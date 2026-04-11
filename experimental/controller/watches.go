@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"strings"
 	"sync"
 	"time"
 
@@ -182,6 +183,78 @@ func (m *WatchManager) shutdown() {
 	for gvr := range m.watches {
 		m.stopLocked(gvr, true)
 	}
+}
+
+// deriveAppliedSet scans all active informer caches for resources carrying
+// the specified graph's identity labels. Returns the applied set — all
+// resources this graph has written to the cluster, keyed by resource key.
+//
+// Per 004-graph-execution.md: "The applied set is derived from the watch
+// cache — all resources where the Graph's identity label exists in the
+// controller's informer stores. Not persisted."
+func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]appliedEntry {
+	m.mu.Lock()
+	// Snapshot watches to avoid holding the lock during cache iteration.
+	watches := make(map[schema.GroupVersionResource]*gvrWatch, len(m.watches))
+	for gvr, w := range m.watches {
+		watches[gvr] = w
+	}
+	m.mu.Unlock()
+
+	suffix := graphLabelSuffix(graphName, namespace)
+	result := make(map[string]appliedEntry)
+
+	for gvr, w := range watches {
+		items := w.informer.GetStore().List()
+		for _, item := range items {
+			accessor, err := meta.Accessor(item)
+			if err != nil {
+				continue
+			}
+			for labelKey, labelValue := range accessor.GetLabels() {
+				if !strings.HasSuffix(labelKey, suffix) {
+					continue
+				}
+				// Extract node ID from the label key.
+				nodeID, _, _, ok := parseIdentityLabel(labelKey)
+				if !ok {
+					continue
+				}
+				// Build resource key from GVR + object metadata.
+				gvk := schema.GroupVersionKind{
+					Group:   gvr.Group,
+					Version: gvr.Version,
+					Kind:    gvrKindFromInformer(gvr, accessor),
+				}
+				key := fmt.Sprintf("%s/%s/%s/%s/%s",
+					gvk.Group, gvk.Version, gvk.Kind,
+					accessor.GetNamespace(), accessor.GetName())
+				result[key] = appliedEntry{
+					NodeID: nodeID,
+					Role:   labelValue,
+					Key:    key,
+				}
+				break // one identity label match per resource is sufficient
+			}
+		}
+	}
+	return result
+}
+
+// gvrKindFromInformer infers the Kind from a GVR and the object metadata.
+// Metadata informers store PartialObjectMetadata which has the Kind set.
+func gvrKindFromInformer(gvr schema.GroupVersionResource, accessor metav1.Object) string {
+	// PartialObjectMetadata carries TypeMeta. Try to read it.
+	if typed, ok := accessor.(*metav1.PartialObjectMetadata); ok && typed.Kind != "" {
+		return typed.Kind
+	}
+	// Fallback: singular form of the resource name with first letter capitalized.
+	// This is imperfect but covers common cases.
+	singular := strings.TrimSuffix(gvr.Resource, "s")
+	if len(singular) > 0 {
+		return strings.ToUpper(singular[:1]) + singular[1:]
+	}
+	return gvr.Resource
 }
 
 // getResourceVersion returns the resourceVersion of an object from the

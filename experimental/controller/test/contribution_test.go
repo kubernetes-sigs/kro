@@ -2,6 +2,7 @@ package graphcontroller_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,11 +142,17 @@ func TestContribution(t *testing.T) {
 	assert.Equal(t, "3", data["replicas"],
 		"contribution should preserve existing data fields")
 
-	// THE KEY ASSERTION: The external object should NOT be managed by the Graph.
-	// Contributions are partial — they don't set management labels.
+	// THE KEY ASSERTION: The external object should NOT have an Owns identity
+	// label from our Graph. Contributions are partial — they set a "contributes"
+	// role, not "owns".
 	extLabels := updatedExternal.GetLabels()
-	assert.NotEqual(t, "test-contribution", extLabels["internal.kro.run/graph-name"],
-		"contribution should NOT set management labels on external object")
+	// Check that no identity label for this graph has role "owns"
+	for key, val := range extLabels {
+		if strings.HasSuffix(key, ".test-contribution."+ns+".internal.kro.run/role") {
+			assert.NotEqual(t, "owns", val,
+				"contribution should NOT set 'owns' role label on external object")
+		}
+	}
 
 	t.Logf("Contribution applied: webapp-instance now has deployment-name=%s, deployment-uid=%s",
 		annotations["kro.run/deployment-name"], annotations["kro.run/deployment-uid"])

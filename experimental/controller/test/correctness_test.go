@@ -2,7 +2,6 @@ package graphcontroller_test
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -12,8 +11,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
-
-	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
 )
 
 // ---------------------------------------------------------------------------
@@ -645,7 +642,8 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Pre-create a resource labeled as owned by a different Graph
+	// Pre-create a resource labeled as owned by a different Graph.
+	// Uses the DNS subdomain identity label format per 004-graph-execution.md.
 	preexisting := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -654,8 +652,7 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 				"name":      "contested-resource",
 				"namespace": ns,
 				"labels": map[string]any{
-					"internal.kro.run/graph-name":      "other-graph",
-					"internal.kro.run/graph-namespace": ns,
+					"somenode.other-graph." + ns + ".internal.kro.run/role": "owns",
 				},
 			},
 			"data": map[string]any{
@@ -722,8 +719,9 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 	assert.Equal(t, "other-graph", data["owner"],
 		"resource should retain original owner's data")
 	labels := existing.GetLabels()
-	assert.Equal(t, "other-graph", labels["internal.kro.run/graph-name"],
-		"resource should retain original graph-name label")
+	// With the new identity label scheme, the original graph's label should still be present
+	assert.Equal(t, "owns", labels["somenode.other-graph."+ns+".internal.kro.run/role"],
+		"resource should retain original graph's identity label")
 	t.Log("Cross-Graph ownership conflict correctly detected and blocked")
 }
 
@@ -739,7 +737,8 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Pre-create a resource labeled as owned by a different Graph
+	// Pre-create a resource labeled as owned by a different Graph.
+	// Uses the DNS subdomain identity label format.
 	preexisting := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -748,8 +747,7 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 				"name":      "force-target",
 				"namespace": ns,
 				"labels": map[string]any{
-					"internal.kro.run/graph-name":      "other-graph",
-					"internal.kro.run/graph-namespace": ns,
+					"somenode.other-graph." + ns + ".internal.kro.run/role": "owns",
 				},
 			},
 			"data": map[string]any{
@@ -802,14 +800,18 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 		return graphReady(g), nil
 	}))
 
-	// Verify ownership was taken: graph-name label should now be "test-force-apply"
+	// Verify ownership was taken: the new graph's identity label should be present
 	result := &unstructured.Unstructured{}
 	result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "force-target", Namespace: ns}, result))
 
 	resultLabels := result.GetLabels()
-	assert.Equal(t, "test-force-apply", resultLabels["internal.kro.run/graph-name"],
-		"graph-name label should reflect the new owner after Force apply")
+	// The new graph's identity label should exist
+	newLabelKey := "imported.test-force-apply." + ns + ".internal.kro.run/role"
+	t.Logf("Looking for label key: %s", newLabelKey)
+	t.Logf("All labels on resource: %v", resultLabels)
+	assert.Equal(t, "owns", resultLabels[newLabelKey],
+		"new graph's identity label should be present after Force apply")
 
 	// Verify the data was overwritten
 	data, _, _ := unstructured.NestedStringMap(result.Object, "data")
@@ -1026,22 +1028,22 @@ func TestInvalidSpecCompilationFailure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Applied set stored on revision annotation
+// Identity labels on managed resources
 // ---------------------------------------------------------------------------
 
-// TestAppliedSetStoredOnRevisionAnnotation proves that the applied set is
-// persisted as an annotation on the GraphRevision, not on the Graph. This
-// verifies the design commitment from 004-graph-execution § Applied Set.
-func TestAppliedSetStoredOnRevisionAnnotation(t *testing.T) {
+// TestIdentityLabelsOnManagedResources verifies that managed resources carry
+// the DNS subdomain identity labels per 004-graph-execution.md § Storage model.
+func TestIdentityLabelsOnManagedResources(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
+	ctx := context.Background()
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
-				"name":      "test-applied-set",
+				"name":      "test-identity-labels",
 				"namespace": ns,
 			},
 			"spec": map[string]any{
@@ -1078,58 +1080,41 @@ func TestAppliedSetStoredOnRevisionAnnotation(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Wait for both resources to be created
+	// Wait for both resources to be created and verify identity labels
 	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
-	for _, name := range []string{"applied-alpha", "applied-beta"} {
+	for _, tc := range []struct {
+		nodeID string
+		name   string
+	}{
+		{"alpha", "applied-alpha"},
+		{"beta", "applied-beta"},
+	} {
 		cm := &unstructured.Unstructured{}
 		cm.SetGroupVersionKind(cmGVK)
 		require.NoError(t, waitForResource(ctx, k8sClient,
-			types.NamespacedName{Name: name, Namespace: ns}, cm))
+			types.NamespacedName{Name: tc.name, Namespace: ns}, cm))
+
+		// Verify DNS subdomain identity labels
+		labels := cm.GetLabels()
+		roleKey := tc.nodeID + ".test-identity-labels." + ns + ".internal.kro.run/role"
+		genKey := tc.nodeID + ".test-identity-labels." + ns + ".internal.kro.run/generation"
+
+		assert.Equal(t, "owns", labels[roleKey],
+			"resource should have identity role label for node %s", tc.nodeID)
+		assert.NotEmpty(t, labels[genKey],
+			"resource should have generation label for node %s", tc.nodeID)
 	}
 
 	// Wait for the Graph to reach Ready
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-applied-set", Namespace: ns}, g); err != nil {
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-identity-labels", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
 		return graphReady(g), nil
 	}))
-
-	// Get the revision and check its applied set annotation
-	revName := "test-applied-set-g00001"
-	rev, err := waitForRevision(ctx, k8sClient, types.NamespacedName{Name: revName, Namespace: ns})
-	require.NoError(t, err)
-
-	anns := rev.GetAnnotations()
-	rawAppliedSet, ok := anns[graphcontroller.AnnotationAppliedSet]
-	require.True(t, ok, "revision should have applied set annotation")
-
-	var appliedSet []string
-	require.NoError(t, json.Unmarshal([]byte(rawAppliedSet), &appliedSet),
-		"applied set should be valid JSON")
-	assert.Len(t, appliedSet, 2, "applied set should contain 2 keys")
-
-	// Verify the keys contain both ConfigMaps
-	keySet := map[string]bool{}
-	for _, k := range appliedSet {
-		keySet[k] = true
-	}
-	assert.True(t, keySet["/v1/ConfigMap/"+ns+"/applied-alpha"],
-		"applied set should contain alpha key")
-	assert.True(t, keySet["/v1/ConfigMap/"+ns+"/applied-beta"],
-		"applied set should contain beta key")
-
-	// Verify the Graph itself has NO applied set annotation
-	g := &unstructured.Unstructured{}
-	g.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-applied-set", Namespace: ns}, g))
-	graphAnns := g.GetAnnotations()
-	_, hasAppliedSet := graphAnns[graphcontroller.AnnotationAppliedSet]
-	assert.False(t, hasAppliedSet,
-		"Graph should NOT have applied set annotation — it lives on the revision")
-	t.Logf("Applied set correctly stored on revision: %v", appliedSet)
+	t.Log("Identity labels correctly stamped on managed resources")
 }
 
 // ---------------------------------------------------------------------------

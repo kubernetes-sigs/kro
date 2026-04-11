@@ -39,18 +39,8 @@ var GraphRevisionGVK = schema.GroupVersionKind{
 	Kind:    "GraphRevision",
 }
 
-// Label and annotation keys for revisions and managed resources.
-const (
-	LabelGraphName       = "internal.kro.run/graph-name"
-	LabelGraphNamespace  = "internal.kro.run/graph-namespace"
-	LabelGraphGeneration = "internal.kro.run/graph-generation"
-	LabelNodeID          = "internal.kro.run/node-id"
-	LabelRevisionHash    = "internal.kro.run/hash"
-
-	// AnnotationAppliedSet stores the set of resource keys that this revision
-	// has written to the cluster.
-	AnnotationAppliedSet = "internal.kro.run/applied-set"
-)
+// NOTE: Identity labels for managed resources are defined in labels.go.
+// The constants below are for revision objects only (flat labels for selection).
 
 // RevisionConditionType identifies a condition on a GraphRevision.
 type RevisionConditionType string
@@ -94,7 +84,7 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 	// Build materialized node list
 	nodes := make([]any, len(spec.Nodes))
 	for i, node := range spec.Nodes {
-		nodes[i] = materializeNode(node, graphName, generationStr)
+		nodes[i] = materializeNode(node, graphName, graphNamespace, generationStr)
 	}
 
 	// Compute content hash over the materialized nodes
@@ -112,9 +102,9 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 				"name":      revisionName(graphName, generation),
 				"namespace": graphNamespace,
 				"labels": map[string]any{
-					LabelGraphName:       graphName,
-					LabelGraphGeneration: generationStr,
-					LabelRevisionHash:    contentHash,
+					LabelRevisionGraphName: graphName,
+					LabelGraphGeneration:   generationStr,
+					LabelRevisionHash:      contentHash,
 				},
 				"ownerReferences": []any{
 					map[string]any{
@@ -137,7 +127,7 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 // materializeNode injects ownership labels and template hash into a
 // single node's template metadata. Returns the node as a map
 // suitable for inclusion in the revision spec.
-func materializeNode(node Node, graphName string, generation string) map[string]any {
+func materializeNode(node Node, graphName, graphNamespace string, generation string) map[string]any {
 	entry := map[string]any{
 		"id": node.ID,
 	}
@@ -149,7 +139,7 @@ func materializeNode(node Node, graphName string, generation string) map[string]
 		// Deferred shapes (Owns vs Contribute unknown until reconcile time)
 		// get labels injected at apply time if they resolve to Owns.
 		if shape == ShapeOwns {
-			injectNodeLabels(tmpl, graphName, generation, node.ID)
+			injectNodeLabels(tmpl, graphName, graphNamespace, generation, node.ID)
 		}
 		entry["template"] = tmpl
 	}
@@ -188,9 +178,10 @@ func materializeNode(node Node, graphName string, generation string) map[string]
 	return entry
 }
 
-// injectNodeLabels stamps ownership labels into a template's metadata.
+// injectNodeLabels stamps identity labels into a template's metadata.
+// Uses the DNS subdomain identity label scheme from 004-graph-execution.md.
 // Also computes and sets the template-hash annotation.
-func injectNodeLabels(tmpl map[string]any, graphName, generation, nodeID string) {
+func injectNodeLabels(tmpl map[string]any, graphName, graphNamespace, generation, nodeID string) {
 	md, _ := tmpl["metadata"].(map[string]any)
 	if md == nil {
 		md = map[string]any{}
@@ -201,9 +192,8 @@ func injectNodeLabels(tmpl map[string]any, graphName, generation, nodeID string)
 	if lbls == nil {
 		lbls = map[string]any{}
 	}
-	lbls[LabelGraphName] = graphName
-	lbls[LabelGraphGeneration] = generation
-	lbls[LabelNodeID] = nodeID
+	lbls[identityLabelKey(nodeID, graphName, graphNamespace)] = RoleOwns
+	lbls[generationLabelKey(nodeID, graphName, graphNamespace)] = generation
 	md["labels"] = lbls
 
 	// Compute template hash from the template content (before adding the
@@ -271,7 +261,7 @@ func getRevision(ctx context.Context, c client.Client, name, namespace string) (
 // listRevisions returns all GraphRevisions for a given Graph, ordered by
 // generation (ascending). Uses the graph-name label for selection.
 func listRevisions(ctx context.Context, c client.Client, graphName, namespace string) ([]*unstructured.Unstructured, error) {
-	req, err := labels.NewRequirement(LabelGraphName, selection.Equals, []string{graphName})
+	req, err := labels.NewRequirement(LabelRevisionGraphName, selection.Equals, []string{graphName})
 	if err != nil {
 		return nil, fmt.Errorf("building label selector: %w", err)
 	}

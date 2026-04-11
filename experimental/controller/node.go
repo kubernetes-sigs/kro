@@ -92,11 +92,13 @@ func (r *GraphReconciler) resolveShape(ctx context.Context, graph *unstructured.
 		return ShapeDeferred, fmt.Errorf("checking resource existence for shape detection %s: %w", node.ID, err)
 	}
 
-	// Resource exists. Check if this Graph created it (kro label match).
+	// Resource exists. Check if this Graph created it (identity label match).
 	existingLabels := existing.GetLabels()
-	if existingLabels[LabelGraphName] == graph.GetName() {
-		logger.V(1).Info("shape resolved: Owns (resource has our kro label)", "node", node.ID)
-		return ShapeOwns, nil
+	for key := range existingLabels {
+		if isGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
+			logger.V(1).Info("shape resolved: Owns (resource has our identity label)", "node", node.ID)
+			return ShapeOwns, nil
+		}
 	}
 
 	logger.V(1).Info("shape resolved: Contribute (resource exists, not ours)", "node", node.ID)

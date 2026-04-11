@@ -175,6 +175,12 @@ type instanceState struct {
 	// Structural boundary prevents prefix collisions between node IDs.
 	forEachItemScope map[string]map[string]any      // nodeID → itemID → scope data
 	forEachItemKeys  map[string]map[string][]string // nodeID → itemID → applied keys
+
+	// Previous applied key set — used to detect intra-revision prune need.
+	// When the key set changes between reconciles (forEach scale-down,
+	// includeWhen toggle), the watch cache scan runs to find prune candidates.
+	// Steady-state reconciles (same key set) skip the scan entirely.
+	previousAppliedKeys map[string]bool
 }
 
 // newInstanceState creates a fresh instanceState for a compiledGraph.
@@ -190,6 +196,35 @@ func newInstanceState(compiled *compiledGraph) *instanceState {
 		forEachItemScope:    map[string]map[string]any{},
 		forEachItemKeys:     map[string]map[string][]string{},
 		resolvedShapes:      make(map[string]TemplateShape, len(compiled.dag.Shapes)),
+	}
+}
+
+// appliedKeySetChanged reports whether the current applied key set differs
+// from the previous reconcile's. Used to gate the watch-cache scan — only
+// scan when keys changed (forEach scale-down, includeWhen toggle).
+// Read-only: does NOT update previousAppliedKeys. Call updateAppliedKeys
+// after prune succeeds to advance the comparison baseline.
+func (s *instanceState) appliedKeySetDiffers(currentKeys []string) bool {
+	if s.previousAppliedKeys == nil {
+		return len(currentKeys) > 0
+	}
+	if len(currentKeys) != len(s.previousAppliedKeys) {
+		return true
+	}
+	for _, k := range currentKeys {
+		if !s.previousAppliedKeys[k] {
+			return true
+		}
+	}
+	return false
+}
+
+// updateAppliedKeys stores the current key set as the comparison baseline.
+// Call this after prune completes successfully.
+func (s *instanceState) updateAppliedKeys(keys []string) {
+	s.previousAppliedKeys = make(map[string]bool, len(keys))
+	for _, k := range keys {
+		s.previousAppliedKeys[k] = true
 	}
 }
 

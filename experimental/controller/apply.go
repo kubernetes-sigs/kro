@@ -18,7 +18,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -307,15 +306,16 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 		obj.SetNamespace(graph.GetNamespace())
 	}
 
-	// Label managed resources for visibility and selector queries.
-	// Labels work for both namespaced and cluster-scoped resources,
-	// unlike owner references which require same-scope.
+	// Stamp identity labels per 004-graph-execution.md § Storage model.
+	// Each managed resource carries two labels encoding the node-graph-namespace
+	// triple in DNS subdomain format. These labels are the basis for the applied
+	// set (derived from the watch cache) and the kro label check.
+	generation := fmt.Sprintf("%d", graph.GetGeneration())
 	lbls := obj.GetLabels()
 	if lbls == nil {
 		lbls = map[string]string{}
 	}
-	lbls[LabelGraphName] = graph.GetName()
-	lbls[LabelGraphNamespace] = graph.GetNamespace()
+	lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, RoleOwns)
 	obj.SetLabels(lbls)
 
 	// Buffer a watch for this resource. The request is flushed to the
@@ -354,7 +354,14 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 			if !apierrors.IsNotFound(err) {
 				return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
 			}
-			// Object might not exist yet (race), fall through to apply
+			// Template hash matches (desired state unchanged) but object
+			// is gone — externally deleted. Clear cache so the next
+			// reconcile with changed inputs will re-create it. Don't
+			// re-create now: the template hasn't changed, so re-applying
+			// the same content is a no-information write that widens race
+			// windows (e.g., finalization between delete and spec update).
+			r.Resources.remove(cacheKey)
+			return nil, fmt.Errorf("resource %s externally deleted: %w", obj.GetName(), ErrDataPending)
 		} else {
 			// Update the cache with fresh data
 			r.Resources.set(cacheKey, &cachedObject{
@@ -386,18 +393,17 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 
 	forceApply := isForceApply(obj)
 
-	// kro label check: if the existing resource has a different Graph's label,
-	// require Force to proceed. Prevents accidental cross-Graph ownership.
+	// kro label check: if the existing resource has a different Graph's identity
+	// label, require Force to proceed. Prevents accidental cross-Graph ownership.
+	// Per 003-ownership.md § kro Label Check.
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(obj.GroupVersionKind())
 	if getErr := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing); getErr == nil {
 		existingLabels := existing.GetLabels()
-		if existingLabels != nil {
-			if ownerGraph, ok := existingLabels[LabelGraphName]; ok && ownerGraph != graph.GetName() {
-				if !forceApply {
-					return nil, fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use kro.run/apply: Force to take ownership): %w",
-						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ownerGraph, graph.GetName(), ErrFieldConflict)
-				}
+		if otherGraph, found := hasOtherGraphIdentityLabel(existingLabels, graph.GetName(), graph.GetNamespace()); found {
+			if !forceApply {
+				return nil, fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use kro.run/apply: Force to take ownership): %w",
+					obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, graph.GetName(), ErrFieldConflict)
 			}
 		}
 	}
@@ -726,9 +732,18 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue // already gone
 		}
 
-		// Verify ownership: must have our graph-name label and template hash
+		// Verify ownership: must have our identity label and template hash
 		objLabels := obj.GetLabels()
-		if objLabels == nil || objLabels[LabelGraphName] != graph.GetName() {
+		hasOurLabel := false
+		if objLabels != nil {
+			for key := range objLabels {
+				if isGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
+					hasOurLabel = true
+					break
+				}
+			}
+		}
+		if !hasOurLabel {
 			continue // not ours
 		}
 		objAnnotations := obj.GetAnnotations()
@@ -815,25 +830,29 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 	}
 
 	var keys []string
+	suffix := graphLabelSuffix(graph.GetName(), graph.GetNamespace())
 	for gvk := range gvkSet {
 		list := &unstructured.UnstructuredList{}
 		listGVK := gvk
 		listGVK.Kind = gvk.Kind + "List"
 		list.SetGroupVersionKind(listGVK)
 
-		selector := labels.SelectorFromSet(map[string]string{
-			LabelGraphName: graph.GetName(),
-		})
-
+		// Cannot use label selector with DNS subdomain keys — list all and
+		// filter client-side. This only runs during teardown (not hot path).
 		if err := r.Client.List(ctx, list, &client.ListOptions{
-			Namespace:     graph.GetNamespace(),
-			LabelSelector: selector,
+			Namespace: graph.GetNamespace(),
 		}); err != nil {
 			continue // skip GVKs we can't list (e.g., CRD deleted)
 		}
 
 		for _, item := range list.Items {
-			keys = append(keys, resourceKey(&item))
+			itemLabels := item.GetLabels()
+			for key := range itemLabels {
+				if strings.HasSuffix(key, suffix) {
+					keys = append(keys, resourceKey(&item))
+					break
+				}
+			}
 		}
 	}
 
@@ -979,57 +998,6 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 		result[i] = s.key
 	}
 	return result, nil
-}
-
-// ---------------------------------------------------------------------------
-// Applied set — annotation-based tracking of what keys a revision wrote
-// ---------------------------------------------------------------------------
-
-// setAppliedSet writes the applied key set as a JSON annotation on the revision.
-func setAppliedSet(ctx context.Context, c client.Client, revision *unstructured.Unstructured, keys []string) error {
-	sorted := make([]string, len(keys))
-	copy(sorted, keys)
-	sort.Strings(sorted)
-
-	data, err := json.Marshal(sorted)
-	if err != nil {
-		return fmt.Errorf("marshaling applied set: %w", err)
-	}
-
-	newValue := string(data)
-
-	latest, err := getRevision(ctx, c, revision.GetName(), revision.GetNamespace())
-	if err != nil {
-		return fmt.Errorf("re-fetching revision for applied set: %w", err)
-	}
-
-	annotations := latest.GetAnnotations()
-	if annotations != nil && annotations[AnnotationAppliedSet] == newValue {
-		return nil
-	}
-
-	if annotations == nil {
-		annotations = map[string]string{}
-	}
-	annotations[AnnotationAppliedSet] = newValue
-	latest.SetAnnotations(annotations)
-	return c.Update(ctx, latest)
-}
-
-func getAppliedSet(revision *unstructured.Unstructured) []string {
-	annotations := revision.GetAnnotations()
-	if annotations == nil {
-		return nil
-	}
-	raw, ok := annotations[AnnotationAppliedSet]
-	if !ok || raw == "" {
-		return nil
-	}
-	var keys []string
-	if err := json.Unmarshal([]byte(raw), &keys); err != nil {
-		return nil
-	}
-	return keys
 }
 
 // ---------------------------------------------------------------------------

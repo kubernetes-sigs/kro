@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -88,15 +89,16 @@ func (rc *resourceCache) remove(key string) {
 }
 
 // removeForGraph removes cached objects that belong to the specified Graph.
-// Checks the graph-name and graph-namespace labels on each cached object.
+// Checks for identity labels using the DNS subdomain scheme.
 // Scoped to a single Graph — does not affect cache entries from other Graphs.
 //
 // This is safe because only applyResource and applyContribution call set(),
-// and both stamp LabelGraphName/LabelGraphNamespace on every applied object.
+// and both stamp identity labels on every applied object.
 // Watch-read objects are stored in the evaluator scope, not in this cache.
 func (rc *resourceCache) removeForGraph(graphName, graphNamespace string) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
+	suffix := graphLabelSuffix(graphName, graphNamespace)
 	for key, obj := range rc.objects {
 		if obj.object == nil {
 			continue
@@ -105,12 +107,15 @@ func (rc *resourceCache) removeForGraph(graphName, graphNamespace string) {
 		if md == nil {
 			continue
 		}
-		labels, _ := md["labels"].(map[string]any)
-		if labels == nil {
+		lbls, _ := md["labels"].(map[string]any)
+		if lbls == nil {
 			continue
 		}
-		if labels[LabelGraphName] == graphName && labels[LabelGraphNamespace] == graphNamespace {
-			delete(rc.objects, key)
+		for labelKey := range lbls {
+			if strings.HasSuffix(labelKey, suffix) {
+				delete(rc.objects, key)
+				break
+			}
 		}
 	}
 }

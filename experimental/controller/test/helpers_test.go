@@ -3,6 +3,7 @@ package graphcontroller_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -251,12 +252,23 @@ func waitForAbsence(ctx context.Context, c client.Client, gvk schema.GroupVersio
 	}
 }
 
-// assertManagedBy checks that a resource has labels indicating it's managed by the named Graph.
+// assertManagedBy checks that a resource has identity labels indicating it's
+// managed by the named Graph. Uses the DNS subdomain identity label scheme.
 func assertManagedBy(t *testing.T, obj *unstructured.Unstructured, graphName string) {
 	t.Helper()
 	labels := obj.GetLabels()
-	assert.Equal(t, graphName, labels["internal.kro.run/graph-name"],
-		"%s should be managed by Graph %s", obj.GetName(), graphName)
+	// Check that at least one identity label exists for this graph.
+	found := false
+	for key, val := range labels {
+		if strings.HasSuffix(key, "."+graphName+"."+obj.GetNamespace()+".internal.kro.run/role") {
+			found = true
+			assert.Contains(t, []string{"owns", "contributes"}, val,
+				"%s should have valid role label for Graph %s", obj.GetName(), graphName)
+			break
+		}
+	}
+	assert.True(t, found,
+		"%s should be managed by Graph %s (no identity label found)", obj.GetName(), graphName)
 }
 
 func createNamespace(t *testing.T) string {
@@ -447,7 +459,7 @@ func waitForRevisionCondition(ctx context.Context, c client.Client, key types.Na
 func assertRevisionLabels(t *testing.T, rev *unstructured.Unstructured, graphName string, generation int64) {
 	t.Helper()
 	labels := rev.GetLabels()
-	assert.Equal(t, graphName, labels[graphcontroller.LabelGraphName],
+	assert.Equal(t, graphName, labels[graphcontroller.LabelRevisionGraphName],
 		"revision should have graph-name label")
 	assert.Equal(t, fmt.Sprintf("%d", generation), labels[graphcontroller.LabelGraphGeneration],
 		"revision should have graph-generation label")

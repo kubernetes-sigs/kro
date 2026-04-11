@@ -17,8 +17,10 @@ package graphcontroller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -151,28 +153,47 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	plan := NewPlanState(dag)
 	var appliedKeys []string
 
-	// Scoped walk: determine which nodes to visit this reconcile.
-	// nil walkScope = full walk (resync, error retry, first reconcile, revision transition).
-	// non-nil walkScope = only visit nodes in the scope.
-	var walkScope map[string]bool
+	// Determine which nodes are triggered this reconcile.
+	// Per 004-graph-execution.md § The Walk: nodes evaluate on external
+	// triggers or propagation triggers. Otherwise O(1) skip.
+	triggered := make(map[string]bool, len(dag.Nodes))
 	isRevisionTransition := len(supersededRevisions) > 0
-	if watcher != nil && !isRevisionTransition {
-		triggers := watcher.drainTriggers()
-		if len(triggers) > 0 {
-			walkScope = ScopeFromTriggers(dag, triggers)
-			// If no triggers mapped to DAG nodes, the scope is empty but
-			// there were real events (e.g., owned resource status updates).
-			// Fall back to full walk — empty scope would skip all nodes.
-			if len(walkScope) == 0 {
-				walkScope = nil
-			} else {
-				logger.V(1).Info("scoped walk", "triggers", len(triggers), "scope", len(walkScope), "dagSize", len(dag.Nodes))
+	isFirstReconcile := len(state.previousPlanStates) == 0
+	if isFirstReconcile || isRevisionTransition {
+		// All nodes triggered on first reconcile or revision transition.
+		for _, node := range dag.Nodes {
+			triggered[node.ID] = true
+		}
+	} else if watcher != nil {
+		watchTriggers := watcher.drainTriggers()
+		if len(watchTriggers) > 0 {
+			for nodeID := range watchTriggers {
+				triggered[nodeID] = true
+			}
+		} else {
+			// No specific watch triggers but controller-runtime still
+			// enqueued us (requeue, resync, Graph spec update). Fall back
+			// to triggering all nodes. Without a drift timer this is the
+			// consistency floor — the reconcile loop is the trigger.
+			for _, node := range dag.Nodes {
+				triggered[node.ID] = true
 			}
 		}
+		// SystemError nodes retry (transient error backoff).
+		for nodeID, prevState := range state.previousPlanStates {
+			if prevState == NodeSystemError {
+				triggered[nodeID] = true
+			}
+		}
+	} else {
+		// No watcher — trigger all nodes (backward compat, tests without watches).
+		for _, node := range dag.Nodes {
+			triggered[node.ID] = true
+		}
 	}
-	// Revision transitions force full walks — the DAG structure changed
-	// and stale entries would never be cleaned up by a scoped walk.
-	// See 004-graph-execution.md § Revision Transitions.
+	// Propagation triggers are set during the walk (step 7) when a node's
+	// propagation hash changes. Tracked in propagationTriggered below.
+	propagationTriggered := make(map[string]bool)
 
 	// Walk DAG with eager scheduling: nodes are dispatched as soon as their
 	// dependencies are satisfied. Workers are pure functions — they receive
@@ -201,6 +222,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// goroutines writing to the same maps causes concurrent-map-writes panic.
 	// Coordinator-local (single-threaded), no synchronization needed.
 	dispatched := make(map[int]bool, len(dag.Nodes))
+	// outputsReady tracks nodes whose outputs are available from a previous
+	// reconcile (via the skip path) but whose dispatch eligibility remains
+	// open. This separates "outputs available" from "evaluation complete."
+	// A skipped node makes its outputs available so dependents can check
+	// dependencies, but stays NodePending so a propagation trigger can
+	// reclaim it for re-evaluation later in the same walk.
+	outputsReady := make(map[string]bool, len(dag.Nodes))
 	var nodeErrors []string // "nodeID: reason" for status reporting
 
 	// tryDispatch checks if a node can be dispatched. Three outcomes:
@@ -226,28 +254,35 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			return
 		}
 
-		// Scoped walk: if the node is outside the walk scope, retain
-		// previous state. This is equivalent to a change check match —
-		// the node is untouched because the triggering event doesn't
-		// affect it. See 004-graph-execution.md § Scoped Walks.
-		if walkScope != nil && !walkScope[node.ID] {
+		// Step 1: Skip check — no external trigger and no propagation trigger.
+		// Per 004-graph-execution.md § Wind step 1: retain previous evaluation.
+		//
+		// Carry forward previous outputs (scope, keys, propagateWhen) so
+		// dependents can read them, but leave plan.States as NodePending.
+		// This keeps the node dispatch-eligible: if a propagation trigger
+		// arrives later in this walk (upstream output changed), tryDispatch
+		// can reclaim the node for re-evaluation. Setting NodeReady here
+		// would block re-dispatch — tryDispatch returns early for non-Pending.
+		if !triggered[node.ID] && !propagationTriggered[node.ID] {
 			if prev, ok := state.previousScope[node.ID]; ok {
 				eval.scope[node.ID] = prev
 			}
 			if prevKeys, ok := state.previousKeys[node.ID]; ok {
 				appliedKeys = append(appliedKeys, prevKeys...)
 			}
+			// Restore propagateWhen from previous cycle.
 			if prevState, ok := state.previousPlanStates[node.ID]; ok {
-				plan.States[node.ID] = prevState
-				// Restore propagateWhen from previous cycle.
 				if (prevState == NodeReady || prevState == NodeNotReady) &&
 					len(node.PropagateWhen) > 0 && state.previousScope[node.ID] != nil {
 					plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
 						node.PropagateWhen, state.previousScope[node.ID], node.ID)
 				}
 			}
-			// Dispatch dependents — this node is "done" (retained previous state)
-			// and its dependents may be in scope and waiting.
+			// Mark outputs available without setting plan.States — node
+			// remains dispatch-eligible for propagation triggers.
+			outputsReady[node.ID] = true
+			// Dispatch dependents — they check outputsReady for dependency
+			// satisfaction alongside plan.States.
 			for _, depIdx := range dag.Dependents[node.ID] {
 				tryDispatch(depIdx)
 			}
@@ -256,14 +291,33 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 		// Check dependencies. Distinguish "still running" from "permanently blocked."
 		for depID := range node.Dependencies {
-			state, exists := plan.States[depID]
+			depState, exists := plan.States[depID]
 			if !exists {
 				continue // not a DAG node
 			}
-			switch state {
+			switch depState {
 			case NodeReady, NodeNotReady:
 				continue // resolved, good
 			case NodePending:
+				// Dependency still inflight — unless its outputs are ready
+				// from the skip path (previous reconcile's state carried forward).
+				if outputsReady[depID] {
+					// Check previous state: only Ready/NotReady satisfy deps.
+					// Previous Error/Blocked/Excluded propagate correctly.
+					if prevState, ok := state.previousPlanStates[depID]; ok {
+						switch prevState {
+						case NodeReady, NodeNotReady:
+							continue // outputs available, dependency satisfied
+						case NodeExcluded:
+							plan.SetState(dag, node.ID, NodeExcluded)
+							return
+						default:
+							plan.SetState(dag, node.ID, NodeBlocked)
+							return
+						}
+					}
+					continue // no previous state, assume satisfied
+				}
 				return // dependency still inflight — don't dispatch yet, don't exclude
 			case NodeExcluded:
 				// Definitive absence — propagate as Excluded
@@ -596,25 +650,71 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				node.PropagateWhen, eval.scope[node.ID], node.ID)
 		}
 
+		// Step 7: Propagation check — hash the specific field paths
+		// dependents reference from this node's output, plus propagateWhen
+		// state. If the hash differs from the previous reconcile, mark
+		// dependents as having a propagation trigger.
+		// Per 004-graph-execution.md § Wind step 7.
+		if res.state == NodeReady || res.state == NodeNotReady {
+			if observed := eval.scope[node.ID]; observed != nil {
+				propagateHash, err := hashSelfSections(node, observed)
+				if err == nil && propagateHash == "" {
+					// No SelfSections (collection watch, bare reference) —
+					// fall back to hashing the full output. Without this,
+					// collection changes would never propagate to forEach.
+					if m, ok := observed.(map[string]any); ok {
+						propagateHash, err = hashDesiredState(m)
+					} else {
+						// Array output (collection watch, forEach) — use JSON hash.
+						data, jsonErr := json.Marshal(observed)
+						if jsonErr == nil {
+							h := fnv.New64a()
+							h.Write(data)
+							propagateHash = fmt.Sprintf("%016x", h.Sum64())
+						}
+					}
+				}
+				if err == nil && propagateHash != "" {
+					prevHash := state.previousSelfHashes[node.ID]
+					if prevHash != "" && propagateHash != prevHash {
+						// Propagation hash changed — trigger dependents.
+						for _, depIdx := range dag.Dependents[node.ID] {
+							propagationTriggered[dag.Nodes[depIdx].ID] = true
+						}
+					}
+					state.previousSelfHashes[node.ID] = propagateHash
+				}
+			}
+		}
+
 		// Save per-node state for next reconcile.
 		state.previousScope[node.ID] = eval.scope[node.ID]
 		state.previousKeys[node.ID] = res.keys
 		state.previousPlanStates[node.ID] = res.state
 
-		// Store input hash for next reconcile's change check.
+		// Store input hash for next reconcile's change check (step 3).
+		// This enables the content-addressed skip: if dependency inputs
+		// haven't changed, template evaluation is deterministic and the
+		// write can be skipped. Without this, every triggered node does
+		// a full apply cycle including re-creating externally deleted resources.
 		if inputHash, err := hashNodeInputs(node, eval.scope); err == nil && inputHash != "" {
 			state.previousInputHashes[node.ID] = inputHash
-		}
-		// Store self hash for gate re-evaluation detection.
-		if observed := eval.scope[node.ID]; observed != nil {
-			if selfHash, err := hashSelfSections(node, observed); err == nil {
-				state.previousSelfHashes[node.ID] = selfHash
-			}
 		}
 
 		// Check dependents: dispatch any whose dependencies are now satisfied.
 		for _, depIdx := range dag.Dependents[node.ID] {
 			tryDispatch(depIdx)
+		}
+	}
+
+	// Finalize skipped nodes: nodes that were skipped (outputsReady) and never
+	// re-dispatched via propagation trigger still have plan.States = Pending.
+	// Restore their previous state for the plan summary (status reporting).
+	for nodeID := range outputsReady {
+		if plan.States[nodeID] == NodePending {
+			if prevState, ok := state.previousPlanStates[nodeID]; ok {
+				plan.States[nodeID] = prevState
+			}
 		}
 	}
 
@@ -632,80 +732,71 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Derive aggregate state from the DAG plan
 	summary := plan.Summary()
 
-	// Persist the applied set on the revision for prune diffing and teardown.
-	//
-	// ORDERING INVARIANT: read the previous applied set BEFORE writing the
-	// new one. Intra-revision prune (forEach scale-down, includeWhen toggle)
-	// depends on comparing the previous cycle's keys to the current cycle's
-	// keys. If setAppliedSet runs first, the previous state is lost and
-	// intra-revision prune silently stops working.
-	// Protected by: TestForEachCollectionScaleUpDown, TestIncludeWhenToggle.
-	previousAppliedSet := getAppliedSet(activeRevision)
-	if len(appliedKeys) > 0 {
-		if err := setAppliedSet(ctx, r.Client, activeRevision, appliedKeys); err != nil {
-			logger.V(1).Info("failed to persist applied set", "error", err)
-		}
-	}
-
 	// -----------------------------------------------------------------------
 	// Prune resources no longer in the applied set
 	// -----------------------------------------------------------------------
 	//
-	// Two prune sources, unioned into a single previous key set:
-	// 1. Superseded revisions' applied sets — handles cross-revision prune
-	//    (spec changes that remove/rename resources).
-	// 2. Active revision's PREVIOUS applied set — handles intra-revision
-	//    prune (forEach scale-down, includeWhen toggle, data-driven changes
-	//    within the same generation).
+	// The applied set is derived from the watch cache — all resources where
+	// the Graph's identity label exists in the controller's informer stores.
+	// Per 004-graph-execution.md § Applied Set.
 	//
-	// The prune candidate set is: union(all previous keys) - current keys.
+	// Prune candidates = appliedSet - currentKeySet.
+	// forEach scale-down, includeWhen toggles, and revision transitions all
+	// produce the same diff — one mechanism.
 	pruneOK := true
-	// Prune is safe only when all blocking states that represent uncertain
-	// absence are clear. Conflict is NOT in the gate — conflicted resources
-	// are known to exist and prune is the recovery mechanism.
 	pruneSafe := !summary.HasDataPending && !summary.HasError && !summary.HasSystemError
 	if pruneSafe {
 		allPreviousKeys := map[string]bool{}
-		// Compile superseded revisions to get their DAGs for finalizer lookup.
-		// The compile cost is already paid (DAGs are cached by spec hash).
-		supersededDAGs := map[string]*DAG{} // revision name → DAG
+
+		// Derive the applied set from the watch cache.
+		if r.Watcher != nil {
+			appliedSet := r.Watcher.watches.deriveAppliedSet(graph.GetName(), graph.GetNamespace())
+			for key := range appliedSet {
+				allPreviousKeys[key] = true
+			}
+		}
+
+		// Include the previous reconcile's applied keys to cover the
+		// informer lag window: resources written in the last reconcile
+		// might not yet appear in the informer cache. Without this,
+		// forEach scale-down and includeWhen toggle produce prune
+		// candidates that are missing from the watch cache, preventing
+		// cleanup. This is a consistency bridge, not an architectural
+		// feature — removable once informer cache consistency is
+		// guaranteed within the reconcile loop.
+		for k := range state.previousAppliedKeys {
+			allPreviousKeys[k] = true
+		}
+		// Update the previous key set for the next reconcile.
+		state.updateAppliedKeys(appliedKeys)
+
+		// Also extract static keys from superseded revisions for resources
+		// that may not yet be in the informer cache. Skip finalizer nodes —
+		// they're dormant during normal operation and only appear in the
+		// applied set when finalization actually creates them.
+		supersededDAGs := map[string]*DAG{}
 		for _, rev := range supersededRevisions {
-			revAppliedSet := getAppliedSet(rev)
-			if len(revAppliedSet) > 0 {
-				for _, k := range revAppliedSet {
-					allPreviousKeys[k] = true
-				}
-			} else {
-				// Fall back to spec-based extraction for revisions without annotations.
-				if revSpec, err := extractRevisionSpec(rev); err == nil {
-					for _, node := range revSpec.Nodes {
-						if key := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); key != "" {
-							allPreviousKeys[key] = true
-						}
+			if revSpec, err := extractRevisionSpec(rev); err == nil {
+				for _, node := range revSpec.Nodes {
+					if node.Finalizes != "" {
+						continue // finalizer node — dormant, never in applied set
+					}
+					if key := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); key != "" {
+						allPreviousKeys[key] = true
 					}
 				}
 			}
-		}
-		// Compile superseded revisions to access their finalizer relationships.
-		for _, rev := range supersededRevisions {
+			// Compile superseded revisions to access their finalizer relationships.
 			if _, revState, compileErr := r.compileRevision(rev); compileErr == nil {
 				supersededDAGs[rev.GetName()] = revState.compiled.dag
 			}
 		}
-		for _, k := range previousAppliedSet {
-			allPreviousKeys[k] = true
-		}
+
 		if len(allPreviousKeys) > 0 {
-			fKeys, err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
-			if len(fKeys) > 0 {
-				if setErr := setAppliedSet(ctx, r.Client, activeRevision, append(appliedKeys, fKeys...)); setErr != nil {
-					logger.V(1).Info("failed to persist applied set after prune", "error", setErr)
-				}
-			}
+			_, err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
 			if err != nil {
 				logger.Error(err, "pruning removed resources")
 				pruneOK = false
-				// Classify prune error through the same taxonomy as node errors.
 				info := classifyAPIError(err)
 				switch info.state {
 				case NodeSystemError:
@@ -775,24 +866,26 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 
 	// Collect all managed resource keys from all revisions for this Graph.
 	// Keys come from two sources:
-	// 1. Applied set annotations (accurate for dynamic names, forEach, contribute)
-	// 2. Static spec extraction (fallback for revisions without annotations)
+	// 1. Watch cache — informer stores scanned for identity labels
+	// 2. Static spec extraction (fallback for resources not in cache)
 	ownsKeys := map[string]bool{}
 	contributeKeys := map[string]bool{} // key → hasStatus encoded in the key
-	for _, rev := range revisions {
-		// Try applied set annotation first — includes both Owns and Contribute keys.
-		if keys := getAppliedSet(rev); len(keys) > 0 {
-			for _, k := range keys {
-				if strings.HasPrefix(k, contributeKeyPrefix) {
-					contributeKeys[k] = true
-				} else {
-					ownsKeys[k] = true
-				}
-			}
-			continue
-		}
 
-		// Fall back: extract static Owns keys from the revision's spec.
+	// Derive applied set from watch cache if available.
+	if r.Watcher != nil {
+		appliedSet := r.Watcher.watches.deriveAppliedSet(graph.GetName(), graph.GetNamespace())
+		for key, entry := range appliedSet {
+			if entry.Role == RoleContributes {
+				// For contribute keys, we need the contribute prefix format.
+				contributeKeys[contributeKeyPrefix+key] = true
+			} else {
+				ownsKeys[key] = true
+			}
+		}
+	}
+
+	// Also extract static keys from revision specs for coverage.
+	for _, rev := range revisions {
 		spec, err := extractRevisionSpec(rev)
 		if err != nil {
 			continue
@@ -804,6 +897,10 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			// Skip Watch and CollectionWatch (read-only).
 			shape := DetectShape(node.Template)
 			if shape == ShapeWatch || shape == ShapeCollectionWatch {
+				continue
+			}
+			// Skip finalizer nodes — dormant during normal operation.
+			if node.Finalizes != "" {
 				continue
 			}
 			if key := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); key != "" {

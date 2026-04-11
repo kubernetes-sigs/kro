@@ -49,10 +49,17 @@ var GraphGVK = schema.GroupVersionKind{
 const (
 	finalizer = "experimental.kro.run/graph-controller"
 
-	// defaultRequeueAfter is used when a resource is not yet ready
-	// and we need to wait for the dynamic watch to trigger. This is
-	// a fallback — the watch should fire first in most cases.
-	defaultRequeueAfter = 1 * time.Second
+	// defaultDriftInterval is the per-node consistency floor interval.
+	// Per 004-graph-execution.md § The Walk: "Each node has an in-memory
+	// drift timer with a jittered interval (default 30 minutes)."
+	// On expiry, the node is triggered unconditionally.
+	defaultDriftInterval = 30 * time.Minute
+	maxDriftJitter       = 5 * time.Minute
+
+	// systemErrorRequeueInterval is the retry interval for Graphs with
+	// nodes in SystemError state. Per design: "backoff retry with a low
+	// cap, then wait for drift timer."
+	systemErrorRequeueInterval = 5 * time.Second
 
 	// DefaultMaxConcurrentReconciles is the number of reconcile workers.
 	// Multiple workers keep the API server busy — each reconcile does
@@ -107,11 +114,19 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	// Set up watch tracking for this reconcile cycle.
+	// walkAttempted gates the commit: if no walk happens (empty trigger
+	// set), the previous cycle's watch registrations are preserved.
+	// Without this, a no-op reconcile (e.g., from status update enqueue)
+	// would commit an empty watch set, removing all scalar/collection
+	// index entries and releasing informers. Any walk attempt counts —
+	// including partial walks that error — because visited nodes consume
+	// watch events and register new watches.
 	var watcher *graphWatcher
+	var walkAttempted bool
 	if r.Watcher != nil {
 		watcher = r.Watcher.forGraph(req.NamespacedName)
 		defer func() {
-			watcher.done(reconcileErr == nil)
+			watcher.done(walkAttempted && reconcileErr == nil)
 		}()
 	}
 
@@ -165,17 +180,16 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			triggered[node.ID] = true
 		}
 	} else if watcher != nil {
+		// Watch triggers: specific nodes that received events.
 		watchTriggers := watcher.drainTriggers()
-		if len(watchTriggers) > 0 {
-			for nodeID := range watchTriggers {
-				triggered[nodeID] = true
-			}
-		} else {
-			// No specific watch triggers but controller-runtime still
-			// enqueued us (requeue, resync, Graph spec update). Fall back
-			// to triggering all nodes. Without a drift timer this is the
-			// consistency floor — the reconcile loop is the trigger.
-			for _, node := range dag.Nodes {
+		for nodeID := range watchTriggers {
+			triggered[nodeID] = true
+		}
+		// Drift timer triggers: nodes whose consistency timer expired.
+		// Per 004-graph-execution.md § The Walk: "Each node has an
+		// in-memory drift timer with a jittered interval."
+		for _, node := range dag.Nodes {
+			if state.isDriftExpired(node.ID) {
 				triggered[node.ID] = true
 			}
 		}
@@ -194,6 +208,18 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Propagation triggers are set during the walk (step 7) when a node's
 	// propagation hash changes. Tracked in propagationTriggered below.
 	propagationTriggered := make(map[string]bool)
+
+	// Early exit: no nodes triggered → no walk needed. Preserves previous
+	// watch state (walkCompleted stays false → watcher.done(false)). Schedule
+	// next reconcile at the earliest drift timer expiry.
+	if len(triggered) == 0 {
+		if next := state.nextDriftExpiry(); !next.IsZero() {
+			if remaining := time.Until(next); remaining > 0 {
+				return ctrl.Result{RequeueAfter: remaining}, nil
+			}
+		}
+		return ctrl.Result{}, nil
+	}
 
 	// Walk DAG with eager scheduling: nodes are dispatched as soon as their
 	// dependencies are satisfied. Workers are pure functions — they receive
@@ -269,6 +295,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			}
 			if prevKeys, ok := state.previousKeys[node.ID]; ok {
 				appliedKeys = append(appliedKeys, prevKeys...)
+			}
+			// Carry forward watch registrations so doneGraph doesn't
+			// treat this node's watches as stale. Without this, a
+			// trigger-scoped walk would remove watches for skipped nodes.
+			if watcher != nil {
+				watcher.retainWatches(node.ID)
 			}
 			// Restore propagateWhen from previous cycle.
 			if prevState, ok := state.previousPlanStates[node.ID]; ok {
@@ -419,6 +451,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 						if prevKeys, ok := state.previousKeys[node.ID]; ok {
 							appliedKeys = append(appliedKeys, prevKeys...)
 						}
+						if watcher != nil {
+							watcher.retainWatches(node.ID)
+						}
 						if prevState, ok := state.previousPlanStates[node.ID]; ok {
 							plan.States[node.ID] = prevState
 							// Propagate readyWhen result from previous cycle.
@@ -463,6 +498,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					}
 					if prevKeys, ok := state.previousKeys[node.ID]; ok {
 						appliedKeys = append(appliedKeys, prevKeys...)
+					}
+					if watcher != nil {
+						watcher.retainWatches(node.ID)
 					}
 					nodeState := NodeReady
 					observed := eval.scope[node.ID]
@@ -676,8 +714,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				}
 				if err == nil && propagateHash != "" {
 					prevHash := state.previousSelfHashes[node.ID]
-					if prevHash != "" && propagateHash != prevHash {
-						// Propagation hash changed — trigger dependents.
+					if prevHash == "" || propagateHash != prevHash {
+						// Propagation hash changed (or first time node
+						// produced output) — trigger dependents.
+						// Per 004-graph-execution.md § Wind step 7: "If
+						// the hash changed — or no previous hash exists —
+						// dependents evaluate."
 						for _, depIdx := range dag.Dependents[node.ID] {
 							propagationTriggered[dag.Nodes[depIdx].ID] = true
 						}
@@ -710,6 +752,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Finalize skipped nodes: nodes that were skipped (outputsReady) and never
 	// re-dispatched via propagation trigger still have plan.States = Pending.
 	// Restore their previous state for the plan summary (status reporting).
+	walkAttempted = true
 	for nodeID := range outputsReady {
 		if plan.States[nodeID] == NodePending {
 			if prevState, ok := state.previousPlanStates[nodeID]; ok {
@@ -832,14 +875,51 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	// The graph is fully converged when every node is Ready and the spec is
 	// accepted. Everything else — errors, conflicts, pending data, not-ready
-	// — retries. The environment can change independently of the controller's
-	// inputs, so we always retry.
+	// — retries via watch events, not periodic requeue.
 	allReady := rstate.accepted && !summary.HasDataPending && !summary.HasNotReady &&
 		!summary.HasBlocked && !summary.HasConflict && !summary.HasError && !summary.HasSystemError
 	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK)
 
-	if !allReady {
-		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+	// Reset drift timers for nodes that were successfully evaluated.
+	// Per 004-graph-execution.md § The Walk: "An SSA apply resets the
+	// drift timer." We reset on evaluation (Ready or NotReady) since
+	// the node was fully processed.
+	//
+	// For nodes in transient non-converged states (DataPending,
+	// SystemError), set a short drift timer so they retry quickly.
+	// DataPending: the common case (dependency resolves → propagation
+	// trigger) is watch-driven. The 1s timer is a fallback for edge
+	// cases where no watch event arrives — e.g., externally deleted
+	// owned resource where the delete event was consumed but the
+	// re-creation needs a second reconcile to clear the cache.
+	// SystemError: transient server failure needs backoff retry.
+	// NotReady nodes don't need short timers — watch events fire when
+	// the resource's status changes. Error/Conflict/Blocked resolve via
+	// propagation, revision transition, or the standard drift timer.
+	for _, node := range dag.Nodes {
+		nodeState := plan.States[node.ID]
+		switch nodeState {
+		case NodeReady, NodeNotReady:
+			state.resetDriftTimer(node.ID, defaultDriftInterval, maxDriftJitter)
+		case NodeDataPending:
+			state.resetDriftTimer(node.ID, 1*time.Second, 0)
+		case NodeSystemError:
+			state.resetDriftTimer(node.ID, systemErrorRequeueInterval, 0)
+		}
+	}
+
+	// Schedule next reconcile. Watch events handle convergence — no
+	// periodic polling. The drift timer is the consistency floor.
+	// Per 004-graph-execution.md § Why Not: "Periodic full-graph resync
+	// ... Informer resyncs trigger all nodes simultaneously — correlated,
+	// expensive. Per-node drift timers with jitter amortize resync."
+	//
+	// Non-converged nodes (DataPending, SystemError) have short drift
+	// timers set above, so the earliest expiry reflects urgency.
+	if next := state.nextDriftExpiry(); !next.IsZero() {
+		if remaining := time.Until(next); remaining > 0 {
+			return ctrl.Result{RequeueAfter: remaining}, nil
+		}
 	}
 	return ctrl.Result{}, nil
 }
@@ -952,7 +1032,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		// Per the design (004-graph-execution): teardown is blocked until
 		// ordering is available — never degrade to unordered deletion.
 		logger.Error(err, "cannot determine deletion order, requeueing")
-		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+		return ctrl.Result{RequeueAfter: systemErrorRequeueInterval}, nil
 	}
 
 	// Compile the active revision (if available) to get the DAG for
@@ -1099,7 +1179,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// requeue — the finalizer holds until the other managers release.
 	if teardownBlocked {
 		logger.Info("teardown blocked: waiting for third-party field managers to release")
-		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+		return ctrl.Result{RequeueAfter: systemErrorRequeueInterval}, nil
 	}
 
 	// Pass 3: Delete all GraphRevisions.

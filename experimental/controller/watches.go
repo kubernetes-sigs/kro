@@ -447,6 +447,26 @@ func (gw *graphWatcher) watchCollection(nodeID string, gvr schema.GroupVersionRe
 	gw.mu.Unlock()
 }
 
+// retainWatches carries forward watch requests from the previous cycle
+// for a node that was skipped in the current trigger-scoped walk. Without
+// this, doneGraph would see skipped nodes' watches as stale and remove
+// them from the index, breaking event routing for those nodes.
+func (gw *graphWatcher) retainWatches(nodeID string) {
+	gw.coord.mu.RLock()
+	state, ok := gw.coord.graphs[gw.graph]
+	if !ok {
+		gw.coord.mu.RUnlock()
+		return
+	}
+	// Copy previous cycle's request for this node into pending.
+	if req, exists := state.previous[nodeID]; exists {
+		gw.mu.Lock()
+		gw.pending = append(gw.pending, *req)
+		gw.mu.Unlock()
+	}
+	gw.coord.mu.RUnlock()
+}
+
 // getResourceVersion returns the resourceVersion from the metadata informer
 // cache for a specific object. Returns "" if not found or no watch exists.
 func (gw *graphWatcher) getResourceVersion(gvr schema.GroupVersionResource, namespace, name string) string {

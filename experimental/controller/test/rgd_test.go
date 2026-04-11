@@ -372,6 +372,7 @@ func TestDynamicResourceListViaCEL(t *testing.T) {
 func TestFullRGDSystemL0L1L2(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
+	group := uniqueGroup()
 
 	// RGD CRD is pre-installed in TestMain.
 
@@ -393,7 +394,7 @@ func TestFullRGDSystemL0L1L2(t *testing.T) {
 				"schema": map[string]any{
 					"kind":       "MyApp",
 					"apiVersion": "v1alpha1",
-					"group":      "apps.test.kro.run",
+					"group":      group,
 					"spec": map[string]any{
 						"image":    "string | default=nginx",
 						"replicas": "integer | default=1",
@@ -428,18 +429,19 @@ func TestFullRGDSystemL0L1L2(t *testing.T) {
 	t.Log("L1: Controller Graph myapp-controller created")
 
 	// ── L1: Verify the MyApp CRD is created ──
-	require.NoError(t, waitForCRD(ctx, k8sClient, "myapps.apps.test.kro.run"))
-	t.Log("L1: CRD myapps.apps.test.kro.run created and established")
+	crdName := "myapps." + group
+	require.NoError(t, waitForCRD(ctx, k8sClient, crdName))
+	t.Logf("L1: CRD %s created and established", crdName)
 	t.Cleanup(func() {
 		crd := &apiextensionsv1.CustomResourceDefinition{}
-		crd.Name = "myapps.apps.test.kro.run"
+		crd.Name = crdName
 		_ = k8sClient.Delete(context.Background(), crd)
 	})
 
 	// ── Create a MyApp instance ──
 	myApp := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "apps.test.kro.run/v1alpha1",
+			"apiVersion": group + "/v1alpha1",
 			"kind":       "MyApp",
 			"metadata": map[string]any{
 				"name":      "test-instance",
@@ -524,6 +526,7 @@ func TestFullRGDSystemL0L1L2(t *testing.T) {
 func TestRGDLifecyclePort(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
+	group := uniqueGroup()
 
 	// RGD CRD is pre-installed in TestMain.
 
@@ -545,7 +548,7 @@ func TestRGDLifecyclePort(t *testing.T) {
 				"schema": map[string]any{
 					"kind":       "TestInstanceUpdate",
 					"apiVersion": "v1alpha1",
-					"group":      "apps.test.kro.run",
+					"group":      group,
 					"spec": map[string]any{
 						"replicas": "integer | default=1",
 						"image":    "string | default=nginx:latest",
@@ -595,19 +598,20 @@ func TestRGDLifecyclePort(t *testing.T) {
 	t.Log("RGD created: test-update")
 
 	// Wait for the CRD to be created by the L1 Graph
-	require.NoError(t, waitForCRD(ctx, k8sClient, "testinstanceupdates.apps.test.kro.run"))
-	t.Log("L1: CRD testinstanceupdates.apps.test.kro.run established")
+	crdName := "testinstanceupdates." + group
+	require.NoError(t, waitForCRD(ctx, k8sClient, crdName))
+	t.Logf("L1: CRD %s established", crdName)
 	t.Cleanup(func() {
 		crd := &apiextensionsv1.CustomResourceDefinition{}
-		crd.Name = "testinstanceupdates.apps.test.kro.run"
+		crd.Name = crdName
 		_ = k8sClient.Delete(context.Background(), crd)
 	})
 
 	// Create an instance
-	instanceGVK := schema.GroupVersionKind{Group: "apps.test.kro.run", Version: "v1alpha1", Kind: "TestInstanceUpdate"}
+	instanceGVK := schema.GroupVersionKind{Group: group, Version: "v1alpha1", Kind: "TestInstanceUpdate"}
 	instance := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "apps.test.kro.run/v1alpha1",
+			"apiVersion": group + "/v1alpha1",
 			"kind":       "TestInstanceUpdate",
 			"metadata": map[string]any{
 				"name":      "test-instance-for-updates",

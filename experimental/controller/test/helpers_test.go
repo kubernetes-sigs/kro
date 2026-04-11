@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -269,6 +270,15 @@ func assertManagedBy(t *testing.T, obj *unstructured.Unstructured, graphName str
 	}
 	assert.True(t, found,
 		"%s should be managed by Graph %s (no identity label found)", obj.GetName(), graphName)
+}
+
+// uniqueGroup returns a unique API group for test CRD isolation. CRDs are
+// cluster-scoped, so parallel tests that create CRDs with the same group
+// would collide. Each call generates a different group (e.g.,
+// "apps-xk4wz.test.kro.run"), ensuring the derived CRD name
+// (<plural>.<group>) is unique per test.
+func uniqueGroup() string {
+	return fmt.Sprintf("apps-%s.test.kro.run", rand.String(5))
 }
 
 func createNamespace(t *testing.T) string {

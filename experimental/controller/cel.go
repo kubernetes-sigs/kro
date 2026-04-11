@@ -19,9 +19,11 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math/rand"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -181,6 +183,12 @@ type instanceState struct {
 	// includeWhen toggle), the watch cache scan runs to find prune candidates.
 	// Steady-state reconciles (same key set) skip the scan entirely.
 	previousAppliedKeys map[string]bool
+
+	// Per-node drift timer expiry times. When expired, the node is triggered
+	// unconditionally — the consistency floor. Reset on successful evaluation.
+	// On restart, all timers start fresh with random jitter.
+	// Per 004-graph-execution.md § The Walk.
+	driftTimers map[string]time.Time
 }
 
 // newInstanceState creates a fresh instanceState for a compiledGraph.
@@ -196,6 +204,7 @@ func newInstanceState(compiled *compiledGraph) *instanceState {
 		forEachItemScope:    map[string]map[string]any{},
 		forEachItemKeys:     map[string]map[string][]string{},
 		resolvedShapes:      make(map[string]TemplateShape, len(compiled.dag.Shapes)),
+		driftTimers:         make(map[string]time.Time),
 	}
 }
 
@@ -226,6 +235,41 @@ func (s *instanceState) updateAppliedKeys(keys []string) {
 	for _, k := range keys {
 		s.previousAppliedKeys[k] = true
 	}
+}
+
+// resetDriftTimer sets the drift timer for a node to fire after the default
+// interval plus jitter. Called after a node is successfully evaluated.
+// Per 004-graph-execution.md § The Walk: "An SSA apply resets the drift timer."
+func (s *instanceState) resetDriftTimer(nodeID string, interval, maxJitter time.Duration) {
+	var jitter time.Duration
+	if maxJitter > 0 {
+		jitter = time.Duration(rand.Int63n(int64(maxJitter)))
+	}
+	s.driftTimers[nodeID] = time.Now().Add(interval + jitter)
+}
+
+// isDriftExpired reports whether a node's drift timer has expired.
+// Returns false if no timer is set (first reconcile handles this via
+// the "all nodes triggered" path).
+func (s *instanceState) isDriftExpired(nodeID string) bool {
+	expiry, ok := s.driftTimers[nodeID]
+	if !ok {
+		return false
+	}
+	return time.Now().After(expiry)
+}
+
+// nextDriftExpiry returns the earliest drift timer expiry across all nodes.
+// Returns zero time if no timers are set. Used to schedule the next
+// reconcile via RequeueAfter — the consistency floor.
+func (s *instanceState) nextDriftExpiry() time.Time {
+	var earliest time.Time
+	for _, expiry := range s.driftTimers {
+		if earliest.IsZero() || expiry.Before(earliest) {
+			earliest = expiry
+		}
+	}
+	return earliest
 }
 
 // initResolvedShapes seeds the resolved shapes map from the DAG's compile-time

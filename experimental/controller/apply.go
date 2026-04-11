@@ -457,6 +457,19 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 		obj.SetNamespace(graph.GetNamespace())
 	}
 
+	// Stamp identity labels so Contribute resources are discoverable via
+	// deriveAppliedSet() after controller restart. Without this, teardown
+	// after restart can't find contributed resources and orphans their fields.
+	// Per 004-graph-execution.md § Applied Set: "Both Owns and Contribute
+	// targets are in the applied set — one mechanism."
+	generation := fmt.Sprintf("%d", graph.GetGeneration())
+	lbls := obj.GetLabels()
+	if lbls == nil {
+		lbls = map[string]string{}
+	}
+	lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, RoleContributes)
+	obj.SetLabels(lbls)
+
 	// Buffer a watch for the target resource (flushed at done(true)).
 	// Use the DAG node ID for scoped walk trigger resolution.
 	gvr := gvkToGVR(obj.GroupVersionKind())
@@ -563,6 +576,11 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 			statusOpts = append(statusOpts, client.ForceOwnership)
 		}
 		if err := r.Client.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, data), statusOpts...); err != nil {
+			// Revert the cached template hash so the next reconcile retries
+			// both the main resource and status subresource patches.
+			// Per 004-graph-execution.md: "If the status subresource apply
+			// fails, the controller reverts the in-memory template-hash."
+			r.Resources.remove(cacheKey)
 			if apierrors.IsConflict(err) {
 				return nil, fmt.Errorf("SSA status conflict on contribution %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
 			}

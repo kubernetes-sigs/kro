@@ -181,6 +181,12 @@ func hashNodeInputs(node *Node, scope map[string]any) (string, error) {
 		for _, section := range sectionNames {
 			sectionData, ok := depMap[section]
 			if !ok {
+				// Absent section: hash a sentinel so absent→present is a change.
+				// Per 004-graph-execution.md: "Absent paths hash to a fixed
+				// sentinel value that is not a valid Kubernetes field value."
+				h.Write([]byte(depID))
+				h.Write([]byte(section))
+				h.Write([]byte("\x00__absent__\x00"))
 				continue
 			}
 			// For metadata, exclude volatile fields.
@@ -221,6 +227,11 @@ func hashSelfSections(node *Node, observed any) (string, error) {
 	for _, section := range sectionNames {
 		sectionData, ok := observedMap[section]
 		if !ok {
+			// Absent section: hash a sentinel so absent→present is a change.
+			// Per 004-graph-execution.md: "Absent paths hash to a fixed
+			// sentinel value that is not a valid Kubernetes field value."
+			h.Write([]byte(section))
+			h.Write([]byte("\x00__absent__\x00"))
 			continue
 		}
 		if section == "metadata" {

@@ -148,8 +148,10 @@ status-only Contribute releases only the status subresource.
 
 ### forEach
 
-forEach stamps its template once per item. Each stamped resource follows the same rules. The
-ownership model applies per-stamp.
+forEach expands into child nodes — each child manages one resource. The ownership model applies
+per-child: each child's managed resource carries the child's identity label and follows the same
+Owns/Contribute rules as any other node. The parent is a logical node with no managed resource and
+no ownership semantics.
 
 ## Actions
 

@@ -6,9 +6,10 @@ state. Performance is structural — work is proportional to change, not to DAG 
 
 ## The DAG
 
-A directed acyclic graph of nodes. Each node declares exactly one Kubernetes resource. Edges are
-dependencies inferred from CEL expression references. A revision materializes a DAG — the static
-structure the walk operates on.
+A directed acyclic graph of nodes. Each node declares one Kubernetes resource. A forEach parent is a
+logical node that expands into child nodes at walk time — children are real nodes in the DAG (see
+[forEach](#foreach)). Edges are dependencies inferred from CEL expression references. A revision
+materializes the DAG.
 
 ### Nodes
 
@@ -113,8 +114,9 @@ state — match skips the SSA write. The propagate-hash is computed over the spe
 dependents reference plus propagateWhen state — match stops downstream evaluation. On restart, no
 cached hashes exist — the first reconcile evaluates all nodes, applies unconditionally (no hash to
 compare against), and populates the hashes for steady-state. The label prefix is a DNS subdomain
-(253-character limit), so graph names and node IDs must be DNS labels — no dots, parsing
-unambiguous.
+(253-character limit). Graph names and non-forEach node IDs are single DNS labels. forEach children
+extend the prefix with additional labels encoding the resource key (see
+[Child Identity](#child-identity)).
 
 ### Wind
 
@@ -139,7 +141,8 @@ current-reconcile state for dependencies, which is always available.
 5. **Dispatch:**
    - Watch: GET full object. Data enters scope. Pending if absent.
    - Collection Watch: GET matching objects. Array enters scope.
-   - forEach: evaluate collection, diff items, process changed children (see [forEach](#foreach)).
+   - forEach parent: evaluate collection, determine children, dispatch changed children
+     (see [forEach](#foreach)).
    - Owns: evaluate template, hash desired state, compare against in-memory template-hash from
      previous evaluation. Match → skip write (unless drift timer triggered — apply unconditionally).
      Differs → SSA apply. 409 → Conflict.
@@ -211,71 +214,108 @@ set. forEach scale-down, includeWhen toggles, and revision transitions all produ
 one mechanism. Superseded revisions provide reverse dependency ordering and finalizes metadata for
 their resources.
 
-forEach children use the same label scheme as static nodes. The child's node ID is
-`<parentID>-<contentHash>` — a truncated content hash of the serialized collection item. This is
-DNS-legal, stable across reordering, and works for any item type (`[]any`). Item mutation changes the
-content hash, so the forEach treats it as "old item removed, new item added" — the child
-re-evaluates. Whether the managed resource is replaced depends on the template: if the resource key
-(GVK + namespace + name) is stable across the mutation, the applied set diff sees no change and no
-prune occurs. If the resource key depends on the mutated field, the old resource is pruned and a new
-one created — correct behavior. Two items with identical content produce the same hash and
-deduplicate to one child. The child's label key is
-`<parentID>-<hash>.<graph>.<ns>.internal.kro.run/role`.
-Per-child errors are recorded on the parent's evaluation: the parent is not Ready until all children
-are applied. If any child errors, the parent inherits the error state and surfaces it in the Graph's
-status with the child's identity. When multiple children error, deterministic errors (Error) take
-precedence over transient errors (SystemError, Conflict) — if any child's failure is deterministic,
-retrying cannot resolve the parent.
+forEach children participate in the applied set like any other node — each child's managed resource
+carries the identity label keyed by resource key (GVK + namespace + name). The parent is a logical
+node with no applied set entry. See [forEach](#foreach) for child identity, node ID encoding, and
+error handling.
 
 ## forEach
 
-A forEach node is a parent that stamps child nodes — one per item in a collection. Each child is an
-independent node in the DAG with its own template, hash, and dependency edges.
+A forEach node is a parent that expands into child nodes — one per item in a collection. The parent
+is a logical node (no managed resource). Children are nodes — all existing per-node machinery
+applies.
 
 ```
                                 forEach parent
                                 ┌──────────┐
-    ${namespaces} ─────────────▶│ policies │
+    ${namespaces} ─────────────▶│ policies │  (logical — no managed resource)
                                 │ (parent) │
                                 └────┬─────┘
-                          ┌──────────┼──────────┐
-                          ▼          ▼          ▼
-                     ┌─────────┐ ┌─────────┐ ┌─────────┐
-                     │ pol/ns-a│ │ pol/ns-b│ │ pol/ns-c│
-                     │ (child) │ │ (child) │ │ (child) │
-                     └─────────┘ └─────────┘ └─────────┘
+                  ┌──────────────────┼──────────────────┐
+                  ▼                  ▼                  ▼
+     ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+     │ default-deny/ns-a│ │ default-deny/ns-b│ │ default-deny/ns-c│
+     │     (child)      │ │     (child)      │ │     (child)      │
+     └──────────────────┘ └──────────────────┘ └──────────────────┘
 ```
 
-**The parent node** evaluates the collection expression and caches each item's last-known state,
-keyed by a content hash of the item. The parent completes when all
-children have been processed — applied and in scope. Downstream nodes that depend on the forEach
-proceed once the parent completes. They do not wait for every child to satisfy readyWhen — data
-availability is the gate, not health. The parent enters scope as an array of child outputs — the
-same type Collection Watch produces. `${policies}` is an array. `${policies.size()}` returns the
-count. Downstream CEL expressions consume forEach the same way they consume any collection. Child
-identity is internal to the parent — downstream nodes depend on the parent (the array), not
-individual children.
+### Child Identity
 
-**Child nodes** bind the iterator variable to their item and evaluate the template independently.
-Each child is identified by the collection item it's bound to. If the collection returns items in a
-different order, the children are the same — same identities, same templates, no churn.
+A child's identity is scoped to its parent and encodes the full resource key as DNS subdomain
+labels within the label key:
 
-**On reconcile,** the parent diffs the current collection against the cached state:
+    <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/role
 
-1. Re-evaluate the collection expression
-2. Diff item identities against cached identities — detect adds, removes, changes
-3. Changed items: update cached state, evaluate that child's template
-4. Unchanged items: skip template evaluation
+For the concrete example — NetworkPolicy `default-deny` in namespace `ns-a`, parent `policies`,
+graph `mygraph` in namespace `default`:
 
-forEach evaluates only changed items, not the entire collection. The identity diff is negligible.
-Template evaluations — the real cost — only run for items whose data actually changed. New items
-create child nodes. Removed items are pruned. If the collection expression cannot evaluate (upstream
-is Pending), the intended item set is unknown — prune is blocked and existing children persist until
-the next successful evaluation.
+    policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/role
+
+This is the same label key structure as any node — the parent ID is the first label, followed by
+the resource key components as additional DNS labels before the graph identity. A non-forEach node
+`deploy` produces `deploy.mygraph.default.internal.kro.run/role`. Uniqueness is across the full resource key (GVK + namespace + name). If the rendered key changes, that's a new child — the old one is a prune
+candidate. Resource keys must be unique across children of the same parent — validated at expansion
+time.
+
+### Parent Expansion
+
+The parent evaluates the collection and determines which children exist. This is the one new
+operation the DAG supports: a logical node that expands into children at walk time.
+
+1. **Evaluate collection** — CEL expression produces `[]any`. An empty collection produces zero
+   children — the parent enters scope as `[]` and is Ready (readyWhen is per-child; zero children
+   means vacuously satisfied).
+2. **Render identity** — per item, bind the iterator variable and resolve the identity fields:
+   `apiVersion`, `kind`, `metadata.name`, and `metadata.namespace`. Any of these may be CEL
+   expressions. If any identity expression cannot evaluate — upstream dependency Pending, CEL type
+   error, nil dereference — the parent is Pending (upstream not ready) or Error (expression failure).
+   Expansion does not proceed and existing children persist. Partial expansion is never attempted.
+3. **Dispatch children** — each child evaluates its template like any node, with the iterator
+   variable bound to the collection item. readyWhen expressions are evaluated per-child — within
+   readyWhen, `${policies}` binds to the individual child's managed resource. In all other contexts
+   (downstream templates, scope), `${policies}` is the parent's aggregated `[]any`.
+4. **Aggregate** — the parent collects child scope entries into `[]any` and enters scope. The parent
+   does not wait for readyWhen — downstream nodes proceed as soon as child data is in scope.
+
+### Parent State
+
+The parent's state is derived from its children:
+
+- **Pending** — any child has not yet been dispatched or is awaiting its first result
+- **Ready** — all children Ready
+- **NotReady** — any child NotReady, none in error states
+- **Error/Conflict/SystemError** — any child in an error state. Error states take precedence over
+  Pending — a child that attempted apply and got a Conflict is in Conflict state, not Pending.
+  Deterministic errors (Error) take precedence over transient errors (SystemError, Conflict) — if
+  any child's failure is deterministic, retrying cannot resolve the parent. Per-child detail surfaces
+  in Graph status.
+
+### Collection Ordering
+
+The `[]any` array downstream nodes receive matches expansion order. The expansion is deterministic
+given the same input collection — same items in the same order produce the same children in the same
+order. Observed state (resources read back from the cluster) is aligned to expansion order by
+resource key during aggregation.
+
+Ordering stability depends on the input collection's stability. If the input reorders (API server
+returns namespaces in a different order), the downstream `[]any` reorders — but each child's
+identity (resource key) is unchanged. Index-sensitive downstream CEL (`${policies[0]}`) is fragile
+unless the collection is explicitly sorted.
+
+### Prune (Scale-Down)
+
+A removed collection item means a child that existed last cycle is absent this cycle. The child's
+managed resource is in the previous applied set but not the current one — standard prune candidate.
+Prune in reverse dependency order. If the forEach node itself is removed from the spec (revision
+transition), children are pruned before the parent is removed from the DAG.
+No forEach-specific scale-down logic — the applied set diff handles it.
+
+If the collection expression cannot evaluate (upstream is Pending), the intended child set is
+unknown — prune is blocked and existing children persist until the next successful evaluation.
 
 ### forEach Strategies
 
-forEach stamps a single template per item. If you need multiple resources per item, two options:
+forEach expands a single template per item. If you need multiple resources per item, two options:
 
 **Sibling forEach blocks** — two forEach entries with the same collection expression. Dependencies
 between them are expressed in the outer DAG. This is the default. Use it when each item needs a
@@ -308,7 +348,7 @@ small number of resources with straightforward dependencies between them.
       podSelector: {}
 ```
 
-**Nested Graphs** — forEach stamps a child Graph per item. Each child Graph is independently
+**Nested Graphs** — forEach creates a child Graph per item. Each child Graph is independently
 reconciled by its own watches. Use nested Graphs when per-item isolation matters — a failure in one
 item shouldn't affect others' reconcile cadence — or when each item's subgraph is complex
 enough that you'd write a separate Graph for it by hand.
@@ -418,7 +458,8 @@ Level 0:  config (Watch)      namespaces (Collection Watch)
               │                       │
 Level 1:  deploy (Owns)       policies (forEach parent)
               │                  ┌────┼────┐
-Level 2:  service (Owns)     pol/a  pol/b  pol/c  (forEach children)
+Level 2:  service (Owns)     default-deny  default-deny  default-deny  (forEach children)
+                               /ns-a        /ns-b         /ns-c
 ```
 
 Two independent branches. A change to config propagates through the left branch — deploy and service
@@ -473,7 +514,7 @@ left branch:
 | deploy     | No         | Yes (config)      | Evaluate template (config in scope) → hash differs → SSA apply            | NotReady   |
 | service    | No         | Yes (deploy)      | propagateWhen unsatisfied (rollout in progress) → retain previous state   | Ready      |
 | policies   | No         | No                | Skip                                                                      | —          |
-| pol/ns-\*  | No         | No                | Skip                                                                      | —          |
+| policies/*  | No         | No                | Skip                                                                      | —          |
 
 1 apply. Service gated by propagateWhen. Right branch untouched — no trigger, no propagation.
 
@@ -486,7 +527,7 @@ When the rollout completes, a Deployment status watch fires for `deploy`:
 | deploy     | Yes        | No                | GET full object → propagateWhen now satisfied → propagation (gate changed)    | Ready      |
 | service    | No         | Yes (deploy)      | Evaluate template (deploy in scope) → hash matches → skip write           | Ready      |
 | policies   | No         | No                | Skip                                                                           | —          |
-| pol/ns-\*  | No         | No                | Skip                                                                           | —          |
+| policies/*  | No         | No                | Skip                                                                           | —          |
 
 0 applies. deploy evaluated because status changed; propagateWhen now satisfied. service
 evaluates but template output unchanged — write skipped.
@@ -503,9 +544,9 @@ Watch event fires for node `namespaces`. Changes propagate through the right bra
 | namespaces                   | Yes        | —                  | GET matching objects → 4 namespaces → differs | Ready      |
 | deploy                       | No         | No                 | Skip                                       | —          |
 | service                      | No         | No                 | Skip                                       | —          |
-| policies                     | No         | Yes (namespaces)   | Diff items: new key `d`. a, b, c unchanged | Ready      |
-| pol/ns-d                     | —          | —                  | New child → evaluate → SSA apply           | Ready      |
-| pol/ns-a, pol/ns-b, pol/ns-c | —          | —                  | Unchanged → skip                           | Ready      |
+| policies                     | No         | Yes (namespaces)   | Expand children: new child for `d`. a, b, c unchanged | Ready      |
+| policies/default-deny/ns-d   | —          | —                  | New child → evaluate → SSA apply           | Ready      |
+| policies/default-deny/ns-{a,b,c} | —     | —                  | Input hash match → skip                    | Ready      |
 
 1 apply. Left branch untouched. Three existing children skipped.
 
@@ -522,10 +563,11 @@ computed but do not gate evaluation — every node passes the skip check because
 | namespaces | GET matching objects → template hash unchanged → skip write         | Ready      |
 | deploy     | GET full object → template hash unchanged → skip write              | Ready      |
 | monitoring | New node → evaluate template → SSA apply                        | Ready      |
-| policies   | Evaluate collection → content hashes unchanged → same children      | Ready      |
-| pol/ns-\*  | Template hash unchanged → skip write                            | Ready      |
+| policies   | Evaluate collection → same children as before                   | Ready      |
+| policies/*  | Template hash unchanged → skip write                            | Ready      |
 
-Active revision's applied set: {deploy, monitoring, pol/ns-a, pol/ns-b, pol/ns-c, pol/ns-d}.
+Active revision's applied set: {deploy, monitoring, policies/default-deny/ns-a,
+policies/default-deny/ns-b, policies/default-deny/ns-c, policies/default-deny/ns-d}.
 Previous revision's applied set included `service`. Prune: delete service.
 
 1 apply + 1 delete.
@@ -617,5 +659,23 @@ equivalent.
 but imposes an N-write steady-state tax. Drift timers with jitter correct drift within the interval
 at near-zero steady-state cost.
 
-Also rejected: index-based forEach identity (reordering causes churn), forEach as a subgraph stamper
-(sibling blocks and nested Graphs compose better).
+**forEach as a single node with internal iteration.** The forEach handler reimplements scheduling,
+state tracking, readyWhen, and change detection inside a mini-coordinator — a parallel system
+alongside the DAG walk. Parent-child makes children real nodes. One system.
+
+**forEach children as dynamic siblings.** Children appear as peers in the DAG rather than under a
+parent. No natural aggregation point for downstream consumers — the parent-child relationship has to
+be reinvented as a convention. Aggregation is structural, not conventional.
+
+**Index-based forEach identity.** Child identity derived from position in the collection. If the
+collection reorders (API server returns namespaces in a different order), children churn — deletes
+and recreates for what should be no-ops. Resource-key identity is stable under reordering.
+
+**Content-hash forEach identity.** Child identity derived from a hash of the collection item. Any
+field mutation changes the hash — a label change on a namespace produces a new child identity,
+triggering delete and recreate. Resource-key identity changes only when the template's identity
+fields (namespace, name) change.
+
+**forEach as a subgraph stamper.** forEach expands into a subgraph of multiple resources per item.
+Sibling forEach blocks and nested Graphs already compose for multi-resource-per-item cases — one
+template per forEach keeps the primitive simple.

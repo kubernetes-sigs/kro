@@ -63,8 +63,10 @@ order is not significant — execution order is determined by the dependency gra
 #### id
 
 A string that names the node within the Graph's scope. Other nodes reference it by this name
-in CEL expressions. Must be unique within the Graph. Must be camelCase — hyphens are parsed as
-subtraction by the CEL evaluator (e.g., `my-app` is interpreted as `my` minus `app`).
+in CEL expressions. Must be unique within the Graph. Hyphens are not allowed — they are parsed as
+subtraction by the CEL evaluator (e.g., `my-app` is `my` minus `app`). May be camelCased for
+readability. The node ID is lowercased when embedded in the identity label key; IDs that collide
+after lowercasing are rejected at compile time.
 
 After a node is processed, its `id` enters scope as a variable available to CEL expressions in
 downstream nodes. The value and type depend on the template shape — see below.
@@ -130,9 +132,16 @@ Watch, and Contribute templates, or as an array for Collection Watch.
 
 #### forEach
 
-Stamps the template once per item in a collection. The collection is a CEL expression referencing a
+Expands the template once per item in a collection. The collection is a CEL expression referencing a
 collection watch or any array in scope. Each iteration binds the item to a named variable available
-within the template.
+within the template. The forEach node is a logical parent — it expands into one child node per item.
+Each child is a real node that manages one resource. Child identity is scoped to the parent — the
+child's node ID combines the parent's ID with the rendered resource key (GVK + namespace + name).
+
+After processing, the parent enters scope as an array of child outputs — `${policies}` is `[]any`.
+Downstream nodes depend on the parent, not individual children. The parent enters scope (enabling
+downstream evaluation) when all children have applied. `.ready()` additionally requires all children
+to satisfy readyWhen.
 
 ```yaml
 - id: policies
@@ -181,8 +190,10 @@ assessment for that node. `.ready()` returns true when the node is applied and i
 conditions pass (or the node has no readyWhen). This is the graph's own readiness model, not a
 Kubernetes conditions check.
 
-For collection nodes (forEach, collection watch), `.ready()` returns true when all items in the
-collection are ready. A collection's readiness is a function of its children's readiness.
+For forEach nodes, readyWhen is evaluated per-child — each child checks readyWhen independently
+using the standard per-node mechanism. `.ready()` on a forEach parent returns true when all children
+are ready. A collection watch's `.ready()` returns true when the node's readyWhen conditions pass
+(evaluated once against the whole array, not per-item).
 
 `.ready()` is not transitive across the DAG — it reflects only the node's own readiness, not its
 dependencies'. Most dependencies are partial (you depend on `dep.spec.something`, not full
@@ -265,11 +276,11 @@ Kubernetes object — it is created via the API server and reconciled independen
 reconciliation. Each level is a separate reconciliation loop with its own resource scope.
 
 The combination of collection watch, forEach, and nested Graphs creates per-instance controllers. A
-parent Graph watches a kind via collection watch, forEach stamps one child Graph per item, and each
+parent Graph watches a kind via collection watch, forEach creates one child Graph per item, and each
 child Graph independently reconciles resources for its item.
 
 ```yaml
-# Parent Graph — watches all Namespaces, stamps a child Graph per Namespace
+# Parent Graph — watches all Namespaces, creates a child Graph per Namespace
 - id: namespaces
   template:
     apiVersion: v1

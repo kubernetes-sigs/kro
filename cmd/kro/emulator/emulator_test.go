@@ -562,10 +562,6 @@ func TestGenerateValueWithPreserveUnknownFields(t *testing.T) {
 	})
 }
 
-func ptr[T comparable](v T) *T {
-	return &v
-}
-
 // Helper function to check if a value is either int64 or string
 func isInt64OrString(v interface{}) bool {
 	switch v.(type) {

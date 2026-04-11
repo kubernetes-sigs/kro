@@ -38,14 +38,19 @@ Nodes with no dependency relationship are independent and can be processed in pa
 
 Each reconcile walks every node in topological order. At each node: should I evaluate?
 
-A node evaluates when any of these hold:
+A node evaluates when it has an external trigger or a propagation trigger.
+
+External triggers — events outside the current walk:
 
 - A watch event fired for this node
-- A dependency was invalidated during this walk
 - The node's drift timer expired
 - The node is in a transient error state (SystemError) — backoff retry with a low cap,
   then wait for drift timer
 - First reconcile or revision transition (all nodes)
+
+Propagation triggers — events from within the current walk:
+
+- A dependency was invalidated during this walk (propagation hash changed at step 7)
 
 Watch events on managed resources (Owns, Contribute) are routed by the identity label key, which
 encodes the node ID. Watch events on unowned resources (Watch, Collection Watch) are routed by GVK +
@@ -116,16 +121,18 @@ unambiguous.
 Forward topological walk. Every dependency is visited before its dependents — steps read
 current-reconcile state for dependencies, which is always available.
 
-1. **Skip check** — not triggered and no dependency invalidated → skip. Retains previous evaluation.
+1. **Skip check** — no external trigger and no propagation trigger → skip. Retains previous evaluation.
 2. **Dependency check** — any dependency Excluded → Excluded, regardless of other dependencies'
    states (definitive absence propagates; the node is structurally non-viable). Any dependency in a
    blocked state → inherit Blocked. Excluded takes precedence over Blocked: if a node has both, it
    is Excluded — the blocked dependency's resolution cannot make the node viable while the Excluded
    dependency is absent.
 3. **propagateWhen** — any dependency's propagateWhen unsatisfied → gate. Template not evaluated.
-   Previous evaluation retained (or Pending if never evaluated). Gate takes precedence over
-   triggers — including revision transitions. A revision transition marks all nodes as triggered, but
-   a gated node still waits for its dependency's propagateWhen to be satisfied before evaluating.
+   Previous evaluation and state retained. If never evaluated, the node remains Pending — dependents
+   see a dependency that hasn't produced data and inherit Blocked. This is correct: gated-and-never-
+   evaluated means the node's output is genuinely unavailable, not merely stale. Gate takes precedence
+   over triggers — including revision transitions. A revision transition marks all nodes as triggered,
+   but a gated node still waits for its dependency's propagateWhen to be satisfied before evaluating.
    When the gate opens on a later reconcile, the node evaluates with current informer
    state — changes during the gate period are visible at that point.
 4. **includeWhen** — false → Excluded.
@@ -204,7 +211,16 @@ set. forEach scale-down, includeWhen toggles, and revision transitions all produ
 one mechanism. Superseded revisions provide reverse dependency ordering and finalizes metadata for
 their resources.
 
-forEach children use the same label scheme as static nodes (identity label).
+forEach children use the same label scheme as static nodes. The child's node ID is
+`<parentID>-<contentHash>` — a truncated content hash of the serialized collection item. This is
+DNS-legal, stable across reordering, and works for any item type (`[]any`). Item mutation changes the
+content hash, so the forEach treats it as "old item removed, new item added" — the child
+re-evaluates. Whether the managed resource is replaced depends on the template: if the resource key
+(GVK + namespace + name) is stable across the mutation, the applied set diff sees no change and no
+prune occurs. If the resource key depends on the mutated field, the old resource is pruned and a new
+one created — correct behavior. Two items with identical content produce the same hash and
+deduplicate to one child. The child's label key is
+`<parentID>-<hash>.<graph>.<ns>.internal.kro.run/role`.
 Per-child errors are recorded on the parent's evaluation: the parent is not Ready until all children
 are applied. If any child errors, the parent inherits the error state and surfaces it in the Graph's
 status with the child's identity. When multiple children error, deterministic errors (Error) take
@@ -231,10 +247,14 @@ independent node in the DAG with its own template, hash, and dependency edges.
 ```
 
 **The parent node** evaluates the collection expression and caches each item's last-known state,
-keyed by the item's identity (stable name or UID, not array position). The parent completes when all
+keyed by a content hash of the item. The parent completes when all
 children have been processed — applied and in scope. Downstream nodes that depend on the forEach
 proceed once the parent completes. They do not wait for every child to satisfy readyWhen — data
-availability is the gate, not health.
+availability is the gate, not health. The parent enters scope as an array of child outputs — the
+same type Collection Watch produces. `${policies}` is an array. `${policies.size()}` returns the
+count. Downstream CEL expressions consume forEach the same way they consume any collection. Child
+identity is internal to the parent — downstream nodes depend on the parent (the array), not
+individual children.
 
 **Child nodes** bind the iterator variable to their item and evaluate the template independently.
 Each child is identified by the collection item it's bound to. If the collection returns items in a
@@ -448,7 +468,7 @@ left branch:
 
 | Node       | Triggered? | Dep invalidated? | Action                                                                    | Evaluation |
 |------------|------------|-------------------|---------------------------------------------------------------------------|------------|
-| config     | Yes        | —                 | Read from informer → hash referenced paths → differs → invalidated               | Ready      |
+| config     | Yes        | —                 | GET full object → hash referenced paths → differs → invalidated               | Ready      |
 | namespaces | No         | No                | Skip                                                                      | —          |
 | deploy     | No         | Yes (config)      | Evaluate template (config in scope) → hash differs → SSA apply            | NotReady   |
 | service    | No         | Yes (deploy)      | propagateWhen unsatisfied (rollout in progress) → retain previous state   | Ready      |
@@ -463,7 +483,7 @@ When the rollout completes, a Deployment status watch fires for `deploy`:
 |------------|------------|-------------------|--------------------------------------------------------------------------------|------------|
 | config     | No         | No                | Skip                                                                           | —          |
 | namespaces | No         | No                | Skip                                                                           | —          |
-| deploy     | Yes        | No                | Read from informer → propagateWhen now satisfied → propagation (gate changed) | Ready      |
+| deploy     | Yes        | No                | GET full object → propagateWhen now satisfied → propagation (gate changed)    | Ready      |
 | service    | No         | Yes (deploy)      | Evaluate template (deploy in scope) → hash matches → skip write           | Ready      |
 | policies   | No         | No                | Skip                                                                           | —          |
 | pol/ns-\*  | No         | No                | Skip                                                                           | —          |
@@ -480,7 +500,7 @@ Watch event fires for node `namespaces`. Changes propagate through the right bra
 | Node                         | Triggered? | Dep invalidated?   | Action                                     | Evaluation |
 |------------------------------|------------|--------------------|--------------------------------------------|------------|
 | config                       | No         | No                 | Skip                                       | —          |
-| namespaces                   | Yes        | —                  | Read from informer → 4 namespaces → differs | Ready      |
+| namespaces                   | Yes        | —                  | GET matching objects → 4 namespaces → differs | Ready      |
 | deploy                       | No         | No                 | Skip                                       | —          |
 | service                      | No         | No                 | Skip                                       | —          |
 | policies                     | No         | Yes (namespaces)   | Diff items: new key `d`. a, b, c unchanged | Ready      |
@@ -498,12 +518,12 @@ computed but do not gate evaluation — every node passes the skip check because
 
 | Node       | Action                                                          | Evaluation |
 |------------|-----------------------------------------------------------------|------------|
-| config     | Read from informer → propagation hash unchanged → no apply          | Ready      |
-| namespaces | Read from informer → propagation hash unchanged → no apply          | Ready      |
-| deploy     | Read from informer → propagation hash unchanged → no apply          | Ready      |
+| config     | GET full object → template hash unchanged → skip write              | Ready      |
+| namespaces | GET matching objects → template hash unchanged → skip write         | Ready      |
+| deploy     | GET full object → template hash unchanged → skip write              | Ready      |
 | monitoring | New node → evaluate template → SSA apply                        | Ready      |
-| policies   | Read from informer → propagation hash unchanged → no apply          | Ready      |
-| pol/ns-\*  | Item unchanged → skip template evaluation                       | Ready      |
+| policies   | Evaluate collection → content hashes unchanged → same children      | Ready      |
+| pol/ns-\*  | Template hash unchanged → skip write                            | Ready      |
 
 Active revision's applied set: {deploy, monitoring, pol/ns-a, pol/ns-b, pol/ns-c, pol/ns-d}.
 Previous revision's applied set included `service`. Prune: delete service.

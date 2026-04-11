@@ -47,7 +47,6 @@ spec:
             internal.kro.run/graph-generation: "3"
             internal.kro.run/graph-name: my-app
             internal.kro.run/node-id: deployment
-          annotations:
             internal.kro.run/template-hash: f7e8d9c0b1a2
         spec:
           replicas: 3
@@ -72,7 +71,6 @@ spec:
             internal.kro.run/graph-generation: "3"
             internal.kro.run/graph-name: my-app
             internal.kro.run/node-id: service
-          annotations:
             internal.kro.run/template-hash: 1a2b3c4d5e6f
         spec:
           selector: ${deployment.spec.selector.matchLabels}
@@ -103,6 +101,16 @@ what needs to be re-interpreted. This is the migration path.
   converges to `True` when the controller has reconciled all resources to their desired state. The
   controller stops observing a superseded revision — its Ready condition reflects the last-known
   state, not a live signal.
+- **`nodes`** — per-node operational state, keyed by node ID. Each entry contains:
+  - `propagateHash` — hash of the specific field paths dependents reference + propagateWhen state
+  - `resolvedKey` — GVK + namespace + name of the managed resource
+
+  The applied set (all resources managed by this Graph) is derived from the watch cache — resources
+  matching `graph-name` in the controller's informer stores. Not persisted in revision status.
+
+  The revision spec is immutable (what to apply). The revision status is the controller's scratchpad
+  (what happened when it did). On restart, the controller reads status to resume without
+  re-evaluating everything.
 
 ## Lifecycle
 
@@ -129,8 +137,8 @@ reverse dependency order. Once the finalizer clears and the Graph is removed, th
 cascading-deletes any remaining revisions.
 
 Revisions are derived artifacts. If manually deleted, the controller regenerates the active revision
-from the current Graph spec on the next reconcile. The applied set on the revision — not the Graph —
-is the authoritative record of what was written to the cluster.
+from the current Graph spec on the next reconcile. The applied set — derived from the watch cache,
+not the revision — is the authoritative record of what was written to the cluster.
 
 ## Why Not
 

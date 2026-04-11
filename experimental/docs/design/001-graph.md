@@ -212,13 +212,13 @@ explicitly:
 #### propagateWhen
 
 A list of CEL expressions. All must evaluate to `true` for the node's updated data to flow to
-dependents. During transitions (e.g., a rolling update), dependents skip re-evaluation while
+dependents. During transitions (e.g., a rolling update), dependents skip evaluation while
 propagateWhen is unsatisfied — they retain their last-applied state. When propagateWhen passes,
-dependents re-evaluate against the now-stable data.
+dependents evaluate against the now-stable data.
 
 readyWhen and propagateWhen are complementary: readyWhen is a health signal (feeds Graph status),
 propagateWhen is a data flow gate (controls when dependents see new values). A node without
-propagateWhen propagates immediately — dependents re-evaluate on every reconcile.
+propagateWhen propagates immediately — dependents evaluate on every reconcile.
 
 ```yaml
 - id: deployment
@@ -353,7 +353,7 @@ fixed.
 | `CycleDetected`     | Dependency graph contains a cycle |
 | `InvalidSpec`       | Structural spec error             |
 
-**`Ready`** — a rollup of node plan states. Each reason maps to the node state blocking convergence.
+**`Ready`** — a rollup of node evaluations. Each reason maps to the node state blocking convergence.
 `True` means converged. `Unknown` means converging — the controller is making progress and no
 intervention is needed. `False` means stuck — something requires operator action. Alarm on `False`
 or `Unknown` for too long.

@@ -206,13 +206,13 @@ second Graph must use Force.
 
 ### Tracking
 
-The controller tracks every resource it has applied to — the applied set. On prune or teardown,
-the controller iterates this set to know which resources need cleanup and how (delete for Owns,
-release for Contribute). The applied set records resource keys. Template shape and subresource
-information are derived from the revision spec.
+The controller tracks every resource it has applied to — the applied set, derived from the watch
+cache by `graph-name` label. On prune or teardown, the controller iterates this set to know which
+resources need cleanup and how (delete for Owns, release for Contribute). Template shape and
+subresource information are derived from the revision spec.
 
-Template hash annotations on resources provide change detection. Hash match → skip the apply. This
-is a performance optimization — the controller converges on spec change, not continuously.
+Template hash labels on resources provide change detection. Hash match → skip the apply. This is a
+performance optimization — the controller converges on spec change, not continuously.
 
 ### Skeleton Apply
 
@@ -220,8 +220,8 @@ Releasing fields uses a skeleton apply — identity-only fields (`apiVersion`, `
 `metadata.name`, `metadata.namespace`). SSA interprets omitted fields as "no longer managed" and
 releases them from this manager. The skeleton apply only targets the subresources the template
 actually applied to: main resource, status subresource, or both. If the skeleton apply returns 404,
-the resource is already gone — release succeeds. If it fails for any other reason, the resource
-remains in the applied set and the release is retried on the next reconcile.
+the resource is already gone — release succeeds. If it fails for any other reason, the release is
+retried on the next reconcile.
 
 ### Teardown
 
@@ -242,8 +242,8 @@ releases. During teardown, the Graph's finalizer holds until the other manager r
 ### Finalizer and Recovery
 
 The Graph carries a finalizer that prevents API server removal until teardown completes. State
-needed for teardown is persisted: the applied set on the revision and template hashes on each
-resource for idempotent re-entry.
+needed for teardown is derived from the watch cache (applied set) and managed resource labels
+(template hashes) — no additional persistence required.
 
 Controller crash mid-teardown: the finalizer prevents Graph removal. Next reconcile re-enters
 teardown. Deleting an already-deleted resource returns 404 — remove from applied set and move on.

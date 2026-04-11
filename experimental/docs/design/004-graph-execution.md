@@ -36,156 +36,162 @@ Nodes with no dependency relationship are independent and can be processed in pa
 
 ## The Walk
 
-A watch event triggers a walk. A cluster change to a resource the Graph cares about enqueues a
-reconcile. No watch event, no reconcile. Steady-state cost is zero when nothing changes.
+Each reconcile walks every node in topological order. At each node: should I evaluate?
 
-Each reconcile walks a scope of the DAG in two phases: wind (forward topological) and prune (reverse
-topological on the diff set). Within each phase, nodes at the same topological level are independent
-and can be processed in parallel. Nodes outside the scope are untouched.
+A node evaluates when any of these hold:
 
-### Scoped Walks
+- A watch event fired for this node
+- A dependency was invalidated during this walk
+- The node's `next-sync` label has passed
+- The node is in a transient error state (SystemError, Conflict) — backoff retry with a low cap,
+  then wait for `next-sync`
+- First reconcile or revision transition (all nodes)
 
-Without scoping, every reconcile walks the entire DAG — every node runs a change check even on
-branches unrelated to the triggering event. Scoped walks restrict the reconcile to the affected
-subgraph.
+Watch events on managed resources (Owns, Contribute) are routed by `node-id` label. Watch events on
+unowned resources (Watch, Collection Watch) are routed by GVK + namespace + name (scalar) or GVK +
+selector (collection) — the controller maintains a mapping from these keys to node IDs, populated
+at graph compilation. A watch event on a GVK the controller monitors triggers all nodes that declare
+a Watch or Collection Watch matching that resource; the propagation hash skips downstream evaluation
+if the node's referenced paths didn't actually change.
 
-Two reverse indexes map watch events to Graphs:
+Deterministic errors (4xx) are not retried — same inputs produce the same failure. They resolve via
+propagation (upstream input changes), revision transition (user fixes the spec), or `next-sync` (the
+consistency floor).
 
-- **Scalar index** — GVR + namespace + name → Graph(s). O(1) per event.
-- **Collection index** — GVR + selector → Graph(s). The watch registration carries the node ID.
+Otherwise — skip. O(1) per skipped node.
 
-A watch event fires for a resource. The node that corresponds to the changed resource is the
-starting point. Walking downstream — to nodes that depend on the starting point — produces the
-walk scope.
+After evaluation, the node's output is hashed — only the specific field paths that downstream CEL
+expressions reference (determined statically at graph compilation from expression ASTs). The hash
+input is the union of all downstream-referenced paths. Absent paths hash to a fixed sentinel value
+that is not a valid Kubernetes field value — the transition from absent to present is a change, not
+a skip. If the hash changed — or no previous hash exists — dependents evaluate when visited later in
+topological order. If not, propagation stops. Changes flow forward through the DAG and stop when they
+stop mattering.
 
-In the common case (a leaf or mid-level node changed), the scope is a small subset of the DAG. In
-the worst case (a root changed), it's the entire DAG. There is no scenario where scoped walks are
-more expensive than full walks.
+Every apply writes a `next-sync` label — a jittered future timestamp (default 5 minutes, jitter
+up to the sync interval). When it expires, the template hash changes (new timestamp value), SSA
+apply fires, and drift is corrected as a side effect. Jitter is per-node, baked into the label, so
+expirations are naturally decorrelated across nodes. This replaces periodic full-graph resync with
+amortized per-node resync.
 
-This model requires that every input to every CEL expression in the DAG corresponds to a watched
-resource. If an expression references something the controller doesn't watch, changes to it are
-invisible and the DAG doesn't reconverge.
+The controller uses metadata-only informers — labels are visible, annotations are not. Full object
+reads happen only during evaluation (step 5). When an evaluated node needs data from a skipped
+dependency, the full object is read from the API server on demand. If absent (deleted externally,
+not yet created), the node is Pending.
 
-### Plan States
+**Storage model.** All controller-managed fields on managed resources use labels — metadata-only
+informers can read labels without fetching the full object. Ownership labels are materialized into
+the revision spec. The revision spec also captures each node's declared template content — enough to
+detect template changes across revisions without re-evaluating. The `template-hash` label on a
+managed resource is computed at apply time over the full apply payload — including runtime-injected
+fields like `next-sync`. It reflects what was actually written, not what the revision spec declares.
+The `internal.kro.run/` prefix marks all controller-internal fields.
 
-Each node in the walk scope lands in exactly one state per reconcile:
-
-| State       | Meaning                        | Dependents | Resolution                          |
-|-------------|--------------------------------|------------|-------------------------------------|
-| Ready       | Applied, readyWhen satisfied   | Proceed    | —                                   |
-| NotReady    | Applied, readyWhen unsatisfied | Proceed    | Converges via watch                 |
-| Pending     | Data not yet available         | Blocked    | Upstream resolves                   |
-| Excluded    | includeWhen false              | Excluded   | includeWhen inputs change           |
-| Blocked     | Dependency in error state      | Blocked    | Dependency resolves                 |
-| Conflict    | Field ownership contested      | Blocked    | Retries next reconcile              |
-| Error       | Client request failed (4xx)    | Blocked    | Retries next reconcile              |
-| SystemError | Server/infra failure (5xx)     | Blocked    | Retries next reconcile              |
-
-Ready and NotReady are both "applied and in scope." readyWhen is a health signal that feeds the
-Graph's aggregated status — it does not gate dependents. Dependents proceed as soon as the node's
-data is in scope.
-
-Blocked states (Pending, Conflict, Error, SystemError) propagate as Blocked — dependents of a
-blocked node are also blocked, and their previous applied keys are retained. Excluded propagates
-as Excluded — dependents of an excluded node are also excluded, and their resources are prune
-candidates. The distinction matters: Excluded is definitive absence (includeWhen evaluated to
-false), Blocked is uncertain absence (the resource might appear once the upstream error resolves).
-Pruning a blocked node's resources would be data loss. Independent branches are unaffected.
+| What | Where | Purpose |
+|---|---|---|
+| `graph-name`, `graph-generation`, `node-id` | Managed resource labels | Watch routing, ownership |
+| `template-hash` | Managed resource label | Skip write if desired state unchanged |
+| `next-sync` | Managed resource label | Resync scheduling |
+| `propagateHash`, `resolvedKey` | Revision status (per-node) | Graph topology state |
 
 ### Wind
 
-Forward topological walk through the scoped nodes. For each node:
+Forward topological walk. Every dependency is visited before its dependents — steps read
+current-reconcile state for dependencies, which is always available.
 
-1. **Dependency check** — if any dependency is in a blocked state, skip. The node inherits the
-   blocked state.
-2. **propagateWhen check** — if a dependency has `propagateWhen` unsatisfied, the node retains its
-   previous plan state and data in scope. It is not re-evaluated. propagateWhen gates data flow
-   during transitions — a Deployment mid-rollout has data in scope, but propagateWhen prevents that
-   transitional state from flowing to dependents. readyWhen is a health signal. propagateWhen is a
-   data flow gate.
-3. **Change check** — hash the node's inputs and compare against the previous reconcile's hash. If
-   the hash matches, the node's inputs haven't changed — evaluation would produce the same result.
-   The node retains its previous state, data in scope, and applied set entries. Skip to the next
-   node. When only gate-relevant inputs changed, skip template evaluation and apply, re-evaluate
-   only the gate conditions.
+1. **Skip check** — not triggered and no dependency invalidated → skip. Retains previous evaluation.
+2. **Dependency check** — any dependency Excluded → Excluded, regardless of other dependencies'
+   states (definitive absence propagates; the node is structurally non-viable). Any dependency in a
+   blocked state → inherit Blocked. Excluded takes precedence over Blocked: if a node has both, it
+   is Excluded — the blocked dependency's resolution cannot make the node viable while the Excluded
+   dependency is absent.
+3. **propagateWhen** — any dependency's propagateWhen unsatisfied → gate. Template not evaluated.
+   Previous evaluation retained (or Pending if never evaluated). Gate takes precedence over
+   triggers — including revision transitions. A revision transition marks all nodes as triggered, but
+   a gated node still waits for its dependency's propagateWhen to be satisfied before evaluating.
+   When the gate opens on a later reconcile, the node evaluates with current informer
+   state — changes during the gate period are visible at that point.
+4. **includeWhen** — false → Excluded.
+5. **Dispatch:**
+   - Watch: GET full object. Data enters scope. Pending if absent.
+   - Collection Watch: GET matching objects. Array enters scope.
+   - forEach: evaluate collection, diff items, process changed children (see [forEach](#foreach)).
+   - Owns: evaluate template, inject `next-sync`, hash desired state, compare against
+     `template-hash` label on managed resource. Match → skip write. Differs → SSA apply.
+     409 → Conflict.
+   - Contribute: same as Owns. 409 → Conflict. Auto-splits status subresource.
+   
+   When a template targets both the main resource and the status subresource, the controller
+   splits the apply into two operations. If the status subresource apply fails, the controller
+   reverts the `template-hash` label to its previous value. Crash between the two operations
+   leaves a forward hash — the next reconcile sees a mismatch (status is stale) and retries
+   both. The failure mode is an unnecessary re-apply, which is idempotent.
+6. **readyWhen** — Ready or NotReady. Data is in scope regardless.
+7. **Propagation check** — hash the specific field paths dependents reference (union of downstream CEL
+   access chains) + propagateWhen state, compare against `propagateHash` in revision status. Differs
+   → node invalidated, update `propagateHash` in revision status. Matches → propagation stops.
+   `propagateHash` is written only when the node is invalidated — unchanged evaluations skip the
+   status write.
 
-4. **includeWhen** — evaluate. If false, mark Excluded.
-5. **Dispatch by shape:**
-   - Watch: data enters scope. Pending if absent.
-   - Collection Watch: array enters scope.
-   - forEach parent: evaluate collection, diff items, process changed children (see
-     [forEach](#foreach)).
-   - Owns: evaluate template, hash the evaluated template, compare against previous. Match → skip
-     write. Differs → SSA apply.
-   - Contribute: same as Owns but force-apply. Auto-splits status subresource.
-6. **readyWhen** — evaluate. Sets Ready or NotReady. Data is in scope regardless.
+Node's data enters scope after processing. For Owns and Contribute, the full object is always read
+during evaluation regardless of whether the write is skipped — the template hash governs the write
+decision, not the read. Two hashing boundaries: template hash (step 5) skips the write, propagation
+hash (step 7) skips downstream evaluation.
 
-After processing, the node's data enters scope — the full Kubernetes object including server-assigned
-fields. Downstream nodes can reference it.
+### Node Evaluation
 
-Every boundary in this pipeline hashes its input to avoid unnecessary work: the change check (step 3)
-hashes the node's inputs to skip evaluation, the dispatch (step 5) hashes the evaluated template to
-skip the write. One mechanism at each level — skip when the input hasn't changed.
+Each node's evaluation resolves to exactly one state:
+
+| State       | Meaning                        | Dependents | Resolution                |
+|-------------|--------------------------------|------------|---------------------------|
+| Ready       | Applied, readyWhen satisfied   | Proceed    | —                         |
+| NotReady    | Applied, readyWhen unsatisfied | Proceed    | Converges via watch       |
+| Pending     | Data not yet available         | Blocked    | Upstream resolves         |
+| Excluded    | includeWhen false              | Excluded   | includeWhen inputs change |
+| Blocked     | Dependency in error state      | Blocked    | Dependency resolves       |
+| Conflict    | Field ownership contested      | Blocked    | Backoff retry, then `next-sync` |
+| Error       | Client request failed (4xx)    | Blocked    | Propagation, revision, or `next-sync` |
+| SystemError | Server/infra failure (5xx)     | Blocked    | Backoff retry, then `next-sync` |
+
+Ready and NotReady are both "applied and in scope." readyWhen is a health signal — it does not gate
+dependents. Blocked states propagate as Blocked (uncertain absence — previous applied keys retained,
+not safe to prune). Excluded propagates as Excluded (definitive absence — safe to prune).
 
 ### Prune
 
-After wind, the controller diffs the current key set against the applied set. Resources in the
-applied set but absent from the current set are prune candidates.
+After wind, diff the current key set against the applied set. Absent resources are prune candidates
+if their absence is definitive (Excluded, removed from revision). Uncertain absence (Pending,
+Error, SystemError) blocks pruning — the resource might reappear once the blocker resolves.
 
-Not all absent resources should be pruned:
+Conflict is deliberately excluded from the prune gate: a 409 is positive evidence that the resource
+exists (another actor owns contested fields). Prune is the designed recovery mechanism for
+conflicts during revision transitions — the old revision's resource is removed from the applied
+set, and the new revision's template creates it fresh without the contested field ownership. A
+template change clears the conflict state — the new template doesn't contest the same fields.
 
-- **Definitive absence** — excluded by includeWhen, or removed from the active revision. Safe to
-  prune.
-- **Uncertain absence** — a dependency is Pending, Error, or SystemError. The resource might appear
-  once the blocker resolves. Not safe to prune.
-
-Prune candidates are removed in reverse dependency order. Owns nodes delete the resource. Contribute
-nodes release fields via skeleton apply. Watch and Collection Watch take no action. If reverse
-dependency ordering is unavailable, prune is blocked — the controller never degrades to unordered
-deletion.
-
-If a prune candidate has finalizer resources (`finalizes` references pointing at it), the
-finalization sequence runs before the resource is removed. See [Teardown](#teardown).
-
-forEach scale-down, includeWhen toggles, and revision transitions all produce the same kind of diff.
-The pruning mechanism is uniform.
+Prune in reverse dependency order. Owns → delete. Contribute → release fields via skeleton apply.
+Watch/Collection Watch → no action. If reverse ordering is unavailable, prune is blocked — never
+degrade to unordered deletion. If a prune candidate has `finalizes` references, finalization runs
+first (see [Teardown](#teardown)).
 
 ### Applied Set
 
-The applied set is the set of resource keys (GVK + namespace + name) a revision has written to the
-cluster. It lives on the GraphRevision — the revision is the single source of truth for both what
-was applied (applied set) and in what dependency structure (DAG topology). The Graph object carries
-no tracking state.
+The applied set is derived from the watch cache — all resources matching `graph-name` in the
+controller's informer stores. Not persisted. The controller already watches every GVK it manages;
+every managed resource carries `graph-name`, `graph-generation`, and `node-id` labels. The applied
+set is a view over data that already exists in memory, hydrated on startup from informer list and
+kept current by watch events. No crash window, no stale state, no status size limits.
 
-Each revision starts with an empty applied set and populates it during wind. A node that is
-successfully applied contributes its key. A node that errors does not — the applied set reflects only
-what was actually written. The applied set is committed after wind completes, containing the keys
-from the successful subset. Nodes that errored are re-evaluated on the next reconcile.
+Prune candidates are derived from the cache: resources with `graph-generation` less than the current
+generation, minus resources expected by the current revision's node list. Superseded revisions
+provide reverse dependency ordering and template shape (Owns vs Contribute) for their resources.
 
-The applied set is only written when the key set actually changes, preventing spurious
-resourceVersion bumps and re-reconcile loops in steady state. A forEach that stamps 100 resources
-produces 100 expanded keys. The applied set is stored as an annotation on the GraphRevision, which
-is practical for Graphs managing up to thousands of resources. Larger fan-outs may require a
-different storage mechanism without changing the semantics.
-
-**Scoped walks and the applied set.** A scoped walk evaluates a subset of nodes, but the applied set
-must be complete. The update is a merge: for visited nodes, replace their previous entries with the
-walk's output. For unvisited nodes, retain previous entries. Three cases for visited nodes:
-
-- **Node produced a key** (Ready, NotReady) — the key enters the applied set.
-- **Node produced no key** (Excluded, or forEach with zero items) — the node's previous keys are
-  **removed**. Excluded is a visit outcome, not a skip — the walk reached the node, evaluated
-  includeWhen, and determined it should not exist. Its contribution to the applied set is the empty
-  set.
-- **Node was skipped** (change check match, propagateWhen gate) — previous keys retained.
-
-This merge is correct within a stable revision — the DAG structure hasn't changed, so unvisited
-nodes' entries are still valid. **Revision transitions trigger full walks** because the DAG structure
-changed and stale entries would never be cleaned up by a scoped walk.
-
-**Prune formula:** the prune candidate set is the union of all superseded revisions' applied sets
-minus the active revision's applied set. Each superseded revision's DAG topology provides reverse
-dependency ordering for its resources.
+forEach children use the same managed resource labels as static nodes (`next-sync`, `template-hash`).
+Per-child errors are recorded on the parent's evaluation: the parent is not Ready until all children
+are applied. If any child errors, the parent inherits the error state and surfaces it in the Graph's
+status with the child's identity. When multiple children error, deterministic errors (Error) take
+precedence over transient errors (SystemError, Conflict) — if any child's failure is deterministic,
+retrying cannot resolve the parent.
 
 ## forEach
 
@@ -220,7 +226,7 @@ different order, the children are the same — same identities, same templates, 
 
 1. Re-evaluate the collection expression
 2. Diff item identities against cached identities — detect adds, removes, changes
-3. Changed items: update cached state, re-evaluate that child's template
+3. Changed items: update cached state, evaluate that child's template
 4. Unchanged items: skip template evaluation
 
 forEach evaluates only changed items, not the entire collection. The identity diff is negligible.
@@ -377,8 +383,9 @@ Level 1:  deploy (Owns)       policies (forEach parent)
 Level 2:  service (Owns)     pol/a  pol/b  pol/c  (forEach children)
 ```
 
-Two independent branches. A change to config triggers a scoped walk of the left branch only. A
-change to a Namespace triggers a scoped walk of the right branch only.
+Two independent branches. A change to config propagates through the left branch — deploy and service
+are evaluated, the right branch skips. A change to a Namespace propagates through the right branch —
+policies and children are evaluated, the left branch skips.
 
 ## Revision Transitions
 
@@ -387,8 +394,10 @@ controller winds toward it.
 
 When the Graph's spec changes, a new revision is materialized. The controller abandons any
 in-progress convergence and begins converging toward the new one. Same walk, same prune — but a
-revision change triggers a full walk. The DAG structure changed; the complete key set must be
-recomputed.
+revision change treats all nodes as triggered. The DAG structure changed; the complete key set must
+be recomputed. Nodes that apply during the transition receive a fresh jittered `next-sync`. Nodes
+that skip (unchanged template) retain their existing `next-sync` and resync naturally when it
+expires.
 
 If revision N is propagating when N+1 arrives, N is abandoned. Resources that N partially created
 either match N+1's templates (kept) or don't (pruned). Resources that N never created either appear
@@ -418,58 +427,73 @@ a revision transition.
 
 **Event 1: ConfigMap updated** — `data.image` changed to `nginx:1.26`.
 
-Scope: scalar index → `app-config` → node `config`. BFS: config → deploy → service. Right branch
-not in scope.
+Watch event fires for node `config`. Walk iterates all nodes; changes propagate through the
+left branch:
 
-| Node    | Action                                                                    | Result   |
-|---------|---------------------------------------------------------------------------|----------|
-| config  | GET → change check (`.data`) → differs → new data in scope               | Ready    |
-| deploy  | Change check → differs → evaluate → output hash differs → SSA apply      | NotReady |
-| service | propagateWhen unsatisfied (rollout in progress) → retain previous state   | Ready    |
+| Node       | Triggered? | Dep invalidated? | Action                                                                    | Evaluation |
+|------------|------------|-------------------|---------------------------------------------------------------------------|------------|
+| config     | Yes        | —                 | Read from informer → hash referenced paths → differs → invalidated               | Ready      |
+| namespaces | No         | No                | Skip                                                                      | —          |
+| deploy     | No         | Yes (config)      | Evaluate template (config in scope) → hash differs → SSA apply            | NotReady   |
+| service    | No         | Yes (deploy)      | propagateWhen unsatisfied (rollout in progress) → retain previous state   | Ready      |
+| policies   | No         | No                | Skip                                                                      | —          |
+| pol/ns-\*  | No         | No                | Skip                                                                      | —          |
 
-1 GET + 1 apply. Service skipped by propagateWhen. Right branch untouched.
+1 apply. Service gated by propagateWhen. Right branch untouched — no trigger, no propagation.
 
-When the rollout completes, a Deployment status watch fires. Next reconcile walks {deploy, service}.
-deploy: change check — dependency inputs (`config.data`) unchanged, but own observed state
-(`deploy.status`) changed → hash differs → re-evaluate readyWhen/propagateWhen (template unchanged,
-no apply). propagateWhen now satisfied. service: change check — inputs (`deploy.metadata.name`,
-`deploy.spec.selector.matchLabels`) unchanged. Skip entirely. 0 applies.
+When the rollout completes, a Deployment status watch fires for `deploy`:
+
+| Node       | Triggered? | Dep invalidated? | Action                                                                         | Evaluation |
+|------------|------------|-------------------|--------------------------------------------------------------------------------|------------|
+| config     | No         | No                | Skip                                                                           | —          |
+| namespaces | No         | No                | Skip                                                                           | —          |
+| deploy     | Yes        | No                | Read from informer → propagateWhen now satisfied → propagation (gate changed) | Ready      |
+| service    | No         | Yes (deploy)      | Evaluate template (deploy in scope) → hash matches → skip write           | Ready      |
+| policies   | No         | No                | Skip                                                                           | —          |
+| pol/ns-\*  | No         | No                | Skip                                                                           | —          |
+
+0 applies. deploy evaluated because status changed; propagateWhen now satisfied. service
+evaluates but template output unchanged — write skipped.
 
 ---
 
 **Event 2: Namespace added** — Namespace `d` created.
 
-Scope: collection index → `namespaces` node. BFS: namespaces → policies → children. Left branch
-untouched.
+Watch event fires for node `namespaces`. Changes propagate through the right branch:
 
-| Node                         | Action                                     | Result |
-|------------------------------|--------------------------------------------|--------|
-| namespaces                   | List → 4 namespaces                        | Ready  |
-| policies                     | Diff items: new key `d`. a, b, c unchanged | Ready  |
-| pol/ns-d                     | New child → evaluate → SSA apply           | Ready  |
-| pol/ns-a, pol/ns-b, pol/ns-c | Unchanged → skip                           | Ready  |
+| Node                         | Triggered? | Dep invalidated?   | Action                                     | Evaluation |
+|------------------------------|------------|--------------------|--------------------------------------------|------------|
+| config                       | No         | No                 | Skip                                       | —          |
+| namespaces                   | Yes        | —                  | Read from informer → 4 namespaces → differs | Ready      |
+| deploy                       | No         | No                 | Skip                                       | —          |
+| service                      | No         | No                 | Skip                                       | —          |
+| policies                     | No         | Yes (namespaces)   | Diff items: new key `d`. a, b, c unchanged | Ready      |
+| pol/ns-d                     | —          | —                  | New child → evaluate → SSA apply           | Ready      |
+| pol/ns-a, pol/ns-b, pol/ns-c | —          | —                  | Unchanged → skip                           | Ready      |
 
-1 List + 1 apply. Three existing children untouched.
+1 apply. Left branch untouched. Three existing children skipped.
 
 ---
 
 **Event 3: Spec change** — `monitoring` added (depends on `deploy`), `service` removed. New revision.
 
-Full walk (DAG structure changed).
+All nodes treated as triggered (revision transition — DAG structure changed). Propagation hashes are
+computed and stored but do not gate evaluation — every node passes the skip check because all are
+triggered:
 
-| Node       | Action                                    | Result |
-|------------|-------------------------------------------|--------|
-| config     | Change check (`.data`) → match → skip     | Ready  |
-| namespaces | Change check → match → skip               | Ready  |
-| deploy     | Change check → match → skip               | Ready  |
-| monitoring | New node → evaluate → SSA apply           | Ready  |
-| policies   | Change check → match → skip               | Ready  |
-| pol/ns-*   | Change check → match → skip               | Ready  |
+| Node       | Action                                                          | Evaluation |
+|------------|-----------------------------------------------------------------|------------|
+| config     | Read from informer → propagation hash unchanged → no apply          | Ready      |
+| namespaces | Read from informer → propagation hash unchanged → no apply          | Ready      |
+| deploy     | Read from informer → propagation hash unchanged → no apply          | Ready      |
+| monitoring | New node → evaluate template → SSA apply                        | Ready      |
+| policies   | Read from informer → propagation hash unchanged → no apply          | Ready      |
+| pol/ns-\*  | Item unchanged → skip template evaluation                       | Ready      |
 
 Active revision's applied set: {deploy, monitoring, pol/ns-a, pol/ns-b, pol/ns-c, pol/ns-d}.
 Previous revision's applied set included `service`. Prune: delete service.
 
-1 apply + 1 delete. Everything else skipped.
+1 apply + 1 delete.
 
 ## Teardown
 
@@ -538,18 +562,33 @@ target without finalization.
 
 ## Why Not
 
-**Full walks on every reconcile.** Scoped walks and change checks together make steady-state cost
-proportional to change, not DAG size. Full walks are the degenerate case.
+**Periodic full-graph resync.** Informer resyncs trigger all nodes simultaneously — correlated,
+expensive. `next-sync` labels with per-node jitter amortize resync across reconciles, with drift
+correction as a side effect.
+
+**Bespoke object caching for partial evaluation.** Caching full objects per node between reconciles
+enables skipping nodes entirely, but introduces coherence obligations — the cache can go stale, and
+the controller is responsible for invalidation. Dirty propagation through a full topological walk
+achieves the same performance (work proportional to change) without maintaining object state.
+Informer stores provide the read path using standard Kubernetes watch machinery.
+
+**BFS-scoped walks from triggers.** Walking only the downstream subgraph of a triggered node avoids
+iterating over unrelated branches. But iterating is O(1) per skipped node (a boolean check), so the
+savings are negligible. The cost is architectural complexity — maintaining walk scopes and restoring
+previous state for out-of-scope nodes. A full iteration with O(1) skip is simpler and effectively
+equivalent.
 
 **Full-object change checks.** `metadata.resourceVersion` changes on every update. Full-object
-hashing always differs. Section-scoped hashing is the correct mechanism — only changes to referenced
-sections trigger evaluation.
+hashing always differs. Field-path propagation hashing is the correct mechanism — only changes to the
+specific paths that dependents reference trigger propagation.
 
 **forEach as a monolithic node.** Re-evaluating all children when one item changes is wasted work
 proportional to the collection size. Parent-with-children evaluates only changed items.
 
-**Incremental applied set updates.** Per-resource writes during wind mean partial failure corrupts
-the set. Atomic commit after complete wind is safe.
+**Persisted applied set.** Storing applied keys in revision status maintains a second copy of state
+the watch cache already holds. The watch cache is always current; the persisted copy can be stale
+(crash between apply and status update). Deriving the applied set from informer stores eliminates
+the crash window, status size limits for large forEach, and the merge semantics for partial walks.
 
 Also rejected: index-based forEach identity (reordering causes churn), forEach as a subgraph stamper
 (sibling blocks and nested Graphs compose better), separate rollforward algorithm (one walk handles

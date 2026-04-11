@@ -15,7 +15,7 @@ Kinds.
 A GraphRevision is namespace-scoped, in the same namespace as its parent Graph. It contains the
 materialized resources that will be applied to the cluster. The Graph spec is the authoring
 surface — terse, with CEL expressions and implicit dependencies. The revision is the operational
-form — internal labels injected, template hashes computed, resource set finalized. CEL expressions
+form — internal labels injected, resource set finalized. CEL expressions
 referencing other nodes (`${...}`) remain unevaluated and are resolved at runtime against live
 cluster state.
 
@@ -44,10 +44,8 @@ spec:
         metadata:
           name: my-app
           labels:
-            internal.kro.run/graph-generation: "3"
-            internal.kro.run/graph-name: my-app
-            internal.kro.run/node-id: deployment
-            internal.kro.run/template-hash: f7e8d9c0b1a2
+            deployment.my-app.default.internal.kro.run/role: owns
+            deployment.my-app.default.internal.kro.run/generation: "3"
         spec:
           replicas: 3
           selector:
@@ -68,10 +66,8 @@ spec:
         metadata:
           name: ${deployment.metadata.name}-svc
           labels:
-            internal.kro.run/graph-generation: "3"
-            internal.kro.run/graph-name: my-app
-            internal.kro.run/node-id: service
-            internal.kro.run/template-hash: 1a2b3c4d5e6f
+            service.my-app.default.internal.kro.run/role: owns
+            service.my-app.default.internal.kro.run/generation: "3"
         spec:
           selector: ${deployment.spec.selector.matchLabels}
           ports:
@@ -83,8 +79,7 @@ spec:
 The spec contains one field:
 
 - `nodes` — same structure as Graph nodes (`id`, `template`, `readyWhen`, `includeWhen`,
-  `propagateWhen`, `finalizes`, `forEach`) with internal metadata injected and template hashes
-  computed. Dependencies between
+  `propagateWhen`, `finalizes`, `forEach`) with internal metadata injected. Dependencies between
   nodes are derived from CEL expression references and cached in memory, not persisted.
 
 The spec is immutable, enforced by CEL validation (`self == oldSelf`). A structural change to the
@@ -101,21 +96,17 @@ what needs to be re-interpreted. This is the migration path.
   converges to `True` when the controller has reconciled all resources to their desired state. The
   controller stops observing a superseded revision — its Ready condition reflects the last-known
   state, not a live signal.
-- **`nodes`** — per-node operational state, keyed by node ID. Each entry contains:
-  - `propagateHash` — hash of the specific field paths dependents reference + propagateWhen state
-  - `resolvedKey` — GVK + namespace + name of the managed resource
 
-  The applied set (all resources managed by this Graph) is derived from the watch cache — resources
-  matching `graph-name` in the controller's informer stores. Not persisted in revision status.
-
-  The revision spec is immutable (what to apply). The revision status is the controller's scratchpad
-  (what happened when it did). On restart, the controller reads status to resume without
-  re-evaluating everything.
+  The revision spec is immutable (what to apply). The revision status is a write-only observation
+  surface — it records what happened, but the controller's operational inputs are the informer store
+  and the DAG, not revision status. The applied set is derived from the watch cache (resources
+  carrying the Graph's identity label in the controller's informer stores), not persisted in
+  revision status.
 
 ## Lifecycle
 
 GraphRevisions use the Graph's `metadata.generation` as their identity — propagated from the Graph
-to the revision to every managed resource via `internal.kro.run/graph-generation`. One number, one
+to the revision to every managed resource via the `generation` label. One number, one
 source: "which version of the Graph produced this." Gaps in the generation sequence mean
 materialization failed — the spec changed but the revision could not be produced.
 

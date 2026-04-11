@@ -42,20 +42,20 @@ A node evaluates when any of these hold:
 
 - A watch event fired for this node
 - A dependency was invalidated during this walk
-- The node's `next-sync` label has passed
-- The node is in a transient error state (SystemError, Conflict) — backoff retry with a low cap,
-  then wait for `next-sync`
+- The node's drift timer expired
+- The node is in a transient error state (SystemError) — backoff retry with a low cap,
+  then wait for drift timer
 - First reconcile or revision transition (all nodes)
 
-Watch events on managed resources (Owns, Contribute) are routed by `node-id` label. Watch events on
-unowned resources (Watch, Collection Watch) are routed by GVK + namespace + name (scalar) or GVK +
-selector (collection) — the controller maintains a mapping from these keys to node IDs, populated
-at graph compilation. A watch event on a GVK the controller monitors triggers all nodes that declare
-a Watch or Collection Watch matching that resource; the propagation hash skips downstream evaluation
-if the node's referenced paths didn't actually change.
+Watch events on managed resources (Owns, Contribute) are routed by the identity label key, which
+encodes the node ID. Watch events on unowned resources (Watch, Collection Watch) are routed by GVK +
+namespace + name (scalar) or GVK + selector (collection) — the controller maintains a mapping from
+these keys to node IDs, populated at graph compilation. A watch event on a GVK the controller
+monitors triggers all nodes that declare a Watch or Collection Watch matching that resource; the
+propagation hash skips downstream evaluation if the node's referenced paths didn't actually change.
 
 Deterministic errors (4xx) are not retried — same inputs produce the same failure. They resolve via
-propagation (upstream input changes), revision transition (user fixes the spec), or `next-sync` (the
+propagation (upstream input changes), revision transition (user fixes the spec), or drift timer (the
 consistency floor).
 
 Otherwise — skip. O(1) per skipped node.
@@ -68,31 +68,48 @@ a skip. If the hash changed — or no previous hash exists — dependents evalua
 topological order. If not, propagation stops. Changes flow forward through the DAG and stop when they
 stop mattering.
 
-Every apply writes a `next-sync` label — a jittered future timestamp (default 5 minutes, jitter
-up to the sync interval). When it expires, the template hash changes (new timestamp value), SSA
-apply fires, and drift is corrected as a side effect. Jitter is per-node, baked into the label, so
-expirations are naturally decorrelated across nodes. This replaces periodic full-graph resync with
-amortized per-node resync.
+Each node has an in-memory drift timer with a jittered interval (default 30 minutes). On expiry, the
+node runs the full pipeline (steps 1-7). The drift timer bypasses the template-hash check — apply
+unconditionally, because server-side defaulters and mutating webhooks can change fields without
+changing the desired state hash. SSA is idempotent; the apply corrects drift as a side effect.
+An SSA apply resets the drift timer. A skipped write during normal evaluation (hash match from a
+watch event or propagation trigger) does not — the timer still fires to catch server-side drift that
+the hash cannot detect. Jitter decorrelates timers across nodes. On restart, timers reset with fresh
+jitter — bounded burst (10k nodes over a 30-minute interval produces ~5.5 applies/sec). Drift timer
+state is in controller metrics, not on managed resources.
 
 The controller uses metadata-only informers — labels are visible, annotations are not. Full object
 reads happen only during evaluation (step 5). When an evaluated node needs data from a skipped
 dependency, the full object is read from the API server on demand. If absent (deleted externally,
 not yet created), the node is Pending.
 
-**Storage model.** All controller-managed fields on managed resources use labels — metadata-only
-informers can read labels without fetching the full object. Ownership labels are materialized into
-the revision spec. The revision spec also captures each node's declared template content — enough to
-detect template changes across revisions without re-evaluating. The `template-hash` label on a
-managed resource is computed at apply time over the full apply payload — including runtime-injected
-fields like `next-sync`. It reflects what was actually written, not what the revision spec declares.
-The `internal.kro.run/` prefix marks all controller-internal fields.
+**Storage model.** Each managed resource carries two labels per Graph-node pair. The Graph-node
+identity is encoded in the label prefix using DNS subdomain structure. Metadata-only informers can
+read labels without fetching the full object. The controller's operational inputs are the informer
+store and the DAG. Revision status is a write-only observation surface — not an operational input.
 
-| What | Where | Purpose |
+| Label key | Value | Purpose |
 |---|---|---|
-| `graph-name`, `graph-generation`, `node-id` | Managed resource labels | Watch routing, ownership |
-| `template-hash` | Managed resource label | Skip write if desired state unchanged |
-| `next-sync` | Managed resource label | Resync scheduling |
-| `propagateHash`, `resolvedKey` | Revision status (per-node) | Graph topology state |
+| `<node>.<graph>.<ns>.internal.kro.run/role` | `owns` or `contributes` | Identity, selection, prune shape |
+| `<node>.<graph>.<ns>.internal.kro.run/generation` | `graph.metadata.generation` | Observational |
+
+Each Graph gets its own label keys. Multiple Graphs targeting the same resource coexist without
+collision — a Contribute template on one Graph and an Owns template on another produce independent
+labels. Typically 1-2 Graphs per resource; label count scales linearly with managing Graphs (2N
+labels for N Graphs).
+
+The identity label enables selection: the applied set is all resources where the Graph's identity
+label exists. The value encodes the relationship (`owns` or `contributes`) and is read at prune time
+to determine the cleanup action (delete vs release fields). The label key encodes the node ID,
+which routes watch events to the correct node.
+
+Change detection uses two in-memory hashes per node. The template-hash is computed over the desired
+state — match skips the SSA write. The propagate-hash is computed over the specific field paths
+dependents reference plus propagateWhen state — match stops downstream evaluation. On restart, no
+cached hashes exist — the first reconcile evaluates all nodes, applies unconditionally (no hash to
+compare against), and populates the hashes for steady-state. The label prefix is a DNS subdomain
+(253-character limit), so graph names and node IDs must be DNS labels — no dots, parsing
+unambiguous.
 
 ### Wind
 
@@ -116,22 +133,19 @@ current-reconcile state for dependencies, which is always available.
    - Watch: GET full object. Data enters scope. Pending if absent.
    - Collection Watch: GET matching objects. Array enters scope.
    - forEach: evaluate collection, diff items, process changed children (see [forEach](#foreach)).
-   - Owns: evaluate template, inject `next-sync`, hash desired state, compare against
-     `template-hash` label on managed resource. Match → skip write. Differs → SSA apply.
-     409 → Conflict.
+   - Owns: evaluate template, hash desired state, compare against in-memory template-hash from
+     previous evaluation. Match → skip write (unless drift timer triggered — apply unconditionally).
+     Differs → SSA apply. 409 → Conflict.
    - Contribute: same as Owns. 409 → Conflict. Auto-splits status subresource.
    
    When a template targets both the main resource and the status subresource, the controller
    splits the apply into two operations. If the status subresource apply fails, the controller
-   reverts the `template-hash` label to its previous value. Crash between the two operations
-   leaves a forward hash — the next reconcile sees a mismatch (status is stale) and retries
-   both. The failure mode is an unnecessary re-apply, which is idempotent.
+   reverts the in-memory template-hash — the next reconcile sees a mismatch and retries both.
+   The failure mode is an unnecessary re-apply, which is idempotent.
 6. **readyWhen** — Ready or NotReady. Data is in scope regardless.
 7. **Propagation check** — hash the specific field paths dependents reference (union of downstream CEL
-   access chains) + propagateWhen state, compare against `propagateHash` in revision status. Differs
-   → node invalidated, update `propagateHash` in revision status. Matches → propagation stops.
-   `propagateHash` is written only when the node is invalidated — unchanged evaluations skip the
-   status write.
+   access chains) + propagateWhen state, compare against in-memory propagate-hash from previous
+   evaluation. Differs → node invalidated. Matches → propagation stops.
 
 Node's data enters scope after processing. For Owns and Contribute, the full object is always read
 during evaluation regardless of whether the write is skipped — the template hash governs the write
@@ -149,9 +163,9 @@ Each node's evaluation resolves to exactly one state:
 | Pending     | Data not yet available         | Blocked    | Upstream resolves         |
 | Excluded    | includeWhen false              | Excluded   | includeWhen inputs change |
 | Blocked     | Dependency in error state      | Blocked    | Dependency resolves       |
-| Conflict    | Field ownership contested      | Blocked    | Backoff retry, then `next-sync` |
-| Error       | Client request failed (4xx)    | Blocked    | Propagation, revision, or `next-sync` |
-| SystemError | Server/infra failure (5xx)     | Blocked    | Backoff retry, then `next-sync` |
+| Conflict    | Field ownership contested      | Blocked    | Propagation, revision, or drift timer |
+| Error       | Client request failed (4xx)    | Blocked    | Propagation, revision, or drift timer |
+| SystemError | Server/infra failure (5xx)     | Blocked    | Backoff retry, then drift timer  |
 
 Ready and NotReady are both "applied and in scope." readyWhen is a health signal — it does not gate
 dependents. Blocked states propagate as Blocked (uncertain absence — previous applied keys retained,
@@ -169,24 +183,28 @@ conflicts during revision transitions — the old revision's resource is removed
 set, and the new revision's template creates it fresh without the contested field ownership. A
 template change clears the conflict state — the new template doesn't contest the same fields.
 
-Prune in reverse dependency order. Owns → delete. Contribute → release fields via skeleton apply.
-Watch/Collection Watch → no action. If reverse ordering is unavailable, prune is blocked — never
-degrade to unordered deletion. If a prune candidate has `finalizes` references, finalization runs
+Prune in reverse dependency order. Owns → delete. Contribute → release fields via skeleton apply
+(SSA apply with Contribute fields omitted, relinquishing field manager ownership; field values
+persist under the remaining manager). Watch/Collection Watch → no action. If reverse ordering is
+unavailable, prune is blocked — never degrade to unordered deletion. If a prune candidate has `finalizes` references, finalization runs
 first (see [Teardown](#teardown)).
 
 ### Applied Set
 
-The applied set is derived from the watch cache — all resources matching `graph-name` in the
-controller's informer stores. Not persisted. The controller already watches every GVK it manages;
-every managed resource carries `graph-name`, `graph-generation`, and `node-id` labels. The applied
-set is a view over data that already exists in memory, hydrated on startup from informer list and
-kept current by watch events. No crash window, no stale state, no status size limits.
+The applied set is derived from the watch cache — all resources where the Graph's identity label
+exists in the controller's informer stores. Not persisted. The controller already watches every GVK
+it manages; every managed resource carries the identity label. The applied set is a view over
+data that already exists in memory, hydrated on startup from informer list and kept current by watch
+events. No crash window, no stale state, no status size limits. Both Owns and Contribute targets are
+in the applied set — one mechanism. The identity label value (`owns` or `contributes`) determines the
+prune action (delete vs release fields).
 
-Prune candidates are derived from the cache: resources with `graph-generation` less than the current
-generation, minus resources expected by the current revision's node list. Superseded revisions
-provide reverse dependency ordering and template shape (Owns vs Contribute) for their resources.
+Prune candidates are the set difference: resources in the applied set minus the current walk's output
+set. forEach scale-down, includeWhen toggles, and revision transitions all produce the same diff —
+one mechanism. Superseded revisions provide reverse dependency ordering and finalizes metadata for
+their resources.
 
-forEach children use the same managed resource labels as static nodes (`next-sync`, `template-hash`).
+forEach children use the same label scheme as static nodes (identity label).
 Per-child errors are recorded on the parent's evaluation: the parent is not Ready until all children
 are applied. If any child errors, the parent inherits the error state and surfaces it in the Graph's
 status with the child's identity. When multiple children error, deterministic errors (Error) take
@@ -395,9 +413,7 @@ controller winds toward it.
 When the Graph's spec changes, a new revision is materialized. The controller abandons any
 in-progress convergence and begins converging toward the new one. Same walk, same prune — but a
 revision change treats all nodes as triggered. The DAG structure changed; the complete key set must
-be recomputed. Nodes that apply during the transition receive a fresh jittered `next-sync`. Nodes
-that skip (unchanged template) retain their existing `next-sync` and resync naturally when it
-expires.
+be recomputed.
 
 If revision N is propagating when N+1 arrives, N is abandoned. Resources that N partially created
 either match N+1's templates (kept) or don't (pruned). Resources that N never created either appear
@@ -478,8 +494,7 @@ Watch event fires for node `namespaces`. Changes propagate through the right bra
 **Event 3: Spec change** — `monitoring` added (depends on `deploy`), `service` removed. New revision.
 
 All nodes treated as triggered (revision transition — DAG structure changed). Propagation hashes are
-computed and stored but do not gate evaluation — every node passes the skip check because all are
-triggered:
+computed but do not gate evaluation — every node passes the skip check because all are triggered:
 
 | Node       | Action                                                          | Evaluation |
 |------------|-----------------------------------------------------------------|------------|
@@ -563,8 +578,8 @@ target without finalization.
 ## Why Not
 
 **Periodic full-graph resync.** Informer resyncs trigger all nodes simultaneously — correlated,
-expensive. `next-sync` labels with per-node jitter amortize resync across reconciles, with drift
-correction as a side effect.
+expensive. Per-node drift timers with jitter amortize resync across reconciles. Simpler scheduling,
+but more moving parts than a single resync interval.
 
 **Bespoke object caching for partial evaluation.** Caching full objects per node between reconciles
 enables skipping nodes entirely, but introduces coherence obligations — the cache can go stale, and
@@ -578,19 +593,9 @@ savings are negligible. The cost is architectural complexity — maintaining wal
 previous state for out-of-scope nodes. A full iteration with O(1) skip is simpler and effectively
 equivalent.
 
-**Full-object change checks.** `metadata.resourceVersion` changes on every update. Full-object
-hashing always differs. Field-path propagation hashing is the correct mechanism — only changes to the
-specific paths that dependents reference trigger propagation.
-
-**forEach as a monolithic node.** Re-evaluating all children when one item changes is wasted work
-proportional to the collection size. Parent-with-children evaluates only changed items.
-
-**Persisted applied set.** Storing applied keys in revision status maintains a second copy of state
-the watch cache already holds. The watch cache is always current; the persisted copy can be stale
-(crash between apply and status update). Deriving the applied set from informer stores eliminates
-the crash window, status size limits for large forEach, and the merge semantics for partial walks.
+**Continuous drift correction.** Apply unconditionally on every reconcile. Catches drift immediately
+but imposes an N-write steady-state tax. Drift timers with jitter correct drift within the interval
+at near-zero steady-state cost.
 
 Also rejected: index-based forEach identity (reordering causes churn), forEach as a subgraph stamper
-(sibling blocks and nested Graphs compose better), separate rollforward algorithm (one walk handles
-all cases), unordered deletion (stuck finalizers), continuous drift restoration (N-write steady-state
-tax).
+(sibling blocks and nested Graphs compose better).

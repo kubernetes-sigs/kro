@@ -91,16 +91,18 @@ The annotation flows to the managed resource — anyone inspecting the cluster s
 
 ### kro Label Check
 
-Every managed resource carries an `internal.kro.run/graph-name` label (injected during
-materialization). Before applying an Owns template, the controller checks this label on the existing
-resource. If the label is present and doesn't match this Graph's name, the resource is owned by
+Every managed resource carries an identity label with key
+`<node>.<graph>.<ns>.internal.kro.run/role` and value `owns` or `contributes`
+(injected during materialization). Each Graph gets its own label key — multiple Graphs targeting the
+same resource coexist without collision. Before applying an Owns template, the controller checks for
+existing identity labels from other Graphs on the resource. If present, the resource is managed by
 another kro Graph. The controller requires `kro.run/apply: Force` to proceed — without it, the apply
 is rejected before SSA is attempted.
 
 This catches accidental duplicates (same resource in two Graphs without Force) and makes kro-to-kro
 migration explicit. SSA's shared-ownership blind spot (same values, no 409) doesn't apply between
 kro Graphs because the label check runs before SSA. For non-kro resources (no
-`internal.kro.run/graph-name` label), the normal SSA flow applies.
+`*.internal.kro.run/role` label), the normal SSA flow applies.
 
 The label check does not run for Contribute templates. Contribute targets someone else's resource by
 design — the label indicating another Graph's ownership is expected, not a conflict.
@@ -160,7 +162,7 @@ Watch are read-only — only the Resource absent and Apply rows apply to them.
 | **Label check** | Reject if another kro Graph (unless Force) | — | — | — |
 | **Apply (default)** | Non-force SSA | Non-force SSA | GET | List |
 | **Apply (Force)** | Force SSA | Force SSA | — | — |
-| **Apply — 409** | Error, stop reconciling | Error, stop reconciling | — | — |
+| **Apply — 409** | Conflict, stop reconciling | Conflict, stop reconciling | — | — |
 | **Template change** | Clear conflict, re-apply | Clear conflict, re-apply | — | — |
 | **Hash match** | Skip apply | Skip apply | — | — |
 | **Prune** | Delete resource | Release fields (skeleton apply) | No action | No action |
@@ -207,12 +209,12 @@ second Graph must use Force.
 ### Tracking
 
 The controller tracks every resource it has applied to — the applied set, derived from the watch
-cache by `graph-name` label. On prune or teardown, the controller iterates this set to know which
-resources need cleanup and how (delete for Owns, release for Contribute). Template shape and
-subresource information are derived from the revision spec.
+cache by identity label existence. On prune or teardown, the controller iterates this set to know
+which resources need cleanup. The identity label value (`owns` or `contributes`) determines the
+cleanup action — delete for Owns, release fields for Contribute. Template shape and subresource
+information are derived from the revision spec.
 
-Template hash labels on resources provide change detection. Hash match → skip the apply. This is a
-performance optimization — the controller converges on spec change, not continuously.
+In-memory hashes provide change detection — skip the apply when desired state hasn't changed.
 
 ### Skeleton Apply
 
@@ -243,7 +245,7 @@ releases. During teardown, the Graph's finalizer holds until the other manager r
 
 The Graph carries a finalizer that prevents API server removal until teardown completes. State
 needed for teardown is derived from the watch cache (applied set) and managed resource labels
-(template hashes) — no additional persistence required.
+(identity) — no additional persistence required.
 
 Controller crash mid-teardown: the finalizer prevents Graph removal. Next reconcile re-enters
 teardown. Deleting an already-deleted resource returns 404 — remove from applied set and move on.

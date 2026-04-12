@@ -14,10 +14,6 @@ jobs:
           cache: true
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ~/.local/share/envtest
-          key: envtest-1.35.x-${{ runner.os }}
-      - name: setup envtest
-        run: |
-          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
-          echo "KUBEBUILDER_ASSETS=$(setup-envtest use 1.35.x -p path)" >> $GITHUB_ENV
+          path: ${{ github.workspace }}/bin
+          key: bin-envtest-1.35.x-${{ runner.os }}
       - run: make -C experimental presubmit

@@ -296,7 +296,10 @@ func (s *instanceState) initResolvedShapes() {
 // patterns with forEach) share one compiledGraph instead of each independently
 // compiling identical CEL programs and DAGs.
 type graphCaches struct {
-	mu        sync.Mutex
+	// RWMutex: get and getCompiled are read-only and take RLock; set and remove
+	// mutate both maps and take Lock. The read path (one get per reconcile per
+	// graph) is the hot path under multi-worker controllers.
+	mu        sync.RWMutex
 	compiled  map[string]*compiledGraph // spec hash → shared compiled graph
 	instances map[string]*instanceState // namespace/revision-name → per-instance state
 }
@@ -309,8 +312,8 @@ func newGraphCaches() *graphCaches {
 }
 
 func (gc *graphCaches) get(key string) *instanceState {
-	gc.mu.Lock()
-	defer gc.mu.Unlock()
+	gc.mu.RLock()
+	defer gc.mu.RUnlock()
 	return gc.instances[key]
 }
 
@@ -351,8 +354,8 @@ func (gc *graphCaches) remove(key string) {
 
 // getCompiled returns a shared compiledGraph by spec hash, or nil if not cached.
 func (gc *graphCaches) getCompiled(specHash string) *compiledGraph {
-	gc.mu.Lock()
-	defer gc.mu.Unlock()
+	gc.mu.RLock()
+	defer gc.mu.RUnlock()
 	return gc.compiled[specHash]
 }
 

@@ -306,16 +306,17 @@ func (ps *PlanState) SetState(dag *DAG, id string, state NodeState) {
 }
 
 // propagateState marks all downstream dependents of a node with the target state.
+// Uses the Dependents reverse adjacency list for O(V+E) traversal — not a linear
+// scan over all nodes. This matters: a linear scan is O(V²) on a chain graph where
+// every node errors, because propagateState is called recursively for each dependent.
 func (ps *PlanState) propagateState(dag *DAG, sourceID string, targetState NodeState) {
-	for _, node := range dag.Nodes {
-		if ps.States[node.ID] != NodePending {
-			continue // already processed
+	for _, depIdx := range dag.Dependents[sourceID] {
+		depID := dag.Nodes[depIdx].ID
+		if ps.States[depID] != NodePending {
+			continue // already propagated
 		}
-		if node.Dependencies[sourceID] {
-			ps.States[node.ID] = targetState
-			// Recurse: this node's dependents are also propagated
-			ps.propagateState(dag, node.ID, targetState)
-		}
+		ps.States[depID] = targetState
+		ps.propagateState(dag, depID, targetState)
 	}
 }
 

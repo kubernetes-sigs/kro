@@ -514,6 +514,77 @@ func BenchmarkCompileRevisionSharing(b *testing.B) {
 	}
 }
 
+// BenchmarkPropagateState measures the cost of propagateState — the function
+// that marks all downstream dependents of an erroring node with NodeBlocked.
+//
+// This is the fix benchmark. The old implementation was O(V²): a linear scan
+// over all nodes at every recursive call level, producing O(V) work per level
+// and O(V) levels for a chain graph, so O(V²) total. The fix uses the
+// Dependents reverse adjacency list for O(V+E) traversal.
+//
+// The chain topology (A→B→C→…) is the worst case for the old implementation
+// because every recursive level scans all V nodes to find the single next
+// dependent. With the fix, each call walks only the single outgoing edge.
+//
+// Run: go test ./experimental/controller -bench=BenchmarkPropagateState -benchmem
+func BenchmarkPropagateState(b *testing.B) {
+	for _, nodeCount := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
+			nodes := buildBenchNodes(nodeCount)
+			dag, err := BuildDAG(nodes)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				ps := NewPlanState(dag)
+				// Trigger propagation from the root — worst case: all V nodes
+				// end up Blocked via chain traversal.
+				ps.SetState(dag, "node0", NodeError)
+			}
+		})
+	}
+}
+
+// propagateStateLinearScan is the pre-fix O(V²) implementation, inlined here
+// so BenchmarkPropagateStateLinearScan can measure the before-state directly.
+func propagateStateLinearScan(ps *PlanState, dag *DAG, sourceID string, targetState NodeState) {
+	for _, node := range dag.Nodes {
+		if ps.States[node.ID] != NodePending {
+			continue
+		}
+		if node.Dependencies[sourceID] {
+			ps.States[node.ID] = targetState
+			propagateStateLinearScan(ps, dag, node.ID, targetState)
+		}
+	}
+}
+
+// BenchmarkPropagateStateLinearScan is the reference baseline — the O(V²)
+// linear-scan algorithm that BenchmarkPropagateState replaces. Compare the
+// two to see the improvement: at 1000 nodes the linear scan is ~V/2 times
+// slower because each of the V recursive calls scans all V nodes, while the
+// fix walks only the single outgoing edge per call.
+func BenchmarkPropagateStateLinearScan(b *testing.B) {
+	for _, nodeCount := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
+			nodes := buildBenchNodes(nodeCount)
+			dag, err := BuildDAG(nodes)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				ps := NewPlanState(dag)
+				ps.States["node0"] = NodeError
+				propagateStateLinearScan(ps, dag, "node0", NodeBlocked)
+			}
+		})
+	}
+}
+
 // BenchmarkSpecHash measures the cost of computing the spec content hash —
 // the gate that enables compiled graph sharing. This must be significantly
 // cheaper than compilation to justify the indirection.

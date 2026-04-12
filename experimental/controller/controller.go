@@ -65,6 +65,14 @@ const (
 	// cap, then wait for drift timer."
 	systemErrorRequeueInterval = 5 * time.Second
 
+	// finalizationRequeueInterval is the consistency floor for finalization
+	// in progress. The primary trigger is a watch event on the gate
+	// resource (when readyWhen's dependencies change). This timer ensures
+	// the gate is re-checked even if that watch event is slow.
+	// Per 004-graph-execution.md § Finalization: "wait for readyWhen before
+	// deleting the target."
+	finalizationRequeueInterval = 5 * time.Second
+
 	// DefaultMaxConcurrentReconciles is the number of reconcile workers.
 	// Multiple workers keep the API server busy — each reconcile does
 	// SSA applies, GETs, and informer syncs that can block. Watch index
@@ -96,6 +104,10 @@ type GraphReconciler struct {
 
 func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, reconcileErr error) {
 	logger := log.FromContext(ctx)
+	// requeueFloor is an explicit requeue interval independent of drift timers.
+	// Set when a transient condition needs re-checking beyond what watch events
+	// guarantee — e.g., finalization in progress. Zero means no explicit floor.
+	var requeueFloor time.Duration
 
 	// 1. Get the Graph
 	graph := &unstructured.Unstructured{}
@@ -947,7 +959,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 
 		if len(allPreviousKeys) > 0 {
-			_, err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
+			_, finalizationPending, err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
 			if err != nil {
 				logger.Error(err, "pruning removed resources")
 				pruneOK = false
@@ -961,6 +973,19 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					summary.HasError = true
 				}
 				nodeErrors = append(nodeErrors, fmt.Sprintf("prune: %s", info.reason))
+			}
+			if finalizationPending {
+				// Finalization is in progress (finalizer resource exists but
+				// readyWhen not yet satisfied). Request a short requeue as a
+				// consistency floor — the primary trigger is a watch event on
+				// the gate resource, but under load that event may be slow.
+				// Per 004-graph-execution.md § Finalization: the controller
+				// waits for readyWhen before deleting the target. This floor
+				// ensures the gate is re-checked even if the watch event is
+				// delayed. Same principle as the NodeDataPending 1s timer,
+				// but graph-level (not per-node) so it doesn't touch the
+				// drift timer map.
+				requeueFloor = finalizationRequeueInterval
 			}
 		}
 	}
@@ -1027,10 +1052,20 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	//
 	// Non-converged nodes (DataPending, SystemError) have short drift
 	// timers set above, so the earliest expiry reflects urgency.
+	//
+	// requeueFloor provides an explicit lower bound independent of drift
+	// timers — used for graph-level transient conditions (e.g., finalization
+	// in progress) that are not associated with any single node.
+	requeue := requeueFloor
 	if next := state.nextDriftExpiry(); !next.IsZero() {
 		if remaining := time.Until(next); remaining > 0 {
-			return ctrl.Result{RequeueAfter: remaining}, nil
+			if requeue == 0 || remaining < requeue {
+				requeue = remaining
+			}
 		}
+	}
+	if requeue > 0 {
+		return ctrl.Result{RequeueAfter: requeue}, nil
 	}
 	return ctrl.Result{}, nil
 }

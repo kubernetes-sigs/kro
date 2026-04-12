@@ -680,9 +680,8 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 // supersededDAGs provides DAGs from superseded revisions for cross-revision
 // finalizer lookups. The old revision's finalizes declarations govern its
 // resources — see 004-graph-execution.md § Prune Ordering.
-func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, supersededDAGs map[string]*DAG, eval *evaluator, watcher *graphWatcher) ([]string, error) {
+func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, supersededDAGs map[string]*DAG, eval *evaluator, watcher *graphWatcher) (finalizerKeys []string, finalizationPending bool, err error) {
 	logger := log.FromContext(ctx)
-	var finalizerKeys []string
 
 	// Build current key set for fast lookup
 	currentSet := map[string]bool{}
@@ -860,6 +859,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			if !ready {
 				logger.Info("finalization in progress — deletion deferred",
 					"key", key, "finalizers", finalizerNodeIDs)
+				finalizationPending = true
 				continue // block deletion until all finalizers ready
 			}
 			logger.Info("finalization complete", "key", key)
@@ -867,7 +867,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 		if err := r.Client.Delete(ctx, obj); err != nil {
 			if client.IgnoreNotFound(err) != nil {
-				return finalizerKeys, fmt.Errorf("pruning %s: %w", key, err)
+				return finalizerKeys, finalizationPending, fmt.Errorf("pruning %s: %w", key, err)
 			}
 		} else {
 			logger.Info("pruned resource", "key", key)
@@ -875,7 +875,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		}
 	}
 
-	return finalizerKeys, nil
+	return finalizerKeys, finalizationPending, nil
 }
 
 // findManagedResourceKeys discovers dynamically-named resources (forEach, CEL

@@ -279,6 +279,13 @@ func findExpr(input string, pos int) (string, string, int, int) {
 
 // normalizeTypes converts JSON-style float64 numbers to int64 for CEL compatibility.
 // The Kubernetes API server returns numbers as float64 in unstructured objects.
+//
+// The full recursive copy is intentional. A check-first pass to avoid copying
+// objects without float64 integers would need to traverse the full tree anyway,
+// and CRD objects have arbitrary shapes — branching on object content adds
+// complexity without measurable benefit. This call is already gated behind the
+// skip-check: triggered nodes always need a fresh normalized copy because their
+// template has changed; skipped nodes never call this function.
 func normalizeTypes(v any) any {
 	switch val := v.(type) {
 	case map[string]any:

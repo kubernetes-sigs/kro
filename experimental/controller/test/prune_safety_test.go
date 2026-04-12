@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -157,6 +158,258 @@ func TestPruneSafetyPendingBlocksPrune(t *testing.T) {
 	t.Log("Graph recovered after toggle restored")
 }
 
+// TestPruneManagedCheckBlocksDeletion proves that the controller respects
+// managedFields during teardown — if another field manager has an SSA Apply
+// entry on an Owns resource, the finalizer holds until the other manager
+// releases.
+//
+// Design 003-ownership § Prune — managed check:
+//
+//	"Before deleting an Owns resource, checks managedFields for other field
+//	managers. If present, deletion is blocked until the other manager releases."
+//
+// Setup:
+//   - Graph creates and owns a ConfigMap (Owns shape, template hash set).
+//   - After convergence, external manager SSA-applies a field to the same CM,
+//     gaining a managedFields entry.
+//   - Graph is deleted (deletion timestamp set, finalizer holds).
+//   - The ConfigMap must survive — controller detects the third-party manager.
+//   - Cleanup: delete the ConfigMap directly → controller can proceed with
+//     teardown → Graph finalizer removed.
+func TestPruneManagedCheckBlocksDeletion(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// 1. Create a Graph that creates and owns a ConfigMap.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-prune-managed-teardown",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "prune-managed-cm"},
+							"data":       map[string]any{"owner": "graph"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// 2. Wait for the ConfigMap to be created and Graph to become Active.
+	cm := &unstructured.Unstructured{}
+	cm.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "prune-managed-cm", Namespace: ns}, cm))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-prune-managed-teardown", Namespace: ns}))
+	t.Log("ConfigMap created, Graph Active — managedFields has kro entry")
+
+	// 3. External manager SSA-applies a different field to the same ConfigMap.
+	// This adds a second managedFields entry (external-manager). The controller
+	// must detect this before deleting on teardown.
+	applyConfigMapAs(t, ns, "prune-managed-cm", "external-manager", map[string]string{
+		"extra-field": "external-value",
+	})
+	// Verify the external field is there before proceeding.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "prune-managed-cm", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(check.Object, "data")
+			return data["extra-field"] == "external-value", nil
+		}))
+	t.Log("External manager applied — ConfigMap now has two managedFields entries")
+
+	// 4. Delete the Graph (sets deletion timestamp, finalizer holds teardown).
+	latest := &unstructured.Unstructured{}
+	latest.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "test-prune-managed-teardown", Namespace: ns}, latest))
+	require.NoError(t, k8sClient.Delete(ctx, latest))
+	t.Log("Graph deletion requested")
+
+	// 5. THE KEY ASSERTION: after the controller processes the deletion,
+	// the ConfigMap must survive. Give the controller time to process the event
+	// and confirm the resource wasn't deleted.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-prune-managed-teardown", Namespace: ns}))
+
+	surviving := &unstructured.Unstructured{}
+	surviving.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "prune-managed-cm", Namespace: ns}, surviving),
+		"ConfigMap must survive teardown when another field manager is present")
+	t.Log("ConfigMap survived Graph deletion — managedFields check blocked teardown deletion")
+
+	// 6. Cleanup: delete the ConfigMap directly so the controller can finish
+	// teardown. Without this, the test namespace cleanup might hang.
+	require.NoError(t, k8sClient.Delete(ctx, surviving))
+	t.Log("ConfigMap manually deleted — unblocking teardown")
+
+	// 7. Controller should now complete teardown and remove the Graph finalizer.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(GraphGVK)
+			err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "test-prune-managed-teardown", Namespace: ns}, check)
+			return err != nil, nil // gone = success
+		}))
+	t.Log("Graph fully deleted after ConfigMap was removed — managedFields teardown block proved")
+}
+
+// TestPruneManagedCheckOnSpecChange proves that the controller respects
+// managedFields during wind/prune — if another field manager has an SSA Apply
+// entry on an Owns resource that becomes a prune candidate (removed from spec),
+// deletion is blocked.
+//
+// Design 003-ownership § Prune — managed check (wind path, apply.go):
+//
+//	"Before deleting an Owns resource, checks managedFields for other field
+//	managers. If present, deletion is blocked."
+//
+// This is a distinct code path from the teardown check (TestPruneManagedCheckBlocksDeletion).
+// A spec change removes a node from the graph; the applied set still contains
+// the resource; the prune loop checks managedFields before deleting.
+//
+// Setup:
+//   - Graph creates two independent ConfigMaps (A and B).
+//   - External manager applies a field to CM-A.
+//   - Graph spec is updated to remove node A.
+//   - CM-A must survive (prune blocked by external manager).
+//   - CM-B must also survive (still in spec).
+func TestPruneManagedCheckOnSpecChange(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// 1. Create a Graph with two independent nodes.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-prune-managed-spec",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "nodeA",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "prune-managed-a"},
+							"data":       map[string]any{"owned-by": "graph"},
+						},
+					},
+					map[string]any{
+						"id": "nodeB",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "prune-managed-b"},
+							"data":       map[string]any{"role": "permanent"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// 2. Wait for both ConfigMaps and Graph Active.
+	cmA := &unstructured.Unstructured{}
+	cmA.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "prune-managed-a", Namespace: ns}, cmA))
+	cmB := &unstructured.Unstructured{}
+	cmB.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "prune-managed-b", Namespace: ns}, cmB))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-prune-managed-spec", Namespace: ns}))
+	t.Log("Both ConfigMaps created, Graph Active")
+
+	// 3. External manager applies a field to CM-A.
+	applyConfigMapAs(t, ns, "prune-managed-a", "external-manager", map[string]string{
+		"external-key": "external-value",
+	})
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "prune-managed-a", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(check.Object, "data")
+			return data["external-key"] == "external-value", nil
+		}))
+	t.Log("External manager applied to CM-A — CM-A now has two SSA managers")
+
+	// 4. Update Graph spec: remove nodeA. This makes CM-A a prune candidate.
+	latestGraph := &unstructured.Unstructured{}
+	latestGraph.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "test-prune-managed-spec", Namespace: ns}, latestGraph))
+	unstructured.SetNestedSlice(latestGraph.Object, []any{
+		map[string]any{
+			"id": "nodeB",
+			"template": map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": "prune-managed-b"},
+				"data":       map[string]any{"role": "permanent"},
+			},
+		},
+	}, "spec", "nodes")
+	require.NoError(t, k8sClient.Update(ctx, latestGraph))
+	t.Log("Removed nodeA from spec — prune candidate created")
+
+	// 5. Wait for Graph to settle on the new spec.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-prune-managed-spec", Namespace: ns}))
+
+	// 6. THE KEY ASSERTION: CM-A must survive despite being removed from spec,
+	// because the external manager's managedFields entry blocks deletion.
+	checkA := &unstructured.Unstructured{}
+	checkA.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "prune-managed-a", Namespace: ns}, checkA),
+		"CM-A must survive spec-change prune when another field manager is present")
+	data, _, _ := unstructured.NestedStringMap(checkA.Object, "data")
+	assert.Equal(t, "external-value", data["external-key"],
+		"external manager's field should be intact on the surviving CM")
+	t.Log("CM-A survived spec-change prune — managedFields check blocked wind/prune deletion")
+
+	// 7. CM-B must also still exist (still in spec).
+	checkB := &unstructured.Unstructured{}
+	checkB.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "prune-managed-b", Namespace: ns}, checkB),
+		"CM-B must still exist — it was not removed from spec")
+	t.Log("CM-B still exists — unrelated nodes unaffected")
+}
+
 // TestPruneSafetyConflictBlocksPrune proves that when a node is in Conflict
 // state (409 from competing SSA field manager), dependent resources that
 // were previously applied are not pruned.
@@ -242,4 +495,108 @@ func TestPruneSafetyConflictBlocksPrune(t *testing.T) {
 	assert.NoError(t, err,
 		"independent resource should NOT be pruned during Conflict state")
 	t.Log("Independent resource survived Conflict — prune safety proved")
+}
+
+// TestPruneSweptOnSpecNodeRemoval proves that removing nodes from the Graph
+// spec causes their managed resources to be pruned on the next reconcile.
+// This covers the case where the new revision has ZERO Owns nodes — triggered
+// is empty, but the prune phase must still run to clean up superseded resources.
+//
+// Design 004-graph-execution § Prune:
+//
+//	"After wind, diff the current key set against the applied set. Absent
+//	resources are prune candidates if their absence is definitive."
+//
+// A revision transition that removes all Owns nodes produces 0 triggered nodes
+// in the new revision. The controller must NOT return early before the prune
+// phase — otherwise resources from the superseded revision are orphaned.
+func TestPruneSweptOnSpecNodeRemoval(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// 1. Create a Graph with two independent Owns nodes.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-prune-sweep",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "nodeA",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "prune-sweep-a"},
+							"data":       map[string]any{"key": "a"},
+						},
+					},
+					map[string]any{
+						"id": "nodeB",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "prune-sweep-b"},
+							"data":       map[string]any{"key": "b"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// 2. Wait for both ConfigMaps to be created.
+	cmA := &unstructured.Unstructured{}
+	cmA.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "prune-sweep-a", Namespace: ns}, cmA))
+	cmB := &unstructured.Unstructured{}
+	cmB.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "prune-sweep-b", Namespace: ns}, cmB))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-prune-sweep", Namespace: ns}))
+	t.Log("Both ConfigMaps created, Graph Active")
+
+	// 3. Update the spec to have ZERO nodes. The new revision has no Owns
+	// nodes — triggered is empty, but the prune phase must still run.
+	// This is the exact scenario needsPruneSweep / isRevisionTransition
+	// guards are meant to handle.
+	latestGraph := &unstructured.Unstructured{}
+	latestGraph.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "test-prune-sweep", Namespace: ns}, latestGraph))
+	unstructured.SetNestedSlice(latestGraph.Object, []any{}, "spec", "nodes")
+	require.NoError(t, k8sClient.Update(ctx, latestGraph))
+	t.Log("Spec emptied — zero nodes in new revision")
+
+	// 4. THE KEY ASSERTION: both ConfigMaps must be pruned.
+	// If the controller returns early before the prune phase (len(triggered)==0
+	// early exit), these resources are orphaned and the test fails.
+	// Uses apierrors.IsNotFound to distinguish actual deletion from context
+	// cancellation — without it, a deadline would falsely satisfy err != nil.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			checkA := &unstructured.Unstructured{}
+			checkA.SetGroupVersionKind(cmGVK)
+			errA := k8sClient.Get(ctx, types.NamespacedName{Name: "prune-sweep-a", Namespace: ns}, checkA)
+			if errA != nil && !apierrors.IsNotFound(errA) {
+				return false, nil // transient error — keep polling
+			}
+			checkB := &unstructured.Unstructured{}
+			checkB.SetGroupVersionKind(cmGVK)
+			errB := k8sClient.Get(ctx, types.NamespacedName{Name: "prune-sweep-b", Namespace: ns}, checkB)
+			if errB != nil && !apierrors.IsNotFound(errB) {
+				return false, nil // transient error — keep polling
+			}
+			return apierrors.IsNotFound(errA) && apierrors.IsNotFound(errB), nil
+		}),
+		"both ConfigMaps must be pruned after all nodes are removed from spec")
+	t.Log("Both ConfigMaps pruned — spec-emptying triggers prune sweep")
 }

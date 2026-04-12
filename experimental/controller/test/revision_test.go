@@ -8,11 +8,333 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+
+	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
 )
+
+// TestRevisionRecoveryAfterManualDeletion proves that if a GraphRevision is
+// manually deleted, the controller regenerates it from the current spec on the
+// next reconcile cycle, restoring the active revision.
+//
+// Design 002-revisions § Recovery:
+//
+//	"If manually deleted, the active revision is regenerated from the current
+//	spec on the next reconcile. The applied set (from watch cache) is the
+//	authoritative record."
+func TestRevisionRecoveryAfterManualDeletion(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "rev-recovery-test",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "cm",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "rev-recovery-cm"},
+							"data":       map[string]any{"key": "value"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for Graph to become Active.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "rev-recovery-test", Namespace: ns}))
+
+	// Get the Graph's generation and revision name.
+	latestGraph := &unstructured.Unstructured{}
+	latestGraph.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "rev-recovery-test", Namespace: ns}, latestGraph))
+	gen := latestGraph.GetGeneration()
+	revName := fmt.Sprintf("rev-recovery-test-g%05d", gen)
+
+	// Wait for the revision and record its content hash.
+	rev, err := waitForRevision(ctx, k8sClient,
+		types.NamespacedName{Name: revName, Namespace: ns})
+	require.NoError(t, err)
+	originalHash := rev.GetLabels()[graphcontroller.LabelRevisionHash]
+	require.NotEmpty(t, originalHash, "revision must have a content hash label")
+	t.Logf("Original revision: %s (hash=%s)", revName, originalHash)
+
+	// Revisions are freely deletable — no finalizer needed.
+	require.NoError(t, k8sClient.Delete(ctx, rev))
+	t.Log("Revision deleted")
+
+	// Wait for the revision to disappear.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(GraphRevisionGVK)
+			err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: revName, Namespace: ns}, check)
+			return err != nil, nil
+		}))
+	t.Log("Revision confirmed deleted")
+
+	// Trigger a reconcile by touching the Graph's labels. The controller does
+	// not watch revisions for deletion events — a reconcile must be triggered
+	// externally so the controller notices the missing revision and regenerates it.
+	latestForTrigger := &unstructured.Unstructured{}
+	latestForTrigger.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "rev-recovery-test", Namespace: ns}, latestForTrigger))
+	lbls := latestForTrigger.GetLabels()
+	if lbls == nil {
+		lbls = map[string]string{}
+	}
+	lbls["trigger"] = "rev-recovery"
+	latestForTrigger.SetLabels(lbls)
+	require.NoError(t, k8sClient.Update(ctx, latestForTrigger))
+	t.Log("Graph touched to trigger reconcile")
+
+	// THE KEY ASSERTION: the revision must be regenerated with the same name
+	// and the same content hash (same generation, same spec).
+	recovered, err := waitForRevision(ctx, k8sClient,
+		types.NamespacedName{Name: revName, Namespace: ns})
+	require.NoError(t, err, "revision must be regenerated after manual deletion")
+
+	recoveredHash := recovered.GetLabels()[graphcontroller.LabelRevisionHash]
+	assert.Equal(t, originalHash, recoveredHash,
+		"recovered revision must have the same content hash as the original")
+	t.Logf("Revision regenerated: %s (hash=%s) — recovery proved", revName, recoveredHash)
+
+	// Graph must return to Active after recovery.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "rev-recovery-test", Namespace: ns}))
+	t.Log("Graph Active after revision recovery")
+}
+
+// TestRevisionContentHashDeduplication proves that recovering a revision at the
+// same generation with the same spec produces an identical content hash.
+// The content hash (internal.kro.run/hash label) is computed from the
+// materialized node output — same spec + same generation → same hash.
+//
+// Design 002-revisions § Identity:
+//
+//	"Content hash identifies semantically identical output across generations."
+//
+// Note: the current implementation includes the generation label in the
+// materialized node output (injected by injectNodeLabels), so the hash
+// encodes both content and generation. This test covers the recovery case:
+// delete the revision and verify the regenerated one is byte-for-byte identical.
+func TestRevisionContentHashDeduplication(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "rev-hash-test",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "cm",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "rev-hash-cm"},
+							"data":       map[string]any{"content": "stable"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "rev-hash-test", Namespace: ns}))
+
+	// Record the original revision and its hash.
+	latestGraph := &unstructured.Unstructured{}
+	latestGraph.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "rev-hash-test", Namespace: ns}, latestGraph))
+	gen := latestGraph.GetGeneration()
+	revName := fmt.Sprintf("rev-hash-test-g%05d", gen)
+
+	rev1, err := waitForRevision(ctx, k8sClient,
+		types.NamespacedName{Name: revName, Namespace: ns})
+	require.NoError(t, err)
+	hash1 := rev1.GetLabels()[graphcontroller.LabelRevisionHash]
+	require.NotEmpty(t, hash1)
+	t.Logf("Original revision hash: %s", hash1)
+
+	// Change the spec (increment generation).
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "rev-hash-test", Namespace: ns}, latestGraph))
+	unstructured.SetNestedSlice(latestGraph.Object, []any{
+		map[string]any{
+			"id": "cm",
+			"template": map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": "rev-hash-cm"},
+				"data":       map[string]any{"content": "changed"},
+			},
+		},
+	}, "spec", "nodes")
+	require.NoError(t, k8sClient.Update(ctx, latestGraph))
+
+	// Wait for Graph convergence on the new spec.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "rev-hash-cm", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(check.Object, "data")
+			return data["content"] == "changed", nil
+		}))
+
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "rev-hash-test", Namespace: ns}, latestGraph))
+	gen2 := latestGraph.GetGeneration()
+	revName2 := fmt.Sprintf("rev-hash-test-g%05d", gen2)
+
+	rev2, err := waitForRevision(ctx, k8sClient,
+		types.NamespacedName{Name: revName2, Namespace: ns})
+	require.NoError(t, err)
+	hash2 := rev2.GetLabels()[graphcontroller.LabelRevisionHash]
+	assert.NotEqual(t, hash1, hash2,
+		"different spec content must produce a different content hash")
+	t.Logf("Gen2 revision hash: %s (different from gen1, as expected)", hash2)
+
+	// Delete gen2 revision and verify it regenerates with the SAME hash2.
+	// Revisions are freely deletable — no finalizer removal needed.
+	require.NoError(t, k8sClient.Delete(ctx, rev2))
+
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(GraphRevisionGVK)
+			err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: revName2, Namespace: ns}, check)
+			return err != nil, nil
+		}))
+
+	// Trigger a reconcile to make the controller notice the missing revision.
+	triggerGraph := &unstructured.Unstructured{}
+	triggerGraph.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "rev-hash-test", Namespace: ns}, triggerGraph))
+	triggerLbls := triggerGraph.GetLabels()
+	if triggerLbls == nil {
+		triggerLbls = map[string]string{}
+	}
+	triggerLbls["trigger"] = "hash-dedup"
+	triggerGraph.SetLabels(triggerLbls)
+	require.NoError(t, k8sClient.Update(ctx, triggerGraph))
+
+	recovered2, err := waitForRevision(ctx, k8sClient,
+		types.NamespacedName{Name: revName2, Namespace: ns})
+	require.NoError(t, err)
+	recoveredHash2 := recovered2.GetLabels()[graphcontroller.LabelRevisionHash]
+	assert.Equal(t, hash2, recoveredHash2,
+		"recovered revision must have the same hash as the original at the same generation and spec")
+	t.Logf("Recovered gen2 revision hash: %s — deterministic hash proved", recoveredHash2)
+}
+
+// TestRevisionOwnerReferences proves that GraphRevisions carry ownerReferences
+// pointing to their parent Graph. This enables the API server to cascade-delete
+// any remaining revisions when the Graph itself is deleted.
+//
+// Design 002-revisions § OwnerReferences:
+//
+//	"Revisions have ownerReferences to their parent Graph. On Graph deletion,
+//	the finalizer holds until full unwind; then API server cascade-deletes
+//	remaining revisions."
+func TestRevisionOwnerReferences(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "rev-ownerref-test",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "cm",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "rev-ownerref-cm"},
+							"data":       map[string]any{"key": "value"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for Active and get the Graph's UID.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "rev-ownerref-test", Namespace: ns}))
+
+	latestGraph := &unstructured.Unstructured{}
+	latestGraph.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "rev-ownerref-test", Namespace: ns}, latestGraph))
+	graphUID := string(latestGraph.GetUID())
+	graphGen := latestGraph.GetGeneration()
+	require.NotEmpty(t, graphUID, "Graph must have a UID")
+
+	// Get the revision.
+	revName := fmt.Sprintf("rev-ownerref-test-g%05d", graphGen)
+	rev, err := waitForRevision(ctx, k8sClient,
+		types.NamespacedName{Name: revName, Namespace: ns})
+	require.NoError(t, err)
+
+	// THE KEY ASSERTION: revision must have ownerReferences containing the Graph.
+	ownerRefs := rev.GetOwnerReferences()
+	require.NotEmpty(t, ownerRefs, "revision must have at least one ownerReference")
+
+	var graphRef *metav1.OwnerReference
+	for i := range ownerRefs {
+		if ownerRefs[i].Name == "rev-ownerref-test" {
+			graphRef = &ownerRefs[i]
+			break
+		}
+	}
+	require.NotNil(t, graphRef,
+		"revision must have an ownerReference pointing to the parent Graph")
+	assert.Equal(t, graphUID, string(graphRef.UID),
+		"ownerReference UID must match the Graph's UID")
+	assert.Equal(t, "Graph", graphRef.Kind,
+		"ownerReference Kind must be Graph")
+	t.Logf("Revision ownerReference: name=%s uid=%s kind=%s — cascade GC proved",
+		graphRef.Name, graphRef.UID, graphRef.Kind)
+}
 
 // TestRevisionCreatedOnGraphCreate verifies that creating a Graph produces
 // a GraphRevision with the correct name, labels, and materialized resources.

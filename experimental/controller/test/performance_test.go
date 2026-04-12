@@ -602,6 +602,73 @@ func TestDeletionSkipsConflictedResources(t *testing.T) {
 	t.Log("graph-owned-cm deleted during cleanup — deletion semantics confirmed")
 }
 
+// TestDedicatedFieldManagerName verifies that each Graph uses a dedicated SSA
+// field manager in the format `experimental.kro.run/<namespace>/<name>`.
+//
+// Design 003-ownership § Dedicated field manager:
+//
+//	"Each Graph instance uses experimental.kro.run/<namespace>/<name>."
+//
+// The field manager name is the key that makes per-Graph field ownership
+// scoped and independent. If the format is wrong, multi-graph coexistence
+// breaks because field managers can't be distinguished by namespace/name.
+func TestDedicatedFieldManagerName(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graphName := "test-field-manager"
+	expectedManager := "experimental.kro.run/" + ns + "/" + graphName
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      graphName,
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "cm",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "field-manager-cm"},
+							"data":       map[string]any{"key": "value"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: graphName, Namespace: ns}))
+
+	// Read the managed ConfigMap and inspect its managedFields.
+	cm := &unstructured.Unstructured{}
+	cm.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "field-manager-cm", Namespace: ns}, cm))
+
+	managedFields := cm.GetManagedFields()
+	require.NotEmpty(t, managedFields, "ConfigMap must have managedFields entries")
+
+	// Find the kro-owned field manager entry.
+	var foundManager string
+	for _, mf := range managedFields {
+		if mf.Manager == expectedManager {
+			foundManager = mf.Manager
+			break
+		}
+	}
+
+	assert.Equal(t, expectedManager, foundManager,
+		"managed resource must have a field manager in format experimental.kro.run/<ns>/<name>")
+	t.Logf("Field manager verified: %s", foundManager)
+}
+
 // TestIdempotentReReconcileZeroWrites proves that re-reconciling a converged
 // Graph with no spec change produces zero API writes to ALL managed resources
 // (design 004-graph-execution § Wind step 3: change check hash match → skip).

@@ -128,8 +128,10 @@ reverse dependency order. Once the finalizer clears and the Graph is removed, th
 cascading-deletes any remaining revisions.
 
 Revisions are derived artifacts. If manually deleted, the controller regenerates the active revision
-from the current Graph spec on the next reconcile. The applied set — derived from the watch cache,
-not the revision — is the authoritative record of what was written to the cluster.
+from the current Graph spec on the next reconcile. On startup, the controller hydrates watch caches
+from all existing revisions before any reconcile fires, so the applied set is accurate from the
+first post-restart reconcile. The applied set — derived from the watch cache, not the revision — is
+the authoritative record of what was written to the cluster.
 
 ## Why Not
 

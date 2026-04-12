@@ -587,3 +587,189 @@ func TestForEachReadyWhenPassesImmediately(t *testing.T) {
 	}))
 	t.Log("Graph is Active — forEach readyWhen happy path proved")
 }
+
+// TestForEachChildIdentityStableUnderReordering proves that forEach child
+// resources are keyed by item identity (metadata.name), not by slice index.
+// When collection members are deleted and recreated in a different order, the
+// mapped children must NOT be deleted and recreated — their resourceVersions
+// must be stable.
+//
+// Design 004-graph-execution § forEach execution:
+//
+//	"Child identity is resource-key-based (stable under reordering)."
+//
+// If the implementation used slice index for identity (index 0, 1, 2), then
+// deleting and recreating items in reverse order would cause 3 deletes + 3
+// creates because each item's identity would change. Name-based identity means
+// item "worker-a" always maps to child "child-worker-a" regardless of position
+// in the collection.
+func TestForEachChildIdentityStableUnderReordering(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// 1. Create 3 ConfigMaps with a shared label — the collection.
+	workerNames := []string{"worker-a", "worker-b", "worker-c"}
+	for _, name := range workerNames {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": ns,
+					"labels": map[string]any{
+						"group": "foreach-workers",
+					},
+				},
+				"data": map[string]any{"role": name},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+	t.Log("3 worker ConfigMaps created in order: a, b, c")
+
+	// 2. Create Graph: collection watch on the 3 workers + forEach stamping children.
+	// Each child's name is derived from the item's metadata.name, so the mapping
+	// is identity-based: worker-a → child-worker-a, etc.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-ordering",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "workers",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"labelSelector": map[string]any{
+									"matchLabels": map[string]any{
+										"group": "foreach-workers",
+									},
+								},
+							},
+						},
+					},
+					map[string]any{
+						"id": "children",
+						"forEach": map[string]any{
+							"item": "${workers}",
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "child-${item.metadata.name}",
+							},
+							"data": map[string]any{
+								"parentName": "${item.metadata.name}",
+								"parentRole": "${item.data.role}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// 3. Wait for all 3 children to be created.
+	childNames := []string{"child-worker-a", "child-worker-b", "child-worker-c"}
+	for _, name := range childNames {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(cmGVK)
+		require.NoError(t, waitForResource(ctx, k8sClient,
+			types.NamespacedName{Name: name, Namespace: ns}, cm),
+			"child %s must be created", name)
+	}
+	t.Log("All 3 children created")
+
+	// Wait for Graph to settle before recording resourceVersions.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-ordering", Namespace: ns}))
+
+	// 4. Record each child's resourceVersion.
+	rvBefore := map[string]string{}
+	for _, name := range childNames {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(cmGVK)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+		rvBefore[name] = cm.GetResourceVersion()
+	}
+	t.Logf("Recorded RVs before reorder: %v", rvBefore)
+
+	// 5. Delete all 3 workers and recreate them in REVERSE order (c, b, a).
+	// If forEach used index-based identity, this would trigger a full
+	// delete+recreate of all children. Name-based identity should be stable.
+	for _, name := range workerNames {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(cmGVK)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+		require.NoError(t, k8sClient.Delete(ctx, cm))
+	}
+	// Wait for all workers to be gone before recreating.
+	for _, name := range workerNames {
+		require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true,
+			func(ctx context.Context) (bool, error) {
+				check := &unstructured.Unstructured{}
+				check.SetGroupVersionKind(cmGVK)
+				err := k8sClient.Get(ctx,
+					types.NamespacedName{Name: name, Namespace: ns}, check)
+				return err != nil, nil
+			}))
+	}
+	t.Log("All workers deleted — recreating in reverse order: c, b, a")
+
+	// Recreate in reverse order.
+	for _, name := range []string{"worker-c", "worker-b", "worker-a"} {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": ns,
+					"labels": map[string]any{
+						"group": "foreach-workers",
+					},
+				},
+				"data": map[string]any{"role": name},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+	t.Log("Workers recreated in reverse order: c, b, a")
+
+	// 6. Wait for all 3 children to exist again (they should never have been deleted).
+	for _, name := range childNames {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(cmGVK)
+		require.NoError(t, waitForResource(ctx, k8sClient,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+	}
+
+	// Wait for Graph to settle.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-ordering", Namespace: ns}))
+
+	// 7. THE KEY ASSERTION: all children's resourceVersions must be unchanged.
+	// If they were deleted and recreated, their RVs would differ.
+	for _, name := range childNames {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(cmGVK)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+		assert.Equal(t, rvBefore[name], cm.GetResourceVersion(),
+			"child %s resourceVersion must be stable — forEach identity is name-based, not index-based", name)
+	}
+	t.Log("All 3 children have stable resourceVersions — forEach identity is name-based, not index-based")
+}

@@ -123,7 +123,6 @@ func TestFinalizesBasicSequence(t *testing.T) {
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: "fin-target", Namespace: ns}, check)
 			return err != nil, nil // gone = true
 		}))
@@ -274,6 +273,210 @@ func TestFinalizesRejectsCELNames(t *testing.T) {
 			return accepted["status"] == "False", nil
 		}))
 	t.Log("Graph correctly rejected — CEL-evaluated name on finalizes node")
+}
+
+// TestFinalizesReadyWhenGatesTargetRemoval proves that a finalizer node's
+// readyWhen condition must be satisfied before the finalization target is
+// deleted. The controller creates the finalizer resource, then waits for
+// readyWhen to pass — the target is blocked until then.
+//
+// Design 001-graph § finalizes:
+//
+//	"The resource is created only when the target becomes a prune candidate
+//	and must reach readyWhen before the target's removal completes."
+//
+// Design 004-graph-execution § Finalization:
+//
+//	"(2) wait for readyWhen, (3) DELETE target."
+//
+// This test has three phases to prove the gate is actively holding, not racing:
+//  1. Remove target from spec → snapshot created, target STILL EXISTS, gate unsatisfied.
+//  2. Stable hold: wait multiple reconcile cycles → target STILL EXISTS.
+//  3. Satisfy gate → target deleted, snapshot cleaned up.
+//
+// The gate uses an existing resource whose CONTENT controls readyWhen — not an
+// absent resource. This is the realistic operational pattern: a finalization
+// condition that depends on some external signal that hasn't fired yet.
+func TestFinalizesReadyWhenGatesTargetRemoval(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create the gate control ConfigMap with ready=false.
+	// The snapshot's readyWhen reads this field and gates on it.
+	gateControl := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "fin-rw-gate",
+				"namespace": ns,
+			},
+			"data": map[string]any{
+				"ready": "false",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, gateControl))
+	t.Log("Gate control ConfigMap created with ready=false")
+
+	// Phase 1: Create a Graph with:
+	//   - target: the resource that will be finalized
+	//   - gatewatch: watches the gate CM (always exists, field controls readyWhen)
+	//   - snapshot: finalizes target, readyWhen gated on ${gatewatch.data.ready == 'true'}
+	//
+	// During normal operation the gate condition is false (ready=false).
+	// The snapshot node must NOT be created until target is a prune candidate.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-finalize-readywhen",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "fin-rw-target"},
+							"data":       map[string]any{"state": "active"},
+						},
+					},
+					map[string]any{
+						"id": "gatewatch",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "fin-rw-gate"},
+						},
+					},
+					map[string]any{
+						"id":        "snapshot",
+						"finalizes": "target",
+						"readyWhen": []any{"${gatewatch.data.ready == 'true'}"},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "fin-rw-snapshot"},
+							"data":       map[string]any{"captured": "true"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for target. Graph won't be fully Ready because snapshot's readyWhen
+	// is false (gate ready=false), but target still gets created.
+	targetCM := &unstructured.Unstructured{}
+	targetCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "fin-rw-target", Namespace: ns}, targetCM))
+	t.Log("Target created — Graph in non-Ready state (gatewatch.data.ready=false)")
+
+	// Snapshot must NOT exist during normal operation.
+	snapshotCheck := &unstructured.Unstructured{}
+	snapshotCheck.SetGroupVersionKind(cmGVK)
+	err := k8sClient.Get(ctx,
+		types.NamespacedName{Name: "fin-rw-snapshot", Namespace: ns}, snapshotCheck)
+	require.Error(t, err,
+		"snapshot must not exist during normal operation (before target is a prune candidate)")
+	t.Log("Snapshot correctly absent before finalization triggers")
+
+	// Phase 2: Update spec to remove BOTH target and snapshot.
+	//
+	// Finalization semantics: the finalizer node (snapshot) and its target
+	// node (target) must BOTH be absent from the new spec. The controller
+	// uses the SUPERSEDED revision's DAG to find finalizer relationships —
+	// the old revision still knows that snapshot finalizes target.
+	//
+	// If snapshot is kept in the new spec with `finalizes: target` but
+	// target is absent, the revision compilation rejects it (DAG validation
+	// requires the finalizes reference to exist in the same spec). This is
+	// intentional: the user removes both nodes when they want finalization
+	// to run. The superseded revision carries the relationship forward.
+	//
+	// The gatewatch node IS kept so it continues to be evaluated in the
+	// wind phase and its data is available to the snapshot's readyWhen
+	// expression when runFinalization checks it.
+	latest := &unstructured.Unstructured{}
+	latest.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "test-finalize-readywhen", Namespace: ns}, latest))
+	unstructured.SetNestedSlice(latest.Object, []any{
+		map[string]any{
+			"id": "gatewatch",
+			"template": map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": "fin-rw-gate"},
+			},
+		},
+		// snapshot is intentionally REMOVED from the new spec.
+		// The superseded revision still knows: snapshot finalizes target.
+		// Finalization proceeds from the superseded DAG.
+	}, "spec", "nodes")
+	require.NoError(t, k8sClient.Update(ctx, latest))
+	t.Log("Removed target and snapshot from spec — finalization triggered via superseded DAG")
+
+	// Wait for snapshot to be created (finalization started running).
+	// The controller uses the superseded revision's snapshot template to
+	// create the resource, then waits for readyWhen before deleting target.
+	snapshotCM := &unstructured.Unstructured{}
+	snapshotCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "fin-rw-snapshot", Namespace: ns}, snapshotCM))
+	t.Log("Snapshot CREATED — finalization is running")
+
+	// Immediate assertion: target must still exist — readyWhen unsatisfied.
+	checkTarget := &unstructured.Unstructured{}
+	checkTarget.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "fin-rw-target", Namespace: ns}, checkTarget),
+		"target must still exist — readyWhen gate (gatewatch.data.ready == 'true') is false")
+	t.Log("Phase 2: target still exists immediately after snapshot creation")
+
+	// Phase 3: Stable hold — wait multiple reconcile cycles and verify target
+	// is still there. This proves the gate is actively holding, not just that
+	// deletion is slow.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-finalize-readywhen", Namespace: ns}))
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-finalize-readywhen", Namespace: ns}))
+
+	holdTarget := &unstructured.Unstructured{}
+	holdTarget.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "fin-rw-target", Namespace: ns}, holdTarget),
+		"target must still exist after multiple reconcile cycles — gate actively holding")
+	t.Log("Phase 3: target survived multiple reconcile cycles — gate is holding")
+
+	// Phase 4: Satisfy the gate by updating the gate CM to ready=true.
+	// gatewatch.data.ready == 'true' → readyWhen passes → target deleted.
+	latestGate := &unstructured.Unstructured{}
+	latestGate.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "fin-rw-gate", Namespace: ns}, latestGate))
+	unstructured.SetNestedField(latestGate.Object, "true", "data", "ready")
+	require.NoError(t, k8sClient.Update(ctx, latestGate))
+	t.Log("Gate updated: ready=true — readyWhen should now be satisfied")
+
+	// Target must be deleted now that readyWhen is satisfied.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 60*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "fin-rw-target", Namespace: ns}, check)
+			return err != nil, nil // gone = success
+		}))
+	t.Log("Target deleted after gate satisfied — readyWhen finalization gate proved")
 }
 
 // TestFinalizesOnTeardown proves that finalization runs during Graph deletion

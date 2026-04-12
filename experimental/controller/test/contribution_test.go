@@ -14,6 +14,188 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
+// TestMultiGraphFieldCoexistence proves that different Graphs can contribute
+// different fields to the same resource without conflict or cross-graph
+// interference.
+//
+// Design 003-ownership § Multi-graph coexistence:
+//
+//	"Different Graphs can manage different fields on the same resource
+//	without conflict."
+//
+// This is the core ownership model: each Graph uses a dedicated field manager
+// (experimental.kro.run/<ns>/<name>), so SSA field ownership is scoped per
+// Graph. Two Graphs writing disjoint field sets on the same resource must not
+// produce a 409 conflict, and each Graph's fields must persist independently.
+func TestMultiGraphFieldCoexistence(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create the shared resource. Both Graphs will detect Contribute shape
+	// (resource exists on first reconcile → Contribute, not Owns).
+	shared := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "shared-coexist-cm",
+				"namespace": ns,
+			},
+			"data": map[string]any{
+				"original": "data",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, shared))
+	t.Log("Shared ConfigMap pre-created")
+
+	// Graph A contributes data.keyA to the shared resource.
+	graphA := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-coexist-a",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "contribute",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "shared-coexist-cm",
+								"annotations": map[string]any{
+									"kro.run/managed-by-a": "graph-a",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graphA))
+
+	// Graph B contributes data.keyB to the same shared resource.
+	graphB := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-coexist-b",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "contribute",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "shared-coexist-cm",
+								"annotations": map[string]any{
+									"kro.run/managed-by-b": "graph-b",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graphB))
+
+	// Wait for both Graphs to reach Active state.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-coexist-a", Namespace: ns}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-coexist-b", Namespace: ns}))
+	t.Log("Both Graphs Active — no conflict detected")
+
+	// THE KEY ASSERTION: shared resource has fields from BOTH graphs.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "shared-coexist-cm", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			ann := check.GetAnnotations()
+			return ann["kro.run/managed-by-a"] == "graph-a" && ann["kro.run/managed-by-b"] == "graph-b", nil
+		}))
+
+	result := &unstructured.Unstructured{}
+	result.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "shared-coexist-cm", Namespace: ns}, result))
+
+	ann := result.GetAnnotations()
+	assert.Equal(t, "graph-a", ann["kro.run/managed-by-a"],
+		"Graph A's field must be present on the shared resource")
+	assert.Equal(t, "graph-b", ann["kro.run/managed-by-b"],
+		"Graph B's field must be present on the shared resource")
+
+	// Original data must be preserved.
+	data, _, _ := unstructured.NestedStringMap(result.Object, "data")
+	assert.Equal(t, "data", data["original"],
+		"original data must be preserved despite two contributes")
+	t.Log("Both Graphs' fields coexist — no conflict, original data preserved")
+
+	// Update Graph A: write a new annotation value.
+	latestA := &unstructured.Unstructured{}
+	latestA.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "test-coexist-a", Namespace: ns}, latestA))
+	unstructured.SetNestedSlice(latestA.Object, []any{
+		map[string]any{
+			"id": "contribute",
+			"template": map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name": "shared-coexist-cm",
+					"annotations": map[string]any{
+						"kro.run/managed-by-a": "graph-a-updated",
+					},
+				},
+			},
+		},
+	}, "spec", "nodes")
+	require.NoError(t, k8sClient.Update(ctx, latestA))
+	t.Log("Updated Graph A: new annotation value")
+
+	// Wait for Graph A's update to propagate.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "shared-coexist-cm", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			return check.GetAnnotations()["kro.run/managed-by-a"] == "graph-a-updated", nil
+		}))
+
+	// CRITICAL: Graph B's field must be UNCHANGED.
+	final := &unstructured.Unstructured{}
+	final.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "shared-coexist-cm", Namespace: ns}, final))
+	finalAnn := final.GetAnnotations()
+	assert.Equal(t, "graph-a-updated", finalAnn["kro.run/managed-by-a"],
+		"Graph A's updated field should be applied")
+	assert.Equal(t, "graph-b", finalAnn["kro.run/managed-by-b"],
+		"Graph B's field must be unchanged — Graph A update must not stomp Graph B's fields")
+	t.Log("Graph A updated without affecting Graph B's fields — multi-graph field coexistence proved")
+}
+
 // TestContribution proves that a Graph can write fields to an object it doesn't own.
 // This is partial SSA — the Graph writes specific fields (like status) without
 // taking ownership. No ownerReference is set on the target.

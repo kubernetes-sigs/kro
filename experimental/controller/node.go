@@ -93,9 +93,19 @@ func (r *GraphReconciler) resolveShape(ctx context.Context, graph *unstructured.
 	}
 
 	// Resource exists. Check if this Graph created it (identity label match).
+	// Per 003-ownership.md: Contribute templates also stamp identity labels
+	// (with role=contributes) so the applied set can find them on restart.
+	// We must check the ROLE VALUE — not just label presence — to distinguish
+	// Contribute (role=contributes) from Owns (role=owns). Without this check,
+	// a Contribute node misidentifies as Owns on the second reconcile, triggering
+	// the kro label conflict check against co-contributing Graphs.
 	existingLabels := existing.GetLabels()
-	for key := range existingLabels {
+	for key, role := range existingLabels {
 		if isGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
+			if role == RoleContributes {
+				logger.V(1).Info("shape resolved: Contribute (resource has our contributes label)", "node", node.ID)
+				return ShapeContribute, nil
+			}
 			logger.V(1).Info("shape resolved: Owns (resource has our identity label)", "node", node.ID)
 			return ShapeOwns, nil
 		}

@@ -28,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -239,12 +238,26 @@ func extractRevisionSpec(revision *unstructured.Unstructured) (*GraphSpec, error
 // CRUD helpers
 // ---------------------------------------------------------------------------
 
-// createRevision creates a GraphRevision in the cluster with a finalizer.
+// createRevision creates a GraphRevision in the cluster.
 // The spec is immutable — enforced by CEL validation (self == oldSelf) on
 // the GraphRevision CRD. See: experimental/docs/design/002-revisions.md
+//
+// Revisions are freely deletable. On controller startup, hydrateWatchCaches
+// pre-populates watch informers from all existing revisions, so the prune
+// phase can reconstruct the applied set for cross-GVR transitions even
+// after a controller restart — without requiring revisions to be pinned in
+// the API server via a finalizer.
 func createRevision(ctx context.Context, c client.Client, revision *unstructured.Unstructured) error {
-	controllerutil.AddFinalizer(revision, finalizer)
 	return c.Create(ctx, revision)
+}
+
+// deleteRevision removes a GraphRevision from the cluster. It is a direct
+// delete — revisions carry no finalizer and GC will handle ownerReference
+// cleanup if the parent Graph is already gone.
+func deleteRevision(ctx context.Context, c client.Client, revision *unstructured.Unstructured) error {
+	// Ignore NotFound: GC may have already deleted the revision via
+	// ownerReference cascade when the parent Graph was deleted.
+	return client.IgnoreNotFound(c.Delete(ctx, revision))
 }
 
 // getRevision fetches a specific GraphRevision by name.
@@ -289,19 +302,6 @@ func listRevisions(ctx context.Context, c client.Client, graphName, namespace st
 	})
 
 	return result, nil
-}
-
-// deleteRevision removes a GraphRevision after removing its finalizer.
-func deleteRevision(ctx context.Context, c client.Client, revision *unstructured.Unstructured) error {
-	if controllerutil.ContainsFinalizer(revision, finalizer) {
-		controllerutil.RemoveFinalizer(revision, finalizer)
-		if err := c.Update(ctx, revision); err != nil {
-			return fmt.Errorf("removing finalizer from revision %s: %w", revision.GetName(), err)
-		}
-	}
-	// Ignore NotFound: GC may have already deleted the revision after the
-	// finalizer was removed (ownerReference to the Graph being deleted).
-	return client.IgnoreNotFound(c.Delete(ctx, revision))
 }
 
 // ---------------------------------------------------------------------------

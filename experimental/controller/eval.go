@@ -98,18 +98,22 @@ func (e *evaluator) checkReadiness(conditions []string, observed any, nodeID str
 	return nil
 }
 
-// checkPropagateWhen evaluates propagateWhen conditions against an observed resource.
+// checkPropagateWhen evaluates propagateWhen conditions against the full scope.
 // Returns true if all conditions pass (data should flow to dependents).
-// Returns false if any condition is false or data-pending.
+// Returns false if any condition is false or errors.
+//
+// propagateWhen expressions can reference other nodes — including cross-node
+// readiness checks like ${deployment.ready()} on a consumer node. Evaluating
+// against the full scope (not a restricted single-node scope) is required for
+// these references to resolve. The DAG walk's topological order guarantees
+// that all dependency nodes are already in e.scope when this is called.
 func (e *evaluator) checkPropagateWhen(conditions []string, observed any, nodeID string) bool {
 	if len(conditions) == 0 {
 		return true
 	}
 
-	propEval := e.withScope(map[string]any{nodeID: observed})
-
 	for _, cond := range conditions {
-		ok, err := propEval.evalBoolCondition(cond)
+		ok, err := e.evalBoolCondition(cond)
 		if err != nil || !ok {
 			return false
 		}

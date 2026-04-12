@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -309,6 +310,9 @@ func listRevisions(ctx context.Context, c client.Client, graphName, namespace st
 // ---------------------------------------------------------------------------
 
 // setRevisionCondition sets a condition on a GraphRevision's status.
+// lastTransitionTime is set to now when the condition status changes;
+// it is preserved when the status is unchanged — matching the Kubernetes
+// condition convention (design 001-graph § Conditions).
 func setRevisionCondition(ctx context.Context, c client.Client, revision *unstructured.Unstructured, condType RevisionConditionType, status ConditionStatus, reason, message string) error {
 	// Get fresh copy to avoid conflicts
 	latest, err := getRevision(ctx, c, revision.GetName(), revision.GetNamespace())
@@ -321,18 +325,37 @@ func setRevisionCondition(ctx context.Context, c client.Client, revision *unstru
 		existingStatus = map[string]any{}
 	}
 
+	now := time.Now().UTC().Format(time.RFC3339)
 	conditions, _ := existingStatus["conditions"].([]any)
+
 	newCondition := map[string]any{
-		"type":    string(condType),
-		"status":  string(status),
-		"reason":  reason,
-		"message": message,
+		"type":               string(condType),
+		"status":             string(status),
+		"reason":             reason,
+		"message":            message,
+		"lastTransitionTime": now,
 	}
 
-	// Replace or append the condition
+	// Preserve lastTransitionTime when the status value hasn't changed.
+	for _, existing := range conditions {
+		eMap, ok := existing.(map[string]any)
+		if !ok {
+			continue
+		}
+		if eMap["type"] == string(condType) {
+			if eMap["status"] == string(status) {
+				if ltt, ok := eMap["lastTransitionTime"].(string); ok && ltt != "" {
+					newCondition["lastTransitionTime"] = ltt
+				}
+			}
+			break
+		}
+	}
+
+	// Replace or append the condition.
 	found := false
-	for i, c := range conditions {
-		cMap, ok := c.(map[string]any)
+	for i, cond := range conditions {
+		cMap, ok := cond.(map[string]any)
 		if !ok {
 			continue
 		}

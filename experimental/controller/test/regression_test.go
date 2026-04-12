@@ -1009,3 +1009,154 @@ func TestContributeIdentityLabels(t *testing.T) {
 			"without this, teardown after restart orphans contributed fields", labelSuffix)
 	t.Log("Contribute identity label found — resource is discoverable via deriveAppliedSet()")
 }
+
+// TestPropagateWhenCrossNodeRef proves that propagateWhen expressions can
+// reference other nodes via .ready() and correctly gate downstream data flow.
+//
+// Design: 001-graph.md § propagateWhen shows:
+//
+//   - id: consumer
+//     propagateWhen:
+//   - ${deployment.ready()}   ← cross-node reference
+//
+// Bug: checkPropagateWhen previously created a restricted scope containing
+// only the evaluating node's own data. Cross-node references like
+// ${upstream.ready()} would fail to evaluate (no such attribute), causing
+// checkPropagateWhen to return false permanently — the propagation gate
+// would never open even when upstream became ready. As a result, downstream
+// could never be created (permanently blocked by PropagateReady["relay"]=false).
+//
+// Setup:
+//   - source ConfigMap: data.status = "pending"
+//   - upstream: Watch on source, readyWhen: ${upstream.data.status == 'active'}
+//   - relay: Owns ConfigMap, propagateWhen: [${upstream.ready()}]
+//   - downstream: Owns ConfigMap, data.relayStatus: ${relay.data.status}
+//
+// Scenario:
+//  1. Graph created — relay is created, downstream is blocked (relay.propagateWhen = false)
+//  2. source → "active": upstream.ready() becomes true, relay.propagateWhen opens
+//  3. downstream is created with relayStatus = "active"
+//
+// With the bug: downstream is never created (propagateWhen returns false for
+// cross-node ref regardless of upstream state). Without the bug: downstream
+// appears once upstream becomes ready.
+func TestPropagateWhenCrossNodeRef(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create source in "pending" state.
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "propagate-source",
+				"namespace": ns,
+			},
+			"data": map[string]any{
+				"status": "pending",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-propagate-cross-node",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// upstream: watches source, ready when status == "active"
+					map[string]any{
+						"id": "upstream",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "propagate-source"},
+						},
+						"readyWhen": []any{
+							"${upstream.data.status == 'active'}",
+						},
+					},
+					// relay: propagateWhen references upstream.ready() — cross-node ref.
+					// Until upstream is ready, relay's data must not flow to dependents.
+					map[string]any{
+						"id": "relay",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "propagate-relay"},
+							"data": map[string]any{
+								"status": "${upstream.data.status}",
+							},
+						},
+						"propagateWhen": []any{
+							"${upstream.ready()}",
+						},
+					},
+					// downstream: depends on relay — created only when relay propagates.
+					map[string]any{
+						"id": "downstream",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "propagate-downstream"},
+							"data": map[string]any{
+								"relayStatus": "${relay.data.status}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Step 1: relay is always created (propagateWhen only gates its dependents).
+	relayGVK := regressionCMGVK
+	relay := &unstructured.Unstructured{}
+	relay.SetGroupVersionKind(relayGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "propagate-relay", Namespace: ns}, relay),
+		"relay ConfigMap should be created")
+	t.Log("Step 1: relay created; downstream is blocked (relay.propagateWhen = false)")
+
+	// downstream must NOT be created while upstream.ready() is false.
+	// relay.propagateWhen = ${upstream.ready()} is false, so downstream is blocked.
+	require.NoError(t, waitForAbsence(ctx, k8sClient, regressionCMGVK,
+		types.NamespacedName{Name: "propagate-downstream", Namespace: ns}, 2*time.Second),
+		"downstream must not exist while relay.propagateWhen is unsatisfied")
+	t.Log("Step 1 confirmed: downstream correctly absent while upstream not ready")
+
+	// Step 2: Update source to "active" — upstream.readyWhen becomes true.
+	// relay.propagateWhen (${upstream.ready()}) must become true → downstream unblocked.
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "propagate-source", Namespace: ns}, source))
+	source.Object["data"] = map[string]any{"status": "active"}
+	require.NoError(t, k8sClient.Update(ctx, source))
+
+	// Downstream must be created once upstream.ready() becomes true.
+	// With the scope bug, checkPropagateWhen returns false for cross-node refs,
+	// so downstream would never be created — this assertion would time out.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(regressionCMGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "propagate-downstream", Namespace: ns}, cm); err != nil {
+			return false, nil
+		}
+		data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+		return data["relayStatus"] == "active", nil
+	}), "downstream should be created with relayStatus='active' once upstream.ready() becomes true; "+
+		"if this times out the propagateWhen cross-node scope bug is present")
+
+	finalDS := &unstructured.Unstructured{}
+	finalDS.SetGroupVersionKind(regressionCMGVK)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "propagate-downstream", Namespace: ns}, finalDS))
+	data, _, _ := unstructured.NestedStringMap(finalDS.Object, "data")
+	assert.Equal(t, "active", data["relayStatus"],
+		"downstream should have 'active' after propagateWhen cross-node ref resolved")
+	t.Log("Step 2: propagateWhen cross-node ref correctly unblocked downstream on upstream.ready()")
+}

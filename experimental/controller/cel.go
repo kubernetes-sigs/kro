@@ -183,11 +183,11 @@ type instanceState struct {
 	previousPlanStates map[string]NodeState // node ID → last plan state
 	forEachItems       map[string][]any     // "nodeID/varName" → cached collection items
 
-	// Resolved shapes for Deferred nodes. Set on first reconcile when the
-	// existence check determines Owns vs Contribute. Persists across
+	// Resolved references for Unresolved nodes. Set on first reconcile when the
+	// existence check determines Owns vs Contributes. Persists across
 	// reconciles within the same revision. Reset on new revision (new
 	// instanceState).
-	resolvedShapes map[string]TemplateShape
+	resolvedReferences map[string]Reference
 
 	// Input hashing state — retained across reconciles for change detection.
 	// See 004-graph-execution.md § Wind step 3.
@@ -232,7 +232,7 @@ func newInstanceState(compiled *compiledGraph) *instanceState {
 		forEachItems:        map[string][]any{},
 		forEachItemScope:    map[string]map[string]any{},
 		forEachItemKeys:     map[string]map[string][]string{},
-		resolvedShapes:      make(map[string]TemplateShape, len(compiled.dag.Shapes)),
+		resolvedReferences:  make(map[string]Reference, len(compiled.dag.References)),
 		driftTimers:         make(map[string]time.Time),
 	}
 }
@@ -301,13 +301,14 @@ func (s *instanceState) nextDriftExpiry() time.Time {
 	return earliest
 }
 
-// initResolvedShapes seeds the resolved shapes map from the DAG's compile-time
-// shapes. Called once at the start of each reconcile to ensure all nodes have
-// an entry. Deferred entries will be resolved during the walk.
-func (s *instanceState) initResolvedShapes() {
-	for id, shape := range s.compiled.dag.Shapes {
-		if _, ok := s.resolvedShapes[id]; !ok {
-			s.resolvedShapes[id] = shape
+// initResolvedReferences seeds the resolved references map from the DAG's
+// compile-time references. Called once at the start of each reconcile to
+// ensure all nodes have an entry. Unresolved entries will be resolved during
+// the walk.
+func (s *instanceState) initResolvedReferences() {
+	for id, ref := range s.compiled.dag.References {
+		if _, ok := s.resolvedReferences[id]; !ok {
+			s.resolvedReferences[id] = ref
 		}
 	}
 }

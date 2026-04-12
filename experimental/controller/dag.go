@@ -15,8 +15,8 @@ type DAG struct {
 	// TopologicalOrder is the apply order (respects dependencies).
 	// Computed via Kahn's algorithm — declaration order is not significant.
 	TopologicalOrder []int
-	// Shapes maps node ID to its detected template shape.
-	Shapes map[string]TemplateShape
+	// References maps node ID to its detected reference type.
+	References map[string]Reference
 	// Levels groups node indices by topological level. Nodes within
 	// the same level are independent and can be processed in parallel.
 	// Level 0 has no dependencies, level 1 depends only on level 0, etc.
@@ -41,7 +41,7 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 	dag := &DAG{
 		Nodes:      make([]Node, len(nodes)),
 		Index:      make(map[string]int, len(nodes)),
-		Shapes:     make(map[string]TemplateShape),
+		References: make(map[string]Reference),
 		Dependents: make(map[string][]int),
 		Finalizers: make(map[string][]string),
 	}
@@ -51,7 +51,7 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 		node.DepSections, node.SelfSections, node.ReadinessDeps = extractReferencedSections(node)
 		dag.Nodes[i] = node
 		dag.Index[node.ID] = i
-		dag.Shapes[node.ID] = node.Shape()
+		dag.References[node.ID] = node.Reference()
 	}
 
 	// Build finalizer map: target node ID → list of finalizer node IDs.

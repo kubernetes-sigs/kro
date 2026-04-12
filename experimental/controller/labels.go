@@ -3,8 +3,8 @@
 // Each managed resource carries two labels per Graph-node pair. The label
 // key is a DNS subdomain that encodes the node ID, graph name, and namespace:
 //
-//	<nodeID>.<graphName>.<namespace>.internal.kro.run/role        → "owns" | "contributes"
-//	<nodeID>.<graphName>.<namespace>.internal.kro.run/generation  → graph.metadata.generation
+//	<nodeID>.<graphName>.<namespace>.internal.kro.run/reference  → "owns" | "contributes"
+//	<nodeID>.<graphName>.<namespace>.internal.kro.run/generation → graph.metadata.generation
 //
 // The identity label key is unique per node-graph-namespace triple. Multiple
 // Graphs targeting the same resource coexist without collision — each Graph's
@@ -15,22 +15,17 @@
 package graphcontroller
 
 import (
+	"fmt"
 	"strings"
 )
 
 const (
 	// identityLabelSuffix is the fixed suffix for all identity labels.
-	// The full key is: <nodeID>.<graphName>.<namespace>.internal.kro.run/role
-	identityLabelSuffix = ".internal.kro.run/role"
+	// The full key is: <nodeID>.<graphName>.<namespace>.internal.kro.run/reference
+	identityLabelSuffix = ".internal.kro.run/reference"
 
 	// generationLabelSuffix is the fixed suffix for generation labels.
 	generationLabelSuffix = ".internal.kro.run/generation"
-
-	// RoleOwns indicates the Graph creates and manages the resource.
-	RoleOwns = "owns"
-
-	// RoleContributes indicates the Graph writes partial state to the resource.
-	RoleContributes = "contributes"
 
 	// Flat labels for revision objects (not managed resources).
 	// Revisions are namespace-scoped alongside their parent Graph and use
@@ -107,7 +102,7 @@ func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 		if !strings.HasSuffix(key, mySuffix) {
 			// Different graph. Extract graph name for the error message.
 			_, gName, _, ok := parseIdentityLabel(key)
-			if ok && (val == RoleOwns || val == RoleContributes) {
+			if ok && (val == ReferenceOwns.String() || val == ReferenceContributes.String()) {
 				return gName, true
 			}
 		}
@@ -116,12 +111,18 @@ func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 }
 
 // setIdentityLabels stamps identity and generation labels onto a resource's
-// metadata labels map. Called during apply for Owns and Contribute templates.
-func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, generation, role string) map[string]string {
+// metadata labels map. Called during apply for Owns and Contributes references.
+// Panics if ref does not have a label value — this is an invariant violation,
+// as all call sites pass ReferenceOwns or ReferenceContributes directly.
+func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, generation string, ref Reference) map[string]string {
+	lv, ok := ref.LabelValue()
+	if !ok {
+		panic(fmt.Sprintf("setIdentityLabels called with non-writable reference %s", ref))
+	}
 	if labels == nil {
 		labels = make(map[string]string)
 	}
-	labels[identityLabelKey(nodeID, graphName, namespace)] = role
+	labels[identityLabelKey(nodeID, graphName, namespace)] = lv
 	labels[generationLabelKey(nodeID, graphName, namespace)] = generation
 	return labels
 }
@@ -164,11 +165,17 @@ func forEachChildGenerationLabelKey(parentID, resName, resNamespace, kind, group
 }
 
 // setForEachChildIdentityLabels stamps forEach child identity and generation labels.
-func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation, role string) map[string]string {
+// Panics if ref does not have a label value — this is an invariant violation,
+// as all call sites pass ReferenceOwns or ReferenceContributes directly.
+func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation string, ref Reference) map[string]string {
+	lv, ok := ref.LabelValue()
+	if !ok {
+		panic(fmt.Sprintf("setForEachChildIdentityLabels called with non-writable reference %s", ref))
+	}
 	if labels == nil {
 		labels = make(map[string]string)
 	}
-	labels[forEachChildIdentityLabelKey(parentID, resName, resNamespace, kind, group, graphName, graphNamespace)] = role
+	labels[forEachChildIdentityLabelKey(parentID, resName, resNamespace, kind, group, graphName, graphNamespace)] = lv
 	labels[forEachChildGenerationLabelKey(parentID, resName, resNamespace, kind, group, graphName, graphNamespace)] = generation
 	return labels
 }
@@ -177,7 +184,7 @@ func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, 
 // watch cache by scanning identity labels.
 type appliedEntry struct {
 	NodeID    string
-	Role      string // RoleOwns or RoleContributes
-	Key       string // resource key (group/version/Kind/namespace/name)
-	HasStatus bool   // for contributes: whether status subresource was applied
+	Reference Reference // ReferenceOwns or ReferenceContributes
+	Key       string    // resource key (group/version/Kind/namespace/name)
+	HasStatus bool      // for contributes: whether status subresource was applied
 }

@@ -1,5 +1,5 @@
-// node.go contains the per-node reconciliation handlers, one per template
-// shape. The coordinator in controller.go dispatches nodes here; these
+// node.go contains the per-node reconciliation handlers, one per reference
+// type. The coordinator in controller.go dispatches nodes here; these
 // handlers evaluate templates and call into apply.go for cluster mutations.
 package graphcontroller
 
@@ -20,33 +20,33 @@ import (
 // Node reconciliation methods
 // ---------------------------------------------------------------------------
 
-// reconcileNode dispatches to the appropriate handler based on node shape.
-// The shape must be resolved before calling this function — Deferred shapes
-// are resolved by the coordinator before dispatching to workers.
+// reconcileNode dispatches to the appropriate handler based on node reference type.
+// The reference must be resolved before calling this function — Unresolved
+// references are resolved by the coordinator before dispatching to workers.
 //
 // All paths return (keys, error) with a uniform error contract:
 //   - ErrDataPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, shape TemplateShape, eval *evaluator, watcher *graphWatcher) ([]string, error) {
+func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, ref Reference, eval *evaluator, watcher *graphWatcher) ([]string, error) {
 	if node.ForEach != nil {
 		return r.reconcileForEach(ctx, graph, node, eval, watcher)
 	}
 
-	switch shape {
-	case ShapeCollectionWatch:
+	switch ref {
+	case ReferenceWatchesKind:
 		err := r.reconcileCollectionWatch(ctx, graph, node, eval, watcher)
 		return nil, err
-	case ShapeWatch:
+	case ReferenceWatches:
 		err := r.reconcileWatch(ctx, graph, node, eval, watcher)
 		return nil, err
-	case ShapeContribute:
+	case ReferenceContributes:
 		key, err := r.reconcileContribute(ctx, graph, node, eval, watcher)
 		if key != "" {
 			return []string{key}, err
 		}
 		return nil, err
-	default: // ShapeOwns
+	default: // ReferenceOwns
 		key, err := r.reconcileOwns(ctx, graph, node, eval, watcher)
 		if key != "" {
 			return []string{key}, err
@@ -55,26 +55,26 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 	}
 }
 
-// resolveShape determines Owns vs Contribute for a Deferred node by checking
-// whether the target resource exists. Absent → Owns, exists → check the kro
-// label. If the resource has this Graph's label, it's Owns (we created it on
-// a previous revision). If it has no kro label or another Graph's label, it's
-// Contribute. Force annotation always resolves to Owns.
-func (r *GraphReconciler) resolveShape(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator) (TemplateShape, error) {
+// resolveReference determines Owns vs Contributes for an Unresolved node by
+// checking whether the target resource exists. Absent → Owns, exists → check
+// the kro label. If the resource has this Graph's label, it's Owns (we created
+// it on a previous revision). If it has no kro label or another Graph's label,
+// it's Contributes. Force annotation always resolves to Owns.
+func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator) (Reference, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMap(node.Template)
 	if err != nil {
 		// Template can't evaluate yet — expressions unresolvable.
-		// Return Deferred so it's retried next reconcile.
-		return ShapeDeferred, fmt.Errorf("resolving shape for %s: %w", node.ID, err)
+		// Return Unresolved so it's retried next reconcile.
+		return ReferenceUnresolved, fmt.Errorf("resolving reference for %s: %w", node.ID, err)
 	}
 
 	// Force annotation is an explicit ownership claim — always Owns.
 	obj := &unstructured.Unstructured{Object: evalMap}
 	if isForceApply(obj) {
-		logger.V(1).Info("shape resolved: Owns (Force annotation)", "node", node.ID)
-		return ShapeOwns, nil
+		logger.V(1).Info("reference resolved: Owns (Force annotation)", "node", node.ID)
+		return ReferenceOwns, nil
 	}
 
 	if obj.GetNamespace() == "" {
@@ -86,33 +86,34 @@ func (r *GraphReconciler) resolveShape(ctx context.Context, graph *unstructured.
 	err = r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.V(1).Info("shape resolved: Owns (resource absent)", "node", node.ID)
-			return ShapeOwns, nil
+			logger.V(1).Info("reference resolved: Owns (resource absent)", "node", node.ID)
+			return ReferenceOwns, nil
 		}
-		return ShapeDeferred, fmt.Errorf("checking resource existence for shape detection %s: %w", node.ID, err)
+		return ReferenceUnresolved, fmt.Errorf("checking resource existence for reference detection %s: %w", node.ID, err)
 	}
 
 	// Resource exists. Check if this Graph created it (identity label match).
-	// Per 003-ownership.md: Contribute templates also stamp identity labels
-	// (with role=contributes) so the applied set can find them on restart.
-	// We must check the ROLE VALUE — not just label presence — to distinguish
-	// Contribute (role=contributes) from Owns (role=owns). Without this check,
-	// a Contribute node misidentifies as Owns on the second reconcile, triggering
-	// the kro label conflict check against co-contributing Graphs.
+	// Per 003-ownership.md: Contributes templates also stamp identity labels
+	// (with reference=contributes) so the applied set can find them on restart.
+	// We must check the REFERENCE VALUE — not just label presence — to
+	// distinguish Contributes (reference=contributes) from Owns (reference=owns).
+	// Without this check, a Contributes node misidentifies as Owns on the second
+	// reconcile, triggering the kro label conflict check against co-contributing
+	// Graphs.
 	existingLabels := existing.GetLabels()
-	for key, role := range existingLabels {
+	for key, val := range existingLabels {
 		if isGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
-			if role == RoleContributes {
-				logger.V(1).Info("shape resolved: Contribute (resource has our contributes label)", "node", node.ID)
-				return ShapeContribute, nil
+			if val == ReferenceContributes.String() {
+				logger.V(1).Info("reference resolved: Contributes (resource has our contributes label)", "node", node.ID)
+				return ReferenceContributes, nil
 			}
-			logger.V(1).Info("shape resolved: Owns (resource has our identity label)", "node", node.ID)
-			return ShapeOwns, nil
+			logger.V(1).Info("reference resolved: Owns (resource has our identity label)", "node", node.ID)
+			return ReferenceOwns, nil
 		}
 	}
 
-	logger.V(1).Info("shape resolved: Contribute (resource exists, not ours)", "node", node.ID)
-	return ShapeContribute, nil
+	logger.V(1).Info("reference resolved: Contributes (resource exists, not ours)", "node", node.ID)
+	return ReferenceContributes, nil
 }
 
 // reconcileWatch reads a single existing object from the API server into scope.

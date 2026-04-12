@@ -10,79 +10,109 @@ import (
 	"strings"
 )
 
-// TemplateShape classifies the relationship between a Graph and a resource.
-// Watch and CollectionWatch are determined by template structure at compile time.
-// Owns and Contribute are determined by resource existence at first reconcile.
-// See 003-ownership.md § Template Shapes.
-type TemplateShape int
+// Reference is the reference type of a Graph node — it classifies how the node
+// relates to its target Kubernetes resource: what it does at reconcile time and
+// what it owes on cleanup. Think of it like pointer types in a PL's ownership
+// model: owned, borrowed mutably, borrowed immutably, or not yet resolved.
+// Watches and WatchesKind are determined by template structure at compile time.
+// Owns and Contributes are determined by resource existence at first reconcile.
+// See 003-ownership.md § References.
+type Reference int
 
 const (
-	// ShapeOwns — the Graph creates the resource. Applied via SSA. Tracked for
-	// cleanup. Deleted on prune.
-	ShapeOwns TemplateShape = iota
-	// ShapeWatch — identity-only template (apiVersion, kind, metadata.name,
+	// ReferenceOwns — the Graph creates the resource. Applied via SSA. Tracked
+	// for cleanup. Deleted on prune.
+	ReferenceOwns Reference = iota
+	// ReferenceWatches — identity-only template (apiVersion, kind, metadata.name,
 	// optionally metadata.namespace). Read-only GET. Not tracked.
-	ShapeWatch
-	// ShapeCollectionWatch — apiVersion + kind with optional selector, no
-	// metadata.name. Read-only List. Not tracked.
-	ShapeCollectionWatch
-	// ShapeContribute — writes fields on a resource the Graph does not create.
-	// Applied via SSA. Tracked for cleanup. Releases fields on prune.
-	ShapeContribute
-	// ShapeDeferred — template has fields beyond identity but Owns vs Contribute
-	// cannot be determined from the template alone. Resolved at first reconcile
-	// by checking whether the target resource exists (absent → Owns, exists →
-	// Contribute). Deferred should never appear in dag.Shapes after the first
-	// reconcile of a revision.
-	ShapeDeferred
+	ReferenceWatches
+	// ReferenceWatchesKind — apiVersion + kind with optional selector, no
+	// metadata.name. Read-only List of all resources of that kind. Not tracked.
+	ReferenceWatchesKind
+	// ReferenceContributes — writes fields on a resource the Graph does not
+	// create. Applied via SSA. Tracked for cleanup. Releases fields on prune.
+	ReferenceContributes
+	// ReferenceUnresolved — template has fields beyond identity but Owns vs
+	// Contributes cannot be determined from the template alone. Resolved at
+	// first reconcile by checking whether the target resource exists (absent →
+	// Owns, present → Contributes). Should never appear in dag.References after
+	// the first reconcile of a revision.
+	ReferenceUnresolved
 )
 
-// String returns the human-readable name of the TemplateShape.
-func (s TemplateShape) String() string {
-	switch s {
-	case ShapeOwns:
-		return "Owns"
-	case ShapeWatch:
-		return "Watch"
-	case ShapeCollectionWatch:
-		return "CollectionWatch"
-	case ShapeContribute:
-		return "Contribute"
-	case ShapeDeferred:
-		return "Deferred"
+// String returns the human-readable name of the Reference for logging and display.
+func (r Reference) String() string {
+	switch r {
+	case ReferenceOwns:
+		return "owns"
+	case ReferenceWatches:
+		return "watches"
+	case ReferenceWatchesKind:
+		return "watches-kind"
+	case ReferenceContributes:
+		return "contributes"
+	case ReferenceUnresolved:
+		return "unresolved"
 	default:
-		return fmt.Sprintf("TemplateShape(%d)", int(s))
+		return fmt.Sprintf("Reference(%d)", int(r))
 	}
 }
 
-// DetectShape returns the TemplateShape of a node's template map.
+// LabelValue returns the identity label value for references that write to a
+// resource. Returns ("", false) for read-only and unresolved references, which
+// are never stamped with an identity label.
+func (r Reference) LabelValue() (string, bool) {
+	switch r {
+	case ReferenceOwns:
+		return "owns", true
+	case ReferenceContributes:
+		return "contributes", true
+	default:
+		return "", false
+	}
+}
+
+// ReferenceFromLabelValue parses an identity label value back to a Reference.
+// Returns (0, false) if the value is not a recognized label value.
+func ReferenceFromLabelValue(s string) (Reference, bool) {
+	switch s {
+	case "owns":
+		return ReferenceOwns, true
+	case "contributes":
+		return ReferenceContributes, true
+	default:
+		return 0, false
+	}
+}
+
+// DetectReference returns the Reference type of a node's template map.
 //
 // Detection order (from 003-ownership.md):
-//  1. CollectionWatch — apiVersion + kind, no metadata.name
-//  2. Watch — only identity fields (apiVersion, kind, metadata.name/namespace)
-//  3. Deferred — has fields beyond identity; Owns vs Contribute determined at
-//     reconcile time by resource existence
-func DetectShape(tmpl map[string]any) TemplateShape {
+//  1. WatchesKind — apiVersion + kind, no metadata.name
+//  2. Watches — only identity fields (apiVersion, kind, metadata.name/namespace)
+//  3. Unresolved — has fields beyond identity; Owns vs Contributes determined
+//     at reconcile time by resource existence
+func DetectReference(tmpl map[string]any) Reference {
 	if len(tmpl) == 0 {
-		return ShapeDeferred
+		return ReferenceUnresolved
 	}
 
 	md, _ := tmpl["metadata"].(map[string]any)
 	_, hasName := md["name"]
 
-	// 1. Collection Watch: no metadata.name
+	// 1. WatchesKind: no metadata.name
 	if !hasName {
-		return ShapeCollectionWatch
+		return ReferenceWatchesKind
 	}
 
-	// 2. Watch: only identity fields
+	// 2. Watches: only identity fields
 	if isIdentityOnly(tmpl) {
-		return ShapeWatch
+		return ReferenceWatches
 	}
 
-	// 3. Deferred: has fields beyond identity. Owns vs Contribute resolved
+	// 3. Unresolved: has fields beyond identity. Owns vs Contributes resolved
 	//    at first reconcile by checking resource existence.
-	return ShapeDeferred
+	return ReferenceUnresolved
 }
 
 // isIdentityOnly returns true if the template contains only identity fields:
@@ -162,9 +192,9 @@ type Node struct {
 	ReadinessDeps map[string]bool
 }
 
-// Shape returns the TemplateShape of this node's template.
-func (n *Node) Shape() TemplateShape {
-	return DetectShape(n.Template)
+// Reference returns the Reference type of this node's template.
+func (n *Node) Reference() Reference {
+	return DetectReference(n.Template)
 }
 
 // GraphSpec holds the parsed spec of a Graph object.

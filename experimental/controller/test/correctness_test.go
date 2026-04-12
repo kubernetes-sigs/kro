@@ -652,7 +652,7 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 				"name":      "contested-resource",
 				"namespace": ns,
 				"labels": map[string]any{
-					"somenode.other-graph." + ns + ".internal.kro.run/role": "owns",
+					"somenode.other-graph." + ns + ".internal.kro.run/reference": "owns",
 				},
 			},
 			"data": map[string]any{
@@ -720,7 +720,7 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 		"resource should retain original owner's data")
 	labels := existing.GetLabels()
 	// With the new identity label scheme, the original graph's label should still be present
-	assert.Equal(t, "owns", labels["somenode.other-graph."+ns+".internal.kro.run/role"],
+	assert.Equal(t, "owns", labels["somenode.other-graph."+ns+".internal.kro.run/reference"],
 		"resource should retain original graph's identity label")
 	t.Log("Cross-Graph ownership conflict correctly detected and blocked")
 }
@@ -747,7 +747,7 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 				"name":      "force-target",
 				"namespace": ns,
 				"labels": map[string]any{
-					"somenode.other-graph." + ns + ".internal.kro.run/role": "owns",
+					"somenode.other-graph." + ns + ".internal.kro.run/reference": "owns",
 				},
 			},
 			"data": map[string]any{
@@ -807,7 +807,7 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 
 	resultLabels := result.GetLabels()
 	// The new graph's identity label should exist
-	newLabelKey := "imported.test-force-apply." + ns + ".internal.kro.run/role"
+	newLabelKey := "imported.test-force-apply." + ns + ".internal.kro.run/reference"
 	t.Logf("Looking for label key: %s", newLabelKey)
 	t.Logf("All labels on resource: %v", resultLabels)
 	assert.Equal(t, "owns", resultLabels[newLabelKey],
@@ -1096,7 +1096,7 @@ func TestIdentityLabelsOnManagedResources(t *testing.T) {
 
 		// Verify DNS subdomain identity labels
 		labels := cm.GetLabels()
-		roleKey := tc.nodeID + ".test-identity-labels." + ns + ".internal.kro.run/role"
+		roleKey := tc.nodeID + ".test-identity-labels." + ns + ".internal.kro.run/reference"
 		genKey := tc.nodeID + ".test-identity-labels." + ns + ".internal.kro.run/generation"
 
 		assert.Equal(t, "owns", labels[roleKey],

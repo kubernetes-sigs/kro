@@ -994,7 +994,7 @@ func TestContributeIdentityLabels(t *testing.T) {
 	// with role "contributes" for our graph. This makes it discoverable by
 	// deriveAppliedSet() after controller restart.
 	resultLabels := result.GetLabels()
-	labelSuffix := "." + graphName + "." + ns + ".internal.kro.run/role"
+	labelSuffix := "." + graphName + "." + ns + ".internal.kro.run/reference"
 	foundContribLabel := false
 	for key, val := range resultLabels {
 		if strings.HasSuffix(key, labelSuffix) {

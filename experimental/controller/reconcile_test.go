@@ -340,7 +340,7 @@ func TestForEachChildIdentityLabelKey(t *testing.T) {
 		"mygraph", "default",
 	)
 	assert.Equal(t,
-		"policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/role",
+		"policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/reference",
 		key,
 	)
 }
@@ -354,7 +354,7 @@ func TestForEachChildIdentityLabelKeyNoGroup(t *testing.T) {
 		"mygraph", "default",
 	)
 	assert.Equal(t,
-		"configs.my-cm.default.configmap.mygraph.default.internal.kro.run/role",
+		"configs.my-cm.default.configmap.mygraph.default.internal.kro.run/reference",
 		key,
 	)
 }

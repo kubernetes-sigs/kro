@@ -44,7 +44,7 @@ spec:
         metadata:
           name: my-app
           labels:
-            deployment.my-app.default.internal.kro.run/role: owns
+            deployment.my-app.default.internal.kro.run/reference: owns
             deployment.my-app.default.internal.kro.run/generation: "3"
         spec:
           replicas: 3
@@ -66,7 +66,7 @@ spec:
         metadata:
           name: ${deployment.metadata.name}-svc
           labels:
-            service.my-app.default.internal.kro.run/role: owns
+            service.my-app.default.internal.kro.run/reference: owns
             service.my-app.default.internal.kro.run/generation: "3"
         spec:
           selector: ${deployment.spec.selector.matchLabels}

@@ -23,7 +23,7 @@ Template shape determines how the node is processed and cleaned up:
 
 - **Owns** — creates and manages the resource. Deletes on prune.
 - **Watch** — reads the resource into scope. No management.
-- **Collection Watch** — discovers matching resources by selector. Enters an array into scope.
+- **WatchesKind** — discovers matching resources by selector. Enters an array into scope.
 - **Contribute** — writes partial state to another actor's resource. Releases fields on prune.
 
 ### Dependencies
@@ -54,10 +54,10 @@ Propagation triggers — events from within the current walk:
 - A dependency was invalidated during this walk (propagation hash changed at step 7)
 
 Watch events on managed resources (Owns, Contribute) are routed by the identity label key, which
-encodes the node ID. Watch events on unowned resources (Watch, Collection Watch) are routed by GVK +
+encodes the node ID. Watch events on unowned resources (Watch, WatchesKind) are routed by GVK +
 namespace + name (scalar) or GVK + selector (collection) — the controller maintains a mapping from
 these keys to node IDs, populated at graph compilation. A watch event on a GVK the controller
-monitors triggers all nodes that declare a Watch or Collection Watch matching that resource; the
+monitors triggers all nodes that declare a Watch or WatchesKind matching that resource; the
 propagation hash skips downstream evaluation if the node's referenced paths didn't actually change.
 
 Deterministic errors (4xx) are not retried — same inputs produce the same failure. They resolve via
@@ -96,7 +96,7 @@ store and the DAG. Revision status is a write-only observation surface — not a
 
 | Label key | Value | Purpose |
 |---|---|---|
-| `<node>.<graph>.<ns>.internal.kro.run/role` | `owns` or `contributes` | Identity, selection, prune shape |
+| `<node>.<graph>.<ns>.internal.kro.run/reference` | `owns` or `contributes` | Identity, selection, prune reference |
 | `<node>.<graph>.<ns>.internal.kro.run/generation` | `graph.metadata.generation` | Observational |
 
 Each Graph gets its own label keys. Multiple Graphs targeting the same resource coexist without
@@ -140,7 +140,7 @@ current-reconcile state for dependencies, which is always available.
 4. **includeWhen** — false → Excluded.
 5. **Dispatch:**
    - Watch: GET full object. Data enters scope. Pending if absent.
-   - Collection Watch: GET matching objects. Array enters scope.
+   - WatchesKind: GET matching objects. Array enters scope.
    - forEach parent: evaluate collection, determine children, dispatch changed children
      (see [forEach](#foreach)).
    - Owns: evaluate template, hash desired state, compare against in-memory template-hash from
@@ -195,7 +195,7 @@ template change clears the conflict state — the new template doesn't contest t
 
 Prune in reverse dependency order. Owns → delete. Contribute → release fields via skeleton apply
 (SSA apply with Contribute fields omitted, relinquishing field manager ownership; field values
-persist under the remaining manager). Watch/Collection Watch → no action. If reverse ordering is
+persist under the remaining manager). Watch/WatchesKind → no action. If reverse ordering is
 unavailable, prune is blocked — never degrade to unordered deletion. If a prune candidate has `finalizes` references, finalization runs
 first (see [Teardown](#teardown)).
 
@@ -244,16 +244,16 @@ applies.
 A child's identity is scoped to its parent and encodes the full resource key as DNS subdomain
 labels within the label key:
 
-    <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/role
+    <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/reference
 
 For the concrete example — NetworkPolicy `default-deny` in namespace `ns-a`, parent `policies`,
 graph `mygraph` in namespace `default`:
 
-    policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/role
+    policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/reference
 
 This is the same label key structure as any node — the parent ID is the first label, followed by
 the resource key components as additional DNS labels before the graph identity. A non-forEach node
-`deploy` produces `deploy.mygraph.default.internal.kro.run/role`. Uniqueness is across the full resource key (GVK + namespace + name). If the rendered key changes, that's a new child — the old one is a prune
+`deploy` produces `deploy.mygraph.default.internal.kro.run/reference`. Uniqueness is across the full resource key (GVK + namespace + name). If the rendered key changes, that's a new child — the old one is a prune
 candidate. Resource keys must be unique across children of the same parent — validated at expansion
 time.
 
@@ -454,7 +454,7 @@ spec:
 This produces the following DAG:
 
 ```
-Level 0:  config (Watch)      namespaces (Collection Watch)
+Level 0:  config (Watch)      namespaces (WatchesKind)
               │                       │
 Level 1:  deploy (Owns)       policies (forEach parent)
               │                  ┌────┼────┐
@@ -486,7 +486,7 @@ Pruning requires reverse dependency ordering — if B depends on A and both are 
 deleted before A. The ordering comes from the most recent revision that defined each pruned resource.
 
 A superseded revision is retained until its unique resources are pruned. This is its only purpose —
-providing prune ordering, template shape (Owns vs Contribute), and finalizes metadata for each
+providing prune ordering, reference type (Owns vs Contribute), and finalizes metadata for each
 pruned resource. The old revision's `finalizes` declarations govern the prune of its resources — if a
 new revision changes or drops `finalizes`, the old revision's metadata still applies to resources
 being pruned from it. Fast spec
@@ -580,7 +580,7 @@ it from the current spec. Teardown is blocked until ordering is available — ne
 unordered deletion.
 
 Owns nodes delete the resource. Contribute nodes release fields via skeleton apply. Watch and
-Collection Watch take no action. If resources persist (child Graphs with finalizers, external
+WatchesKind take no action. If resources persist (child Graphs with finalizers, external
 finalizers), requeue. Once all managed resources are processed, remove the Graph's finalizer.
 
 ### Finalization

@@ -160,7 +160,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 			// Stamp forEach child identity labels per 004-graph-execution.md § Child Identity.
 			// Each child's label key encodes the full resource key:
-			//   <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/role
+			//   <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/reference
 			childObj := &unstructured.Unstructured{Object: evalMap}
 			if childObj.GetNamespace() == "" {
 				childObj.SetNamespace(graph.GetNamespace())
@@ -177,7 +177,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				childObj.GetName(), childObj.GetNamespace(),
 				gvk.Kind, gv.Group,
 				graph.GetName(), graph.GetNamespace(),
-				generation, RoleOwns,
+				generation, ReferenceOwns,
 			)
 			childObj.SetLabels(lbls)
 			evalMap = childObj.Object

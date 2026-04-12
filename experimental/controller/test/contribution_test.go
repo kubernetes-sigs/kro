@@ -330,7 +330,7 @@ func TestContribution(t *testing.T) {
 	extLabels := updatedExternal.GetLabels()
 	// Check that no identity label for this graph has role "owns"
 	for key, val := range extLabels {
-		if strings.HasSuffix(key, ".test-contribution."+ns+".internal.kro.run/role") {
+		if strings.HasSuffix(key, ".test-contribution."+ns+".internal.kro.run/reference") {
 			assert.NotEqual(t, "owns", val,
 				"contribution should NOT set 'owns' role label on external object")
 		}
@@ -431,7 +431,7 @@ func TestResourcePruning(t *testing.T) {
 	t.Log("Kept ConfigMap still exists with correct data")
 }
 
-// TestContributeShapeDetectedByExistence proves that when a resource
+// TestContributeReferenceDetectedByExistence proves that when a resource
 // pre-exists before the Graph creates it, the controller detects Contribute
 // shape — behavioral consequence: the resource is NOT deleted when the
 // template is removed from the Graph spec. Owns shape would delete it.
@@ -442,7 +442,7 @@ func TestResourcePruning(t *testing.T) {
 //
 // The assertion is on behavioral consequence (no delete on prune), not
 // internal classification.
-func TestContributeShapeDetectedByExistence(t *testing.T) {
+func TestContributeReferenceDetectedByExistence(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 

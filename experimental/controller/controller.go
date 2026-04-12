@@ -180,7 +180,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	eval := newEvaluator(state)
 	dag := state.compiled.dag
-	state.initResolvedShapes()
+	state.initResolvedReferences()
 	plan := NewPlanState(dag)
 	var appliedKeys []string
 
@@ -499,8 +499,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// because their output is determined by cluster state (GET/List),
 		// not by scope data. A Watch node's dependency inputs can be unchanged
 		// while a new resource was created in the cluster.
-		nodeShape := node.Shape()
-		canHashSkip := nodeShape != ShapeWatch && nodeShape != ShapeCollectionWatch
+		nodeRef := node.Reference()
+		canHashSkip := nodeRef != ReferenceWatches && nodeRef != ReferenceWatchesKind
 		if canHashSkip {
 			if _, hasPrevHash := state.previousInputHashes[node.ID]; hasPrevHash {
 				inputHash, hashErr := hashNodeInputs(node, eval.scope)
@@ -650,15 +650,15 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// see or mutate any shared state.
 		workerEval := eval.snapshotFor(node, state)
 
-		// Resolve Deferred shapes in the coordinator (single-threaded)
-		// before dispatching to workers. This ensures the resolvedShapes
+		// Resolve Unresolved references in the coordinator (single-threaded)
+		// before dispatching to workers. This ensures the resolvedReferences
 		// map is only written from the coordinator goroutine.
-		// ForEach nodes handle their own per-item shape detection — skip.
-		nodeShape = state.resolvedShapes[node.ID]
-		if nodeShape == ShapeDeferred && node.ForEach == nil {
-			resolved, err := r.resolveShape(ctx, graph, *node, workerEval)
+		// ForEach nodes handle their own per-item reference detection — skip.
+		nodeRef = state.resolvedReferences[node.ID]
+		if nodeRef == ReferenceUnresolved && node.ForEach == nil {
+			resolved, err := r.resolveReference(ctx, graph, *node, workerEval)
 			if err != nil {
-				// Shape resolution failed — treat like a node error.
+				// Reference resolution failed — treat like a node error.
 				nodeState := NodeDataPending
 				if !errors.Is(err, ErrDataPending) {
 					info := classifyAPIError(err)
@@ -667,14 +667,14 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				plan.SetState(dag, node.ID, nodeState)
 				return
 			}
-			nodeShape = resolved
-			state.resolvedShapes[node.ID] = resolved
+			nodeRef = resolved
+			state.resolvedReferences[node.ID] = resolved
 		}
 
 		// Dispatch to worker goroutine.
 		dispatched[idx] = true
-		go func(n Node, we *evaluator, shape TemplateShape) {
-			keys, err := r.reconcileNode(ctx, graph, n, shape, we, watcher)
+		go func(n Node, we *evaluator, ref Reference) {
+			keys, err := r.reconcileNode(ctx, graph, n, ref, we, watcher)
 			state := NodeReady
 			if err != nil {
 				switch {
@@ -700,7 +700,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				forEachScopes:  we.forEachNewScope,
 				forEachItems:   we.forEachNewItems,
 			}
-		}(*node, workerEval, nodeShape)
+		}(*node, workerEval, nodeRef)
 		inflight++
 	}
 
@@ -756,10 +756,10 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 		if res.state == NodeDataPending {
 			plan.SetState(dag, node.ID, NodeDataPending)
-			// Reset Contribute shape when a conflicted target disappears.
-			if state.resolvedShapes[node.ID] == ShapeContribute &&
+			// Reset Contributes reference when a conflicted target disappears.
+			if state.resolvedReferences[node.ID] == ReferenceContributes &&
 				state.previousPlanStates[node.ID] == NodeConflict {
-				state.resolvedShapes[node.ID] = ShapeDeferred
+				state.resolvedReferences[node.ID] = ReferenceUnresolved
 				delete(state.previousInputHashes, node.ID)
 			}
 			state.previousPlanStates[node.ID] = NodeDataPending
@@ -1123,7 +1123,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	if r.Watcher != nil {
 		appliedSet := r.Watcher.watches.deriveAppliedSet(graph.GetName(), graph.GetNamespace())
 		for key, entry := range appliedSet {
-			if entry.Role == RoleContributes {
+			if entry.Reference == ReferenceContributes {
 				// For contribute keys, we need the contribute prefix format.
 				contributeKeys[contributeKeyPrefix+key] = true
 			} else {
@@ -1142,9 +1142,9 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if node.Template == nil {
 				continue
 			}
-			// Skip Watch and CollectionWatch (read-only).
-			shape := DetectShape(node.Template)
-			if shape == ShapeWatch || shape == ShapeCollectionWatch {
+			// Skip Watches and WatchesKind (read-only).
+			ref := DetectReference(node.Template)
+			if ref == ReferenceWatches || ref == ReferenceWatchesKind {
 				continue
 			}
 			// Skip finalizer nodes — dormant during normal operation.

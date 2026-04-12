@@ -261,7 +261,7 @@ func assertManagedBy(t *testing.T, obj *unstructured.Unstructured, graphName str
 	// Check that at least one identity label exists for this graph.
 	found := false
 	for key, val := range labels {
-		if strings.HasSuffix(key, "."+graphName+"."+obj.GetNamespace()+".internal.kro.run/role") {
+		if strings.HasSuffix(key, "."+graphName+"."+obj.GetNamespace()+".internal.kro.run/reference") {
 			found = true
 			assert.Contains(t, []string{"owns", "contributes"}, val,
 				"%s should have valid role label for Graph %s", obj.GetName(), graphName)

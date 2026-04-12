@@ -321,7 +321,7 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 		lbls = map[string]string{}
 	}
 	if !hasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
-		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, RoleOwns)
+		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceOwns)
 		obj.SetLabels(lbls)
 	}
 
@@ -524,7 +524,7 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 	if lbls == nil {
 		lbls = map[string]string{}
 	}
-	lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, RoleContributes)
+	lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceContributes)
 	obj.SetLabels(lbls)
 
 	// Buffer a watch for the target resource (flushed at done(true)).
@@ -900,9 +900,9 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 			if node.Template == nil {
 				continue
 			}
-			shape := DetectShape(node.Template)
-			if shape == ShapeWatch || shape == ShapeCollectionWatch {
-				continue // read-only shapes don't create resources
+			ref := DetectReference(node.Template)
+			if ref == ReferenceWatches || ref == ReferenceWatchesKind {
+				continue // read-only references don't create resources
 			}
 			apiVersion, _ := node.Template["apiVersion"].(string)
 			kind, _ := node.Template["kind"].(string)

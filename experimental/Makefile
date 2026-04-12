@@ -1,7 +1,7 @@
 # Root of the repo (where go.mod lives). All go commands run from there.
 ROOT := $(shell git rev-parse --show-toplevel)
 
-LOCALBIN         := $(ROOT)/bin
+LOCALBIN         := $(shell go env GOPATH)/bin
 KO               := $(LOCALBIN)/ko
 ENVTEST          := $(LOCALBIN)/setup-envtest
 ENVTEST_VERSION  ?= 1.35.x

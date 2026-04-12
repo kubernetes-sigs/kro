@@ -47,3 +47,10 @@ library changes. Conflicts stay scoped because dependency flows one way.
 
 When experimental code earns its place in `pkg/`, move it. The import
 path change is scoped to experimental consumers only.
+
+## Testing
+
+    cd experimental && make presubmit
+
+`experimental/Makefile` defines common development recipes (`run`, `apply`,
+`test`, `bench`). Check there before reaching for raw `go` commands.

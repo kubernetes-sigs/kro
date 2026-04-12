@@ -426,20 +426,4 @@ upgrade-kro: ko ## Build current kro and upgrade the running deployment (no clus
 		--set config.dynamicControllerConcurrentReconciles=10 | $(WITH_GOFLAGS) $(KO) apply -f -
 	kubectl wait --for=condition=available --timeout=3m deployment/kro -n kro-system
 
-##@ Krocodile (Experimental Graph Controller)
 
-.PHONY: krocodile-run
-krocodile-run: ## Run the graph controller locally (bootstraps CRDs automatically)
-	go run ./experimental/cmd/ --bootstrap
-
-.PHONY: krocodile-apply
-krocodile-apply: ko ## Build and deploy the graph controller to the current cluster
-	$(KO) apply -f experimental/deploy/
-
-.PHONY: krocodile-test
-krocodile-test: ## Run experimental graph controller tests
-	go test ./experimental/controller/... -count=1 -v
-
-.PHONY: krocodile-bench
-krocodile-bench: ## Run experimental benchmarks
-	go test ./experimental/controller -bench=. -benchmem -count=1

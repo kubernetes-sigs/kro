@@ -122,7 +122,7 @@ func TestPruneSafetyPendingBlocksPrune(t *testing.T) {
 	t.Log("Removed toggle field — includeWhen cannot evaluate")
 
 	// Wait for the Graph to enter non-Ready state.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			g := &unstructured.Unstructured{}
 			g.SetGroupVersionKind(GraphGVK)

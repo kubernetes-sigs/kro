@@ -180,6 +180,24 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		for _, node := range dag.Nodes {
 			triggered[node.ID] = true
 		}
+		// Transfer previousAppliedKeys from superseded revisions so the
+		// prune phase knows what the old revision applied. Without this,
+		// a new instanceState (empty previousAppliedKeys) combined with
+		// informer lag leaves the prune with no candidates — and if the
+		// superseded revision is GC'd, the keys are lost permanently.
+		if isRevisionTransition && state.previousAppliedKeys == nil {
+			for _, rev := range supersededRevisions {
+				oldKey := rev.GetNamespace() + "/" + rev.GetName()
+				if oldState := r.Caches.get(oldKey); oldState != nil {
+					for k := range oldState.previousAppliedKeys {
+						if state.previousAppliedKeys == nil {
+							state.previousAppliedKeys = make(map[string]bool)
+						}
+						state.previousAppliedKeys[k] = true
+					}
+				}
+			}
+		}
 		// Clean up metric series for nodes removed between revisions.
 		// Active revision nodes define the live set; any node in a
 		// superseded revision not present in the active set is stale.
@@ -239,9 +257,35 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	propagationTriggered := make(map[string]bool)
 
 	// Early exit: no nodes triggered → no walk needed. Preserves previous
-	// watch state (walkCompleted stays false → watcher.done(false)). Schedule
-	// next reconcile at the earliest drift timer expiry.
-	if len(triggered) == 0 {
+	// No triggered nodes → no walk needed. Preserve existing watch state
+	// (walkCompleted stays false → watcher.done(false)). Schedule next
+	// reconcile at the earliest drift timer expiry.
+	//
+	// Exception: revision transitions where the superseded revision has
+	// nodes not in the active set MUST reach the prune phase even with
+	// 0 triggered nodes. Without this, a spec change that removes nodes
+	// (or empties the spec) would leave orphaned resources.
+	needsPruneSweep := false
+	if isRevisionTransition && len(triggered) == 0 {
+		activeNodeIDs := make(map[string]bool, len(dag.Nodes))
+		for _, node := range dag.Nodes {
+			activeNodeIDs[node.ID] = true
+		}
+		for _, rev := range supersededRevisions {
+			if spec, err := extractRevisionSpec(rev); err == nil {
+				for _, node := range spec.Nodes {
+					if !activeNodeIDs[node.ID] && node.Finalizes == "" {
+						needsPruneSweep = true
+						break
+					}
+				}
+			}
+			if needsPruneSweep {
+				break
+			}
+		}
+	}
+	if len(triggered) == 0 && !needsPruneSweep {
 		if next := state.nextDriftExpiry(); !next.IsZero() {
 			if remaining := time.Until(next); remaining > 0 {
 				return ctrl.Result{RequeueAfter: remaining}, nil
@@ -853,6 +897,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	pruneSafe := !summary.HasDataPending && !summary.HasError && !summary.HasSystemError
 	if pruneSafe {
 		allPreviousKeys := map[string]bool{}
+		logger.V(1).Info("prune gate open", "previousAppliedKeys", len(state.previousAppliedKeys), "superseded", len(supersededRevisions))
 
 		// Derive the applied set from the watch cache.
 		if r.Watcher != nil {

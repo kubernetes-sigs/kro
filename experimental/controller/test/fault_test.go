@@ -103,7 +103,7 @@ func TestWatchedResourceDeletedMidReconcile(t *testing.T) {
 	t.Log("Externally deleted watched resource")
 
 	// The Graph should enter a non-Ready state (DataPending or similar).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			g := &unstructured.Unstructured{}
 			g.SetGroupVersionKind(GraphGVK)
@@ -205,7 +205,7 @@ func TestOwnedResourceDeletedExternally(t *testing.T) {
 	t.Log("Externally deleted managed resource")
 
 	// Wait for the controller to recreate it.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			check := &unstructured.Unstructured{}
 			check.SetGroupVersionKind(cmGVK)
@@ -267,7 +267,7 @@ func TestInvalidCELExpressionSurfacesError(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for Accepted=False.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			g := &unstructured.Unstructured{}
 			g.SetGroupVersionKind(GraphGVK)

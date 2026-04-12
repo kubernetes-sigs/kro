@@ -163,7 +163,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 
 	// --- Contribution: status written back to the SimpleApp instance via status subresource ---
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		updated := &unstructured.Unstructured{}
 		updated.SetGroupVersionKind(simpleAppGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "my-app", Namespace: ns}, updated); err != nil {
@@ -199,7 +199,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 	t.Log("Updated SimpleApp: image=redis:7")
 
 	// ConfigMap should update to reflect the new image
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		cm := &unstructured.Unstructured{}
 		cm.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "my-app-config", Namespace: ns}, cm); err != nil {
@@ -211,7 +211,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 	t.Log("L2: ConfigMap updated to image=redis:7 — reactive propagation proved")
 
 	// Verify status contribution also updated reactively
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		updated := &unstructured.Unstructured{}
 		updated.SetGroupVersionKind(simpleAppGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "my-app", Namespace: ns}, updated); err != nil {

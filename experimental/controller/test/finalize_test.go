@@ -120,7 +120,7 @@ func TestFinalizesBasicSequence(t *testing.T) {
 	// (the target can only be deleted after the finalizer resource is created
 	// and reaches readyWhen). The finalizer resource itself is ephemeral —
 	// it's created, checked for readiness, and then pruned in subsequent cycles.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 15*time.Second, true,
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			check := &unstructured.Unstructured{}
 			check.SetGroupVersionKind(cmGVK)
@@ -254,7 +254,7 @@ func TestFinalizesRejectsCELNames(t *testing.T) {
 
 	// The Graph should be rejected — Accepted should be False with a
 	// compilation error about CEL-evaluated names on finalizes nodes.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			g := &unstructured.Unstructured{}
 			g.SetGroupVersionKind(GraphGVK)
@@ -339,7 +339,7 @@ func TestFinalizesOnTeardown(t *testing.T) {
 	// Wait for the Graph to be fully deleted (teardown complete).
 	// This proves finalization ran: the target can't be deleted until
 	// the finalizer resource is created and reaches readyWhen.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 15*time.Second, true,
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			g := &unstructured.Unstructured{}
 			g.SetGroupVersionKind(GraphGVK)

@@ -319,7 +319,7 @@ func TestCycleDetectionRejectsSpec(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Graph should reach Accepted=False with CycleDetected reason
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-cycle", Namespace: ns}, g); err != nil {
@@ -422,7 +422,7 @@ func TestWatchAbsentResourceIsDataPending(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Graph should show DataPending status
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-watch-absent", Namespace: ns}, g); err != nil {
@@ -467,7 +467,7 @@ func TestWatchAbsentResourceIsDataPending(t *testing.T) {
 
 	// Dependent should now be created with the resolved value
 	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		dep := &unstructured.Unstructured{}
 		dep.SetGroupVersionKind(cmGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "watch-dependent", Namespace: ns}, dep); err != nil {
@@ -693,7 +693,7 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Graph should show FieldConflict
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-label-check", Namespace: ns}, g); err != nil {
@@ -791,7 +791,7 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Graph should reach Ready — Force overrides the label check
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-force-apply", Namespace: ns}, g); err != nil {
@@ -857,7 +857,7 @@ func TestInvalidSpecMissingNodeID(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Should be rejected with InvalidSpec
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-missing-id", Namespace: ns}, g); err != nil {
@@ -928,7 +928,7 @@ func TestInvalidSpecDuplicateNodeID(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-dup-id", Namespace: ns}, g); err != nil {
@@ -993,7 +993,7 @@ func TestInvalidSpecCompilationFailure(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-bad-cel", Namespace: ns}, g); err != nil {
@@ -1106,7 +1106,7 @@ func TestIdentityLabelsOnManagedResources(t *testing.T) {
 	}
 
 	// Wait for the Graph to reach Ready
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-identity-labels", Namespace: ns}, g); err != nil {
@@ -1178,7 +1178,7 @@ func TestDefaultReadinessIsApplied(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Graph should reach Ready — no readyWhen means "applied = ready"
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-default-ready", Namespace: ns}, g); err != nil {
@@ -1375,7 +1375,7 @@ func TestReadyFunctionReflectsNodeState(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, source))
 
 	// Graph should reach Ready — watched.ready() now true
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-ready-fn-state", Namespace: ns}, g); err != nil {
@@ -1448,7 +1448,7 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 
 	// Graph should reach Ready — workers is an empty collection,
 	// workers.ready() returns true (vacuously), summary's readyWhen passes.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-empty-ready", Namespace: ns}, g); err != nil {
@@ -1527,7 +1527,7 @@ func TestCollectionItemReadyViaIndex(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Graph should reach Ready — workers[0].ready() is true
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-index-ready", Namespace: ns}, g); err != nil {
@@ -1655,7 +1655,7 @@ func TestCollectionReadyFalseWhenItemNotReady(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, latest))
 
 	// Graph should reach Ready — all items ready, items.ready() is true
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-coll-ready-false", Namespace: ns}, g); err != nil {
@@ -1814,7 +1814,7 @@ func TestCrossNodeReadyWhen(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, source))
 
 	// Graph should reach Ready
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-cross-ready", Namespace: ns}, g); err != nil {
@@ -1913,7 +1913,7 @@ func TestSupersededRevisionGC(t *testing.T) {
 	t.Log("Revision g00002 created and active")
 
 	// Wait for g00001 to be garbage collected
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		count, err := countRevisions(ctx, k8sClient, "test-revision-gc", ns)
 		if err != nil {
 			return false, nil

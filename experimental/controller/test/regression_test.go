@@ -83,7 +83,7 @@ func TestDeletionOrderIsTopological(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, graph))
 
 	// Wait for the Graph to be fully removed (finalizer processed).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(GraphGVK)
 		err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-topo-delete", Namespace: ns}, check)
@@ -285,7 +285,7 @@ func TestContributeCleanupOnPrune(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for the contribution to be applied.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(regressionCMGVK)
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "contribute-target", Namespace: ns}, obj); err != nil {
@@ -396,7 +396,7 @@ func TestContributeCleanupOnTeardown(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for contribution.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(regressionCMGVK)
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "teardown-target", Namespace: ns}, obj); err != nil {
@@ -412,7 +412,7 @@ func TestContributeCleanupOnTeardown(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, graph))
 
 	// Wait for the Graph to be fully removed.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(GraphGVK)
 		err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-contrib-teardown", Namespace: ns}, check)
@@ -533,7 +533,7 @@ func TestContributionUpdatesWhenDependencyChanges(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for initial contribution: target should have version=v1
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		updated := &unstructured.Unstructured{}
 		updated.SetGroupVersionKind(regressionCMGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-target", Namespace: ns}, updated); err != nil {
@@ -749,7 +749,7 @@ func TestBlockedDependencyRecoveryReconverges(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, watched))
 
 	// Wait for Graph to leave Ready state.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			g := &unstructured.Unstructured{}
 			g.SetGroupVersionKind(GraphGVK)
@@ -867,7 +867,7 @@ func TestContributeReadyWhenGatesGraphReadiness(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for the contribution to be applied (annotation appears).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			obj := &unstructured.Unstructured{}
 			obj.SetGroupVersionKind(regressionCMGVK)

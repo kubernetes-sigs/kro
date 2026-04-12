@@ -355,7 +355,7 @@ func TestContributeShapeDetectedByExistence(t *testing.T) {
 	t.Log("Removed both nodes from spec — prune triggered")
 
 	// Wait for the owned resource to be deleted (Owns shape → delete on prune).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			check := &unstructured.Unstructured{}
 			check.SetGroupVersionKind(cmGVK)

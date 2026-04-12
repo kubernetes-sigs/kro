@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
@@ -179,6 +180,28 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		for _, node := range dag.Nodes {
 			triggered[node.ID] = true
 		}
+		// Clean up metric series for nodes removed between revisions.
+		// Active revision nodes define the live set; any node in a
+		// superseded revision not present in the active set is stale.
+		if isRevisionTransition {
+			activeNodeIDs := make(map[string]bool, len(dag.Nodes))
+			for _, node := range dag.Nodes {
+				activeNodeIDs[node.ID] = true
+			}
+			removedIDs := make(map[string]bool)
+			for _, rev := range supersededRevisions {
+				if spec, err := extractRevisionSpec(rev); err == nil {
+					for _, node := range spec.Nodes {
+						if !activeNodeIDs[node.ID] {
+							removedIDs[node.ID] = true
+						}
+					}
+				}
+			}
+			if len(removedIDs) > 0 {
+				deleteNodeMetrics(graph.GetName(), graph.GetNamespace(), removedIDs)
+			}
+		}
 	} else if watcher != nil {
 		// Watch triggers: specific nodes that received events.
 		watchTriggers := watcher.drainTriggers()
@@ -197,6 +220,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		for nodeID, prevState := range state.previousPlanStates {
 			if prevState == NodeSystemError {
 				triggered[nodeID] = true
+				SystemErrorRetriesTotal.With(graphMetricLabels(
+					graph.GetName(), graph.GetNamespace(), nodeID,
+				)).Inc()
 			}
 		}
 	} else {
@@ -944,6 +970,11 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// Clean up the resource cache for this Graph only.
 	r.Resources.removeForGraph(graph.GetName(), graph.GetNamespace())
 
+	// Clean up all metric time series for this Graph via partial match.
+	// Covers every node that ever emitted a metric, even if revision specs
+	// are no longer parseable.
+	deleteGraphMetricsForGraph(graph.GetName(), graph.GetNamespace())
+
 	// Collect all managed resource keys from all revisions for this Graph.
 	// Keys come from two sources:
 	// 1. Watch cache — informer stores scanned for identity labels
@@ -1213,6 +1244,8 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 // Returns a shutdown function that stops the watch manager. The caller
 // must invoke this on teardown.
 func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int) (shutdown func(), err error) {
+	RegisterMetrics(crmetrics.Registry)
+
 	if maxWorkers <= 0 {
 		maxWorkers = DefaultMaxConcurrentReconciles
 	}

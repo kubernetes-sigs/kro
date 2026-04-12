@@ -5,6 +5,7 @@ package graphcontroller_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -904,4 +905,107 @@ func TestContributeReadyWhenGatesGraphReadiness(t *testing.T) {
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-contrib-readywhen", Namespace: ns}))
 	t.Log("Graph is Ready — contribute readyWhen satisfied")
+}
+
+// TestContributeIdentityLabels proves that Contribute resources carry identity
+// labels with role "contributes". These labels make Contribute resources
+// discoverable via deriveAppliedSet() after controller restart, ensuring
+// teardown can release their fields via skeleton apply.
+//
+// Regression: applyContribution previously did not call setIdentityLabels.
+// After a controller restart, deriveAppliedSet() scanned informer caches for
+// identity labels and found nothing for Contribute resources — teardown
+// orphaned their fields (never released via skeleton apply).
+func TestContributeIdentityLabels(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create a target resource that the Graph will contribute to.
+	target := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "contrib-label-target",
+				"namespace": ns,
+			},
+			"data": map[string]any{"owner": "external"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, target))
+
+	graphName := "test-contrib-labels"
+
+	// Graph: watches the target, then contributes annotations to it.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      graphName,
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "ext",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "contrib-label-target"},
+						},
+					},
+					map[string]any{
+						"id": "contrib",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{
+								"name": "contrib-label-target",
+								"annotations": map[string]any{
+									"contributed-by": "graph",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for the contribution to be applied.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(cmGVK)
+		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "contrib-label-target", Namespace: ns}, obj); err != nil {
+			return false, nil
+		}
+		ann := obj.GetAnnotations()
+		return ann != nil && ann["contributed-by"] == "graph", nil
+	}))
+
+	// Re-read the target to check identity labels.
+	result := &unstructured.Unstructured{}
+	result.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-label-target", Namespace: ns}, result))
+
+	// THE KEY ASSERTION: The contributed resource must have an identity label
+	// with role "contributes" for our graph. This makes it discoverable by
+	// deriveAppliedSet() after controller restart.
+	resultLabels := result.GetLabels()
+	labelSuffix := "." + graphName + "." + ns + ".internal.kro.run/role"
+	foundContribLabel := false
+	for key, val := range resultLabels {
+		if strings.HasSuffix(key, labelSuffix) {
+			assert.Equal(t, "contributes", val,
+				"Contribute resource must have role 'contributes', not 'owns'")
+			foundContribLabel = true
+			break
+		}
+	}
+	assert.True(t, foundContribLabel,
+		"Contribute resource must have an identity label (suffix %s) for applied set discovery; "+
+			"without this, teardown after restart orphans contributed fields", labelSuffix)
+	t.Log("Contribute identity label found — resource is discoverable via deriveAppliedSet()")
 }

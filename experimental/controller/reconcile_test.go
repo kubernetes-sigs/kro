@@ -236,3 +236,125 @@ func TestClassifyAPIErrorDefaultIsNodeError(t *testing.T) {
 		assert.Equal(t, NodeState(0), info.state)
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Validation tests — design reconciliation
+// ---------------------------------------------------------------------------
+
+// TestNodeIDHyphenRejected verifies that node IDs containing hyphens are
+// rejected at parse time. Per 001-graph.md: "Hyphens are not allowed — they
+// are parsed as subtraction by the CEL evaluator."
+func TestNodeIDHyphenRejected(t *testing.T) {
+	raw := []any{
+		map[string]any{
+			"id":       "my-app",
+			"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "cm"}},
+		},
+	}
+	_, err := parseNodeList(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hyphens are not allowed")
+}
+
+// TestNodeIDCaseCollisionRejected verifies that node IDs that collide after
+// lowercasing are rejected. Per 001-graph.md: "IDs that collide after
+// lowercasing are rejected at compile time."
+func TestNodeIDCaseCollisionRejected(t *testing.T) {
+	raw := []any{
+		map[string]any{
+			"id":       "Deploy",
+			"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}},
+		},
+		map[string]any{
+			"id":       "deploy",
+			"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}},
+		},
+	}
+	_, err := parseNodeList(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "collides with")
+}
+
+// TestFinalizesTargetMustExist verifies that a finalizes declaration pointing
+// at a nonexistent node ID is rejected at DAG build time.
+func TestFinalizesTargetMustExist(t *testing.T) {
+	nodes := []Node{
+		{ID: "snapshot", Finalizes: "nonexistent", Template: map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "snap"},
+		}},
+	}
+	_, err := BuildDAG(nodes)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no node with that ID exists")
+}
+
+// TestForEachVariableCollision verifies that forEach iterator variable names
+// that shadow node IDs are rejected at parse time.
+func TestForEachVariableCollision(t *testing.T) {
+	raw := []any{
+		map[string]any{
+			"id":       "items",
+			"template": map[string]any{"apiVersion": "v1", "kind": "Namespace"},
+		},
+		map[string]any{
+			"id":       "policy",
+			"forEach":  map[string]any{"items": "${items}"},
+			"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "cm"}},
+		},
+	}
+	_, err := parseNodeList(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "collides with a node ID")
+}
+
+// TestNodeStateString verifies that NodeState.String() returns the design's
+// canonical names. Per 006-quality.md: "Each concept has exactly one name."
+func TestNodeStateString(t *testing.T) {
+	tests := []struct {
+		state NodeState
+		want  string
+	}{
+		{NodePending, "Pending"},
+		{NodeReady, "Ready"},
+		{NodeNotReady, "NotReady"},
+		{NodeExcluded, "Excluded"},
+		{NodeBlocked, "Blocked"},
+		{NodeDataPending, "DataPending"},
+		{NodeError, "Error"},
+		{NodeConflict, "Conflict"},
+		{NodeSystemError, "SystemError"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.want, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.state.String())
+		})
+	}
+}
+
+// TestForEachChildIdentityLabelKey verifies the DNS subdomain format for
+// forEach child identity labels per 004-graph-execution.md § Child Identity.
+func TestForEachChildIdentityLabelKey(t *testing.T) {
+	key := forEachChildIdentityLabelKey(
+		"policies", "default-deny", "ns-a",
+		"NetworkPolicy", "networking.k8s.io",
+		"mygraph", "default",
+	)
+	assert.Equal(t,
+		"policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/role",
+		key,
+	)
+}
+
+// TestForEachChildIdentityLabelKeyNoGroup verifies core API group resources
+// (empty group) omit the group segment.
+func TestForEachChildIdentityLabelKeyNoGroup(t *testing.T) {
+	key := forEachChildIdentityLabelKey(
+		"configs", "my-cm", "default",
+		"ConfigMap", "",
+		"mygraph", "default",
+	)
+	assert.Equal(t,
+		"configs.my-cm.default.configmap.mygraph.default.internal.kro.run/role",
+		key,
+	)
+}

@@ -55,11 +55,13 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 	}
 
 	// Build finalizer map: target node ID → list of finalizer node IDs.
+	// Validate that finalizer targets exist in the DAG.
 	for _, node := range dag.Nodes {
 		if node.Finalizes != "" {
-			if _, exists := dag.Index[node.Finalizes]; exists {
-				dag.Finalizers[node.Finalizes] = append(dag.Finalizers[node.Finalizes], node.ID)
+			if _, exists := dag.Index[node.Finalizes]; !exists {
+				return nil, fmt.Errorf("node %q declares finalizes %q, but no node with that ID exists", node.ID, node.Finalizes)
 			}
+			dag.Finalizers[node.Finalizes] = append(dag.Finalizers[node.Finalizes], node.ID)
 		}
 	}
 
@@ -220,6 +222,33 @@ const (
 	NodeConflict                     // SSA 409 — field ownership taken by another actor
 	NodeSystemError                  // Server/infrastructure failure (5xx, timeout, network)
 )
+
+// String returns the human-readable name of the NodeState.
+// Per 006-quality.md: "Each concept has exactly one name, used consistently."
+func (s NodeState) String() string {
+	switch s {
+	case NodePending:
+		return "Pending"
+	case NodeReady:
+		return "Ready"
+	case NodeNotReady:
+		return "NotReady"
+	case NodeExcluded:
+		return "Excluded"
+	case NodeBlocked:
+		return "Blocked"
+	case NodeDataPending:
+		return "DataPending"
+	case NodeError:
+		return "Error"
+	case NodeConflict:
+		return "Conflict"
+	case NodeSystemError:
+		return "SystemError"
+	default:
+		return fmt.Sprintf("NodeState(%d)", int(s))
+	}
+}
 
 // PlanState tracks the state of all nodes during a reconcile cycle.
 type PlanState struct {

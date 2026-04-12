@@ -80,6 +80,19 @@ func isGraphIdentityLabel(key, graphName, namespace string) bool {
 	return strings.HasSuffix(strings.ToLower(key), graphLabelSuffix(graphName, namespace))
 }
 
+// hasGraphIdentityLabels checks if a label map already contains any identity
+// labels for the specified graph. Used by applyResource to skip identity
+// label stamping when the caller (e.g., forEach) has already set them.
+func hasGraphIdentityLabels(labels map[string]string, graphName, namespace string) bool {
+	suffix := graphLabelSuffix(graphName, namespace)
+	for key := range labels {
+		if strings.HasSuffix(strings.ToLower(key), suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // hasOtherGraphIdentityLabel checks if a resource's labels contain any
 // identity labels from a DIFFERENT graph than the specified one. Used by
 // the kro label check before applying an Owns template — if present,
@@ -110,6 +123,53 @@ func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, g
 	}
 	labels[identityLabelKey(nodeID, graphName, namespace)] = role
 	labels[generationLabelKey(nodeID, graphName, namespace)] = generation
+	return labels
+}
+
+// forEachChildIdentityLabelKey returns the identity label key for a forEach child.
+// Per 004-graph-execution.md § Child Identity:
+//
+//	<parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/role
+//
+// This encodes the full resource key as DNS subdomain labels within the label key,
+// making each child uniquely identifiable in the applied set.
+func forEachChildIdentityLabelKey(parentID, resName, resNamespace, kind, group, graphName, graphNamespace string) string {
+	// Lowercase all segments per RFC 1123 subdomain requirement.
+	segments := []string{
+		strings.ToLower(parentID),
+		strings.ToLower(resName),
+		strings.ToLower(resNamespace),
+		strings.ToLower(kind),
+	}
+	if group != "" {
+		segments = append(segments, strings.ToLower(group))
+	}
+	segments = append(segments, strings.ToLower(graphName), strings.ToLower(graphNamespace))
+	return strings.Join(segments, ".") + identityLabelSuffix
+}
+
+// forEachChildGenerationLabelKey returns the generation label key for a forEach child.
+func forEachChildGenerationLabelKey(parentID, resName, resNamespace, kind, group, graphName, graphNamespace string) string {
+	segments := []string{
+		strings.ToLower(parentID),
+		strings.ToLower(resName),
+		strings.ToLower(resNamespace),
+		strings.ToLower(kind),
+	}
+	if group != "" {
+		segments = append(segments, strings.ToLower(group))
+	}
+	segments = append(segments, strings.ToLower(graphName), strings.ToLower(graphNamespace))
+	return strings.Join(segments, ".") + generationLabelSuffix
+}
+
+// setForEachChildIdentityLabels stamps forEach child identity and generation labels.
+func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation, role string) map[string]string {
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	labels[forEachChildIdentityLabelKey(parentID, resName, resNamespace, kind, group, graphName, graphNamespace)] = role
+	labels[forEachChildGenerationLabelKey(parentID, resName, resNamespace, kind, group, graphName, graphNamespace)] = generation
 	return labels
 }
 

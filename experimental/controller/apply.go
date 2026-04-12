@@ -310,13 +310,20 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 	// Each managed resource carries two labels encoding the node-graph-namespace
 	// triple in DNS subdomain format. These labels are the basis for the applied
 	// set (derived from the watch cache) and the kro label check.
+	//
+	// Skip stamping if identity labels are already present (e.g., forEach
+	// children stamp their own child-scoped labels before calling applyResource).
+	// The child's identity IS the forEach-derived label; the parent label
+	// would be a conflicting claim on the resource's identity.
 	generation := fmt.Sprintf("%d", graph.GetGeneration())
 	lbls := obj.GetLabels()
 	if lbls == nil {
 		lbls = map[string]string{}
 	}
-	lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, RoleOwns)
-	obj.SetLabels(lbls)
+	if !hasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
+		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, RoleOwns)
+		obj.SetLabels(lbls)
+	}
 
 	// Buffer a watch for this resource. The request is flushed to the
 	// coordinator's indexes at done(true), not immediately — this avoids
@@ -381,16 +388,6 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 	annotations[templateHashAnnotation] = templateHash
 	obj.SetAnnotations(annotations)
 
-	data, err := json.Marshal(obj.Object)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling: %w", err)
-	}
-
-	applied := &unstructured.Unstructured{}
-	applied.SetGroupVersionKind(obj.GroupVersionKind())
-	applied.SetName(obj.GetName())
-	applied.SetNamespace(obj.GetNamespace())
-
 	forceApply := isForceApply(obj)
 
 	// kro label check: if the existing resource has a different Graph's identity
@@ -414,6 +411,30 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 		patchOpts = append(patchOpts, client.ForceOwnership)
 	}
 
+	// Per 003-ownership.md § Status Subresource: "When a template contains
+	// .status fields, the controller splits the apply into two operations —
+	// metadata/spec via the main resource, status via the status subresource."
+	statusData, hasStatus := obj.Object["status"]
+	mainPayload := obj.Object
+	if hasStatus && statusData != nil {
+		mainPayload = make(map[string]any, len(obj.Object))
+		for k, v := range obj.Object {
+			if k != "status" {
+				mainPayload[k] = v
+			}
+		}
+	}
+
+	data, err := json.Marshal(mainPayload)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling: %w", err)
+	}
+
+	applied := &unstructured.Unstructured{}
+	applied.SetGroupVersionKind(obj.GroupVersionKind())
+	applied.SetName(obj.GetName())
+	applied.SetNamespace(obj.GetNamespace())
+
 	if err := r.Client.Patch(ctx, applied, client.RawPatch(types.ApplyPatchType, data), patchOpts...); err != nil {
 		if apierrors.IsConflict(err) {
 			return nil, fmt.Errorf("SSA conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
@@ -421,7 +442,43 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 		return nil, fmt.Errorf("applying %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
 	}
 
-	// Use the Patch response directly — it contains the full post-apply state.
+	// Status subresource patch if .status is present.
+	// Per 003-ownership.md: "Each subresource has its own managedFields entries."
+	if hasStatus && statusData != nil {
+		statusPayload := map[string]any{
+			"apiVersion": obj.GetAPIVersion(),
+			"kind":       obj.GetKind(),
+			"metadata": map[string]any{
+				"name":      obj.GetName(),
+				"namespace": obj.GetNamespace(),
+			},
+			"status": statusData,
+		}
+		sData, err := json.Marshal(statusPayload)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling status: %w", err)
+		}
+		statusTarget := &unstructured.Unstructured{}
+		statusTarget.SetGroupVersionKind(obj.GroupVersionKind())
+		statusTarget.SetName(obj.GetName())
+		statusTarget.SetNamespace(obj.GetNamespace())
+		var statusOpts []client.SubResourcePatchOption
+		statusOpts = append(statusOpts, fieldOwner)
+		if forceApply {
+			statusOpts = append(statusOpts, client.ForceOwnership)
+		}
+		if err := r.Client.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, sData), statusOpts...); err != nil {
+			// Revert the cached template hash so the next reconcile retries both.
+			// Per 004-graph-execution.md: "If the status subresource apply fails,
+			// the controller reverts the in-memory template-hash."
+			r.Resources.remove(cacheKey)
+			if apierrors.IsConflict(err) {
+				return nil, fmt.Errorf("SSA status conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
+			}
+			return nil, fmt.Errorf("applying status %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
+		}
+	}
+
 	// Read back to get status fields that the Patch response may not include.
 	readBack := &unstructured.Unstructured{}
 	readBack.SetGroupVersionKind(obj.GroupVersionKind())
@@ -747,6 +804,17 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(gvk)
 		if err := r.Client.Get(ctx, nn, obj); err != nil {
+			// Per 004-graph-execution.md § Finalization: "If the target resource
+			// does not exist in the cluster (creation failed, already deleted
+			// externally), there is nothing to finalize. The controller skips
+			// finalization and proceeds with cleanup."
+			if nodeID := keyToNodeID[key]; nodeID != "" {
+				if _, finalizerNodeIDs := findFinalizers(nodeID); len(finalizerNodeIDs) > 0 {
+					logger.Info("finalization skipped: target resource does not exist",
+						"key", key, "finalizers", finalizerNodeIDs)
+				}
+			}
+			r.Resources.remove(key)
 			continue // already gone
 		}
 

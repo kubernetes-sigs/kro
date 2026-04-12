@@ -269,6 +269,10 @@ func parseNodeList(raw any) ([]Node, error) {
 	}
 
 	seen := make(map[string]bool, len(list))
+	// Track lowercased IDs to detect case-collisions. Per 001-graph.md:
+	// "The node ID is lowercased when embedded in the identity label key;
+	// IDs that collide after lowercasing are rejected at compile time."
+	seenLower := make(map[string]string, len(list)) // lowercased → original
 	var nodes []Node
 	for i, item := range list {
 		m, ok := item.(map[string]any)
@@ -281,10 +285,20 @@ func parseNodeList(raw any) ([]Node, error) {
 		if !ok || id == "" {
 			return nil, fmt.Errorf("node[%d]: missing or empty id", i)
 		}
+		// Per 001-graph.md: "Hyphens are not allowed — they are parsed as
+		// subtraction by the CEL evaluator (e.g., my-app is my minus app)."
+		if strings.Contains(id, "-") {
+			return nil, fmt.Errorf("node[%d] %q: hyphens are not allowed in node IDs (parsed as subtraction by CEL)", i, id)
+		}
 		if seen[id] {
 			return nil, fmt.Errorf("node[%d]: duplicate id %q", i, id)
 		}
+		lower := strings.ToLower(id)
+		if orig, exists := seenLower[lower]; exists && orig != id {
+			return nil, fmt.Errorf("node[%d] %q: collides with %q after lowercasing (both produce %q in identity labels)", i, id, orig, lower)
+		}
 		seen[id] = true
+		seenLower[lower] = id
 		node.ID = id
 		if tmpl, ok := m["template"].(map[string]any); ok {
 			node.Template = tmpl
@@ -309,6 +323,13 @@ func parseNodeList(raw any) ([]Node, error) {
 			for k, v := range fe {
 				if vs, ok := v.(string); ok {
 					node.ForEach[k] = vs
+				}
+			}
+			// Validate: forEach iterator variable names must not collide
+			// with any node ID. A collision would shadow the node in scope.
+			for varName := range node.ForEach {
+				if seen[varName] {
+					return nil, fmt.Errorf("node[%d] %q: forEach variable %q collides with a node ID", i, id, varName)
 				}
 			}
 		}

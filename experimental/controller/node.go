@@ -218,6 +218,18 @@ func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *u
 	}
 	eval.scope[node.ID] = items
 	logger.V(1).Info("resolved collection watch", "node", node.ID, "gvk", gvk, "count", len(items))
+
+	// Per 001-graph.md: "A collection watch's .ready() returns true when the
+	// node's readyWhen conditions pass (evaluated once against the whole array,
+	// not per-item)."
+	if len(node.ReadyWhen) > 0 {
+		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
+			// Mark collection as not ready — .ready() reflects this.
+			eval.scope[node.ID] = items // keep items in scope
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -235,7 +247,7 @@ func (r *GraphReconciler) reconcileOwns(ctx context.Context, graph *unstructured
 		return "", err
 	}
 
-	eval.scope[node.ID] = applied.Object
+	eval.scope[node.ID] = normalizeTypes(applied.Object)
 	key := resourceKey(applied)
 	logger.V(1).Info("applied resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
@@ -263,7 +275,7 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 	if err != nil {
 		return "", err
 	}
-	eval.scope[node.ID] = applied.Object
+	eval.scope[node.ID] = normalizeTypes(applied.Object)
 	logger.V(1).Info("contributed to resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
 	// Evaluate readyWhen if present, matching the reconcileOwns pattern.

@@ -214,6 +214,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		for _, node := range dag.Nodes {
 			if state.isDriftExpired(node.ID) {
 				triggered[node.ID] = true
+				DriftTimerFiresTotal.With(graphMetricLabels(
+					graph.GetName(), graph.GetNamespace(), node.ID,
+				)).Inc()
 			}
 		}
 		// SystemError nodes retry (transient error backoff).
@@ -347,7 +350,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			return
 		}
 
-		// Check dependencies. Distinguish "still running" from "permanently blocked."
+		// Check dependencies. Two-pass scan to enforce Excluded > Blocked precedence.
+		// Per 004-graph-execution.md § Wind step 2: "Excluded takes precedence over
+		// Blocked: if a node has both, it is Excluded — the blocked dependency's
+		// resolution cannot make the node viable while the Excluded dependency is absent."
+		hasExcluded := false
+		hasBlocked := false
+		hasInflight := false
 		for depID := range node.Dependencies {
 			depState, exists := plan.States[depID]
 			if !exists {
@@ -360,32 +369,39 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				// Dependency still inflight — unless its outputs are ready
 				// from the skip path (previous reconcile's state carried forward).
 				if outputsReady[depID] {
-					// Check previous state: only Ready/NotReady satisfy deps.
-					// Previous Error/Blocked/Excluded propagate correctly.
 					if prevState, ok := state.previousPlanStates[depID]; ok {
 						switch prevState {
 						case NodeReady, NodeNotReady:
 							continue // outputs available, dependency satisfied
 						case NodeExcluded:
-							plan.SetState(dag, node.ID, NodeExcluded)
-							return
+							hasExcluded = true
+							continue
 						default:
-							plan.SetState(dag, node.ID, NodeBlocked)
-							return
+							hasBlocked = true
+							continue
 						}
 					}
 					continue // no previous state, assume satisfied
 				}
-				return // dependency still inflight — don't dispatch yet, don't exclude
+				hasInflight = true
 			case NodeExcluded:
-				// Definitive absence — propagate as Excluded
-				plan.SetState(dag, node.ID, NodeExcluded)
-				return
+				hasExcluded = true
 			default:
 				// Blocked, DataPending, Error, SystemError, Conflict — uncertain absence
-				plan.SetState(dag, node.ID, NodeBlocked)
-				return
+				hasBlocked = true
 			}
+		}
+		// Excluded takes precedence over Blocked (definitive > uncertain).
+		if hasExcluded {
+			plan.SetState(dag, node.ID, NodeExcluded)
+			return
+		}
+		if hasBlocked {
+			plan.SetState(dag, node.ID, NodeBlocked)
+			return
+		}
+		if hasInflight {
+			return // dependency still inflight — don't dispatch yet
 		}
 
 		// Step 2: propagateWhen check
@@ -664,6 +680,41 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			}
 			continue
 		}
+		if res.state == NodeConflict {
+			plan.SetState(dag, node.ID, NodeConflict)
+			state.previousPlanStates[node.ID] = NodeConflict
+			state.previousScope[node.ID] = res.scopeValue
+			state.previousKeys[node.ID] = res.keys
+			nodeErrors = append(nodeErrors, fmt.Sprintf("%s: field conflict", node.ID))
+			logger.V(0).Info("conflict on node", "node", node.ID, "error", res.err)
+			if prevKeys, ok := state.previousKeys[node.ID]; ok {
+				appliedKeys = append(appliedKeys, prevKeys...)
+			}
+			for _, depIdx := range dag.Dependents[node.ID] {
+				tryDispatch(depIdx)
+			}
+			continue
+		}
+		if res.state == NodeDataPending {
+			plan.SetState(dag, node.ID, NodeDataPending)
+			// Reset Contribute shape when a conflicted target disappears.
+			if state.resolvedShapes[node.ID] == ShapeContribute &&
+				state.previousPlanStates[node.ID] == NodeConflict {
+				state.resolvedShapes[node.ID] = ShapeDeferred
+				delete(state.previousInputHashes, node.ID)
+			}
+			state.previousPlanStates[node.ID] = NodeDataPending
+			state.previousScope[node.ID] = res.scopeValue
+			state.previousKeys[node.ID] = res.keys
+			logger.V(1).Info("data pending for node", "node", node.ID, "error", res.err)
+			if prevKeys, ok := state.previousKeys[node.ID]; ok {
+				appliedKeys = append(appliedKeys, prevKeys...)
+			}
+			for _, depIdx := range dag.Dependents[node.ID] {
+				tryDispatch(depIdx)
+			}
+			continue
+		}
 
 		// Merge worker output into shared scope.
 		if res.scopeValue != nil {
@@ -686,25 +737,11 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		if res.state == NodeReady || res.state == NodeNotReady {
 			appliedKeys = append(appliedKeys, res.keys...)
 		} else {
-			// Non-success states (DataPending, Conflict, SystemError) —
+			// Non-success states that reach here (e.g., NodeNotReady with keys) —
 			// retain previous keys since the resource may still exist.
 			if prevKeys, ok := state.previousKeys[node.ID]; ok {
 				appliedKeys = append(appliedKeys, prevKeys...)
 			}
-		}
-
-		// Reset Contribute shape when a conflicted target disappears.
-		// When a Contribute node was in Conflict (external manager owns
-		// the same fields) and the target is deleted (DataPending), the
-		// cached Contribute shape prevents recovery. Resetting to Deferred
-		// lets the next reconcile re-resolve: target absent → Owns → create.
-		// Only fires for Conflict→DataPending to avoid false resets during
-		// normal startup when targets may not exist yet.
-		if res.state == NodeDataPending &&
-			state.resolvedShapes[node.ID] == ShapeContribute &&
-			state.previousPlanStates[node.ID] == NodeConflict {
-			state.resolvedShapes[node.ID] = ShapeDeferred
-			delete(state.previousInputHashes, node.ID)
 		}
 
 		// Evaluate propagateWhen (coordinator reads from now-merged scope).

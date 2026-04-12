@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -124,6 +125,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 		// Diff: identify changed, unchanged, and removed items.
 		var allApplied []any
+		var childErrors []error // track per-child errors for state derivation
 		for _, id := range currentOrder {
 			item := currentItems[id]
 			prevItem, existed := prevItems[id]
@@ -156,9 +158,41 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				return nil, fmt.Errorf("forEach %s item: %w", node.ID, err)
 			}
 
+			// Stamp forEach child identity labels per 004-graph-execution.md § Child Identity.
+			// Each child's label key encodes the full resource key:
+			//   <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/role
+			childObj := &unstructured.Unstructured{Object: evalMap}
+			if childObj.GetNamespace() == "" {
+				childObj.SetNamespace(graph.GetNamespace())
+			}
+			gvk := childObj.GroupVersionKind()
+			gv, _ := schema.ParseGroupVersion(childObj.GetAPIVersion())
+			generation := fmt.Sprintf("%d", graph.GetGeneration())
+			lbls := childObj.GetLabels()
+			if lbls == nil {
+				lbls = map[string]string{}
+			}
+			lbls = setForEachChildIdentityLabels(
+				lbls, node.ID,
+				childObj.GetName(), childObj.GetNamespace(),
+				gvk.Kind, gv.Group,
+				graph.GetName(), graph.GetNamespace(),
+				generation, RoleOwns,
+			)
+			childObj.SetLabels(lbls)
+			evalMap = childObj.Object
+
 			applied, err := r.applyResource(ctx, graph, evalMap, watcher, node.ID)
 			if err != nil {
-				return keys, fmt.Errorf("applying %s item: %w", node.ID, err)
+				// Per 004-graph-execution.md § Parent State: track per-child errors
+				// for proper state aggregation. Don't fail fast on the first error.
+				childErrors = append(childErrors, err)
+				logger.V(1).Info("forEach child error", "node", node.ID, "item", id, "error", err)
+				// Retain previous keys for this item if available
+				if prevKeys, ok := prevItemKeys[id]; ok {
+					keys = append(keys, prevKeys...)
+				}
+				continue
 			}
 			allApplied = append(allApplied, applied.Object)
 			itemKeys := []string{resourceKey(applied)}
@@ -177,14 +211,24 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		eval.forEachNewItems[cacheKey] = items
 
 		eval.scope[node.ID] = allApplied
+
+		// Per 004-graph-execution.md § Parent State: derive parent state from children.
+		// Error states take precedence over Pending; deterministic errors (Error)
+		// take precedence over transient errors (SystemError, Conflict).
+		if len(childErrors) > 0 {
+			// Return the first child error — the coordinator maps it to the
+			// appropriate NodeState. Error classification happens in controller.go.
+			return keys, childErrors[0]
+		}
 	}
 
 	// Check readyWhen per-item: all items must pass for the collection to be Ready.
-	// Temporarily override the node's scope entry with each item so that
-	// readyWhen expressions like ${workers.data.ready} resolve to the item.
+	// Per 001-graph.md: "For forEach nodes, readyWhen is evaluated per-child —
+	// each child checks readyWhen independently using the standard per-node mechanism."
 	if len(node.ReadyWhen) > 0 {
 		scopeVal := eval.scope[node.ID]
 		if scopeVal != nil {
+			anyNotReady := false
 			for _, applied := range scopeVal.([]any) {
 				saved := eval.scope[node.ID]
 				eval.scope[node.ID] = applied
@@ -194,11 +238,17 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 					if m, ok := applied.(map[string]any); ok {
 						m["__ready"] = false
 					}
-					return keys, err
+					anyNotReady = true
+					// Don't return immediately — mark all items' readiness first
+					// so .ready() on the parent reflects accurate per-item state.
+					continue
 				}
 				if m, ok := applied.(map[string]any); ok {
 					m["__ready"] = true
 				}
+			}
+			if anyNotReady {
+				return keys, ErrWaitingForReadiness
 			}
 			logger.V(1).Info("all forEach items ready", "node", node.ID)
 		}

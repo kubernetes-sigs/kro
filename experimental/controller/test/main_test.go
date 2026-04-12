@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -65,6 +66,7 @@ func TestMain(m *testing.M) {
 	// 3. Start envtest (kube-apiserver + etcd), logging to the shared file.
 	// -----------------------------------------------------------------------
 	testEnv = &envtest.Environment{
+		BinaryAssetsDirectory: resolveEnvtestAssets(),
 		ControlPlane: envtest.ControlPlane{
 			APIServer: &envtest.APIServer{Out: logFile, Err: logFile},
 			Etcd:      &envtest.Etcd{Out: logFile, Err: logFile},
@@ -197,6 +199,35 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "stopping envtest: %v\n", err)
 	}
 	os.Exit(code)
+}
+
+// ---------------------------------------------------------------------------
+// Envtest binary resolution
+// ---------------------------------------------------------------------------
+
+// resolveEnvtestAssets returns the path to envtest binaries (etcd,
+// kube-apiserver). If KUBEBUILDER_ASSETS is already set, it's used as-is.
+// Otherwise, setup-envtest is invoked to resolve the path — it downloads
+// binaries on first use and caches them in its OS-default store directory.
+//
+// This lets `go test ./experimental/...` work from any terminal or IDE
+// without the Makefile wrapper that previously set KUBEBUILDER_ASSETS.
+func resolveEnvtestAssets() string {
+	if v := os.Getenv("KUBEBUILDER_ASSETS"); v != "" {
+		return v
+	}
+	cmd := exec.Command("setup-envtest", "use", "1.35.x", "-p", "path")
+	out, err := cmd.Output()
+	if err != nil {
+		// Output() captures stdout only; grab stderr from the ExitError for diagnostics.
+		stderr := ""
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = string(ee.Stderr)
+		}
+		fmt.Fprintf(os.Stderr, "setup-envtest not found or failed: %v\n%s\nRun: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest\n", err, stderr)
+		os.Exit(1)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // ---------------------------------------------------------------------------

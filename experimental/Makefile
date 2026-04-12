@@ -1,10 +1,8 @@
 # Root of the repo (where go.mod lives). All go commands run from there.
 ROOT := $(shell git rev-parse --show-toplevel)
 
-LOCALBIN         := $(shell go env GOPATH)/bin
-KO               := $(LOCALBIN)/ko
-ENVTEST          := $(LOCALBIN)/setup-envtest
-ENVTEST_VERSION  ?= 1.35.x
+LOCALBIN := $(shell go env GOPATH)/bin
+KO       := $(LOCALBIN)/ko
 
 TEST_FLAGS := -race -count=1
 TEST_PKGS  := ./experimental/...
@@ -24,15 +22,11 @@ help: ## Display this help.
 ##@ Presubmit
 
 .PHONY: presubmit
-presubmit: vet envtest ## Run presubmit checks (vet, tests, mod tidy)
-	cd $(ROOT) && KUBEBUILDER_ASSETS="$${KUBEBUILDER_ASSETS:-$$($(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)}" go test $(TEST_FLAGS) $(TEST_PKGS)
+presubmit: vet ## Run presubmit checks (vet, tests, mod tidy)
+	cd $(ROOT) && go test $(TEST_FLAGS) $(TEST_PKGS)
 	cd $(ROOT) && go mod tidy && git diff --exit-code go.mod go.sum
 
 ##@ Development
-
-.PHONY: envtest
-envtest: ## Download setup-envtest if necessary.
-	test -s $(ENVTEST) || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
 .PHONY: vet
 vet: ## Run go vet against experimental code.
@@ -47,8 +41,8 @@ apply: ## Build and deploy the graph controller to the current cluster.
 	$(KO) apply -f $(ROOT)/experimental/deploy/
 
 .PHONY: test
-test: envtest ## Run tests with verbose output.
-	cd $(ROOT) && KUBEBUILDER_ASSETS="$${KUBEBUILDER_ASSETS:-$$($(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)}" go test $(TEST_FLAGS) $(TEST_PKGS) -v
+test: ## Run tests with verbose output.
+	cd $(ROOT) && go test $(TEST_FLAGS) $(TEST_PKGS) -v
 
 .PHONY: bench
 bench: ## Run benchmarks.

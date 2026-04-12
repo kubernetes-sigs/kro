@@ -14,8 +14,7 @@ jobs:
           cache: true
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: |
-            ~/go/bin/setup-envtest
-            ~/go/bin/k8s
-          key: bin-envtest-1.35.x-${{ runner.os }}
+          path: ~/.local/share/kubebuilder-envtest
+          key: envtest-1.35.x-${{ runner.os }}
+      - run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
       - run: make -C experimental presubmit

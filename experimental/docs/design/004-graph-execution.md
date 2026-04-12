@@ -125,13 +125,13 @@ current-reconcile state for dependencies, which is always available.
 
 1. **Skip check** — no external trigger and no propagation trigger → skip. Retains previous evaluation.
 2. **Dependency check** — any dependency Excluded → Excluded, regardless of other dependencies'
-   states (definitive absence propagates; the node is structurally non-viable). Any dependency in a
-   blocked state → inherit Blocked. Excluded takes precedence over Blocked: if a node has both, it
-   is Excluded — the blocked dependency's resolution cannot make the node viable while the Excluded
-   dependency is absent.
+   states (definitive absence propagates; the node is structurally non-viable). Any dependency in an
+   error state (Conflict, Error, SystemError, or Blocked) → inherit Blocked. Any dependency Pending
+   → inherit Pending. Precedence where multiple apply: Excluded > Blocked > Pending — a Blocked
+   dependency's error signal takes precedence over a sibling that is merely Pending.
 3. **propagateWhen** — any dependency's propagateWhen unsatisfied → gate. Template not evaluated.
    Previous evaluation and state retained. If never evaluated, the node remains Pending — dependents
-   see a dependency that hasn't produced data and inherit Blocked. This is correct: gated-and-never-
+   see a dependency that hasn't produced data and inherit Pending. This is correct: gated-and-never-
    evaluated means the node's output is genuinely unavailable, not merely stale. Gate takes precedence
    over triggers — including revision transitions. A revision transition marks all nodes as triggered,
    but a gated node still waits for its dependency's propagateWhen to be satisfied before evaluating.
@@ -170,22 +170,22 @@ Each node's evaluation resolves to exactly one state:
 |-------------|--------------------------------|------------|---------------------------|
 | Ready       | Applied, readyWhen satisfied   | Proceed    | —                         |
 | NotReady    | Applied, readyWhen unsatisfied | Proceed    | Converges via watch       |
-| Pending     | Data not yet available         | Blocked    | Upstream resolves         |
+| Pending     | Data not yet available         | Pending    | Upstream resolves         |
 | Excluded    | includeWhen false              | Excluded   | includeWhen inputs change |
-| Blocked     | Dependency in error state      | Blocked    | Dependency resolves       |
+| Blocked     | Dependency in error state           | Blocked    | Dependency resolves       |
 | Conflict    | Field ownership contested      | Blocked    | Propagation, revision, or drift timer |
 | Error       | Client request failed (4xx)    | Blocked    | Propagation, revision, or drift timer |
 | SystemError | Server/infra failure (5xx)     | Blocked    | Backoff retry, then drift timer  |
 
 Ready and NotReady are both "applied and in scope." readyWhen is a health signal — it does not gate
-dependents. Blocked states propagate as Blocked (uncertain absence — previous applied keys retained,
-not safe to prune). Excluded propagates as Excluded (definitive absence — safe to prune).
+dependents. Pending and Blocked both represent uncertain absence — previous applied keys are
+retained, not safe to prune. Excluded propagates as Excluded (definitive absence — safe to prune).
 
 ### Prune
 
 After wind, diff the current key set against the applied set. Absent resources are prune candidates
 if their absence is definitive (Excluded, removed from revision). Uncertain absence (Pending,
-Error, SystemError) blocks pruning — the resource might reappear once the blocker resolves.
+Blocked, Error, SystemError) blocks pruning — the resource might reappear once the blocker resolves.
 
 Conflict is deliberately excluded from the prune gate: a 409 is positive evidence that the resource
 exists (another actor owns contested fields). Prune is the designed recovery mechanism for

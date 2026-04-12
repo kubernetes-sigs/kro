@@ -140,8 +140,8 @@ child's node ID combines the parent's ID with the rendered resource key (GVK + n
 
 After processing, the parent enters scope as an array of child outputs — `${policies}` is `[]any`.
 Downstream nodes depend on the parent, not individual children. The parent enters scope (enabling
-downstream evaluation) when all children have applied. `.ready()` additionally requires all children
-to satisfy readyWhen.
+downstream evaluation) once all children have applied successfully — readyWhen is not required.
+`.ready()` additionally requires all children to satisfy readyWhen.
 
 ```yaml
 - id: policies
@@ -163,7 +163,7 @@ to satisfy readyWhen.
 
 A list of CEL expressions. All must evaluate to `true` for the node to be included. If any
 condition is false, the node is skipped — nothing is applied and it does not enter scope. Downstream
-nodes that depend on it cannot evaluate (the data is not in scope) and are also absent.
+nodes that depend on it cannot evaluate (the data is not in scope) and are also Excluded.
 
 ```yaml
 - id: ingress
@@ -374,7 +374,7 @@ or `Unknown` for too long.
 | `Ready`       | `True`    | Ready       | All resources reconciled                       |
 | `NotReady`    | `Unknown` | NotReady    | Applied but readyWhen conditions not met       |
 | `Pending`     | `Unknown` | Pending     | Waiting for upstream data                      |
-| `Blocked`     | `Unknown` | Blocked     | Dependency in error state, waiting for resolve |
+| `Blocked`     | `Unknown` | Blocked     | Dependency in error state, waiting for resolve     |
 | `NotAccepted` | `False`   | —           | Spec invalid; rollup of Accepted=False         |
 | `Conflict`    | `False`   | Conflict    | SSA field ownership contested by another actor |
 | `Error`       | `False`   | Error       | Client request failed (4xx)                    |

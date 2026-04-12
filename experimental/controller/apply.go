@@ -665,23 +665,20 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 // Prune + delete ordering
 // ---------------------------------------------------------------------------
 
-// pruneRemovedResources deletes managed resources that were previously applied
-// but are no longer in the current reconcile's key set.
-// The prune candidate set is: previousKeys - currentKeys.
-//
-// For Owns resources, this issues a Delete. For Contribute resources
-// (prefixed with "contribute:"), this issues a skeleton apply to release
-// field ownership without deleting the target.
-//
-// If a prune candidate has finalizer nodes declared (via `finalizes`), the
-// finalization sequence runs before deletion: create the finalizer resource,
-// wait for readyWhen, then delete the target. See 004-graph-execution.md § Finalization.
-//
-// supersededDAGs provides DAGs from superseded revisions for cross-revision
-// finalizer lookups. The old revision's finalizes declarations govern its
-// resources — see 004-graph-execution.md § Prune Ordering.
-func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, supersededDAGs map[string]*DAG, eval *evaluator, watcher *graphWatcher) (finalizerKeys []string, finalizationPending bool, err error) {
+// pruneRemovedResources deletes or releases resources no longer in the applied
+// set. Returns (finalizerKeys, deferredKeys, err):
+//   - finalizerKeys: keys of finalizer resources created this cycle
+//   - deferredKeys: keys of resources whose deletion was deferred this cycle
+//     (finalization in progress, blocked by third-party field managers, etc.).
+//     The caller must include these in deferredPruneKeys for the next
+//     reconcile so they remain visible as prune candidates, AND must not GC
+//     superseded revisions while any deferral is active — the superseded DAG's
+//     finalizer relationships are still needed to complete the sequence.
+//   - err: hard error from an API call; sets pruneOK=false at the call site.
+func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, supersededDAGs map[string]*DAG, eval *evaluator, watcher *graphWatcher) ([]string, []string, error) {
 	logger := log.FromContext(ctx)
+	var finalizerKeys []string
+	var deferredKeys []string
 
 	// Build current key set for fast lookup
 	currentSet := map[string]bool{}
@@ -729,7 +726,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	// each finalizer node's direct dependencies (other than the target
 	// itself) are deferred — they must remain alive while the finalizer
 	// is running.
-	deferredKeys := map[string]bool{}
+	finalizerDeps := map[string]bool{}
 	for key := range previousKeys {
 		if currentSet[key] {
 			continue
@@ -749,7 +746,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 					continue // skip the target itself
 				}
 				if dk, ok := nodeIDToKey[depID]; ok {
-					deferredKeys[dk] = true
+					finalizerDeps[dk] = true
 				}
 			}
 		}
@@ -772,9 +769,10 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	for _, key := range pruneCandidates {
 		// Defer deletion of resources that are dependencies of in-flight
 		// finalizer nodes — they must remain alive while the finalizer runs.
-		if deferredKeys[key] {
+		if finalizerDeps[key] {
 			logger.Info("prune deferred: resource is a dependency of an in-flight finalizer",
 				"key", key)
+			deferredKeys = append(deferredKeys, key)
 			continue
 		}
 
@@ -843,6 +841,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		if blockers := thirdPartyFieldManagers(obj, ownManager); len(blockers) > 0 {
 			logger.Info("prune blocked: resource has other field managers",
 				"key", key, "blockers", blockers)
+			deferredKeys = append(deferredKeys, key)
 			continue // resource stays in applied set — retry next reconcile
 		}
 
@@ -859,7 +858,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			if !ready {
 				logger.Info("finalization in progress — deletion deferred",
 					"key", key, "finalizers", finalizerNodeIDs)
-				finalizationPending = true
+				deferredKeys = append(deferredKeys, key)
 				continue // block deletion until all finalizers ready
 			}
 			logger.Info("finalization complete", "key", key)
@@ -867,7 +866,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 		if err := r.Client.Delete(ctx, obj); err != nil {
 			if client.IgnoreNotFound(err) != nil {
-				return finalizerKeys, finalizationPending, fmt.Errorf("pruning %s: %w", key, err)
+				return finalizerKeys, deferredKeys, fmt.Errorf("pruning %s: %w", key, err)
 			}
 		} else {
 			logger.Info("pruned resource", "key", key)
@@ -875,7 +874,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		}
 	}
 
-	return finalizerKeys, finalizationPending, nil
+	return finalizerKeys, deferredKeys, nil
 }
 
 // findManagedResourceKeys discovers dynamically-named resources (forEach, CEL

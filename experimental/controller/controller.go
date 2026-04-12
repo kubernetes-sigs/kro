@@ -909,10 +909,11 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// forEach scale-down, includeWhen toggles, and revision transitions all
 	// produce the same diff — one mechanism.
 	pruneOK := true
+	prunePending := false
 	pruneSafe := !summary.HasDataPending && !summary.HasError && !summary.HasSystemError
 	if pruneSafe {
 		allPreviousKeys := map[string]bool{}
-		logger.V(1).Info("prune gate open", "previousAppliedKeys", len(state.previousAppliedKeys), "superseded", len(supersededRevisions))
+		logger.V(1).Info("prune gate open", "previousAppliedKeys", len(state.previousAppliedKeys), "deferredPruneKeys", len(state.deferredPruneKeys), "superseded", len(supersededRevisions))
 
 		// Derive the applied set from the watch cache.
 		if r.Watcher != nil {
@@ -931,6 +932,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// feature — removable once informer cache consistency is
 		// guaranteed within the reconcile loop.
 		for k := range state.previousAppliedKeys {
+			allPreviousKeys[k] = true
+		}
+		// Include keys whose deletion was deferred in the previous reconcile
+		// (finalization in progress, third-party field-manager block, etc.).
+		// These may not appear in the watch cache or previousAppliedKeys, so
+		// without this they'd silently disappear from the prune candidate set.
+		for k := range state.deferredPruneKeys {
 			allPreviousKeys[k] = true
 		}
 		// Update the previous key set for the next reconcile.
@@ -959,7 +967,29 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 
 		if len(allPreviousKeys) > 0 {
-			_, finalizationPending, err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
+			var deferred []string
+			_, deferred, err = r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
+			if len(deferred) > 0 {
+				prunePending = true
+				// Store deferred keys for the next reconcile to retry.
+				state.deferredPruneKeys = make(map[string]bool, len(deferred))
+				for _, k := range deferred {
+					state.deferredPruneKeys[k] = true
+				}
+				// Finalization is in progress (finalizer resource exists but
+				// readyWhen not yet satisfied). Request a short requeue as a
+				// consistency floor — the primary trigger is a watch event on
+				// the gate resource, but under load that event may be slow.
+				// Per 004-graph-execution.md § Finalization: the controller
+				// waits for readyWhen before deleting the target. This floor
+				// ensures the gate is re-checked even if the watch event is
+				// delayed. Same principle as the NodeDataPending 1s timer,
+				// but graph-level (not per-node) so it doesn't touch the
+				// drift timer map.
+				requeueFloor = finalizationRequeueInterval
+			} else {
+				state.deferredPruneKeys = nil
+			}
 			if err != nil {
 				logger.Error(err, "pruning removed resources")
 				pruneOK = false
@@ -973,19 +1003,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					summary.HasError = true
 				}
 				nodeErrors = append(nodeErrors, fmt.Sprintf("prune: %s", info.reason))
-			}
-			if finalizationPending {
-				// Finalization is in progress (finalizer resource exists but
-				// readyWhen not yet satisfied). Request a short requeue as a
-				// consistency floor — the primary trigger is a watch event on
-				// the gate resource, but under load that event may be slow.
-				// Per 004-graph-execution.md § Finalization: the controller
-				// waits for readyWhen before deleting the target. This floor
-				// ensures the gate is re-checked even if the watch event is
-				// delayed. Same principle as the NodeDataPending 1s timer,
-				// but graph-level (not per-node) so it doesn't touch the
-				// drift timer map.
-				requeueFloor = finalizationRequeueInterval
 			}
 		}
 	}
@@ -1014,7 +1031,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// — retries via watch events, not periodic requeue.
 	allReady := rstate.accepted && !summary.HasDataPending && !summary.HasNotReady &&
 		!summary.HasBlocked && !summary.HasConflict && !summary.HasError && !summary.HasSystemError
-	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK)
+	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK && !prunePending)
 
 	// Reset drift timers for nodes that were successfully evaluated.
 	// Per 004-graph-execution.md § The Walk: "An SSA apply resets the

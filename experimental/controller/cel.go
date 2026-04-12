@@ -120,13 +120,34 @@ type compiledGraph struct {
 	dag      *DAG                   // dependency graph (immutable after BuildDAG)
 }
 
-// eval evaluates a pre-compiled CEL expression against the given scope.
-// The program must exist in the cache — a cache miss indicates an invariant
-// violation (AllExpressions() is incomplete) and is treated as a hard error.
+// eval evaluates a CEL expression against the given scope.
+// First checks the pre-compiled program cache; if the expression is not found
+// (e.g., a readyWhen expression from a superseded revision evaluated using the
+// current revision's evaluator), it compiles the expression on-the-fly using
+// the current CEL environment. This handles cross-revision finalization where
+// the snapshot's readyWhen may reference nodes declared in the current spec but
+// whose expression was only pre-compiled in the old spec.
 func (c *compiledGraph) eval(expr string, scope map[string]any) (any, error) {
 	prg, ok := c.programs[expr]
 	if !ok {
-		return nil, fmt.Errorf("expression %q not found in compiled cache — this is an invariant violation (AllExpressions may be incomplete)", expr)
+		// Expected cache miss during cross-revision finalization. When a
+		// superseded node's readyWhen expression is evaluated using the current
+		// revision's compiled graph (because runFinalization receives the live
+		// evaluator), the expression won't be in programs — it was only compiled
+		// for the old spec. Compile it on-the-fly using the current CEL env.
+		// This path fires only during finalization of superseded nodes (bounded
+		// population, bounded lifetime) so recompilation cost is negligible.
+		// The resulting program is NOT cached to avoid lifecycle coupling between
+		// the program cache and finalization completion.
+		ast, issues := c.env.Compile(expr)
+		if issues != nil && issues.Err() != nil {
+			return nil, fmt.Errorf("expression %q not in cache, dynamic compile failed: %w", expr, issues.Err())
+		}
+		var err error
+		prg, err = c.env.Program(ast)
+		if err != nil {
+			return nil, fmt.Errorf("expression %q not in cache, dynamic program failed: %w", expr, err)
+		}
 	}
 
 	out, _, err := prg.Eval(scope)
@@ -183,6 +204,14 @@ type instanceState struct {
 	// includeWhen toggle), the watch cache scan runs to find prune candidates.
 	// Steady-state reconciles (same key set) skip the scan entirely.
 	previousAppliedKeys map[string]bool
+
+	// deferredPruneKeys carries keys whose deletion was deferred in the last
+	// reconcile (finalization in progress, third-party field managers, etc.).
+	// These are injected into allPreviousKeys on the next reconcile so they
+	// remain visible as prune candidates regardless of watch-cache lag.
+	// Distinct from previousAppliedKeys: those track what was applied (for
+	// prune diffing); these track what is pending deletion (for retry).
+	deferredPruneKeys map[string]bool
 
 	// Per-node drift timer expiry times. When expired, the node is triggered
 	// unconditionally — the consistency floor. Reset on successful evaluation.

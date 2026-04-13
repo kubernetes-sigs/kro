@@ -372,8 +372,9 @@ func resourceKey(obj *unstructured.Unstructured) string {
 
 // staticResourceKey builds a resource key from an unevaluated template's
 // metadata fields. Skips templates with CEL expressions in the name
-// (can't determine key statically). Always uses fallbackNamespace because
-// the template's metadata.namespace may itself contain ${...} expressions.
+// (can't determine key statically). Uses the template's literal
+// metadata.namespace when present; falls back to fallbackNamespace when
+// the namespace is absent, empty, or contains ${...} expressions.
 // This is the spec-time equivalent of resourceKey — used during prune
 // diffing and revision spec scanning where templates haven't been evaluated.
 func staticResourceKey(tmpl map[string]any, fallbackNamespace string) string {
@@ -387,9 +388,13 @@ func staticResourceKey(tmpl map[string]any, fallbackNamespace string) string {
 	if name == "" || strings.Contains(name, "${") {
 		return "" // dynamic name — can't determine key statically
 	}
+	ns, _ := md["namespace"].(string)
+	if ns == "" || strings.Contains(ns, "${") {
+		ns = fallbackNamespace
+	}
 	gv, _ := schema.ParseGroupVersion(apiVersion)
 	gvk := gv.WithKind(kind)
-	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, fallbackNamespace, name}, "/")
+	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, ns, name}, "/")
 }
 
 func parseResourceKey(key string) (schema.GroupVersionKind, types.NamespacedName) {
@@ -421,6 +426,14 @@ func parseContributeKey(key string) (resourceKey string, hasStatus bool) {
 		return strings.TrimSuffix(rest, contributeStatusSuffix), true
 	}
 	return rest, false
+}
+
+// templateHasStatus returns true if a template map contains a non-nil
+// status field. Used during teardown to determine whether skeleton apply
+// must also release the status subresource.
+func templateHasStatus(tmpl map[string]any) bool {
+	s, ok := tmpl["status"]
+	return ok && s != nil
 }
 
 // ---------------------------------------------------------------------------

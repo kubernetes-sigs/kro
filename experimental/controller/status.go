@@ -92,11 +92,11 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	if s.HasConflict {
 		return ConditionFalse, "Conflict", "One or more resources have SSA field ownership conflicts"
 	}
-	if s.HasPending {
-		return ConditionUnknown, "Pending", "One or more resources waiting for upstream data"
-	}
 	if s.HasBlocked {
 		return ConditionUnknown, "Blocked", "One or more resources blocked by upstream errors"
+	}
+	if s.HasPending {
+		return ConditionUnknown, "Pending", "One or more resources waiting for upstream data"
 	}
 	if s.HasNotReady {
 		return ConditionUnknown, "NotReady", "One or more resources have not satisfied their readyWhen conditions"

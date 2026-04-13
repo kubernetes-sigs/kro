@@ -1127,13 +1127,39 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	ownKeys := map[string]bool{}
 	contributeKeys := map[string]bool{} // key → hasStatus encoded in the key
 
+	// Build a map from resource keys to hasStatus by scanning revision specs.
+	// This recovers the +status suffix that the watch cache cannot provide.
+	// Per 003-ownership.md § Status Subresource: "Releases only target the
+	// subresources the template actually applied to."
+	contributeStatusMap := map[string]bool{} // resource key → hasStatus
+	for _, rev := range revisions {
+		spec, err := extractRevisionSpec(rev)
+		if err != nil {
+			continue
+		}
+		for _, node := range spec.Nodes {
+			if node.Template == nil {
+				continue
+			}
+			if templateHasStatus(node.Template) {
+				if key := staticResourceKey(node.Template, graph.GetNamespace()); key != "" {
+					contributeStatusMap[key] = true
+				}
+			}
+		}
+	}
+
 	// Derive applied set from watch cache if available.
 	if r.Watcher != nil {
 		appliedSet := r.Watcher.watches.deriveAppliedSet(graph.GetName(), graph.GetNamespace())
 		for key, entry := range appliedSet {
 			if entry.Reference == ReferenceContribute {
-				// For contribute keys, we need the contribute prefix format.
-				contributeKeys[contributeKeyPrefix+key] = true
+				// For contribute keys, encode hasStatus from revision spec scan.
+				cKey := contributeKeyPrefix + key
+				if contributeStatusMap[key] {
+					cKey += contributeStatusSuffix
+				}
+				contributeKeys[cKey] = true
 			} else {
 				ownKeys[key] = true
 			}

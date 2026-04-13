@@ -549,3 +549,172 @@ func TestReconcileStateDeriveReadyCondition_FinalizerSkipped(t *testing.T) {
 	assert.Equal(t, "Ready", reason)
 	assert.Contains(t, message, "finalization skipped", "Ready message should surface FinalizerSkipped info")
 }
+
+// ---------------------------------------------------------------------------
+// Correctness reconciliation — Finding 1: staticResourceKey namespace
+// ---------------------------------------------------------------------------
+
+// TestStaticResourceKey_ExplicitNamespace proves that staticResourceKey reads
+// a literal metadata.namespace from the template instead of always using the
+// fallback. Per 004-graph-execution.md § Applied Set: resource keys encode
+// group/version/Kind/namespace/name. If the template specifies a literal
+// namespace, the key must use it.
+//
+// Before the fix, staticResourceKey always used fallbackNamespace, causing
+// cross-namespace resources to have wrong keys in the prune candidate set.
+func TestStaticResourceKey_ExplicitNamespace(t *testing.T) {
+	t.Run("literal namespace overrides fallback", func(t *testing.T) {
+		tmpl := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "my-config",
+				"namespace": "kube-system",
+			},
+		}
+		key := staticResourceKey(tmpl, "default")
+		assert.Equal(t, "/v1/ConfigMap/kube-system/my-config", key,
+			"should use the template's literal namespace, not fallback")
+	})
+
+	t.Run("absent namespace uses fallback", func(t *testing.T) {
+		tmpl := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name": "my-config",
+			},
+		}
+		key := staticResourceKey(tmpl, "default")
+		assert.Equal(t, "/v1/ConfigMap/default/my-config", key,
+			"should use fallback when namespace is absent")
+	})
+
+	t.Run("dynamic namespace uses fallback", func(t *testing.T) {
+		tmpl := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "my-config",
+				"namespace": "${ns.metadata.name}",
+			},
+		}
+		key := staticResourceKey(tmpl, "default")
+		assert.Equal(t, "/v1/ConfigMap/default/my-config", key,
+			"should use fallback when namespace contains ${...}")
+	})
+
+	t.Run("empty namespace uses fallback", func(t *testing.T) {
+		tmpl := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "my-config",
+				"namespace": "",
+			},
+		}
+		key := staticResourceKey(tmpl, "default")
+		assert.Equal(t, "/v1/ConfigMap/default/my-config", key,
+			"should use fallback when namespace is empty string")
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Correctness reconciliation — Finding 2: Contribute status in teardown
+// ---------------------------------------------------------------------------
+
+// TestContributeStatusDetection proves that contributeHasStatus correctly
+// detects whether a template's Contribute node applies status fields.
+// During teardown, this determines whether skeletonApply releases the
+// status subresource.
+//
+// Per 003-ownership.md § Status Subresource: "Releases only target the
+// subresources the template actually applied to — a status-only Contribute
+// releases only the status subresource."
+func TestContributeStatusDetection(t *testing.T) {
+	t.Run("template with status field", func(t *testing.T) {
+		tmpl := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]any{"name": "target"},
+			"status":     map[string]any{"ready": true},
+		}
+		assert.True(t, templateHasStatus(tmpl),
+			"template with status field should be detected")
+	})
+
+	t.Run("template without status field", func(t *testing.T) {
+		tmpl := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]any{"name": "target"},
+			"data":       map[string]any{"key": "value"},
+		}
+		assert.False(t, templateHasStatus(tmpl),
+			"template without status field should not be detected")
+	})
+
+	t.Run("template with nil status", func(t *testing.T) {
+		tmpl := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]any{"name": "target"},
+			"status":     nil,
+		}
+		assert.False(t, templateHasStatus(tmpl),
+			"template with nil status should not be detected")
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Correctness reconciliation — Finding 3: Non-API error classification
+// ---------------------------------------------------------------------------
+
+// TestClassifyAPIError_NonAPIErrorsAreNotSystemError proves that errors
+// which are NOT wrapped *StatusError (i.e., not from the API server) AND
+// are NOT network/infrastructure errors are classified correctly.
+//
+// Per 004-graph-execution.md: "Definition nodes can be Ready, NotReady
+// (readyWhen unsatisfied), or Error (CEL evaluation failure). They cannot
+// be... SystemError (no API calls)."
+//
+// The coordinator re-classifies NodeError from the worker using
+// classifyAPIError. For non-API errors (CEL failures, template errors),
+// the function should distinguish between transient infrastructure errors
+// and deterministic non-API errors.
+func TestClassifyAPIError_CELErrorIsNotSystemError(t *testing.T) {
+	// A CEL type error — deterministic, same inputs always produce same failure.
+	// This should NOT be SystemError (which triggers 5s retry).
+	celErr := fmt.Errorf("evaluating \"deploy.status.replicas > 0\": type conversion error: got string, want int")
+	info := classifyAPIError(celErr)
+
+	// Currently this is NodeSystemError (the bug). After the fix, this should
+	// be NodeError (deterministic non-API failure).
+	assert.Equal(t, NodeError, info.state,
+		"CEL evaluation errors are deterministic non-API failures, not transient system errors")
+}
+
+// ---------------------------------------------------------------------------
+// Correctness reconciliation — Finding 4: Status priority
+// ---------------------------------------------------------------------------
+
+// TestDeriveReadyCondition_BlockedBeforePending proves that when both
+// Blocked and Pending states coexist, Blocked takes priority in the Ready
+// condition. Blocked means "upstream error — someone needs to act."
+// Pending means "just waiting." Blocked is more actionable.
+//
+// Per 004-graph-execution.md § Wind step 2: "Precedence where multiple
+// apply: Excluded > Blocked > Pending."
+func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
+	state := &reconcileState{
+		compiled: true,
+		PlanSummary: PlanSummary{
+			HasPending: true,
+			HasBlocked: true,
+		},
+	}
+	status, reason, _ := state.deriveReadyCondition()
+	assert.Equal(t, ConditionUnknown, status)
+	assert.Equal(t, "Blocked", reason,
+		"Blocked should take priority over Pending — upstream error is more actionable than waiting")
+}

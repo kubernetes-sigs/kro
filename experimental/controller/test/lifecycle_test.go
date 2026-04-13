@@ -723,19 +723,20 @@ func TestIncludeWhenToggle(t *testing.T) {
 	t.Log("includeWhen toggle proved: false→true creates, true→false prunes")
 }
 
-// TestDriftNotRestored proves the content-addressed apply optimization: drift
-// persists because the template hash matches — the controller only re-applies
-// when the evaluated template output changes (design 004-graph-execution § Wind
-// step 5, dispatch hash check). A spec change produces a new template hash,
-// which triggers a Patch that overwrites drift.
+// TestDriftCorrectedByTimer proves the drift timer ownership enforcement:
+// external mutations to managed fields persist during normal watch-triggered
+// reconciles (content-addressed apply optimization — template hash match skips
+// the Patch), but the drift timer bypasses the hash check and applies
+// unconditionally, restoring managed fields to the desired state.
 //
-// This is the same tradeoff as pod-template-hash in Deployments: steady-state
-// cost of zero writes outweighs continuous drift restoration.
-func TestDriftNotRestored(t *testing.T) {
-	// The content-addressed apply optimization (template hash) intentionally
-	// skips re-applying when the desired state hasn't changed. This means
-	// external mutations ("drift") persist until the Graph template output
-	// changes. This is the same tradeoff as pod-template-hash in Deployments.
+// Per 004-graph-execution.md § The Walk: "The drift timer bypasses the
+// template-hash check — apply unconditionally, because server-side
+// defaulters and mutating webhooks can change fields without changing
+// the desired state hash. SSA is idempotent; the apply corrects drift
+// as a side effect."
+func TestDriftCorrectedByTimer(t *testing.T) {
+	// The test binary starts with --drift-interval=2s, so drift correction
+	// fires within a few seconds after external mutation.
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -785,15 +786,22 @@ func TestDriftNotRestored(t *testing.T) {
 
 	// Wait for reconcile to settle — poll for RV stability rather than fixed sleep.
 	// The watch fires (resourceVersion changed), but the template hash matches
-	// so the Patch is skipped.
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-drift", Namespace: ns}))
-
-	check := &unstructured.Unstructured{}
-	check.SetGroupVersionKind(cmGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "drift-target", Namespace: ns}, check))
-	d, _, _ := unstructured.NestedStringMap(check.Object, "data")
-	assert.Equal(t, "DRIFTED", d["desired"], "drift should persist — content-addressed apply skips re-apply when template output unchanged")
-	t.Log("Drift persists as expected — content-addressed apply optimization working")
+	// so the Patch is skipped during the watch-triggered reconcile. The drift
+	// timer fires after the shortened interval (2s) and applies unconditionally,
+	// correcting the drift.
+	//
+	// Per 004-graph-execution.md § The Walk: "The drift timer bypasses the
+	// template-hash check — apply unconditionally."
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		check := &unstructured.Unstructured{}
+		check.SetGroupVersionKind(cmGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "drift-target", Namespace: ns}, check); err != nil {
+			return false, nil
+		}
+		d, _, _ := unstructured.NestedStringMap(check.Object, "data")
+		return d["desired"] == "correct-value", nil
+	}))
+	t.Log("Drift corrected by drift timer — managed field restored to desired state")
 
 	// Now update the Graph spec to change the desired value — this SHOULD apply
 	graphLatest := &unstructured.Unstructured{}

@@ -174,7 +174,7 @@ func (r *GraphReconciler) runFinalization(
 			// Step 1: Finalizer resource doesn't exist — create it.
 			logger.Info("creating finalizer resource", "finalizer", finNodeID,
 				"target", target.GetName())
-			applied, applyErr := r.applyResource(ctx, graph, evalMap, watcher, finNodeID)
+			applied, applyErr := r.applyResource(ctx, graph, evalMap, watcher, finNodeID, false)
 			if applyErr != nil {
 				return false, createdKeys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
 			}
@@ -284,7 +284,7 @@ func (r *GraphReconciler) runForEachFinalization(
 				// Child doesn't exist — create it.
 				logger.Info("creating forEach finalizer child",
 					"finalizer", finNode.ID, "name", childObj.GetName())
-				applied, applyErr := r.applyResource(ctx, graph, evalMap, watcher, finNode.ID)
+				applied, applyErr := r.applyResource(ctx, graph, evalMap, watcher, finNode.ID, false)
 				if applyErr != nil {
 					return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
 				}
@@ -421,7 +421,15 @@ func parseContributeKey(key string) (resourceKey string, hasStatus bool) {
 // Apply
 // ---------------------------------------------------------------------------
 
-func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string) (*unstructured.Unstructured, error) {
+// applyResource applies an Own template via SSA.
+//
+// driftCorrection bypasses the content-addressed template hash check.
+// Per 004-graph-execution.md § The Walk: "The drift timer bypasses the
+// template-hash check — apply unconditionally, because server-side
+// defaulters and mutating webhooks can change fields without changing
+// the desired state hash. SSA is idempotent; the apply corrects drift
+// as a side effect."
+func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, driftCorrection bool) (*unstructured.Unstructured, error) {
 	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
@@ -466,42 +474,49 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 	cacheKey := resourceCacheKey(obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName())
 
 	// Check the resource cache + metadata informer for change detection.
-	if cached, ok := r.Resources.get(cacheKey); ok && cached.templateHash == templateHash {
-		// Our desired state hasn't changed. Check if the live object has changed
-		// (e.g., status updated by another controller) via the metadata informer.
-		if watcher != nil {
-			liveRV := watcher.getResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
-			if liveRV != "" && liveRV == cached.resourceVersion {
-				// Nothing changed at all — skip both Patch and GET.
-				return &unstructured.Unstructured{Object: cached.object}, nil
+	// Drift correction bypasses this check entirely — the drift timer's
+	// purpose is to re-apply unconditionally so SSA corrects any live-state
+	// divergence from the desired state. The template hash answers "did the
+	// desired state change?" — during drift correction the question is "does
+	// live state match desired state?" which can only be answered by applying.
+	if !driftCorrection {
+		if cached, ok := r.Resources.get(cacheKey); ok && cached.templateHash == templateHash {
+			// Our desired state hasn't changed. Check if the live object has changed
+			// (e.g., status updated by another controller) via the metadata informer.
+			if watcher != nil {
+				liveRV := watcher.getResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
+				if liveRV != "" && liveRV == cached.resourceVersion {
+					// Nothing changed at all — skip both Patch and GET.
+					return &unstructured.Unstructured{Object: cached.object}, nil
+				}
+			}
+			// Metadata changed (status update, etc.) but our template hasn't.
+			// Skip the Patch, but GET to refresh the scope with current status.
+			readBack := &unstructured.Unstructured{}
+			readBack.SetGroupVersionKind(obj.GroupVersionKind())
+			if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, readBack); err != nil {
+				if !apierrors.IsNotFound(err) {
+					return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
+				}
+				// Template hash matches (desired state unchanged) but object
+				// is gone — externally deleted. Clear cache so the next
+				// reconcile with changed inputs will re-create it. Don't
+				// re-create now: the template hasn't changed, so re-applying
+				// the same content is a no-information write that widens race
+				// windows (e.g., finalization between delete and spec update).
+				r.Resources.remove(cacheKey)
+				return nil, fmt.Errorf("resource %s externally deleted: %w", obj.GetName(), ErrPending)
+			} else {
+				// Update the cache with fresh data
+				r.Resources.set(cacheKey, &cachedObject{
+					resourceVersion: readBack.GetResourceVersion(),
+					templateHash:    templateHash,
+					object:          readBack.Object,
+				})
+				return readBack, nil
 			}
 		}
-		// Metadata changed (status update, etc.) but our template hasn't.
-		// Skip the Patch, but GET to refresh the scope with current status.
-		readBack := &unstructured.Unstructured{}
-		readBack.SetGroupVersionKind(obj.GroupVersionKind())
-		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, readBack); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
-			}
-			// Template hash matches (desired state unchanged) but object
-			// is gone — externally deleted. Clear cache so the next
-			// reconcile with changed inputs will re-create it. Don't
-			// re-create now: the template hasn't changed, so re-applying
-			// the same content is a no-information write that widens race
-			// windows (e.g., finalization between delete and spec update).
-			r.Resources.remove(cacheKey)
-			return nil, fmt.Errorf("resource %s externally deleted: %w", obj.GetName(), ErrPending)
-		} else {
-			// Update the cache with fresh data
-			r.Resources.set(cacheKey, &cachedObject{
-				resourceVersion: readBack.GetResourceVersion(),
-				templateHash:    templateHash,
-				object:          readBack.Object,
-			})
-			return readBack, nil
-		}
-	}
+	} // !driftCorrection
 
 	// Set the template hash annotation for future comparisons.
 	annotations := obj.GetAnnotations()
@@ -629,7 +644,9 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 // is skipped. When it does change, the new state is applied.
 // Uses non-force SSA by default; force only with kro.run/apply: Force.
 // Surfaces SSA conflicts as ErrFieldConflict.
-func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string) (*unstructured.Unstructured, error) {
+// applyContribution applies a Contribute template via SSA.
+// driftCorrection bypasses the content-addressed template hash check.
+func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, driftCorrection bool) (*unstructured.Unstructured, error) {
 	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
@@ -665,30 +682,33 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 	cacheKey := resourceCacheKey(obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName())
 
 	// Check cache for hash match — skip Patch if contribution output unchanged.
-	if cached, ok := r.Resources.get(cacheKey); ok && cached.templateHash == templateHash {
-		if watcher != nil {
-			liveRV := watcher.getResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
-			if liveRV != "" && liveRV == cached.resourceVersion {
-				return &unstructured.Unstructured{Object: cached.object}, nil
+	// Drift correction bypasses this — same reasoning as applyResource.
+	if !driftCorrection {
+		if cached, ok := r.Resources.get(cacheKey); ok && cached.templateHash == templateHash {
+			if watcher != nil {
+				liveRV := watcher.getResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
+				if liveRV != "" && liveRV == cached.resourceVersion {
+					return &unstructured.Unstructured{Object: cached.object}, nil
+				}
+			}
+			// Metadata changed but our contribution hasn't — GET to refresh.
+			readBack := &unstructured.Unstructured{}
+			readBack.SetGroupVersionKind(obj.GroupVersionKind())
+			if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, readBack); err != nil {
+				if !apierrors.IsNotFound(err) {
+					return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
+				}
+				// Object might not exist yet (race), fall through to apply
+			} else {
+				r.Resources.set(cacheKey, &cachedObject{
+					resourceVersion: readBack.GetResourceVersion(),
+					templateHash:    templateHash,
+					object:          readBack.Object,
+				})
+				return readBack, nil
 			}
 		}
-		// Metadata changed but our contribution hasn't — GET to refresh.
-		readBack := &unstructured.Unstructured{}
-		readBack.SetGroupVersionKind(obj.GroupVersionKind())
-		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, readBack); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
-			}
-			// Object might not exist yet (race), fall through to apply
-		} else {
-			r.Resources.set(cacheKey, &cachedObject{
-				resourceVersion: readBack.GetResourceVersion(),
-				templateHash:    templateHash,
-				object:          readBack.Object,
-			})
-			return readBack, nil
-		}
-	}
+	} // !driftCorrection
 
 	// Target must exist — contributions patch into existing resources.
 	targetCheck := &unstructured.Unstructured{}

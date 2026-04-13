@@ -24,13 +24,17 @@ import (
 // The reference must be resolved before calling this function — Unresolved
 // references are resolved by the coordinator before dispatching to workers.
 //
+// driftCorrection is true when the node was triggered by the drift timer.
+// Per 004-graph-execution.md § The Walk: drift-triggered nodes bypass the
+// template-hash check and apply unconditionally via SSA.
+//
 // All paths return (keys, error) with a uniform error contract:
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, ref Reference, eval *evaluator, watcher *graphWatcher) ([]string, error) {
+func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, ref Reference, eval *evaluator, watcher *graphWatcher, driftCorrection bool) ([]string, error) {
 	if node.ForEach != nil {
-		return r.reconcileForEach(ctx, graph, node, eval, watcher)
+		return r.reconcileForEach(ctx, graph, node, eval, watcher, driftCorrection)
 	}
 
 	switch ref {
@@ -43,13 +47,13 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 		err := r.reconcileWatch(ctx, graph, node, eval, watcher)
 		return nil, err
 	case ReferenceContribute:
-		key, err := r.reconcileContribute(ctx, graph, node, eval, watcher)
+		key, err := r.reconcileContribute(ctx, graph, node, eval, watcher, driftCorrection)
 		if key != "" {
 			return []string{key}, err
 		}
 		return nil, err
 	default: // ReferenceOwn
-		key, err := r.reconcileOwn(ctx, graph, node, eval, watcher)
+		key, err := r.reconcileOwn(ctx, graph, node, eval, watcher, driftCorrection)
 		if key != "" {
 			return []string{key}, err
 		}
@@ -281,7 +285,8 @@ func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *u
 }
 
 // reconcileOwn evaluates and applies an Own template, checks readyWhen.
-func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) (string, error) {
+// driftCorrection bypasses the template-hash check in applyResource.
+func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMap(node.Template)
@@ -289,7 +294,7 @@ func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.
 		return "", fmt.Errorf("template %s: %w", node.ID, err)
 	}
 
-	applied, err := r.applyResource(ctx, graph, evalMap, watcher, node.ID)
+	applied, err := r.applyResource(ctx, graph, evalMap, watcher, node.ID, driftCorrection)
 	if err != nil {
 		return "", err
 	}
@@ -310,7 +315,8 @@ func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.
 }
 
 // reconcileContribute evaluates and applies a Contribute template.
-func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) (string, error) {
+// driftCorrection bypasses the template-hash check in applyContribution.
+func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMap(node.Template)
@@ -318,7 +324,7 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 		return "", fmt.Errorf("contribute %s: %w", node.ID, err)
 	}
 
-	applied, err := r.applyContribution(ctx, graph, evalMap, watcher, node.ID)
+	applied, err := r.applyContribution(ctx, graph, evalMap, watcher, node.ID, driftCorrection)
 	if err != nil {
 		return "", err
 	}

@@ -70,10 +70,12 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 // Implements forEach item diffing from design 004: the parent diffs the
 // current collection against cached state and only re-evaluates changed items.
 //
+// driftCorrection bypasses the template-hash check in child applies.
+//
 // forEach state is passed in via the evaluator's forEachPrev* fields and
 // returned via forEachNew* fields. The coordinator merges the output back
 // into the shared cache — workers never touch shared state directly.
-func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) ([]string, error) {
+func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) ([]string, error) {
 	logger := log.FromContext(ctx)
 	var keys []string
 
@@ -206,9 +208,9 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 			var applied *unstructured.Unstructured
 			if childRef == ReferenceContribute {
-				applied, err = r.applyContribution(ctx, graph, evalMap, watcher, node.ID)
+				applied, err = r.applyContribution(ctx, graph, evalMap, watcher, node.ID, driftCorrection)
 			} else {
-				applied, err = r.applyResource(ctx, graph, evalMap, watcher, node.ID)
+				applied, err = r.applyResource(ctx, graph, evalMap, watcher, node.ID, driftCorrection)
 			}
 			if err != nil {
 				// Per 004-graph-execution.md § Parent State: track per-child errors

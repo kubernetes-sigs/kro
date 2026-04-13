@@ -50,15 +50,19 @@ var GraphGVK = schema.GroupVersionKind{
 	Kind:    "Graph",
 }
 
+// DefaultDriftInterval is the per-node consistency floor interval.
+// Per 004-graph-execution.md § The Walk: "Each node has an in-memory
+// drift timer with a jittered interval (default 30 minutes)."
+// On expiry, the node bypasses the template-hash check and applies
+// unconditionally.
+var DefaultDriftInterval = 30 * time.Minute
+
+// MaxDriftJitter is the maximum random jitter added to the drift interval.
+// Decorrelates timers across nodes to avoid correlated bursts.
+var MaxDriftJitter = 5 * time.Minute
+
 const (
 	finalizer = "experimental.kro.run/graph-controller"
-
-	// defaultDriftInterval is the per-node consistency floor interval.
-	// Per 004-graph-execution.md § The Walk: "Each node has an in-memory
-	// drift timer with a jittered interval (default 30 minutes)."
-	// On expiry, the node is triggered unconditionally.
-	defaultDriftInterval = 30 * time.Minute
-	maxDriftJitter       = 5 * time.Minute
 
 	// systemErrorRequeueInterval is the retry interval for Graphs with
 	// nodes in SystemError state. Per design: "backoff retry with a low
@@ -96,10 +100,29 @@ func gvkToGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
 
 // GraphReconciler reconciles Graph objects.
 type GraphReconciler struct {
-	Client    client.Client
-	Watcher   *WatchCoordinator // nil = no dynamic watches (backward compat with existing tests)
-	Caches    *graphCaches      // per-revision compiled expression caches
-	Resources *resourceCache    // per-resource full object cache
+	Client        client.Client
+	Watcher       *WatchCoordinator // nil = no dynamic watches (backward compat with existing tests)
+	Caches        *graphCaches      // per-revision compiled expression caches
+	Resources     *resourceCache    // per-resource full object cache
+	DriftInterval time.Duration     // per-node drift timer interval; 0 = use DefaultDriftInterval
+	DriftJitter   time.Duration     // max drift jitter; 0 = use MaxDriftJitter
+}
+
+// driftInterval returns the effective drift interval for this reconciler.
+func (r *GraphReconciler) driftInterval() time.Duration {
+	if r.DriftInterval > 0 {
+		return r.DriftInterval
+	}
+	return DefaultDriftInterval
+}
+
+// driftJitter returns the effective drift jitter for this reconciler.
+func (r *GraphReconciler) driftJitter() time.Duration {
+	if r.DriftInterval > 0 {
+		// When interval is overridden, use overridden jitter (even if 0).
+		return r.DriftJitter
+	}
+	return MaxDriftJitter
 }
 
 func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, reconcileErr error) {
@@ -188,6 +211,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Per 004-graph-execution.md § The Walk: nodes evaluate on external
 	// triggers or propagation triggers. Otherwise O(1) skip.
 	triggered := make(map[string]bool, len(dag.Nodes))
+	// driftTriggered tracks nodes triggered specifically by the drift timer.
+	// Per 004-graph-execution.md § The Walk: "The drift timer bypasses the
+	// template-hash check — apply unconditionally." Drift-triggered nodes
+	// skip the step 3 input hash check AND force the SSA Patch in step 5,
+	// because the question is "does live state match desired state?" not
+	// "did inputs change?" — different questions with different cache semantics.
+	driftTriggered := make(map[string]bool, len(dag.Nodes))
 	isRevisionTransition := len(supersededRevisions) > 0
 	isFirstReconcile := len(state.previousPlanStates) == 0
 	if isFirstReconcile || isRevisionTransition {
@@ -243,10 +273,14 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 		// Drift timer triggers: nodes whose consistency timer expired.
 		// Per 004-graph-execution.md § The Walk: "Each node has an
-		// in-memory drift timer with a jittered interval."
+		// in-memory drift timer with a jittered interval (default 30
+		// minutes). On expiry, the node runs the full pipeline (steps
+		// 1-7). The drift timer bypasses the template-hash check —
+		// apply unconditionally."
 		for _, node := range dag.Nodes {
 			if state.isDriftExpired(node.ID) {
 				triggered[node.ID] = true
+				driftTriggered[node.ID] = true
 				DriftTimerFiresTotal.With(graphMetricLabels(
 					graph.GetName(), graph.GetNamespace(), node.ID,
 				)).Inc()
@@ -517,8 +551,15 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// because their output is determined by cluster state (GET/List),
 		// not by scope data. A Watch node's dependency inputs can be unchanged
 		// while a new resource was created in the cluster.
+		//
+		// Drift-triggered nodes bypass input hashing entirely. The drift
+		// timer asks "does live state match desired state?" — not "did
+		// inputs change?" The input hash has no information relevant to
+		// that question (step 3 compares dependency data kro last observed,
+		// not live cluster state). Per 004-graph-execution.md § The Walk:
+		// "The drift timer bypasses the template-hash check."
 		nodeRef := node.Reference()
-		canHashSkip := nodeRef != ReferenceWatch && nodeRef != ReferenceWatchKind
+		canHashSkip := nodeRef != ReferenceWatch && nodeRef != ReferenceWatchKind && !driftTriggered[node.ID]
 		if canHashSkip {
 			if _, hasPrevHash := state.previousInputHashes[node.ID]; hasPrevHash {
 				inputHash, hashErr := hashNodeInputs(node, eval.scope)
@@ -691,8 +732,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 		// Dispatch to worker goroutine.
 		dispatched[idx] = true
-		go func(n Node, we *evaluator, ref Reference) {
-			keys, err := r.reconcileNode(ctx, graph, n, ref, we, watcher)
+		isDrift := driftTriggered[node.ID]
+		go func(n Node, we *evaluator, ref Reference, driftCorrection bool) {
+			keys, err := r.reconcileNode(ctx, graph, n, ref, we, watcher, driftCorrection)
 			state := NodeReady
 			if err != nil {
 				switch {
@@ -718,7 +760,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				forEachScopes:  we.forEachNewScope,
 				forEachItems:   we.forEachNewItems,
 			}
-		}(*node, workerEval, nodeRef)
+		}(*node, workerEval, nodeRef, isDrift)
 		inflight++
 	}
 
@@ -1079,7 +1121,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		nodeState := plan.States[node.ID]
 		switch nodeState {
 		case NodeReady, NodeNotReady:
-			state.resetDriftTimer(node.ID, defaultDriftInterval, maxDriftJitter)
+			state.resetDriftTimer(node.ID, r.driftInterval(), r.driftJitter())
 		case NodePending:
 			state.resetDriftTimer(node.ID, 1*time.Second, 0)
 		case NodeSystemError:
@@ -1390,8 +1432,17 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 
 	// If any resource deletion was blocked by third-party field managers,
 	// requeue — the finalizer holds until the other managers release.
+	// Per 004-graph-execution.md § Teardown: surface TeardownBlocked so
+	// operators can identify why the Graph is stuck in deleting state.
 	if teardownBlocked {
 		logger.Info("teardown blocked: waiting for third-party field managers to release")
+		if statusErr := r.updateStatus(ctx, graph, &reconcileState{
+			accepted:   true,
+			hasBlocked: true,
+			nodeErrors: []string{"teardown blocked: waiting for third-party field managers to release"},
+		}); statusErr != nil {
+			logger.Error(statusErr, "updating status during teardown")
+		}
 		return ctrl.Result{RequeueAfter: systemErrorRequeueInterval}, nil
 	}
 
@@ -1532,7 +1583,9 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchMan
 //
 // Returns a shutdown function that stops the watch manager. The caller
 // must invoke this on teardown.
-func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int) (shutdown func(), err error) {
+//
+// driftInterval overrides the per-node drift timer interval. 0 uses the default (30m).
+func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int, driftInterval time.Duration) (shutdown func(), err error) {
 	RegisterMetrics(crmetrics.Registry)
 
 	if maxWorkers <= 0 {
@@ -1556,10 +1609,11 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int)
 	watchMgr.onEvent = coordinator.routeEvent
 
 	reconciler := &GraphReconciler{
-		Client:    mgr.GetClient(),
-		Watcher:   coordinator,
-		Caches:    newGraphCaches(),
-		Resources: newResourceCache(),
+		Client:        mgr.GetClient(),
+		Watcher:       coordinator,
+		Caches:        newGraphCaches(),
+		Resources:     newResourceCache(),
+		DriftInterval: driftInterval,
 	}
 
 	// Pre-populate watch informers from existing GraphRevisions before the

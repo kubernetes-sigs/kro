@@ -107,7 +107,15 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	if s.hasNotReady {
 		return ConditionUnknown, "NotReady", "One or more resources have not satisfied their readyWhen conditions"
 	}
-	return ConditionTrue, "Ready", fmt.Sprintf("All %d resources reconciled", s.appliedCount)
+	msg := fmt.Sprintf("All %d resources reconciled", s.appliedCount)
+	// Surface informational notes (e.g., FinalizerSkipped) that don't
+	// constitute errors but are operationally useful. Per 004-graph-execution.md
+	// § Finalization: "The Graph's status surfaces this: FinalizerSkipped
+	// with a message naming the resource."
+	if len(s.nodeErrors) > 0 {
+		msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
+	}
+	return ConditionTrue, "Ready", msg
 }
 
 // updateStatus writes the Graph's status subresource. Reads the latest version

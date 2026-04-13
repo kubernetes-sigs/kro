@@ -14,6 +14,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	"time"
 
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,12 +32,14 @@ func main() {
 		healthProbeBindAddress string
 		metricsBindAddress     string
 		maxWorkers             int
+		driftInterval          time.Duration
 	)
 
 	flag.BoolVar(&bootstrapFlag, "bootstrap", false, "Install CRDs before starting the controller")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to. Use :0 for a random port.")
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", "0", "The address the metrics endpoint binds to. Use 0 to disable.")
 	flag.IntVar(&maxWorkers, "max-workers", 0, "Maximum concurrent reconcile workers. 0 uses the default.")
+	flag.DurationVar(&driftInterval, "drift-interval", 0, "Per-node drift timer interval. 0 uses the default (30m).")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
@@ -73,7 +76,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	shutdown, err := graphcontroller.SetupWithManager(mgr, cfg, maxWorkers)
+	shutdown, err := graphcontroller.SetupWithManager(mgr, cfg, maxWorkers, driftInterval)
 	if err != nil {
 		log.Error(err, "setting up controller")
 		os.Exit(1)

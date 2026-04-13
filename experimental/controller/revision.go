@@ -501,6 +501,14 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 		return nil, nil, err
 	}
 
+	// Validate that identity label keys won't exceed the DNS subdomain limit.
+	// This is a compile-time check — same inputs always produce the same length.
+	for _, node := range graphSpec.Nodes {
+		if err := validateIdentityLabelKey(node.ID, graphName, namespace); err != nil {
+			return nil, nil, fmt.Errorf("label key too long: %w", err)
+		}
+	}
+
 	// Materialize the revision
 	revision := materialize(graph, graphSpec)
 	if err := createRevision(ctx, r.Client, revision); err != nil {

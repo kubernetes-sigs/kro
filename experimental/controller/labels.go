@@ -19,6 +19,10 @@ import (
 	"strings"
 )
 
+// maxLabelPrefixLength is the Kubernetes limit for the prefix part of a
+// label key (the DNS subdomain before the /). Per RFC 1123: max 253.
+const maxLabelPrefixLength = 253
+
 const (
 	// identityLabelSuffix is the fixed suffix for all identity labels.
 	// The full key is: <nodeID>.<graphName>.<namespace>.internal.kro.run/reference
@@ -41,6 +45,19 @@ const (
 // for Kubernetes label key prefixes.
 func identityLabelKey(nodeID, graphName, namespace string) string {
 	return strings.ToLower(nodeID) + "." + strings.ToLower(graphName) + "." + strings.ToLower(namespace) + identityLabelSuffix
+}
+
+// validateIdentityLabelKey checks that the identity label key for a node
+// doesn't exceed the Kubernetes label key prefix limit (253 characters).
+// Returns an error describing the violation if the key is too long.
+func validateIdentityLabelKey(nodeID, graphName, namespace string) error {
+	key := identityLabelKey(nodeID, graphName, namespace)
+	// The prefix is everything before the /
+	if idx := strings.Index(key, "/"); idx > maxLabelPrefixLength {
+		return fmt.Errorf("identity label key prefix for node %q exceeds the %d-character DNS subdomain limit (%d characters: %s)",
+			nodeID, maxLabelPrefixLength, idx, key[:idx])
+	}
+	return nil
 }
 
 // generationLabelKey returns the generation label key for a node in a graph.

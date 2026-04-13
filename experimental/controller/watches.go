@@ -46,7 +46,7 @@ import (
 
 // WatchManager maintains one metadata-only informer per GVR, ref-counted by owners.
 type WatchManager struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	watches map[schema.GroupVersionResource]*gvrWatch
 	owners  map[schema.GroupVersionResource]map[string]struct{}
 	client  metadata.Interface
@@ -194,13 +194,13 @@ func (m *WatchManager) shutdown() {
 // cache — all resources where the Graph's identity label exists in the
 // controller's informer stores. Not persisted."
 func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]appliedEntry {
-	m.mu.Lock()
+	m.mu.RLock()
 	// Snapshot watches to avoid holding the lock during cache iteration.
 	watches := make(map[schema.GroupVersionResource]*gvrWatch, len(m.watches))
 	for gvr, w := range m.watches {
 		watches[gvr] = w
 	}
-	m.mu.Unlock()
+	m.mu.RUnlock()
 
 	suffix := graphLabelSuffix(graphName, namespace)
 	result := make(map[string]appliedEntry)
@@ -272,9 +272,9 @@ func gvrKindFromInformer(gvr schema.GroupVersionResource, accessor metav1.Object
 // metadata informer cache, if a watch is active for the GVR. Returns ""
 // if the object is not found or no watch exists.
 func (m *WatchManager) getResourceVersion(gvr schema.GroupVersionResource, namespace, name string) string {
-	m.mu.Lock()
+	m.mu.RLock()
 	w, ok := m.watches[gvr]
-	m.mu.Unlock()
+	m.mu.RUnlock()
 	if !ok {
 		return ""
 	}

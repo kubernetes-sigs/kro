@@ -289,7 +289,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 			"metadata": map[string]any{"name": "test", "namespace": "default"},
 		}}
 
-		_, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil)
+		_, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "forEach defines items")
 	})

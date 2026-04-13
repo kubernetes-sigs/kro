@@ -535,7 +535,7 @@ func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 
 // TestReconcileStateDeriveReadyCondition_FinalizerSkipped proves that the
 // prune phase can surface FinalizerSkipped information via nodeErrors which
-// flows into the Ready condition message.
+// flows into the Ready condition message as an informational note.
 func TestReconcileStateDeriveReadyCondition_FinalizerSkipped(t *testing.T) {
 	state := &reconcileState{
 		accepted:   true,
@@ -543,8 +543,9 @@ func TestReconcileStateDeriveReadyCondition_FinalizerSkipped(t *testing.T) {
 		nodeErrors: []string{"prune: finalization skipped for /v1/PersistentVolumeClaim/default/data (target absent)"},
 	}
 	// With no error flags set, the graph should still be Ready (finalization
-	// skipped is informational, not an error).
-	status, reason, _ := state.deriveReadyCondition()
+	// skipped is informational, not an error). The message includes the note.
+	status, reason, message := state.deriveReadyCondition()
 	assert.Equal(t, ConditionTrue, status)
 	assert.Equal(t, "Ready", reason)
+	assert.Contains(t, message, "finalization skipped", "Ready message should surface FinalizerSkipped info")
 }

@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
@@ -228,6 +229,21 @@ func waitForSettle(ctx context.Context, c client.Client, gvk schema.GroupVersion
 		lastRV = rv
 		stableCount = 0
 		return false, nil
+	})
+}
+
+// updateWithRetry fetches the latest version of an unstructured resource,
+// applies the mutate function, and retries on conflict. This eliminates
+// flakes caused by the controller updating the object between Get and Update.
+func updateWithRetry(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, key types.NamespacedName, mutate func(*unstructured.Unstructured)) error {
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(gvk)
+		if err := c.Get(ctx, key, obj); err != nil {
+			return err
+		}
+		mutate(obj)
+		return c.Update(ctx, obj)
 	})
 }
 

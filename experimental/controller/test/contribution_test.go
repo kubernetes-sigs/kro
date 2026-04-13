@@ -393,22 +393,19 @@ func TestResourcePruning(t *testing.T) {
 	t.Log("Both ConfigMaps created")
 
 	// Update the Graph: remove the second resource
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-pruning", Namespace: ns}, latest))
-
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "keep",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "keep-me"},
-				"data":       map[string]any{"state": "permanent"},
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-pruning", Namespace: ns}, func(obj *unstructured.Unstructured) {
+		unstructured.SetNestedSlice(obj.Object, []any{
+			map[string]any{
+				"id": "keep",
+				"template": map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]any{"name": "keep-me"},
+					"data":       map[string]any{"state": "permanent"},
+				},
 			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+		}, "spec", "nodes")
+	}))
 
 	// Wait for the removed ConfigMap to be deleted
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {

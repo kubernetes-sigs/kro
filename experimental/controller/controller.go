@@ -847,6 +847,18 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					}
 				}
 				if err == nil && propagateHash != "" {
+					// Per 004-graph-execution.md § Wind step 8: the
+					// propagation hash includes propagateWhen state.
+					// When a gate transitions (false→true or true→false),
+					// the hash changes and dependents are triggered —
+					// even if the output field paths are unchanged.
+					if len(node.PropagateWhen) > 0 {
+						if plan.PropagateReady[node.ID] {
+							propagateHash += ":propagate=true"
+						} else {
+							propagateHash += ":propagate=false"
+						}
+					}
 					prevHash := state.previousSelfHashes[node.ID]
 					if prevHash == "" || propagateHash != prevHash {
 						for _, depIdx := range dag.Dependents[node.ID] {

@@ -2229,3 +2229,148 @@ func TestStandaloneVsEmbeddedCELTypePreservation(t *testing.T) {
 		}))
 	t.Log("Embedded updated to \"prefix-earth-suffix\" — reactive string interpolation proved")
 }
+
+// ---------------------------------------------------------------------------
+// propagateWhen gate transition triggers propagation — regression test
+// ---------------------------------------------------------------------------
+
+// TestPropagateWhenGateOpenTriggersDownstream proves that when a dependency's
+// propagateWhen transitions from false→true, dependents are re-evaluated —
+// even when the dependency's output fields that the dependent references
+// haven't changed since the gate closed.
+//
+// This is the exact scenario from design 004-graph-execution § Worked Example
+// Event 1 follow-up: deploy's propagateWhen becomes satisfied, service gets
+// "Dep invalidated? Yes (deploy)" because the "gate changed" — regardless of
+// whether deploy.metadata.name or deploy.spec.selector.matchLabels changed.
+//
+// Per design line 187-188: "Propagation check — hash the output paths
+// downstream expressions reference plus propagateWhen state."
+//
+// Flow:
+//  1. Start with gate OPEN (ready=true). All nodes converge. Graph Ready.
+//  2. Close gate (ready=false) AND change data.name to "updated-name".
+//  3. Consumer retains old name ("original-name") because gate is closed.
+//  4. Reopen gate (ready=true) WITHOUT changing data.name again.
+//  5. Consumer must see "updated-name" — the gate transition is the ONLY
+//     trigger since data.name hasn't changed between steps 3 and 4.
+func TestPropagateWhenGateOpenTriggersDownstream(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create the source — gate starts OPEN.
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "gate-source",
+				"namespace": ns,
+			},
+			"data": map[string]any{
+				"name":  "original-name",
+				"ready": "true",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-gate-propagation",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "src",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "gate-source",
+							},
+						},
+						"propagateWhen": []any{
+							"${src.data.ready == 'true'}",
+						},
+					},
+					map[string]any{
+						"id": "consumer",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "gate-consumer",
+							},
+							"data": map[string]any{
+								"fromSource": "${src.data.name}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Step 1: Wait for consumer created with initial data. Gate is open.
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	consumer := &unstructured.Unstructured{}
+	consumer.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "gate-consumer", Namespace: ns}, consumer))
+	d, _, _ := unstructured.NestedStringMap(consumer.Object, "data")
+	assert.Equal(t, "original-name", d["fromSource"])
+	t.Log("Step 1: consumer created with fromSource=original-name, gate open")
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-gate-propagation", Namespace: ns}))
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-gate-propagation", Namespace: ns}))
+
+	// Step 2: Close gate AND change data.name. Consumer should retain old name.
+	latest := &unstructured.Unstructured{}
+	latest.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "gate-source", Namespace: ns}, latest))
+	unstructured.SetNestedField(latest.Object, "false", "data", "ready")
+	unstructured.SetNestedField(latest.Object, "updated-name", "data", "name")
+	require.NoError(t, k8sClient.Update(ctx, latest))
+	t.Log("Step 2: closed gate (ready=false) and changed name to updated-name")
+
+	// Wait for controller to process the change. Consumer should retain old name.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-gate-propagation", Namespace: ns}))
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "gate-consumer", Namespace: ns}, consumer))
+	d2, _, _ := unstructured.NestedStringMap(consumer.Object, "data")
+	assert.Equal(t, "original-name", d2["fromSource"],
+		"consumer should retain original-name while gate is closed")
+	t.Logf("Step 3: consumer retained fromSource=%s while gate closed", d2["fromSource"])
+
+	// Step 4: Reopen gate WITHOUT changing data.name. The ONLY change is
+	// ready: false→true. If propagateWhen state is in the propagation hash,
+	// this gate transition triggers consumer and it picks up "updated-name".
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "gate-source", Namespace: ns}, latest))
+	unstructured.SetNestedField(latest.Object, "true", "data", "ready")
+	require.NoError(t, k8sClient.Update(ctx, latest))
+	t.Log("Step 4: reopened gate (ready=true), data.name unchanged at updated-name")
+
+	// Consumer should see "updated-name" — the gate change is the trigger.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		result := &unstructured.Unstructured{}
+		result.SetGroupVersionKind(cmGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "gate-consumer", Namespace: ns}, result); err != nil {
+			return false, nil
+		}
+		d, _, _ := unstructured.NestedStringMap(result.Object, "data")
+		return d["fromSource"] == "updated-name", nil
+	}))
+
+	t.Log("Step 5: consumer sees updated-name — propagateWhen gate transition triggered propagation")
+}

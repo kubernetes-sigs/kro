@@ -93,7 +93,7 @@ func (rc *resourceCache) remove(key string) {
 // Checks for identity labels using the DNS subdomain scheme.
 // Scoped to a single Graph — does not affect cache entries from other Graphs.
 //
-// This is safe because only applyResource and applyContribution call set(),
+// This is safe because only applySSA calls set(),
 // and both stamp identity labels on every applied object.
 // Watch-read objects are stored in the evaluator scope, not in this cache.
 func (rc *resourceCache) removeForGraph(graphName, graphNamespace string) {
@@ -167,7 +167,7 @@ func hashNodeInputs(node *Node, scope map[string]any) (string, error) {
 		}
 		depMap, ok := depData.(map[string]any)
 		if !ok {
-			// Non-map dependency (e.g., collection watch array) — hash the whole thing.
+			// Non-map dependency (e.g., WatchKind array) — hash the whole thing.
 			data, err := json.Marshal(depData)
 			if err != nil {
 				return "", fmt.Errorf("hashing dependency %q: %w", depID, err)

@@ -358,7 +358,7 @@ type watchRequest struct {
 	gvr       schema.GroupVersionResource
 	name      string
 	namespace string
-	selector  labels.Selector // non-nil for collection watches
+	selector  labels.Selector // non-nil for WatchKind
 }
 
 func (r *watchRequest) isCollection() bool { return r.selector != nil }
@@ -445,9 +445,9 @@ func (gw *graphWatcher) watchScalar(nodeID string, gvr schema.GroupVersionResour
 	gw.mu.Unlock()
 }
 
-// watchCollection buffers a collection watch request (label selector).
+// watchKind buffers a WatchKind watch request (label selector).
 // The request is flushed to the coordinator's indexes in done(true).
-func (gw *graphWatcher) watchCollection(nodeID string, gvr schema.GroupVersionResource, namespace string, sel labels.Selector) {
+func (gw *graphWatcher) watchKind(nodeID string, gvr schema.GroupVersionResource, namespace string, sel labels.Selector) {
 	gw.mu.Lock()
 	gw.pending = append(gw.pending, watchRequest{
 		nodeID:    nodeID,
@@ -591,10 +591,10 @@ func (c *WatchCoordinator) doneGraph(graph graphKey, pending []watchRequest) {
 	// GVRs already running just bumps the owner set.
 	//
 	// Timing: ensureWatch runs here (post-reconcile) rather than
-	// during watchScalar/watchCollection. For a brand-new GVR, the
+	// during watchScalar/watchKind. For a brand-new GVR, the
 	// informer won't be running during its first reconcile cycle.
 	// This is safe: getResourceVersion returns "" which triggers a
-	// fallback GET in applyResource/applyContribution. On subsequent
+	// fallback GET in applySSA. On subsequent
 	// reconciles the informer is already running from this call.
 	ownerID := graphOwnerID(graph)
 	for gvr := range newGVRs {

@@ -496,7 +496,7 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	}
 
 	// Compile to verify validity before creating the revision.
-	_, err = compileGraph(graphSpec)
+	_, err = compileGraphSpec(graphSpec)
 	if err != nil {
 		return nil, nil, err
 	}

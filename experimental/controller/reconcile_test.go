@@ -400,16 +400,16 @@ func TestForEachChildIdentityLabelKeyNoGroup(t *testing.T) {
 // Correctness reconciliation — regression tests
 // ---------------------------------------------------------------------------
 
-// TestCollectionWatchReadyWhenFailure_RegressionReadyFlag proves that when a
-// collection watch's readyWhen fails, .ready() returns false. Per 001-graph.md:
-// "A collection watch's .ready() returns true when the node's readyWhen
+// TestWatchKindReadyWhenFailure_RegressionReadyFlag proves that when a
+// WatchKind's readyWhen fails, .ready() returns false. Per 001-graph.md:
+// "A WatchKind's .ready() returns true when the node's readyWhen
 // conditions pass (evaluated once against the whole array, not per-item)."
 //
 // Before the fix, items were stamped with __ready=true before readyWhen
 // evaluation. If readyWhen failed, the items retained __ready=true and
 // .ready() on the collection returned true even though the node was NotReady.
-func TestCollectionWatchReadyWhenFailure_RegressionReadyFlag(t *testing.T) {
-	// Simulate the collection watch pattern: items with __ready set,
+func TestWatchKindReadyWhenFailure_RegressionReadyFlag(t *testing.T) {
+	// Simulate the WatchKind pattern: items with __ready set,
 	// then readyWhen fails. .ready() on the array must return false.
 	items := []any{
 		map[string]any{
@@ -452,9 +452,9 @@ func TestCollectionWatchReadyWhenFailure_RegressionReadyFlag(t *testing.T) {
 	}
 }
 
-// TestCollectionWatchNoReadyWhen_ItemsReady proves that when a collection
+// TestWatchKindNoReadyWhen_ItemsReady proves that when a collection
 // watch has no readyWhen, all items have __ready=true (applied = ready).
-func TestCollectionWatchNoReadyWhen_ItemsReady(t *testing.T) {
+func TestWatchKindNoReadyWhen_ItemsReady(t *testing.T) {
 	items := []any{
 		map[string]any{"metadata": map[string]any{"name": "ns-a"}, "__ready": true},
 		map[string]any{"metadata": map[string]any{"name": "ns-b"}, "__ready": true},
@@ -462,7 +462,7 @@ func TestCollectionWatchNoReadyWhen_ItemsReady(t *testing.T) {
 	for _, item := range items {
 		m, _ := item.(map[string]any)
 		ready, _ := m["__ready"].(bool)
-		assert.True(t, ready, "collection watch items without readyWhen should be ready")
+		assert.True(t, ready, "WatchKind items without readyWhen should be ready")
 	}
 }
 

@@ -74,6 +74,22 @@ func (e *evaluator) markReady(nodeID string, ready bool) {
 	}
 }
 
+// evalReadiness evaluates readyWhen conditions and stamps __ready in scope.
+// Returns ErrWaitingForReadiness if any condition is false or data-pending.
+// Combines checkReadiness + markReady into a single call — the three-step
+// pattern (check → mark false on failure → mark true on success) was
+// duplicated across every post-dispatch path in reconcileNode.
+func (e *evaluator) evalReadiness(nodeID string, readyWhen []string) error {
+	if len(readyWhen) > 0 {
+		if err := e.checkReadiness(readyWhen, e.scope[nodeID], nodeID); err != nil {
+			e.markReady(nodeID, false)
+			return err
+		}
+	}
+	e.markReady(nodeID, true)
+	return nil
+}
+
 // checkReadiness evaluates readyWhen conditions against the full scope.
 // Returns nil if all conditions pass, ErrWaitingForReadiness if any are false
 // or data-pending. Evaluates against the full scope so readyWhen can reference

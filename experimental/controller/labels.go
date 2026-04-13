@@ -100,7 +100,7 @@ func isGraphIdentityLabel(key, graphName, namespace string) bool {
 }
 
 // hasGraphIdentityLabels checks if a label map already contains any identity
-// labels for the specified graph. Used by applyResource to skip identity
+// labels for the specified graph. Used by applySSA to skip identity
 // label stamping when the caller (e.g., forEach) has already set them.
 func hasGraphIdentityLabels(labels map[string]string, graphName, namespace string) bool {
 	suffix := graphLabelSuffix(graphName, namespace)

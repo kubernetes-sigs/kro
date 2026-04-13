@@ -30,9 +30,9 @@ import (
 //
 // After dispatch, reconcileNode evaluates readyWhen as a post-dispatch step
 // for node types that don't handle their own per-item readiness (Definition,
-// Watch, Own, Contribute). CollectionWatch and ForEach return early — they
+// Watch, Own, Contribute). WatchKind and ForEach return early — they
 // handle readiness internally (per-item for ForEach, per-collection for
-// CollectionWatch).
+// WatchKind).
 //
 // All paths return (keys, error) with a uniform error contract:
 //   - ErrPending: retryable, data not yet available
@@ -49,8 +49,8 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 			return nil, err
 		}
 	case ReferenceWatchKind:
-		err := r.reconcileCollectionWatch(ctx, graph, node, eval, watcher)
-		return nil, err // CollectionWatch handles its own readiness
+		err := r.reconcileWatchKind(ctx, graph, node, eval, watcher)
+		return nil, err // WatchKind handles its own readiness
 	case ReferenceWatch:
 		if err := r.reconcileWatch(ctx, graph, node, eval, watcher); err != nil {
 			return nil, err
@@ -63,15 +63,7 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 			}
 			return nil, err
 		}
-		// readyWhen post-dispatch
-		if len(node.ReadyWhen) > 0 {
-			if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
-				eval.markReady(node.ID, false)
-				return []string{key}, err
-			}
-		}
-		eval.markReady(node.ID, true)
-		return []string{key}, nil
+		return []string{key}, eval.evalReadiness(node.ID, node.ReadyWhen)
 	default: // ReferenceOwn
 		key, err := r.reconcileOwn(ctx, graph, node, eval, watcher, driftCorrection)
 		if err != nil {
@@ -80,26 +72,11 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 			}
 			return nil, err
 		}
-		// readyWhen post-dispatch
-		if len(node.ReadyWhen) > 0 {
-			if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
-				eval.markReady(node.ID, false)
-				return []string{key}, err
-			}
-		}
-		eval.markReady(node.ID, true)
-		return []string{key}, nil
+		return []string{key}, eval.evalReadiness(node.ID, node.ReadyWhen)
 	}
 
 	// Post-dispatch readyWhen for Definition and Watch (no keys to return).
-	if len(node.ReadyWhen) > 0 {
-		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
-			eval.markReady(node.ID, false)
-			return nil, err
-		}
-	}
-	eval.markReady(node.ID, true)
-	return nil, nil
+	return nil, eval.evalReadiness(node.ID, node.ReadyWhen)
 }
 
 // reconcileDefinition evaluates a definition node — resolves values from the template
@@ -216,13 +193,13 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 	return nil
 }
 
-// reconcileCollectionWatch reads a collection of resources matching a selector into scope.
-func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
+// reconcileWatchKind reads a collection of resources matching a selector into scope.
+func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
 
 	tmpl, err := eval.toMap(node.Template)
 	if err != nil {
-		return fmt.Errorf("collectionWatch %s: %w", node.ID, err)
+		return fmt.Errorf("watchKind %s: %w", node.ID, err)
 	}
 
 	apiVersion, _ := tmpl["apiVersion"].(string)
@@ -256,7 +233,7 @@ func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *u
 	}
 
 	if watcher != nil {
-		watcher.watchCollection(node.ID, gvkToGVR(gvk), graph.GetNamespace(), labelSelector)
+		watcher.watchKind(node.ID, gvkToGVR(gvk), graph.GetNamespace(), labelSelector)
 	}
 
 	listGVK := gvk
@@ -276,9 +253,9 @@ func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *u
 		items[i] = normalizeTypes(item.Object)
 	}
 	eval.scope[node.ID] = items
-	logger.V(1).Info("resolved collection watch", "node", node.ID, "gvk", gvk, "count", len(items))
+	logger.V(1).Info("resolved watchKind", "node", node.ID, "gvk", gvk, "count", len(items))
 
-	// Per 001-graph.md: "A collection watch's .ready() returns true when the
+	// Per 001-graph.md: "A WatchKind's .ready() returns true when the
 	// node's readyWhen conditions pass (evaluated once against the whole array,
 	// not per-item)."
 	//
@@ -309,7 +286,7 @@ func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *u
 }
 
 // reconcileOwn evaluates and applies an Own template.
-// driftCorrection bypasses the apply-hash check in applyResource.
+// driftCorrection bypasses the apply-hash check in applySSA.
 func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
@@ -318,7 +295,7 @@ func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.
 		return "", fmt.Errorf("template %s: %w", node.ID, err)
 	}
 
-	applied, err := r.applyResource(ctx, graph, evalMap, watcher, node.ID, driftCorrection)
+	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, ReferenceOwn, driftCorrection)
 	if err != nil {
 		return "", err
 	}
@@ -331,7 +308,7 @@ func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.
 }
 
 // reconcileContribute evaluates and applies a Contribute template.
-// driftCorrection bypasses the apply-hash check in applyContribution.
+// driftCorrection bypasses the apply-hash check in applySSA.
 func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
@@ -340,7 +317,7 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 		return "", fmt.Errorf("contribute %s: %w", node.ID, err)
 	}
 
-	applied, err := r.applyContribution(ctx, graph, evalMap, watcher, node.ID, driftCorrection)
+	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, ReferenceContribute, driftCorrection)
 	if err != nil {
 		return "", err
 	}

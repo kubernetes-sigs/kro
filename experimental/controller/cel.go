@@ -249,26 +249,6 @@ func newInstanceState(compiled *compiledGraph) *instanceState {
 	}
 }
 
-// appliedKeySetChanged reports whether the current applied key set differs
-// from the previous reconcile's. Used to gate the watch-cache scan — only
-// scan when keys changed (forEach scale-down, includeWhen toggle).
-// Read-only: does NOT update previousAppliedKeys. Call updateAppliedKeys
-// after prune succeeds to advance the comparison baseline.
-func (s *instanceState) appliedKeySetDiffers(currentKeys []string) bool {
-	if s.previousAppliedKeys == nil {
-		return len(currentKeys) > 0
-	}
-	if len(currentKeys) != len(s.previousAppliedKeys) {
-		return true
-	}
-	for _, k := range currentKeys {
-		if !s.previousAppliedKeys[k] {
-			return true
-		}
-	}
-	return false
-}
-
 // updateAppliedKeys stores the current key set as the comparison baseline.
 // Call this after prune completes successfully.
 func (s *instanceState) updateAppliedKeys(keys []string) {
@@ -479,13 +459,6 @@ func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 	}, nil
 }
 
-// compileGraph is the backward-compatible entry point used by ensureRevision
-// for pre-creation validation. It compiles the spec and returns the compiled
-// graph without caching (the caller discards the result after validation).
-func compileGraph(spec *GraphSpec) (*compiledGraph, error) {
-	return compileGraphSpec(spec)
-}
-
 // ---------------------------------------------------------------------------
 // Spec hashing
 // ---------------------------------------------------------------------------
@@ -608,7 +581,7 @@ func celPluralFunction() []cel.EnvOption {
 //   - With readyWhen: __ready = (all conditions passed)
 //
 // For scalar nodes (Watch, Own, Contribute), .ready() reads __ready from
-// the object map. For collection nodes (forEach, collection watch), .ready()
+// the object map. For collection nodes (forEach, WatchKind), .ready()
 // returns true when ALL items have __ready == true — the collection's
 // readiness is a function of its children's readiness.
 //

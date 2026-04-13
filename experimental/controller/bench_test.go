@@ -135,7 +135,7 @@ func BenchmarkCompileGraph(b *testing.B) {
 			spec := buildBenchSpec(nodeCount)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, err := compileGraph(spec)
+				_, err := compileGraphSpec(spec)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -184,7 +184,7 @@ func BenchmarkTemplateEvaluation(b *testing.B) {
 	for _, exprCount := range []int{1, 5, 10, 20} {
 		b.Run(fmt.Sprintf("exprs=%d", exprCount), func(b *testing.B) {
 			spec := buildBenchSpecWithExprs(exprCount)
-			compiled, err := compileGraph(spec)
+			compiled, err := compileGraphSpec(spec)
 			if err != nil {
 				b.Fatal(err)
 			}

@@ -93,7 +93,7 @@ func TestForEachBasic(t *testing.T) {
 }
 
 // TestForEachWithExternalRefSelector proves the full pattern:
-// collection watch reads a collection from the cluster,
+// WatchKind reads a collection from the cluster,
 // forEach iterates it and stamps one resource per item.
 // This is the core mechanism for "one child Graph per instance" in the RGD model.
 func TestForEachWithExternalRefSelector(t *testing.T) {
@@ -628,7 +628,7 @@ func TestForEachChildIdentityStableUnderReordering(t *testing.T) {
 	}
 	t.Log("3 worker ConfigMaps created in order: a, b, c")
 
-	// 2. Create Graph: collection watch on the 3 workers + forEach stamping children.
+	// 2. Create Graph: WatchKind on the 3 workers + forEach stamping children.
 	// Each child's name is derived from the item's metadata.name, so the mapping
 	// is identity-based: worker-a → child-worker-a, etc.
 	graph := &unstructured.Unstructured{

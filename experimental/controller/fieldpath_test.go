@@ -195,8 +195,9 @@ func TestExtractFieldPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			env := testEnv(t, tt.vars...)
-			got, err := extractFieldPaths(env, tt.expr, tt.scopeVars)
-			require.NoError(t, err)
+			ast, issues := env.Compile(tt.expr)
+			require.NoError(t, issues.Err())
+			got := extractFieldPathsFromAST(ast.NativeRep().Expr(), tt.scopeVars, nil)
 
 			// Normalize empty maps for comparison.
 			if len(got) == 0 {
@@ -206,7 +207,7 @@ func TestExtractFieldPaths(t *testing.T) {
 				tt.want = map[string][]FieldPath{}
 			}
 
-			assert.Equal(t, tt.want, got, "extractFieldPaths(%q)", tt.expr)
+			assert.Equal(t, tt.want, got, "extractFieldPathsFromAST(%q)", tt.expr)
 		})
 	}
 }

@@ -517,7 +517,7 @@ func TestPendingChain(t *testing.T) {
 	t.Log("Full chain resolved: source → middle → tail")
 }
 
-// TestForEachCollectionScaleUpDown proves forEach with collection watch: adding
+// TestForEachCollectionScaleUpDown proves forEach with WatchKind: adding
 // or removing collection members creates or prunes stamped resources
 // (design 004-graph-execution § forEach).
 func TestForEachCollectionScaleUpDown(t *testing.T) {

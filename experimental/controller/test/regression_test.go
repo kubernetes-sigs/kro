@@ -570,14 +570,14 @@ func TestContributionUpdatesWhenDependencyChanges(t *testing.T) {
 	t.Log("Contribution updated to version=v2 — downstream status propagation works")
 }
 
-// TestCollectionWatchClusterScopedResource proves that a CollectionWatch on
+// TestWatchKindClusterScopedResource proves that a WatchKind on
 // cluster-scoped resources (e.g., Namespaces) triggers reconciliation when
 // new resources are created, even when the Graph is in a specific namespace.
 //
 // Regression: routeEvent's namespace filter rejected events for cluster-scoped
 // resources (namespace="") because the entry's namespace was the Graph's
 // namespace (non-empty), and "" != "default" caused the event to be skipped.
-func TestCollectionWatchClusterScopedResource(t *testing.T) {
+func TestWatchKindClusterScopedResource(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -660,7 +660,7 @@ func TestCollectionWatchClusterScopedResource(t *testing.T) {
 	t.Log("Added new cluster-scoped Namespace (Graph NOT touched)")
 
 	// THE PROOF: a new ConfigMap should appear for the new Namespace,
-	// triggered by the collection watch on the cluster-scoped resource.
+	// triggered by the WatchKind on the cluster-scoped resource.
 	newCM := &unstructured.Unstructured{}
 	newCM.SetGroupVersionKind(regressionCMGVK)
 	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: ns + "-watched-b-marker", Namespace: ns}, newCM),
@@ -915,7 +915,7 @@ func TestContributeReadyWhenGatesGraphReadiness(t *testing.T) {
 // discoverable via deriveAppliedSet() after controller restart, ensuring
 // teardown can release their fields via skeleton apply.
 //
-// Regression: applyContribution previously did not call setIdentityLabels.
+// Regression: applySSA for Contribute references previously did not call setIdentityLabels.
 // After a controller restart, deriveAppliedSet() scanned informer caches for
 // identity labels and found nothing for Contribute resources — teardown
 // orphaned their fields (never released via skeleton apply).

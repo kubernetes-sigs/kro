@@ -208,9 +208,9 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 			var applied *unstructured.Unstructured
 			if childRef == ReferenceContribute {
-				applied, err = r.applyContribution(ctx, graph, evalMap, watcher, node.ID, driftCorrection)
+				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ReferenceContribute, driftCorrection)
 			} else {
-				applied, err = r.applyResource(ctx, graph, evalMap, watcher, node.ID, driftCorrection)
+				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ReferenceOwn, driftCorrection)
 			}
 			if err != nil {
 				// Per 004-graph-execution.md § Parent State: track per-child errors

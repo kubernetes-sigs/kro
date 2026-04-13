@@ -16,7 +16,6 @@
 package graphcontroller
 
 import (
-	"github.com/google/cel-go/cel"
 	celast "github.com/google/cel-go/common/ast"
 )
 
@@ -35,21 +34,6 @@ func (fp FieldPath) Equal(other FieldPath) bool {
 		}
 	}
 	return true
-}
-
-// extractFieldPaths compiles a CEL expression and extracts all (scopeVariable, FieldPath)
-// pairs from the AST. Only chains rooted at known scope variables are returned.
-// Comprehension iteration variables are excluded.
-//
-// The env must be the same CEL environment used for compilation (contains
-// all scope variable declarations). scopeVars is the set of variable names
-// that correspond to graph node IDs (dependencies + self).
-func extractFieldPaths(env *cel.Env, expr string, scopeVars map[string]bool) (map[string][]FieldPath, error) {
-	ast, issues := env.Compile(expr)
-	if issues != nil && issues.Err() != nil {
-		return nil, issues.Err()
-	}
-	return extractFieldPathsFromAST(ast.NativeRep().Expr(), scopeVars, nil), nil
 }
 
 // extractFieldPathsFromAST walks a CEL AST and collects all (scopeVariable, FieldPath)

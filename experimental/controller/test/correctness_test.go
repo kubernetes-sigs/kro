@@ -1393,7 +1393,7 @@ func TestReadyFunctionReflectsNodeState(t *testing.T) {
 }
 
 // TestEmptyCollectionReadyIsVacuouslyTrue proves that .ready() on an empty
-// collection returns true. An empty collection watch has no items to be
+// collection returns true. An empty WatchKind has no items to be
 // not-ready, so the collection is vacuously ready. This prevents empty
 // collections from blocking graphs that use collection.ready() in
 // propagateWhen or readyWhen.
@@ -1401,7 +1401,7 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Graph: collection watch with a label selector matching nothing,
+	// Graph: WatchKind with a label selector matching nothing,
 	// downstream uses readyWhen: workers.ready(). Should reach Active
 	// because empty collection is vacuously ready.
 	graph := &unstructured.Unstructured{

@@ -122,7 +122,7 @@ func (r *GraphReconciler) runFinalization(
 	// Put the target's data in scope so finalizer templates can reference it.
 	// The target is still alive (no deletionTimestamp).
 	for _, node := range dag.Nodes {
-		if resourceKey(target) == resourceKeyFromEvaluatedTemplate(node.Template, graph.GetNamespace()) {
+		if resourceKey(target) == resolvedResourceKey(node.Template, graph.GetNamespace()) {
 			eval.scope[node.ID] = normalizeTypes(target.Object)
 			break
 		}
@@ -174,7 +174,7 @@ func (r *GraphReconciler) runFinalization(
 			// Step 1: Finalizer resource doesn't exist — create it.
 			logger.Info("creating finalizer resource", "finalizer", finNodeID,
 				"target", target.GetName())
-			applied, applyErr := r.applyResource(ctx, graph, evalMap, watcher, finNodeID, false)
+			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, ReferenceOwn, false)
 			if applyErr != nil {
 				return false, createdKeys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
 			}
@@ -284,7 +284,7 @@ func (r *GraphReconciler) runForEachFinalization(
 				// Child doesn't exist — create it.
 				logger.Info("creating forEach finalizer child",
 					"finalizer", finNode.ID, "name", childObj.GetName())
-				applied, applyErr := r.applyResource(ctx, graph, evalMap, watcher, finNode.ID, false)
+				applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, ReferenceOwn, false)
 				if applyErr != nil {
 					return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
 				}
@@ -312,10 +312,13 @@ func (r *GraphReconciler) runForEachFinalization(
 	return allReady, createdKeys, nil
 }
 
-// resourceKeyFromEvaluatedTemplate builds a resource key from an evaluated
-// template map, matching the key format used by resourceKey(). Used to map
-// template content to resource keys for finalizer lookup.
-func resourceKeyFromEvaluatedTemplate(tmpl map[string]any, defaultNS string) string {
+// resolvedResourceKey builds a resource key from an already-evaluated
+// template map, matching the key format used by resourceKey(). Unlike
+// staticResourceKey, this operates on templates where CEL expressions have
+// already been resolved — it reads metadata.namespace directly and never
+// skips names containing ${...}. Used for finalizer target lookup during
+// prune/teardown.
+func resolvedResourceKey(tmpl map[string]any, defaultNS string) string {
 	if tmpl == nil {
 		return ""
 	}
@@ -367,10 +370,13 @@ func resourceKey(obj *unstructured.Unstructured) string {
 	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, obj.GetNamespace(), obj.GetName()}, "/")
 }
 
-// resourceKeyFromTemplate builds an Own key from template metadata fields.
-// This is the static-name equivalent of resourceKey — used when the resource
-// hasn't been applied yet (e.g., during spec-based prune diffing).
-func resourceKeyFromTemplate(tmpl map[string]any, fallbackNamespace string) string {
+// staticResourceKey builds a resource key from an unevaluated template's
+// metadata fields. Skips templates with CEL expressions in the name
+// (can't determine key statically). Always uses fallbackNamespace because
+// the template's metadata.namespace may itself contain ${...} expressions.
+// This is the spec-time equivalent of resourceKey — used during prune
+// diffing and revision spec scanning where templates haven't been evaluated.
+func staticResourceKey(tmpl map[string]any, fallbackNamespace string) string {
 	apiVersion, _ := tmpl["apiVersion"].(string)
 	kind, _ := tmpl["kind"].(string)
 	md, _ := tmpl["metadata"].(map[string]any)
@@ -453,7 +459,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	}
 	if ref == ReferenceOwn {
 		// Own: skip stamping if identity labels are already present (e.g., forEach
-		// children stamp their own child-scoped labels before calling applyResource).
+		// children stamp their own child-scoped labels before calling applySSA).
 		if !hasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
 			lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceOwn)
 			obj.SetLabels(lbls)
@@ -635,16 +641,6 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	return readBack, nil
 }
 
-// applyResource applies an Own template via SSA.
-func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, driftCorrection bool) (*unstructured.Unstructured, error) {
-	return r.applySSA(ctx, graph, evalMap, watcher, nodeID, ReferenceOwn, driftCorrection)
-}
-
-// applyContribution applies a Contribute template via SSA.
-func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, driftCorrection bool) (*unstructured.Unstructured, error) {
-	return r.applySSA(ctx, graph, evalMap, watcher, nodeID, ReferenceContribute, driftCorrection)
-}
-
 // ---------------------------------------------------------------------------
 // Prune + delete ordering
 // ---------------------------------------------------------------------------
@@ -686,7 +682,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	for _, d := range allDAGs {
 		for _, node := range d.Nodes {
 			if node.Template != nil {
-				if rk := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); rk != "" {
+				if rk := staticResourceKey(node.Template, graph.GetNamespace()); rk != "" {
 					keyToNodeID[rk] = node.ID
 					nodeIDToKey[node.ID] = rk
 				}
@@ -949,7 +945,7 @@ func pruneOrder(keys []string, dags []*DAG, defaultNS string) []string {
 			if node.Template == nil {
 				continue
 			}
-			rk := resourceKeyFromTemplate(node.Template, defaultNS)
+			rk := staticResourceKey(node.Template, defaultNS)
 			if rk == "" {
 				continue
 			}

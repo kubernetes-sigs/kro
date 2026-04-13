@@ -831,13 +831,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			if observed := eval.scope[node.ID]; observed != nil {
 				propagateHash, err := hashSelfPaths(node, observed)
 				if err == nil && propagateHash == "" {
-					// No SelfPaths (collection watch, bare reference) —
+					// No SelfPaths (WatchKind, bare reference) —
 					// fall back to hashing the full output. Without this,
 					// collection changes would never propagate to forEach.
 					if m, ok := observed.(map[string]any); ok {
 						propagateHash, err = hashDesiredState(m)
 					} else {
-						// Array output (collection watch, forEach) — use JSON hash.
+						// Array output (WatchKind, forEach) — use JSON hash.
 						data, jsonErr := json.Marshal(observed)
 						if jsonErr == nil {
 							h := fnv.New64a()
@@ -969,7 +969,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					if node.Finalizes != "" {
 						continue // finalizer node — dormant, never in applied set
 					}
-					if key := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); key != "" {
+					if key := staticResourceKey(node.Template, graph.GetNamespace()); key != "" {
 						allPreviousKeys[key] = true
 					}
 				}
@@ -1159,7 +1159,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if node.Finalizes != "" {
 				continue
 			}
-			if key := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); key != "" {
+			if key := staticResourceKey(node.Template, graph.GetNamespace()); key != "" {
 				ownKeys[key] = true
 			}
 		}
@@ -1228,7 +1228,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	if teardownDAG != nil {
 		for _, node := range teardownDAG.Nodes {
 			if node.Template != nil {
-				if rk := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); rk != "" {
+				if rk := staticResourceKey(node.Template, graph.GetNamespace()); rk != "" {
 					keyToNodeID[rk] = node.ID
 					if node.Finalizes != "" {
 						finalizerNodeKeys[rk] = true
@@ -1318,7 +1318,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 						if finIdx, ok2 := teardownDAG.Index[finNodeID]; ok2 {
 							finNode := &teardownDAG.Nodes[finIdx]
 							if finNode.Template != nil && finNode.ForEach == nil {
-								if fk := resourceKeyFromTemplate(finNode.Template, graph.GetNamespace()); fk != "" {
+								if fk := staticResourceKey(finNode.Template, graph.GetNamespace()); fk != "" {
 									fGVK, fNN := parseResourceKey(fk)
 									finDel := &unstructured.Unstructured{}
 									finDel.SetGroupVersionKind(fGVK)

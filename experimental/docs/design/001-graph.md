@@ -393,14 +393,14 @@ when the status value does not change between reconciles.
 
 The Graph defines two conditions on orthogonal axes:
 
-**`Accepted`** — the spec is valid. CEL expressions compiled, the dependency graph is acyclic, and
+**`Compiled`** — the spec is valid. CEL expressions compiled, the dependency graph is acyclic, and
 node definitions are structurally correct. Set once when the spec is processed. Permanent until
 the spec changes. Alarm on `False` immediately — the Graph will never converge until the spec is
 fixed.
 
 | Reason              | Meaning                           |
 | ------------------- | --------------------------------- |
-| `Accepted`          | Spec is valid                     |
+| `Compiled`          | Spec is valid                     |
 | `CompilationFailed` | CEL expression failed to compile  |
 | `CycleDetected`     | Dependency graph contains a cycle |
 | `InvalidSpec`       | Structural spec error             |
@@ -416,7 +416,7 @@ or `Unknown` for too long.
 | `NotReady`    | `Unknown` | NotReady    | Applied but readyWhen conditions not met       |
 | `Pending`     | `Unknown` | Pending     | Waiting for upstream data                      |
 | `Blocked`     | `Unknown` | Blocked     | Dependency in error state, waiting for resolve     |
-| `NotAccepted` | `False`   | —           | Spec invalid; rollup of Accepted=False         |
+| `NotCompiled` | `False`   | —           | Spec invalid; rollup of Compiled=False         |
 | `Conflict`    | `False`   | Conflict    | SSA field ownership contested by another actor |
 | `Error`       | `False`   | Error       | Client request failed (4xx)                    |
 | `SystemError` | `False`   | SystemError | Server or infrastructure failure (5xx)         |
@@ -424,9 +424,9 @@ or `Unknown` for too long.
 ```yaml
 status:
   conditions:
-    - type: Accepted
+    - type: Compiled
       status: "True"
-      reason: Accepted
+      reason: Compiled
       lastTransitionTime: "2025-01-15T10:29:00Z"
     - type: Ready
       status: "True"

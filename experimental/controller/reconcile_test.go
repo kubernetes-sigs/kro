@@ -538,7 +538,7 @@ func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 // flows into the Ready condition message as an informational note.
 func TestReconcileStateDeriveReadyCondition_FinalizerSkipped(t *testing.T) {
 	state := &reconcileState{
-		accepted:   true,
+		compiled:   true,
 		nodeCount:  3,
 		nodeErrors: []string{"prune: finalization skipped for /v1/PersistentVolumeClaim/default/data (target absent)"},
 	}

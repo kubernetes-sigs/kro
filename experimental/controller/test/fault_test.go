@@ -229,7 +229,7 @@ func TestOwnedResourceDeletedExternally(t *testing.T) {
 }
 
 // TestInvalidCELExpressionSurfacesError proves that a Graph with an invalid
-// CEL expression is rejected at compile time — Accepted=False with
+// CEL expression is rejected at compile time — Compiled=False with
 // CompilationFailed reason (design 001-graph § Status § Conditions).
 // The controller does not crash and the Graph can be fixed.
 func TestInvalidCELExpressionSurfacesError(t *testing.T) {
@@ -266,7 +266,7 @@ func TestInvalidCELExpressionSurfacesError(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Wait for Accepted=False.
+	// Wait for Compiled=False.
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			g := &unstructured.Unstructured{}
@@ -280,13 +280,13 @@ func TestInvalidCELExpressionSurfacesError(t *testing.T) {
 				return false, nil
 			}
 			conditions, _ := status["conditions"].([]any)
-			accepted, found := findCondition(conditions, "Accepted")
+			compiled, found := findCondition(conditions, "Compiled")
 			if !found {
 				return false, nil
 			}
-			return accepted["status"] == "False", nil
+			return compiled["status"] == "False", nil
 		}))
-	t.Log("Graph rejected — Accepted=False")
+	t.Log("Graph rejected — Compiled=False")
 
 	// No managed resource should exist.
 	err := k8sClient.Get(ctx, types.NamespacedName{Name: "broken-cm", Namespace: ns},
@@ -319,7 +319,7 @@ func TestInvalidCELExpressionSurfacesError(t *testing.T) {
 		types.NamespacedName{Name: "fixed-cm", Namespace: ns}, fixed))
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-fault-invalid-cel", Namespace: ns}))
-	t.Log("Graph recovered after fixing CEL expression — Accepted=True, Ready=True")
+	t.Log("Graph recovered after fixing CEL expression — Compiled=True, Ready=True")
 }
 
 // TestConflictThenSpecChangeResolvesConflict proves that changing the Graph

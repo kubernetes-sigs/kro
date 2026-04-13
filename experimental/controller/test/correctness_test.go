@@ -269,7 +269,7 @@ func TestPropagateWhenDoesNotBlockIndependentBranches(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestCycleDetectionRejectsSpec proves that a Graph with circular dependencies
-// is rejected with Accepted=False, CycleDetected reason. No revision is created
+// is rejected with Compiled=False, CycleDetected reason. No revision is created
 // and no resources are applied.
 func TestCycleDetectionRejectsSpec(t *testing.T) {
 	t.Parallel()
@@ -318,7 +318,7 @@ func TestCycleDetectionRejectsSpec(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Graph should reach Accepted=False with CycleDetected reason
+	// Graph should reach Compiled=False with CycleDetected reason
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
@@ -330,7 +330,7 @@ func TestCycleDetectionRejectsSpec(t *testing.T) {
 			return false, nil
 		}
 		conditions, _ := status["conditions"].([]any)
-		cond, found := findCondition(conditions, "Accepted")
+		cond, found := findCondition(conditions, "Compiled")
 		if !found {
 			return false, nil
 		}
@@ -344,15 +344,15 @@ func TestCycleDetectionRejectsSpec(t *testing.T) {
 
 	status, _ := g.Object["status"].(map[string]any)
 	conditions, _ := status["conditions"].([]any)
-	accepted, found := findCondition(conditions, "Accepted")
-	require.True(t, found, "Accepted condition should exist")
-	assert.Equal(t, "False", accepted["status"])
-	assert.Equal(t, "CycleDetected", accepted["reason"],
+	compiled, found := findCondition(conditions, "Compiled")
+	require.True(t, found, "Compiled condition should exist")
+	assert.Equal(t, "False", compiled["status"])
+	assert.Equal(t, "CycleDetected", compiled["reason"],
 		"reason should be CycleDetected")
-	t.Logf("Cycle correctly detected: reason=%s, message=%s", accepted["reason"], accepted["message"])
+	t.Logf("Cycle correctly detected: reason=%s, message=%s", compiled["reason"], compiled["message"])
 
-	// Verify Accepted condition is False (spec error — cycle detected)
-	assert.Equal(t, "False", accepted["status"], "Accepted should be False when cycle detected")
+	// Verify Compiled condition is False (spec error — cycle detected)
+	assert.Equal(t, "False", compiled["status"], "Compiled should be False when cycle detected")
 
 	// No revision should be created
 	count, err := countRevisions(ctx, k8sClient, "test-cycle", ns)
@@ -825,7 +825,7 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestInvalidSpecMissingNodeID proves that a Graph with a node missing its
-// id field is rejected with Accepted=False, InvalidSpec reason.
+// id field is rejected with Compiled=False, InvalidSpec reason.
 func TestInvalidSpecMissingNodeID(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -868,7 +868,7 @@ func TestInvalidSpecMissingNodeID(t *testing.T) {
 			return false, nil
 		}
 		conditions, _ := status["conditions"].([]any)
-		cond, found := findCondition(conditions, "Accepted")
+		cond, found := findCondition(conditions, "Compiled")
 		if !found {
 			return false, nil
 		}
@@ -880,14 +880,14 @@ func TestInvalidSpecMissingNodeID(t *testing.T) {
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-missing-id", Namespace: ns}, g))
 	status, _ := g.Object["status"].(map[string]any)
 	conditions, _ := status["conditions"].([]any)
-	accepted, found := findCondition(conditions, "Accepted")
-	require.True(t, found, "Accepted condition should exist")
-	assert.Equal(t, "False", accepted["status"])
+	compiled, found := findCondition(conditions, "Compiled")
+	require.True(t, found, "Compiled condition should exist")
+	assert.Equal(t, "False", compiled["status"])
 	t.Log("Missing node ID correctly rejected with InvalidSpec")
 }
 
 // TestInvalidSpecDuplicateNodeID proves that a Graph with duplicate node IDs
-// is rejected with Accepted=False, InvalidSpec reason.
+// is rejected with Compiled=False, InvalidSpec reason.
 func TestInvalidSpecDuplicateNodeID(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -939,7 +939,7 @@ func TestInvalidSpecDuplicateNodeID(t *testing.T) {
 			return false, nil
 		}
 		conditions, _ := status["conditions"].([]any)
-		cond, found := findCondition(conditions, "Accepted")
+		cond, found := findCondition(conditions, "Compiled")
 		if !found {
 			return false, nil
 		}
@@ -951,14 +951,14 @@ func TestInvalidSpecDuplicateNodeID(t *testing.T) {
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-dup-id", Namespace: ns}, g))
 	status, _ := g.Object["status"].(map[string]any)
 	conditions, _ := status["conditions"].([]any)
-	accepted, found := findCondition(conditions, "Accepted")
-	require.True(t, found, "Accepted condition should exist")
-	assert.Equal(t, "False", accepted["status"])
+	compiled, found := findCondition(conditions, "Compiled")
+	require.True(t, found, "Compiled condition should exist")
+	assert.Equal(t, "False", compiled["status"])
 	t.Log("Duplicate node ID correctly rejected with InvalidSpec")
 }
 
 // TestInvalidSpecCompilationFailure proves that a Graph with an invalid CEL
-// expression is rejected with Accepted=False, CompilationFailed reason.
+// expression is rejected with Compiled=False, CompilationFailed reason.
 func TestInvalidSpecCompilationFailure(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -1004,7 +1004,7 @@ func TestInvalidSpecCompilationFailure(t *testing.T) {
 			return false, nil
 		}
 		conditions, _ := status["conditions"].([]any)
-		cond, found := findCondition(conditions, "Accepted")
+		cond, found := findCondition(conditions, "Compiled")
 		if !found {
 			return false, nil
 		}
@@ -1016,9 +1016,9 @@ func TestInvalidSpecCompilationFailure(t *testing.T) {
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-bad-cel", Namespace: ns}, g))
 	status, _ := g.Object["status"].(map[string]any)
 	conditions, _ := status["conditions"].([]any)
-	accepted, found := findCondition(conditions, "Accepted")
-	require.True(t, found, "Accepted condition should exist")
-	assert.Equal(t, "False", accepted["status"])
+	compiled, found := findCondition(conditions, "Compiled")
+	require.True(t, found, "Compiled condition should exist")
+	assert.Equal(t, "False", compiled["status"])
 
 	// No revision should be created
 	count, err := countRevisions(ctx, k8sClient, "test-bad-cel", ns)

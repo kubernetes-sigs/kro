@@ -454,7 +454,7 @@ func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 
 	// Build the dependency graph using pre-extracted field paths.
 	// Cycle detection happens here — a cycle in the dependency graph
-	// sets Accepted=False with CycleDetected reason.
+	// sets Compiled=False with CycleDetected reason.
 	dag, err := BuildDAG(spec.Nodes, exprPaths)
 	if err != nil {
 		return nil, err

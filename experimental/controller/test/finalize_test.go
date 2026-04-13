@@ -245,7 +245,7 @@ func TestFinalizesRejectsCELNames(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// The Graph should be rejected — Accepted should be False with a
+	// The Graph should be rejected — Compiled should be False with a
 	// compilation error about CEL-evaluated names on finalizes nodes.
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
@@ -260,11 +260,11 @@ func TestFinalizesRejectsCELNames(t *testing.T) {
 				return false, nil
 			}
 			conditions, _ := status["conditions"].([]any)
-			accepted, found := findCondition(conditions, "Accepted")
+			compiled, found := findCondition(conditions, "Compiled")
 			if !found {
 				return false, nil
 			}
-			return accepted["status"] == "False", nil
+			return compiled["status"] == "False", nil
 		}))
 	t.Log("Graph correctly rejected — CEL-evaluated name on finalizes node")
 }

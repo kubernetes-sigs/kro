@@ -535,7 +535,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// Compilation or materialization failure — no revision created.
 		// Report the error on the Graph and return. The returned error is
 		// logged once by controller-runtime; no logger.Error here.
-		if statusErr := r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err}); statusErr != nil {
+		if statusErr := r.updateStatus(ctx, graph, &reconcileState{compiled: false, compiledErr: err}); statusErr != nil {
 			logger.Error(statusErr, "updating status after revision error")
 		}
 		return ctrl.Result{}, fmt.Errorf("ensuring revision: %w", err)
@@ -548,7 +548,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Parse and compile the active revision's spec (cached by revision name).
 	revisionSpec, state, err := r.compileRevision(activeRevision)
 	if err != nil {
-		if statusErr := r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err}); statusErr != nil {
+		if statusErr := r.updateStatus(ctx, graph, &reconcileState{compiled: false, compiledErr: err}); statusErr != nil {
 			logger.Error(statusErr, "updating status after compilation error")
 		}
 		return ctrl.Result{}, fmt.Errorf("compiling revision: %w", err)
@@ -1025,7 +1025,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Update status on Graph and revision
 	// -----------------------------------------------------------------------
 	rstate := &reconcileState{
-		accepted:    true,
+		compiled:    true,
 		nodeCount:   len(revisionSpec.Nodes),
 		PlanSummary: summary,
 		nodeErrors:  nodeErrors,
@@ -1035,9 +1035,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	// The graph is fully converged when every node is Ready and the spec is
-	// accepted. Everything else — errors, conflicts, pending data, not-ready
+	// compiled. Everything else — errors, conflicts, pending data, not-ready
 	// — retries via watch events, not periodic requeue.
-	allReady := rstate.accepted && !rstate.HasPending && !rstate.HasNotReady &&
+	allReady := rstate.compiled && !rstate.HasPending && !rstate.HasNotReady &&
 		!rstate.HasBlocked && !rstate.HasConflict && !rstate.HasError && !rstate.HasSystemError
 	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK && !prunePending)
 
@@ -1377,7 +1377,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	if teardownBlocked {
 		logger.Info("teardown blocked: waiting for third-party field managers to release")
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{
-			accepted:    true,
+			compiled:    true,
 			PlanSummary: PlanSummary{HasBlocked: true},
 			nodeErrors:  []string{"teardown blocked: waiting for third-party field managers to release"},
 		}); statusErr != nil {

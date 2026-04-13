@@ -14,7 +14,7 @@ import (
 )
 
 // TestStatusActiveOnSuccess proves that a successfully reconciled Graph
-// reports Ready=True with reason=Ready and Accepted=True with reason=Accepted
+// reports Ready=True with reason=Ready and Compiled=True with reason=Compiled
 // (design 001-graph § Status, § Conditions). Verifies exactly 2 conditions.
 func TestStatusActiveOnSuccess(t *testing.T) {
 	t.Parallel()
@@ -73,16 +73,16 @@ func TestStatusActiveOnSuccess(t *testing.T) {
 	conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
 	require.Len(t, conditions, 2)
 
-	accepted, ok := findCondition(conditions, "Accepted")
-	require.True(t, ok, "Accepted condition should exist")
-	assert.Equal(t, "True", accepted["status"])
-	assert.Equal(t, "Accepted", accepted["reason"])
+	compiled, ok := findCondition(conditions, "Compiled")
+	require.True(t, ok, "Compiled condition should exist")
+	assert.Equal(t, "True", compiled["status"])
+	assert.Equal(t, "Compiled", compiled["reason"])
 
 	cond, ok := findCondition(conditions, "Ready")
 	require.True(t, ok, "Ready condition should exist")
 	assert.Equal(t, "True", cond["status"])
 	assert.Equal(t, "Ready", cond["reason"])
-	t.Logf("Status: Accepted=%s, Ready=%s reason=%s message=%s", accepted["status"], cond["status"], cond["reason"], cond["message"])
+	t.Logf("Status: Compiled=%s, Ready=%s reason=%s message=%s", compiled["status"], cond["status"], cond["reason"], cond["message"])
 }
 
 // TestStatusInProgressOnReadyWhen proves that a Graph with a not-ready
@@ -157,15 +157,15 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 	conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
 	require.Len(t, conditions, 2)
 
-	accepted, ok := findCondition(conditions, "Accepted")
-	require.True(t, ok, "Accepted condition should exist")
-	assert.Equal(t, "True", accepted["status"])
+	compiled, ok := findCondition(conditions, "Compiled")
+	require.True(t, ok, "Compiled condition should exist")
+	assert.Equal(t, "True", compiled["status"])
 
 	cond, ok := findCondition(conditions, "Ready")
 	require.True(t, ok, "Ready condition should exist")
 	assert.Equal(t, "Unknown", cond["status"])
 	assert.Equal(t, "NotReady", cond["reason"])
-	t.Logf("Before: Accepted=%s Ready=%s reason=%s", accepted["status"], cond["status"], cond["reason"])
+	t.Logf("Before: Compiled=%s Ready=%s reason=%s", compiled["status"], cond["status"], cond["reason"])
 
 	// Transition source to ready
 	latestSource := &unstructured.Unstructured{}

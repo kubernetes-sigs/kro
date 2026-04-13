@@ -17,7 +17,7 @@ type ConditionType string
 
 // Condition types
 const (
-	ConditionAccepted ConditionType = "Accepted"
+	ConditionCompiled ConditionType = "Compiled"
 	ConditionReady    ConditionType = "Ready"
 )
 
@@ -33,32 +33,32 @@ const (
 
 // reconcileState captures the outcome of a reconcile cycle for status derivation.
 type reconcileState struct {
-	// Accepted tracks spec validity. Set once when the spec is parsed/compiled.
+	// compiled tracks spec validity. Set once when the spec is parsed/compiled.
 	// False is terminal — no resources are touched until the spec is fixed.
-	accepted    bool
-	acceptedErr error // non-nil when accepted=false
+	compiled    bool
+	compiledErr error // non-nil when compiled=false
 
 	PlanSummary
 	nodeErrors []string // "nodeID: reason" for status message
 	nodeCount  int
 }
 
-// deriveAcceptedCondition computes the Accepted condition.
-// Accepted is set once when the spec is parsed/compiled. It's permanent until
+// deriveCompiledCondition computes the Compiled condition.
+// Compiled is set once when the spec is parsed/compiled. It's permanent until
 // the spec changes. False means the Graph will never converge until the spec is fixed.
-func (s *reconcileState) deriveAcceptedCondition() (status ConditionStatus, reason string, message string) {
-	if s.accepted {
-		return ConditionTrue, "Accepted", "Spec is valid"
+func (s *reconcileState) deriveCompiledCondition() (status ConditionStatus, reason string, message string) {
+	if s.compiled {
+		return ConditionTrue, "Compiled", "Spec is valid"
 	}
-	if s.acceptedErr != nil {
+	if s.compiledErr != nil {
 		// Classify the error
-		if errors.Is(s.acceptedErr, ErrCompilationFailed) {
-			return ConditionFalse, "CompilationFailed", s.acceptedErr.Error()
+		if errors.Is(s.compiledErr, ErrCompilationFailed) {
+			return ConditionFalse, "CompilationFailed", s.compiledErr.Error()
 		}
-		if errors.Is(s.acceptedErr, ErrCycleDetected) {
-			return ConditionFalse, "CycleDetected", s.acceptedErr.Error()
+		if errors.Is(s.compiledErr, ErrCycleDetected) {
+			return ConditionFalse, "CycleDetected", s.compiledErr.Error()
 		}
-		return ConditionFalse, "InvalidSpec", s.acceptedErr.Error()
+		return ConditionFalse, "InvalidSpec", s.compiledErr.Error()
 	}
 	return ConditionFalse, "InvalidSpec", "Spec validation failed"
 }
@@ -71,13 +71,13 @@ func (s *reconcileState) deriveAcceptedCondition() (status ConditionStatus, reas
 //	Ready       → True    — all resources reconciled
 //	Pending     → Unknown — waiting for upstream data
 //	NotReady    → Unknown — applied but readyWhen conditions not met
-//	NotAccepted → False   — spec invalid; rollup of Accepted=False
+//	NotCompiled → False   — spec invalid; rollup of Compiled=False
 //	Error       → False   — client request failed (4xx)
 //	SystemError → False   — server or infrastructure failure (5xx)
 //	Conflict    → False   — SSA field ownership contested
 func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason string, message string) {
-	if !s.accepted {
-		return ConditionFalse, "NotAccepted", "Spec is not valid; resources cannot be reconciled"
+	if !s.compiled {
+		return ConditionFalse, "NotCompiled", "Spec is not valid; resources cannot be reconciled"
 	}
 	if s.HasSystemError {
 		return ConditionFalse, "SystemError",
@@ -124,12 +124,12 @@ func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Build both conditions
-	acceptedStatus, acceptedReason, acceptedMessage := state.deriveAcceptedCondition()
-	acceptedCondition := map[string]any{
-		"type":               string(ConditionAccepted),
-		"status":             string(acceptedStatus),
-		"reason":             acceptedReason,
-		"message":            acceptedMessage,
+	compiledStatus, compiledReason, compiledMessage := state.deriveCompiledCondition()
+	compiledCondition := map[string]any{
+		"type":               string(ConditionCompiled),
+		"status":             string(compiledStatus),
+		"reason":             compiledReason,
+		"message":            compiledMessage,
 		"lastTransitionTime": now,
 	}
 
@@ -150,10 +150,10 @@ func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.
 			continue
 		}
 		switch ecMap["type"] {
-		case string(ConditionAccepted):
-			if ecMap["status"] == string(acceptedStatus) {
+		case string(ConditionCompiled):
+			if ecMap["status"] == string(compiledStatus) {
 				if ltt, ok := ecMap["lastTransitionTime"].(string); ok {
-					acceptedCondition["lastTransitionTime"] = ltt
+					compiledCondition["lastTransitionTime"] = ltt
 				}
 			}
 		case string(ConditionReady):
@@ -167,7 +167,7 @@ func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.
 
 	status := map[string]any{
 		"conditions": []any{
-			acceptedCondition,
+			compiledCondition,
 			readyCondition,
 		},
 	}

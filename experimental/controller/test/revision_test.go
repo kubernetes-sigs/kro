@@ -558,7 +558,7 @@ func TestRevisionNotCreatedOnCompilationFailure(t *testing.T) {
 
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Wait for Graph to show Accepted=False
+	// Wait for Graph to show Compiled=False
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
@@ -566,13 +566,13 @@ func TestRevisionNotCreatedOnCompilationFailure(t *testing.T) {
 			return false, nil
 		}
 		conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
-		cond, found := findCondition(conditions, "Accepted")
+		cond, found := findCondition(conditions, "Compiled")
 		if !found {
 			return false, nil
 		}
 		return cond["status"] == "False", nil
 	}))
-	t.Log("Graph has Accepted=False")
+	t.Log("Graph has Compiled=False")
 
 	// No revision should exist
 	count, err := countRevisions(ctx, k8sClient, "rev-fail-test", ns)

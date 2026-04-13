@@ -368,7 +368,7 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 			// the same content is a no-information write that widens race
 			// windows (e.g., finalization between delete and spec update).
 			r.Resources.remove(cacheKey)
-			return nil, fmt.Errorf("resource %s externally deleted: %w", obj.GetName(), ErrDataPending)
+			return nil, fmt.Errorf("resource %s externally deleted: %w", obj.GetName(), ErrPending)
 		} else {
 			// Update the cache with fresh data
 			r.Resources.set(cacheKey, &cachedObject{
@@ -572,7 +572,7 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 	targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
 	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("contribute target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), ErrDataPending)
+			return nil, fmt.Errorf("contribute target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), ErrPending)
 		}
 		return nil, fmt.Errorf("checking contribute target %s: %w", obj.GetName(), err)
 	}

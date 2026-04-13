@@ -24,7 +24,7 @@ import (
 
 // TestWatchedResourceDeletedMidReconcile proves that when a watched resource
 // is externally deleted after the Graph has converged, the controller
-// recovers gracefully — dependents enter data-pending, and the Graph
+// recovers gracefully — dependents enter pending, and the Graph
 // status reflects the blocked state.
 //
 // This is a fault the controller hits in production: an operator deletes
@@ -102,7 +102,7 @@ func TestWatchedResourceDeletedMidReconcile(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, toDelete))
 	t.Log("Externally deleted watched resource")
 
-	// The Graph should enter a non-Ready state (DataPending or similar).
+	// The Graph should enter a non-Ready state (Pending or similar).
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			g := &unstructured.Unstructured{}

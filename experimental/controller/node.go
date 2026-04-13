@@ -25,7 +25,7 @@ import (
 // references are resolved by the coordinator before dispatching to workers.
 //
 // All paths return (keys, error) with a uniform error contract:
-//   - ErrDataPending: retryable, data not yet available
+//   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
 func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, ref Reference, eval *evaluator, watcher *graphWatcher) ([]string, error) {
@@ -145,7 +145,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 	obj.SetGroupVersionKind(gvk)
 	if err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("watch %s: resource %s/%s %s/%s not found: %w", node.ID, apiVersion, kind, namespace, name, ErrDataPending)
+			return fmt.Errorf("watch %s: resource %s/%s %s/%s not found: %w", node.ID, apiVersion, kind, namespace, name, ErrPending)
 		}
 		return fmt.Errorf("reading %s/%s %s/%s: %w", apiVersion, kind, namespace, name, err)
 	}

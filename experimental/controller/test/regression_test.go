@@ -682,7 +682,7 @@ func TestCollectionWatchClusterScopedResource(t *testing.T) {
 // Setup:
 //   - Watch node reads an external ConfigMap
 //   - Dependent Owns node references the watched data
-//   - Delete the external ConfigMap → Watch enters DataPending → dependent is Blocked
+//   - Delete the external ConfigMap → Watch enters Pending → dependent is Blocked
 //   - Recreate the external ConfigMap → Watch resolves → dependent reconverges
 //   - Assert: Graph reaches Ready, dependent resource exists with correct data
 func TestBlockedDependencyRecoveryReconverges(t *testing.T) {
@@ -745,7 +745,7 @@ func TestBlockedDependencyRecoveryReconverges(t *testing.T) {
 		types.NamespacedName{Name: "test-blocked-recovery", Namespace: ns}))
 	t.Log("Phase 1: Graph ready, dependent has fromSource=v1")
 
-	// Delete the watched resource → source enters DataPending → dependent is Blocked.
+	// Delete the watched resource → source enters Pending → dependent is Blocked.
 	require.NoError(t, k8sClient.Delete(ctx, watched))
 
 	// Wait for Graph to leave Ready state.
@@ -758,7 +758,7 @@ func TestBlockedDependencyRecoveryReconverges(t *testing.T) {
 			}
 			return !graphReady(g), nil
 		}))
-	t.Log("Phase 2: Graph not ready (source deleted → DataPending)")
+	t.Log("Phase 2: Graph not ready (source deleted → Pending)")
 
 	// THE KEY ASSERTION: dependent resource still exists while source is absent.
 	check := &unstructured.Unstructured{}

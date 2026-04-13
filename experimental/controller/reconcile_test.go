@@ -55,13 +55,13 @@ func TestSetStatePropagateSplitExcludedBlocked(t *testing.T) {
 		assert.Equal(t, NodeBlocked, plan.States["c"], "transitive dependent should be Blocked")
 	})
 
-	t.Run("NodeDataPending propagates as NodeBlocked", func(t *testing.T) {
+	t.Run("NodePending propagates as NodePending", func(t *testing.T) {
 		plan := NewPlanState(dag)
-		plan.SetState(dag, "a", NodeDataPending)
+		plan.SetState(dag, "a", NodePending)
 
-		assert.Equal(t, NodeDataPending, plan.States["a"])
-		assert.Equal(t, NodeBlocked, plan.States["b"])
-		assert.Equal(t, NodeBlocked, plan.States["c"])
+		assert.Equal(t, NodePending, plan.States["a"])
+		assert.Equal(t, NodePending, plan.States["b"])
+		assert.Equal(t, NodePending, plan.States["c"])
 	})
 
 	t.Run("NodeConflict propagates as NodeBlocked", func(t *testing.T) {
@@ -87,8 +87,8 @@ func TestSetStatePropagateSplitExcludedBlocked(t *testing.T) {
 		plan.SetState(dag, "a", NodeReady)
 
 		assert.Equal(t, NodeReady, plan.States["a"])
-		assert.Equal(t, NodePending, plan.States["b"], "Ready should not propagate")
-		assert.Equal(t, NodePending, plan.States["c"])
+		assert.Equal(t, nodeUnvisited, plan.States["b"], "Ready should not propagate")
+		assert.Equal(t, nodeUnvisited, plan.States["c"])
 	})
 
 	t.Run("NodeNotReady does not propagate", func(t *testing.T) {
@@ -96,8 +96,8 @@ func TestSetStatePropagateSplitExcludedBlocked(t *testing.T) {
 		plan.SetState(dag, "a", NodeNotReady)
 
 		assert.Equal(t, NodeNotReady, plan.States["a"])
-		assert.Equal(t, NodePending, plan.States["b"], "NotReady should not propagate")
-		assert.Equal(t, NodePending, plan.States["c"])
+		assert.Equal(t, nodeUnvisited, plan.States["b"], "NotReady should not propagate")
+		assert.Equal(t, nodeUnvisited, plan.States["c"])
 	})
 }
 
@@ -314,12 +314,12 @@ func TestNodeStateString(t *testing.T) {
 		state NodeState
 		want  string
 	}{
+		{nodeUnvisited, "Unvisited"},
 		{NodePending, "Pending"},
 		{NodeReady, "Ready"},
 		{NodeNotReady, "NotReady"},
 		{NodeExcluded, "Excluded"},
 		{NodeBlocked, "Blocked"},
-		{NodeDataPending, "DataPending"},
 		{NodeError, "Error"},
 		{NodeConflict, "Conflict"},
 		{NodeSystemError, "SystemError"},

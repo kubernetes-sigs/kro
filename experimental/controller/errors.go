@@ -28,7 +28,7 @@ type apiErrorInfo struct {
 // Server errors (5xx/timeout/network) → NodeSystemError:
 //   - reason is the raw error message
 //
-// 404 and 409 are handled separately by callers (ErrDataPending, ErrFieldConflict).
+// 404 and 409 are handled separately by callers (ErrPending, ErrFieldConflict).
 func classifyAPIError(err error) apiErrorInfo {
 	if err == nil {
 		return apiErrorInfo{}

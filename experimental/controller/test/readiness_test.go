@@ -224,8 +224,8 @@ func TestReadyWhenTemplateDoesNotGateDownstream(t *testing.T) {
 	t.Logf("ConfigMap config-c has fromA=%s fromB=%s", data["fromA"], data["fromB"])
 }
 
-// TestDataPendingRequeues proves that when a CEL expression references data
-// that doesn't exist yet (data-pending), the controller requeues gracefully
+// TestPendingRequeues proves that when a CEL expression references data
+// that doesn't exist yet (pending), the controller requeues gracefully
 // instead of failing permanently.
 //
 // Setup:
@@ -234,7 +234,7 @@ func TestReadyWhenTemplateDoesNotGateDownstream(t *testing.T) {
 //   - Verify the controller doesn't crash and the Graph still reconciles
 //   - Add the missing field to the source
 //   - Verify the downstream resource is created with the correct value
-func TestDataPendingRequeues(t *testing.T) {
+func TestPendingRequeues(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -260,7 +260,7 @@ func TestDataPendingRequeues(t *testing.T) {
 			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
-				"name":      "test-data-pending",
+				"name":      "test-pending",
 				"namespace": ns,
 			},
 			"spec": map[string]any{
@@ -285,7 +285,7 @@ func TestDataPendingRequeues(t *testing.T) {
 							},
 							"data": map[string]any{
 								// This references a field that doesn't exist yet.
-								// The CEL evaluation should return "no such key" → data-pending → requeue.
+								// The CEL evaluation should return "no such key" → pending → requeue.
 								"result": "${source.data.pending_field}",
 							},
 						},
@@ -304,8 +304,8 @@ func TestDataPendingRequeues(t *testing.T) {
 	// Verify the Graph still exists and hasn't been deleted (controller didn't crash)
 	graphCheck := &unstructured.Unstructured{}
 	graphCheck.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-data-pending", Namespace: ns}, graphCheck))
-	t.Log("Graph still exists — controller handled data-pending gracefully")
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-pending", Namespace: ns}, graphCheck))
+	t.Log("Graph still exists — controller handled pending gracefully")
 
 	// Now add the missing field to the source
 	latestSource := &unstructured.Unstructured{}
@@ -332,7 +332,7 @@ func TestDataPendingRequeues(t *testing.T) {
 	data, _, _ := unstructured.NestedStringMap(finalOutput.Object, "data")
 	assert.Equal(t, "resolved-value", data["result"],
 		"output should have the resolved value after data became available")
-	t.Logf("Output created with result=%s after data-pending resolved", data["result"])
+	t.Logf("Output created with result=%s after pending resolved", data["result"])
 }
 
 // TestReadyWhenNotReadyThenReady proves the full readyWhen lifecycle:

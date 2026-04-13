@@ -38,7 +38,7 @@ type reconcileState struct {
 	accepted    bool
 	acceptedErr error // non-nil when accepted=false
 
-	hasDataPending bool
+	hasPending     bool
 	hasNotReady    bool
 	hasBlocked     bool
 	hasConflict    bool
@@ -98,7 +98,7 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	if s.hasConflict {
 		return ConditionFalse, "Conflict", "One or more resources have SSA field ownership conflicts"
 	}
-	if s.hasDataPending {
+	if s.hasPending {
 		return ConditionUnknown, "Pending", "One or more resources waiting for upstream data"
 	}
 	if s.hasBlocked {

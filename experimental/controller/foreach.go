@@ -78,8 +78,8 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	for varName, collectionExpr := range node.ForEach {
 		collection, err := eval.evalString(collectionExpr)
 		if err != nil {
-			if isDataPending(err) {
-				return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, ErrDataPending)
+			if isPending(err) {
+				return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, ErrPending)
 			}
 			return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, err)
 		}

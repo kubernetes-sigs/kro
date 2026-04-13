@@ -551,7 +551,7 @@ func BenchmarkPropagateState(b *testing.B) {
 // so BenchmarkPropagateStateLinearScan can measure the before-state directly.
 func propagateStateLinearScan(ps *PlanState, dag *DAG, sourceID string, targetState NodeState) {
 	for _, node := range dag.Nodes {
-		if ps.States[node.ID] != NodePending {
+		if ps.States[node.ID] != nodeUnvisited {
 			continue
 		}
 		if node.Dependencies[sourceID] {

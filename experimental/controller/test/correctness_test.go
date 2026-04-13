@@ -371,13 +371,13 @@ func TestCycleDetectionRejectsSpec(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Watch absent / Contribute target absent → DataPending
+// Watch absent / Contribute target absent → Pending
 // ---------------------------------------------------------------------------
 
-// TestWatchAbsentResourceIsDataPending proves that a Watch node targeting a
-// non-existent resource enters DataPending state and blocks dependents via
+// TestWatchAbsentResourceIsPending proves that a Watch node targeting a
+// non-existent resource enters Pending state and blocks dependents via
 // contagious exclusion. When the resource appears, the chain resolves.
-func TestWatchAbsentResourceIsDataPending(t *testing.T) {
+func TestWatchAbsentResourceIsPending(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -421,7 +421,7 @@ func TestWatchAbsentResourceIsDataPending(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Graph should show DataPending status
+	// Graph should show Pending status
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
@@ -440,7 +440,7 @@ func TestWatchAbsentResourceIsDataPending(t *testing.T) {
 		// Should be Unknown with Pending reason
 		return ready["status"] == "Unknown" && ready["reason"] == "Pending", nil
 	}))
-	t.Log("Graph correctly shows DataPending when watch target is absent")
+	t.Log("Graph correctly shows Pending when watch target is absent")
 
 	// Dependent should NOT be created
 	require.NoError(t, waitForAbsence(ctx, k8sClient,
@@ -483,7 +483,7 @@ func TestWatchAbsentResourceIsDataPending(t *testing.T) {
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "watch-dependent", Namespace: ns}, dep))
 	data, _, _ := unstructured.NestedStringMap(dep.Object, "data")
 	assert.Equal(t, "resolved-value", data["value"])
-	t.Log("Watch absent → DataPending → resource appears → chain resolves")
+	t.Log("Watch absent → Pending → resource appears → chain resolves")
 }
 
 // TestAbsentResourceIsOwnedByDefault proves that when a node's target resource

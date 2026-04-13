@@ -436,11 +436,11 @@ func TestContagiousExclusion(t *testing.T) {
 	t.Log("Contagious exclusion proved: feature excluded → dependent contagiously excluded → independent unaffected")
 }
 
-// TestDataPendingChain proves chained data dependencies:
-// A is created → B references A.data.missing → B is data-pending →
+// TestPendingChain proves chained data dependencies:
+// A is created → B references A.data.missing → B is pending →
 // C references B → C is contagiously blocked.
 // Then A is updated with the missing field → B resolves → C resolves.
-func TestDataPendingChain(t *testing.T) {
+func TestPendingChain(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 

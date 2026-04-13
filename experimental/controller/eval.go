@@ -86,7 +86,7 @@ func (e *evaluator) checkReadiness(conditions []string, observed any, nodeID str
 	for _, cond := range conditions {
 		ok, err := e.evalBoolCondition(cond)
 		if err != nil {
-			if isDataPending(err) {
+			if isPending(err) {
 				return fmt.Errorf("node %q: readyWhen %q: data not yet available: %w", nodeID, cond, ErrWaitingForReadiness)
 			}
 			return fmt.Errorf("node %q: readyWhen %q: %w", nodeID, cond, err)
@@ -122,12 +122,12 @@ func (e *evaluator) checkPropagateWhen(conditions []string, observed any, nodeID
 }
 
 // toMap evaluates a template and asserts the result is a map.
-// Normalizes data-pending errors to ErrDataPending.
+// Normalizes data-pending errors to ErrPending.
 func (e *evaluator) toMap(tmpl map[string]any) (map[string]any, error) {
 	evaluated, err := e.template(tmpl)
 	if err != nil {
-		if isDataPending(err) {
-			return nil, ErrDataPending
+		if isPending(err) {
+			return nil, ErrPending
 		}
 		return nil, fmt.Errorf("evaluating: %w", err)
 	}
@@ -210,8 +210,8 @@ func (e *evaluator) includeWhen(conditions []string) (bool, error) {
 	for _, cond := range conditions {
 		ok, err := e.evalBoolCondition(cond)
 		if err != nil {
-			if isDataPending(err) {
-				return false, fmt.Errorf("includeWhen data pending: %w", ErrDataPending)
+			if isPending(err) {
+				return false, fmt.Errorf("includeWhen data pending: %w", ErrPending)
 			}
 			return false, err
 		}

@@ -212,21 +212,28 @@ func ScopeFromTriggers(dag *DAG, triggerNodes map[string]bool) map[string]bool {
 type NodeState int
 
 const (
-	NodePending     NodeState = iota // Not yet processed
-	NodeReady                        // Applied and readyWhen satisfied
-	NodeNotReady                     // Applied but readyWhen not satisfied
-	NodeExcluded                     // Definitive absence: excluded by includeWhen evaluating to false
-	NodeBlocked                      // Uncertain absence: dependency in Error/Conflict/SystemError/DataPending
-	NodeDataPending                  // CEL expression couldn't resolve (retryable)
-	NodeError                        // Client request failed (4xx)
-	NodeConflict                     // SSA 409 — field ownership taken by another actor
-	NodeSystemError                  // Server/infrastructure failure (5xx, timeout, network)
+	// nodeUnvisited is the zero-value sentinel — "not yet processed by the
+	// walk." Unexported: it is walk-internal machinery, not a design state.
+	// The dispatch guard (tryDispatch) uses != nodeUnvisited to detect nodes
+	// that have already been assigned a state by the walk or by propagation.
+	nodeUnvisited NodeState = iota
+
+	NodePending     // Data not yet available (retryable)
+	NodeReady       // Applied and readyWhen satisfied
+	NodeNotReady    // Applied but readyWhen not satisfied
+	NodeExcluded    // Definitive absence: excluded by includeWhen evaluating to false
+	NodeBlocked     // Uncertain absence: dependency in error state
+	NodeError       // Client request failed (4xx)
+	NodeConflict    // SSA 409 — field ownership taken by another actor
+	NodeSystemError // Server/infrastructure failure (5xx, timeout, network)
 )
 
 // String returns the human-readable name of the NodeState.
 // Per 006-quality.md: "Each concept has exactly one name, used consistently."
 func (s NodeState) String() string {
 	switch s {
+	case nodeUnvisited:
+		return "Unvisited"
 	case NodePending:
 		return "Pending"
 	case NodeReady:
@@ -237,8 +244,6 @@ func (s NodeState) String() string {
 		return "Excluded"
 	case NodeBlocked:
 		return "Blocked"
-	case NodeDataPending:
-		return "DataPending"
 	case NodeError:
 		return "Error"
 	case NodeConflict:
@@ -259,14 +264,14 @@ type PlanState struct {
 	PropagateReady map[string]bool
 }
 
-// NewPlanState creates a fresh plan state with all nodes pending.
+// NewPlanState creates a fresh plan state with all nodes unvisited.
 func NewPlanState(dag *DAG) *PlanState {
 	ps := &PlanState{
 		States:         make(map[string]NodeState, len(dag.Nodes)),
 		PropagateReady: make(map[string]bool, len(dag.Nodes)),
 	}
 	for _, node := range dag.Nodes {
-		ps.States[node.ID] = NodePending
+		ps.States[node.ID] = nodeUnvisited
 		// Nodes without propagateWhen propagate immediately.
 		ps.PropagateReady[node.ID] = len(node.PropagateWhen) == 0
 	}
@@ -291,16 +296,23 @@ func (ps *PlanState) DependencyPropagateBlocked(node *Node) string {
 
 // SetState updates a node's state and propagates to dependents.
 // NodeExcluded propagates as NodeExcluded (definitive absence).
-// NodeBlocked, NodeDataPending, NodeError, NodeConflict, NodeSystemError
-// propagate as NodeBlocked (uncertain absence).
+// NodePending propagates as NodePending (uncertain absence — data not yet available).
+// NodeBlocked, NodeError, NodeConflict, NodeSystemError propagate as NodeBlocked
+// (uncertain absence — dependency in error state).
 // NotReady does NOT propagate — data is in scope regardless.
+//
+// Per 004-graph-execution.md § Wind step 2: "Any dependency in an error state
+// (Conflict, Error, SystemError, or Blocked) → inherit Blocked. Any dependency
+// Pending → inherit Pending."
 func (ps *PlanState) SetState(dag *DAG, id string, state NodeState) {
 	ps.States[id] = state
 
 	switch state {
 	case NodeExcluded:
 		ps.propagateState(dag, id, NodeExcluded)
-	case NodeBlocked, NodeDataPending, NodeError, NodeConflict, NodeSystemError:
+	case NodePending:
+		ps.propagateState(dag, id, NodePending)
+	case NodeBlocked, NodeError, NodeConflict, NodeSystemError:
 		ps.propagateState(dag, id, NodeBlocked)
 	}
 }
@@ -309,10 +321,16 @@ func (ps *PlanState) SetState(dag *DAG, id string, state NodeState) {
 // Uses the Dependents reverse adjacency list for O(V+E) traversal — not a linear
 // scan over all nodes. This matters: a linear scan is O(V²) on a chain graph where
 // every node errors, because propagateState is called recursively for each dependent.
+//
+// Note: propagateState uses a first-wins guard (!= nodeUnvisited) and does not enforce
+// Excluded > Blocked > Pending precedence. In diamond dependencies with mixed-state
+// parents, the child may receive whichever state propagates first. tryDispatch
+// re-evaluates all dependencies with full precedence before acting on any node.
+// No code path should read propagated state as authoritative.
 func (ps *PlanState) propagateState(dag *DAG, sourceID string, targetState NodeState) {
 	for _, depIdx := range dag.Dependents[sourceID] {
 		depID := dag.Nodes[depIdx].ID
-		if ps.States[depID] != NodePending {
+		if ps.States[depID] != nodeUnvisited {
 			continue // already propagated
 		}
 		ps.States[depID] = targetState
@@ -322,7 +340,7 @@ func (ps *PlanState) propagateState(dag *DAG, sourceID string, targetState NodeS
 
 // PlanSummary holds aggregate state from a completed DAG walk.
 type PlanSummary struct {
-	HasDataPending bool
+	HasPending     bool
 	HasNotReady    bool
 	HasBlocked     bool
 	HasConflict    bool
@@ -340,8 +358,8 @@ func (ps *PlanState) Summary() PlanSummary {
 			s.ReadyCount++
 		case NodeNotReady:
 			s.HasNotReady = true
-		case NodeDataPending:
-			s.HasDataPending = true
+		case NodePending:
+			s.HasPending = true
 		case NodeBlocked:
 			s.HasBlocked = true
 		case NodeExcluded:

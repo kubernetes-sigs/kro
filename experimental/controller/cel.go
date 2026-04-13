@@ -36,10 +36,10 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
 )
 
-// ErrDataPending indicates that CEL evaluation failed because required data
+// ErrPending indicates that CEL evaluation failed because required data
 // is not yet available (e.g., a resource's status field hasn't been populated).
 // This is a retryable condition — the controller should requeue and try again.
-var ErrDataPending = errors.New("data pending")
+var ErrPending = errors.New("data pending")
 
 // ErrWaitingForReadiness indicates that a resource exists but hasn't satisfied
 // its readyWhen conditions yet. Downstream resources should wait.
@@ -59,7 +59,7 @@ var ErrFieldConflict = errors.New("field conflict")
 // This is a permanent error until the spec is fixed.
 var ErrCycleDetected = errors.New("cycle detected")
 
-// celDataPendingPatterns are CEL error patterns that indicate data is not yet
+// celPendingPatterns are CEL error patterns that indicate data is not yet
 // available (retryable). Other CEL errors are considered expression bugs.
 //
 // Data pending (retryable):
@@ -72,20 +72,20 @@ var ErrCycleDetected = errors.New("cycle detected")
 //   - "type conversion error" : wrong types in expression
 //   - "no such overload"      : invalid operation for types
 //   - "division by zero"      : math error
-var celDataPendingPatterns = []string{
+var celPendingPatterns = []string{
 	"no such key",
 	"no such field",
 	"no such attribute",
 	"index out of bounds",
 }
 
-// isCELDataPending checks if a CEL error indicates data is pending.
-func isCELDataPending(err error) bool {
+// isCELPending checks if a CEL error indicates data is pending.
+func isCELPending(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
-	for _, pattern := range celDataPendingPatterns {
+	for _, pattern := range celPendingPatterns {
 		if strings.Contains(msg, pattern) {
 			return true
 		}
@@ -93,10 +93,10 @@ func isCELDataPending(err error) bool {
 	return false
 }
 
-// isDataPending checks if an error indicates data is pending — either a CEL
-// runtime error (string pattern match) or a wrapped ErrDataPending sentinel.
-func isDataPending(err error) bool {
-	return isCELDataPending(err) || errors.Is(err, ErrDataPending)
+// isPending checks if an error indicates data is pending — either a CEL
+// runtime error (string pattern match) or a wrapped ErrPending sentinel.
+func isPending(err error) bool {
+	return isCELPending(err) || errors.Is(err, ErrPending)
 }
 
 // ---------------------------------------------------------------------------
@@ -152,8 +152,8 @@ func (c *compiledGraph) eval(expr string, scope map[string]any) (any, error) {
 
 	out, _, err := prg.Eval(scope)
 	if err != nil {
-		if isCELDataPending(err) {
-			return nil, fmt.Errorf("evaluating %q: %w: %w", expr, ErrDataPending, err)
+		if isCELPending(err) {
+			return nil, fmt.Errorf("evaluating %q: %w: %w", expr, ErrPending, err)
 		}
 		return nil, fmt.Errorf("evaluating %q: %w", expr, err)
 	}
@@ -399,7 +399,7 @@ func (gc *graphCaches) getCompiled(specHash string) *compiledGraph {
 //
 // All node IDs are declared upfront as DynType. Expressions that reference
 // nodes not yet in scope at eval time will produce CEL runtime errors
-// (e.g., "no such key") which isDataPending handles correctly.
+// (e.g., "no such key") which isPending handles correctly.
 func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 	allIDs := spec.AllIdentifiers()
 

@@ -256,48 +256,19 @@ func (ps *PlanState) DependencyPropagateBlocked(node *Node) string {
 	return ""
 }
 
-// SetState updates a node's state and propagates to dependents.
-// NodeExcluded propagates as NodeExcluded (definitive absence).
-// NodePending propagates as NodePending (uncertain absence — data not yet available).
-// NodeBlocked, NodeError, NodeConflict, NodeSystemError propagate as NodeBlocked
-// (uncertain absence — dependency in error state).
-// NotReady does NOT propagate — data is in scope regardless.
+// SetState records a node's authoritative state.
 //
-// Per 004-graph-execution.md § Wind step 2: "Any dependency in an error state
-// (Conflict, Error, SystemError, or Blocked) → inherit Blocked. Any dependency
-// Pending → inherit Pending."
+// State does NOT propagate to dependents — the walk coordinator
+// dispatches dependents explicitly via tryDispatch, which evaluates
+// all dependencies with full precedence (Excluded > Blocked > Pending).
+//
+// Previous versions eagerly propagated state via a first-wins flood
+// fill. This violated precedence in diamond dependencies: if an Error
+// parent propagated before an Excluded parent, the child was marked
+// Blocked instead of Excluded — an incorrect classification that
+// prevented pruning resources that should have been pruned.
 func (ps *PlanState) SetState(dag *DAG, id string, state NodeState) {
 	ps.States[id] = state
-
-	switch state {
-	case NodeExcluded:
-		ps.propagateState(dag, id, NodeExcluded)
-	case NodePending:
-		ps.propagateState(dag, id, NodePending)
-	case NodeBlocked, NodeError, NodeConflict, NodeSystemError:
-		ps.propagateState(dag, id, NodeBlocked)
-	}
-}
-
-// propagateState marks all downstream dependents of a node with the target state.
-// Uses the Dependents reverse adjacency list for O(V+E) traversal — not a linear
-// scan over all nodes. This matters: a linear scan is O(V²) on a chain graph where
-// every node errors, because propagateState is called recursively for each dependent.
-//
-// Note: propagateState uses a first-wins guard (!= nodeUnvisited) and does not enforce
-// Excluded > Blocked > Pending precedence. In diamond dependencies with mixed-state
-// parents, the child may receive whichever state propagates first. tryDispatch
-// re-evaluates all dependencies with full precedence before acting on any node.
-// No code path should read propagated state as authoritative.
-func (ps *PlanState) propagateState(dag *DAG, sourceID string, targetState NodeState) {
-	for _, depIdx := range dag.Dependents[sourceID] {
-		depID := dag.Nodes[depIdx].ID
-		if ps.States[depID] != nodeUnvisited {
-			continue // already propagated
-		}
-		ps.States[depID] = targetState
-		ps.propagateState(dag, depID, targetState)
-	}
 }
 
 // PlanSummary holds aggregate state from a completed DAG walk.

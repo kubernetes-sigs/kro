@@ -150,6 +150,21 @@ type walkState struct {
 	inflight     int
 }
 
+// notifyDependents dispatches all dependents of a node after its state is
+// committed without execution (Excluded, Blocked, Pending, includeWhen
+// failure). Each dependent is propagation-triggered so that tryDispatch
+// bypasses the skip check and evaluates dependencies with full precedence.
+//
+// Bounded by DAG depth (acyclic, verified at compile time). Each dependent
+// is dispatched at most once — the early return in tryDispatch guards
+// against re-evaluation of already-committed nodes.
+func (w *walkState) notifyDependents(nodeID string) {
+	for _, depIdx := range w.dag.Dependents[nodeID] {
+		w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
+		w.tryDispatch(depIdx)
+	}
+}
+
 // tryDispatch checks if a node can be dispatched. Three outcomes:
 // 1. All dependencies resolved → dispatch to worker
 // 2. Some dependency still inflight → skip, retried when dependency completes
@@ -240,14 +255,17 @@ func (w *walkState) tryDispatch(idx int) {
 	}
 	if hasExcluded {
 		w.plan.SetState(w.dag, node.ID, NodeExcluded)
+		w.notifyDependents(node.ID)
 		return
 	}
 	if hasBlocked {
 		w.plan.SetState(w.dag, node.ID, NodeBlocked)
+		w.notifyDependents(node.ID)
 		return
 	}
 	if hasPending {
 		w.plan.SetState(w.dag, node.ID, NodePending)
+		w.notifyDependents(node.ID)
 		return
 	}
 	if hasInflight {
@@ -400,10 +418,12 @@ func (w *walkState) tryDispatch(idx int) {
 			} else {
 				w.plan.SetState(w.dag, node.ID, NodeError)
 			}
+			w.notifyDependents(node.ID)
 			return
 		}
 		if !included {
 			w.plan.SetState(w.dag, node.ID, NodeExcluded)
+			w.notifyDependents(node.ID)
 			return
 		}
 	}
@@ -422,6 +442,7 @@ func (w *walkState) tryDispatch(idx int) {
 				nodeState = info.state
 			}
 			w.plan.SetState(w.dag, node.ID, nodeState)
+			w.notifyDependents(node.ID)
 			return
 		}
 		nodeRef = resolved

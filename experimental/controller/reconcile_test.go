@@ -1,10 +1,12 @@
 package graphcontroller
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"testing"
 
+	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -24,12 +26,16 @@ import (
 // just that it doesn't do the wrong thing (safety).
 // ---------------------------------------------------------------------------
 
-// TestSetStatePropagateSplitExcludedBlocked proves that SetState propagates
-// NodeExcluded for definitive absence (includeWhen=false) and NodeBlocked
-// for uncertain absence (dependency errored). This is the structural split
-// that makes prune safety possible — without it, the prune loop can't
-// distinguish "definitely doesn't exist" from "might exist after recovery."
-func TestSetStatePropagateSplitExcludedBlocked(t *testing.T) {
+// TestSetStateDoesNotPropagate proves that SetState only sets the source
+// node's state and does NOT propagate to dependents. State propagation
+// is the responsibility of tryDispatch, which evaluates all dependencies
+// with full precedence (Excluded > Blocked > Pending).
+//
+// The previous implementation used a first-wins flood fill that violated
+// precedence in diamond dependencies: if an Error parent propagated
+// before an Excluded parent, the child was marked Blocked instead of
+// Excluded — an incorrect classification that prevented pruning.
+func TestSetStateDoesNotPropagate(t *testing.T) {
 	// Build a chain: A → B → C
 	nodes := []Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
@@ -39,73 +45,23 @@ func TestSetStatePropagateSplitExcludedBlocked(t *testing.T) {
 	dag, err := BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
-	t.Run("NodeExcluded propagates as NodeExcluded", func(t *testing.T) {
-		plan := NewPlanState(dag)
-		plan.SetState(dag, "a", NodeExcluded)
+	states := []NodeState{NodeExcluded, NodeError, NodePending, NodeConflict, NodeSystemError, NodeReady, NodeNotReady}
+	for _, sourceState := range states {
+		t.Run(sourceState.String(), func(t *testing.T) {
+			plan := NewPlanState(dag)
+			plan.SetState(dag, "a", sourceState)
 
-		assert.Equal(t, NodeExcluded, plan.States["a"], "source should be Excluded")
-		assert.Equal(t, NodeExcluded, plan.States["b"], "direct dependent should be Excluded")
-		assert.Equal(t, NodeExcluded, plan.States["c"], "transitive dependent should be Excluded")
-	})
-
-	t.Run("NodeError propagates as NodeBlocked", func(t *testing.T) {
-		plan := NewPlanState(dag)
-		plan.SetState(dag, "a", NodeError)
-
-		assert.Equal(t, NodeError, plan.States["a"], "source should be Error")
-		assert.Equal(t, NodeBlocked, plan.States["b"], "direct dependent should be Blocked")
-		assert.Equal(t, NodeBlocked, plan.States["c"], "transitive dependent should be Blocked")
-	})
-
-	t.Run("NodePending propagates as NodePending", func(t *testing.T) {
-		plan := NewPlanState(dag)
-		plan.SetState(dag, "a", NodePending)
-
-		assert.Equal(t, NodePending, plan.States["a"])
-		assert.Equal(t, NodePending, plan.States["b"])
-		assert.Equal(t, NodePending, plan.States["c"])
-	})
-
-	t.Run("NodeConflict propagates as NodeBlocked", func(t *testing.T) {
-		plan := NewPlanState(dag)
-		plan.SetState(dag, "a", NodeConflict)
-
-		assert.Equal(t, NodeConflict, plan.States["a"])
-		assert.Equal(t, NodeBlocked, plan.States["b"])
-		assert.Equal(t, NodeBlocked, plan.States["c"])
-	})
-
-	t.Run("NodeSystemError propagates as NodeBlocked", func(t *testing.T) {
-		plan := NewPlanState(dag)
-		plan.SetState(dag, "a", NodeSystemError)
-
-		assert.Equal(t, NodeSystemError, plan.States["a"])
-		assert.Equal(t, NodeBlocked, plan.States["b"])
-		assert.Equal(t, NodeBlocked, plan.States["c"])
-	})
-
-	t.Run("NodeReady does not propagate", func(t *testing.T) {
-		plan := NewPlanState(dag)
-		plan.SetState(dag, "a", NodeReady)
-
-		assert.Equal(t, NodeReady, plan.States["a"])
-		assert.Equal(t, nodeUnvisited, plan.States["b"], "Ready should not propagate")
-		assert.Equal(t, nodeUnvisited, plan.States["c"])
-	})
-
-	t.Run("NodeNotReady does not propagate", func(t *testing.T) {
-		plan := NewPlanState(dag)
-		plan.SetState(dag, "a", NodeNotReady)
-
-		assert.Equal(t, NodeNotReady, plan.States["a"])
-		assert.Equal(t, nodeUnvisited, plan.States["b"], "NotReady should not propagate")
-		assert.Equal(t, nodeUnvisited, plan.States["c"])
-	})
+			assert.Equal(t, sourceState, plan.States["a"], "source should be set")
+			assert.Equal(t, nodeUnvisited, plan.States["b"], "direct dependent should remain unvisited")
+			assert.Equal(t, nodeUnvisited, plan.States["c"], "transitive dependent should remain unvisited")
+		})
+	}
 }
 
 // TestSummaryCountsBlockedState proves that PlanSummary correctly reports
-// HasBlocked when any node is in NodeBlocked state. This feeds the allReady
-// check and the status condition.
+// HasBlocked when a node is explicitly set to NodeBlocked. Since SetState
+// no longer propagates, the test sets dependent state explicitly (matching
+// what tryDispatch would do during a real walk).
 func TestSummaryCountsBlockedState(t *testing.T) {
 	nodes := []Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
@@ -116,12 +72,213 @@ func TestSummaryCountsBlockedState(t *testing.T) {
 
 	plan := NewPlanState(dag)
 	plan.SetState(dag, "a", NodeError)
-	// b should now be NodeBlocked via propagation
+	// Simulate what tryDispatch does: when b's dependency a is in error,
+	// tryDispatch marks b as Blocked.
+	plan.SetState(dag, "b", NodeBlocked)
 
 	summary := plan.Summary()
 	assert.True(t, summary.HasError, "should report error on the source node")
 	assert.True(t, summary.HasBlocked, "should report blocked on the dependent node")
 	assert.Equal(t, 0, summary.ReadyCount)
+}
+
+// ---------------------------------------------------------------------------
+// tryDispatch state propagation tests
+//
+// These replace the old SetState propagation tests. The design commitment
+// (004 § Wind step 2: Excluded > Blocked > Pending) is now enforced by
+// tryDispatch, not SetState. These tests exercise tryDispatch directly.
+// ---------------------------------------------------------------------------
+
+// newTestWalkState builds a minimal walkState for testing tryDispatch.
+// All nodes are marked as triggered so the skip check doesn't fire.
+// Dependency states can be pre-set via plan.States before calling tryDispatch.
+func newTestWalkState(t *testing.T, dag *DAG) *walkState {
+	t.Helper()
+	compiled := &compiledGraph{
+		env:          nil,
+		programs:     map[string]cel.Program{},
+		exprPaths:    map[string]map[string][]FieldPath{},
+		declaredVars: map[string]bool{},
+		dag:          dag,
+	}
+	plan := NewPlanState(dag)
+	triggered := make(map[string]bool, len(dag.Nodes))
+	for i := range dag.Nodes {
+		triggered[dag.Nodes[i].ID] = true
+	}
+	return &walkState{
+		ctx:                  context.Background(),
+		dag:                  dag,
+		plan:                 plan,
+		state:                newInstanceState(compiled),
+		eval:                 &evaluator{compiled: compiled, scope: map[string]any{}},
+		triggered:            triggered,
+		propagationTriggered: map[string]bool{},
+		dispatched:           map[int]bool{},
+		outputsReady:         map[string]bool{},
+		results:              make(chan nodeResult, 16),
+	}
+}
+
+// TestTryDispatchPrecedence_ExcludedOverBlockedOverPending proves that
+// tryDispatch enforces the design's state precedence when a node has
+// multiple dependencies in different failure states.
+//
+// Per 004-graph-execution.md § Wind step 2:
+//   - "Any dependency Excluded → Excluded, regardless of other dependencies'
+//     states (definitive absence propagates; the node is structurally non-viable)."
+//   - "Any dependency in an error state → inherit Blocked."
+//   - "Any dependency Pending → inherit Pending."
+//   - "Precedence where multiple apply: Excluded > Blocked > Pending"
+func TestTryDispatchPrecedence_ExcludedOverBlockedOverPending(t *testing.T) {
+	// Diamond: A and B are parents of C.
+	nodes := []Node{
+		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
+		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}}},
+		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"a": "${a.metadata.name}", "b": "${b.metadata.name}"}}},
+	}
+	dag, err := BuildDAG(nodes, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		stateA     NodeState
+		stateB     NodeState
+		wantChildC NodeState
+	}{
+		// Excluded > Blocked: Excluded parent takes precedence over Error parent.
+		{"Excluded+Error→Excluded", NodeExcluded, NodeError, NodeExcluded},
+		{"Error+Excluded→Excluded", NodeError, NodeExcluded, NodeExcluded},
+		// Excluded > Pending: Excluded parent takes precedence over Pending parent.
+		{"Excluded+Pending→Excluded", NodeExcluded, NodePending, NodeExcluded},
+		{"Pending+Excluded→Excluded", NodePending, NodeExcluded, NodeExcluded},
+		// Blocked > Pending: Error parent takes precedence over Pending parent.
+		{"Error+Pending→Blocked", NodeError, NodePending, NodeBlocked},
+		{"Pending+Error→Blocked", NodePending, NodeError, NodeBlocked},
+		// Same states: straightforward inheritance.
+		{"Excluded+Excluded→Excluded", NodeExcluded, NodeExcluded, NodeExcluded},
+		{"Error+Error→Blocked", NodeError, NodeError, NodeBlocked},
+		{"Pending+Pending→Pending", NodePending, NodePending, NodePending},
+		// All error variants map to Blocked.
+		{"Conflict+Pending→Blocked", NodeConflict, NodePending, NodeBlocked},
+		{"SystemError+Pending→Blocked", NodeSystemError, NodePending, NodeBlocked},
+		{"Blocked+Pending→Blocked", NodeBlocked, NodePending, NodeBlocked},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			walk := newTestWalkState(t, dag)
+			walk.plan.SetState(dag, "a", tc.stateA)
+			walk.plan.SetState(dag, "b", tc.stateB)
+
+			cIdx := -1
+			for i, n := range dag.Nodes {
+				if n.ID == "c" {
+					cIdx = i
+					break
+				}
+			}
+			require.NotEqual(t, -1, cIdx)
+
+			walk.tryDispatch(cIdx)
+			assert.Equal(t, tc.wantChildC, walk.plan.States["c"],
+				"child C should inherit %s from parents %s+%s", tc.wantChildC, tc.stateA, tc.stateB)
+		})
+	}
+}
+
+// TestTryDispatchChainPropagation proves that tryDispatch propagates state
+// transitively through chains: A → B → C. When A is set to Excluded, both
+// B and C become Excluded. When A is set to Error, both B and C become
+// Blocked.
+//
+// This is the equivalent of the old TestSetStatePropagateSplitExcludedBlocked,
+// now tested at the correct layer (tryDispatch, not SetState).
+func TestTryDispatchChainPropagation(t *testing.T) {
+	nodes := []Node{
+		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
+		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
+		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"ref": "${b.metadata.name}"}}},
+	}
+	dag, err := BuildDAG(nodes, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		rootA NodeState
+		wantB NodeState
+		wantC NodeState
+	}{
+		{"Excluded chains as Excluded", NodeExcluded, NodeExcluded, NodeExcluded},
+		{"Error chains as Blocked", NodeError, NodeBlocked, NodeBlocked},
+		{"Pending chains as Pending", NodePending, NodePending, NodePending},
+		{"Conflict chains as Blocked", NodeConflict, NodeBlocked, NodeBlocked},
+		{"SystemError chains as Blocked", NodeSystemError, NodeBlocked, NodeBlocked},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			walk := newTestWalkState(t, dag)
+			walk.plan.SetState(dag, "a", tc.rootA)
+
+			bIdx, cIdx := -1, -1
+			for i, n := range dag.Nodes {
+				switch n.ID {
+				case "b":
+					bIdx = i
+				case "c":
+					cIdx = i
+				}
+			}
+			require.NotEqual(t, -1, bIdx)
+			require.NotEqual(t, -1, cIdx)
+
+			// Dispatch b — it will see a's state and propagate to c.
+			walk.tryDispatch(bIdx)
+
+			assert.Equal(t, tc.wantB, walk.plan.States["b"], "direct dependent")
+			assert.Equal(t, tc.wantC, walk.plan.States["c"], "transitive dependent")
+		})
+	}
+}
+
+// TestTryDispatchPrecedence_RegressionDiamondExcludedBlocked is the
+// regression test for the specific bug this change fixes. In the old code,
+// propagateState used a first-wins flood fill that didn't enforce
+// Excluded > Blocked precedence. This test proves the fix holds.
+//
+// The bug: diamond A(Excluded) + B(Error) → child could be Blocked
+// (wrong) instead of Excluded (correct), preventing resource pruning.
+func TestTryDispatchPrecedence_RegressionDiamondExcludedBlocked(t *testing.T) {
+	nodes := []Node{
+		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
+		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}}},
+		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"a": "${a.metadata.name}", "b": "${b.metadata.name}"}}},
+		{ID: "d", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "d"}, "data": map[string]any{"ref": "${c.metadata.name}"}}},
+	}
+	dag, err := BuildDAG(nodes, nil)
+	require.NoError(t, err)
+
+	walk := newTestWalkState(t, dag)
+	walk.plan.SetState(dag, "a", NodeExcluded)
+	walk.plan.SetState(dag, "b", NodeError)
+
+	cIdx := -1
+	for i, n := range dag.Nodes {
+		if n.ID == "c" {
+			cIdx = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, cIdx)
+
+	walk.tryDispatch(cIdx)
+
+	assert.Equal(t, NodeExcluded, walk.plan.States["c"],
+		"child of Excluded+Error parents must be Excluded (not Blocked)")
+	assert.Equal(t, NodeExcluded, walk.plan.States["d"],
+		"transitive dependent must also be Excluded")
 }
 
 // TestPruneOrderReverseDependency proves that pruneOrder sorts prune

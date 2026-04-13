@@ -36,7 +36,6 @@ const (
 	// flat labels for simple selection. These are NOT the identity labels.
 	LabelRevisionGraphName = "internal.kro.run/graph-name"
 	LabelGraphGeneration   = "internal.kro.run/graph-generation"
-	LabelRevisionHash      = "internal.kro.run/hash"
 )
 
 // nodeLabelPrefix returns the DNS subdomain prefix shared by identity and

@@ -268,10 +268,10 @@ func TestPropagateWhenDoesNotBlockIndependentBranches(t *testing.T) {
 // Cycle detection — safety invariant
 // ---------------------------------------------------------------------------
 
-// TestCircularDependencyRejectsSpec proves that a Graph with circular dependencies
-// is rejected with Compiled=False, CircularDependency reason. No revision is created
+// TestDependencyErrorRejectsSpec proves that a Graph with circular dependencies
+// is rejected with Compiled=False, DependencyError reason. No revision is created
 // and no resources are applied.
-func TestCircularDependencyRejectsSpec(t *testing.T) {
+func TestDependencyErrorRejectsSpec(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -318,7 +318,7 @@ func TestCircularDependencyRejectsSpec(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Graph should reach Compiled=False with CircularDependency reason
+	// Graph should reach Compiled=False with DependencyError reason
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
@@ -347,8 +347,8 @@ func TestCircularDependencyRejectsSpec(t *testing.T) {
 	compiled, found := findCondition(conditions, "Compiled")
 	require.True(t, found, "Compiled condition should exist")
 	assert.Equal(t, "False", compiled["status"])
-	assert.Equal(t, "CircularDependency", compiled["reason"],
-		"reason should be CircularDependency")
+	assert.Equal(t, "DependencyError", compiled["reason"],
+		"reason should be DependencyError")
 	t.Logf("Circular dependency correctly detected: reason=%s, message=%s", compiled["reason"], compiled["message"])
 
 	// Verify Compiled condition is False (spec error — circular dependency)

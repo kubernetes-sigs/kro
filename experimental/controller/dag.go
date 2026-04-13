@@ -139,7 +139,7 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 				cycleIDs = append(cycleIDs, dag.Nodes[i].ID)
 			}
 		}
-		return nil, fmt.Errorf("nodes %v form a dependency cycle: %w", cycleIDs, ErrCircularDependency)
+		return nil, fmt.Errorf("nodes %v form a dependency cycle: %w", cycleIDs, ErrDependencyError)
 	}
 
 	dag.TopologicalOrder = order

@@ -1,11 +1,10 @@
 // revision.go implements GraphRevision — an immutable, namespace-scoped
-// snapshot of a Graph's materialized resources.
+// snapshot of a Graph's spec.
 //
 // Every structural mutation to a Graph (spec generation bump) produces a new
-// GraphRevision. The revision contains fully materialized resource templates
-// with ownership labels and per-resource content hashes injected. CEL ${...}
-// expressions are preserved as-is — they're evaluated at reconcile time, not
-// materialization time.
+// GraphRevision. The revision contains the Graph's node declarations as
+// authored — CEL ${...} expressions are preserved as-is. Ownership labels and
+// template hashes are injected at apply time, not at snapshot time.
 //
 // A revision can only be created if the spec compiles successfully (CEL +
 // DAG). Its existence proves the spec was structurally valid at creation time.
@@ -67,31 +66,19 @@ func revisionName(graphName string, generation int64) string {
 // ---------------------------------------------------------------------------
 
 // materialize produces a GraphRevision from a Graph and its parsed spec.
-// The revision contains fully materialized resource templates with:
-//   - internal.kro.run/graph-name label on each resource
-//   - internal.kro.run/graph-generation label on each resource
-//   - internal.kro.run/node-id label on each resource
-//   - internal.kro.run/template-hash annotation per resource
-//
-// CEL ${...} expressions are preserved as-is. The revision is the unit of
-// compilation — its existence proves the spec was structurally valid.
+// The revision is a spec snapshot — CEL ${...} expressions are preserved
+// as-is. Ownership labels and template hashes are injected at apply time,
+// not at materialization time.
 func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructured.Unstructured {
 	graphName := graph.GetName()
 	graphNamespace := graph.GetNamespace()
 	generation := graph.GetGeneration()
 	generationStr := strconv.FormatInt(generation, 10)
 
-	// Build materialized node list
+	// Build node list — a direct snapshot of the Graph spec nodes.
 	nodes := make([]any, len(spec.Nodes))
 	for i, node := range spec.Nodes {
-		nodes[i] = materializeNode(node, graphName, graphNamespace, generationStr)
-	}
-
-	// Compute content hash over the materialized nodes
-	contentHash, err := hashDesiredState(map[string]any{"nodes": nodes})
-	if err != nil {
-		// Non-fatal: empty hash means the first reconcile won't elide the apply.
-		contentHash = ""
+		nodes[i] = snapshotNode(node)
 	}
 
 	revision := &unstructured.Unstructured{
@@ -104,7 +91,6 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 				"labels": map[string]any{
 					LabelRevisionGraphName: graphName,
 					LabelGraphGeneration:   generationStr,
-					LabelRevisionHash:      contentHash,
 				},
 				"ownerReferences": []any{
 					map[string]any{
@@ -124,24 +110,15 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 	return revision
 }
 
-// materializeNode injects ownership labels and apply hash into a
-// single node's template metadata. Returns the node as a map
-// suitable for inclusion in the revision spec.
-func materializeNode(node Node, graphName, graphNamespace string, generation string) map[string]any {
+// snapshotNode copies a node's declaration into the revision spec.
+// No labels or hashes are injected — the revision is a pure spec snapshot.
+func snapshotNode(node Node) map[string]any {
 	entry := map[string]any{
 		"id": node.ID,
 	}
 
 	if node.Template != nil {
-		tmpl := deepCopyMap(node.Template)
-		ref := DetectReference(tmpl)
-		// Only inject ownership labels for structurally-known Own references.
-		// Unresolved references (Own vs Contribute unknown until reconcile time)
-		// get labels injected at apply time if they resolve to Own.
-		if ref == ReferenceOwn {
-			injectNodeLabels(tmpl, graphName, graphNamespace, generation, node.ID)
-		}
-		entry["template"] = tmpl
+		entry["template"] = deepCopyMap(node.Template)
 	}
 	if node.ForEach != nil {
 		fe := make(map[string]any, len(node.ForEach))
@@ -178,48 +155,12 @@ func materializeNode(node Node, graphName, graphNamespace string, generation str
 	return entry
 }
 
-// injectNodeLabels stamps identity labels into a template's metadata.
-// Uses the DNS subdomain identity label scheme from 004-graph-execution.md.
-// Also computes and sets the template-hash annotation.
-func injectNodeLabels(tmpl map[string]any, graphName, graphNamespace, generation, nodeID string) {
-	md, _ := tmpl["metadata"].(map[string]any)
-	if md == nil {
-		md = map[string]any{}
-		tmpl["metadata"] = md
-	}
-
-	lbls, _ := md["labels"].(map[string]any)
-	if lbls == nil {
-		lbls = map[string]any{}
-	}
-	ownLabel, _ := ReferenceOwn.LabelValue()
-	lbls[identityLabelKey(nodeID, graphName, graphNamespace)] = ownLabel
-	lbls[generationLabelKey(nodeID, graphName, graphNamespace)] = generation
-	md["labels"] = lbls
-
-	// Compute apply hash from the template content (before adding the
-	// hash itself — same pattern as cache.go's hashDesiredState).
-	hash, err := hashDesiredState(tmpl)
-	if err != nil {
-		// Non-fatal: empty hash means the first reconcile won't elide the apply.
-		hash = ""
-	}
-
-	anns, _ := md["annotations"].(map[string]any)
-	if anns == nil {
-		anns = map[string]any{}
-	}
-	anns[applyHashAnnotation] = hash
-	md["annotations"] = anns
-}
-
 // ---------------------------------------------------------------------------
 // Parsing — extract GraphSpec from a revision's spec
 // ---------------------------------------------------------------------------
 
 // extractRevisionSpec parses a GraphSpec from a GraphRevision object.
-// The revision's spec.nodes has the same structure as Graph spec.nodes,
-// just with labels/hashes already injected into templates.
+// The revision's spec.nodes has the same structure as Graph spec.nodes.
 func extractRevisionSpec(revision *unstructured.Unstructured) (*GraphSpec, error) {
 	spec, ok := revision.Object["spec"].(map[string]any)
 	if !ok {

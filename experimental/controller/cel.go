@@ -55,9 +55,9 @@ var ErrInvalidExpression = errors.New("invalid expression")
 // field or the Graph spec changes to no longer write that field.
 var ErrFieldConflict = errors.New("field conflict")
 
-// ErrCircularDependency indicates that the dependency graph contains a cycle.
+// ErrDependencyError indicates that the dependency graph contains a cycle.
 // This is a permanent error until the spec is fixed.
-var ErrCircularDependency = errors.New("circular dependency")
+var ErrDependencyError = errors.New("circular dependency")
 
 // celPendingPatterns are CEL error patterns that indicate data is not yet
 // available (retryable). Other CEL errors are considered expression bugs.
@@ -434,7 +434,7 @@ func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 
 	// Build the dependency graph using pre-extracted field paths.
 	// Cycle detection happens here — a cycle in the dependency graph
-	// sets Compiled=False with CircularDependency reason.
+	// sets Compiled=False with DependencyError reason.
 	dag, err := BuildDAG(spec.Nodes, exprPaths)
 	if err != nil {
 		return nil, err

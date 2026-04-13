@@ -55,8 +55,8 @@ func (s *reconcileState) deriveCompiledCondition() (status ConditionStatus, reas
 		if errors.Is(s.compiledErr, ErrInvalidExpression) {
 			return ConditionFalse, "ExpressionError", s.compiledErr.Error()
 		}
-		if errors.Is(s.compiledErr, ErrCircularDependency) {
-			return ConditionFalse, "CircularDependency", s.compiledErr.Error()
+		if errors.Is(s.compiledErr, ErrDependencyError) {
+			return ConditionFalse, "DependencyError", s.compiledErr.Error()
 		}
 		return ConditionFalse, "DeclarationError", s.compiledErr.Error()
 	}

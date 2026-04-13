@@ -489,8 +489,6 @@ func assertRevisionLabels(t *testing.T, rev *unstructured.Unstructured, graphNam
 		"revision should have graph-name label")
 	assert.Equal(t, fmt.Sprintf("%d", generation), labels[graphcontroller.LabelGraphGeneration],
 		"revision should have graph-generation label")
-	assert.NotEmpty(t, labels[graphcontroller.LabelRevisionHash],
-		"revision should have content hash label")
 }
 
 // countRevisions returns the number of GraphRevisions for a Graph in a namespace.

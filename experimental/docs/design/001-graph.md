@@ -47,11 +47,10 @@ spec:
             - port: 80
 ```
 
-Template fields can contain `${...}` CEL expressions that reference other nodes by `id`. Each
-node's `id` is a scope variable — after a node is processed, its full Kubernetes object
-(including status) is available to downstream expressions. A standalone expression (`${expr}`
-as the entire string) preserves the CEL return type. An embedded expression
-(`prefix-${expr}-suffix`) string-interpolates.
+Template fields can contain `${...}` CEL expressions that reference other nodes by `id`. Each node's
+`id` is a scope variable — after a node is applied, its full Kubernetes object (including status) is
+available to downstream expressions. A standalone expression (`${expr}` as the entire string)
+preserves the CEL return type. An embedded expression (`prefix-${expr}-suffix`) string-interpolates.
 
 ## Spec
 
@@ -62,59 +61,68 @@ is not significant — execution order is determined by the dependency graph.
 
 #### id
 
-A string that names the node within the Graph's scope. Other nodes reference it by this name
-in CEL expressions. Must be unique within the Graph. Hyphens are not allowed — they are parsed as
-subtraction by the CEL evaluator (e.g., `my-app` is `my` minus `app`). May be camelCased for
-readability. The node ID is lowercased when embedded in the identity label key; IDs that collide
-after lowercasing are rejected at compile time.
+A string that names the node within the Graph's scope. Other nodes reference it by this name in CEL
+expressions. Must be unique within the Graph (case-insensitive). Hyphens are not allowed — they are
+parsed as subtraction by the CEL evaluator (e.g., `my-app` is `my` minus `app`). May be camelCased
+for readability.
 
-After a node is processed, its `id` enters scope as a variable available to CEL expressions in
+After a node is applied, its `id` enters scope as a variable available to CEL expressions in
 downstream nodes. The value and type depend on the reference type — see below.
 
 #### template
 
-A Kubernetes resource declaration (or, for definition nodes, a map of values). The
-reference type determines how the controller handles it:
+A Kubernetes resource declaration. The reference type determines how the controller handles it:
 
-- **Own** — specifies fields beyond identity (labels, annotations, spec, data). The Graph creates
-  the resource if it doesn't exist, applies the specified fields via SSA, and tracks the resource
-  for cleanup.
+- **Own** — a full resource specification. The Graph creates the resource if it doesn't exist,
+  applies the specified fields via SSA, and tracks the resource for cleanup. The template declares
+  the complete desired state — `apiVersion`, `kind`, `metadata`, and the resource body (spec, data,
+  etc.).
 - **Watch** — specifies only identity (`apiVersion`, `kind`, `metadata.name`, `metadata.namespace`).
-  The Graph reads the resource into scope without managing it. If the resource does not exist, the
-  node is Pending.
+  The Graph reads the resource into scope without managing it.
 - **WatchKind** — specifies `apiVersion` and `kind` with an optional `selector` but no
-  `metadata.name`. The Graph discovers matching resources and enters them into scope as an array.
-  Create and delete events on matching objects trigger re-reconciliation.
+  `metadata.name`. The Graph discovers all resources of that kind matching the selector and enters
+  them into scope as an array. Create, update, and delete events on matching objects trigger
+  re-reconciliation.
 - **Contribute** — specifies a subset of fields on a resource that another actor manages (e.g., only
   status, or only labels). The Graph applies exactly those fields and tracks them for cleanup. This
   is how a Graph writes status to a custom resource, adds labels to an existing object, or
-  contributes any partial state.
-- **Definition** — no `apiVersion` and no `kind`. The template is a map of key-value pairs where
-  values are literals or `${...}` CEL expressions. The node produces no Kubernetes resource — it
-  defines values and enters the result into scope as `map[string]any`. No API calls, no
-  drift timer, no cleanup on teardown.
+  contributes any partial state. Each field has exactly one writer — an owning node can delegate
+  specific fields to a contributor, but two nodes cannot write the same field.
+- **Definition** — no `apiVersion`, `kind`, or identity fields. The template is a map of key-value
+  pairs where values are literals or `${...}` CEL expressions. The node produces no Kubernetes
+  resource — it defines computed values and enters the result into scope as `map[string]any`.
 
-After processing, the resource enters scope under its `id` — as the full Kubernetes object for Own,
-Watch, and Contribute templates, as an array for WatchKind, or as `map[string]any` for Definition.
+After a node is applied, its result enters scope under its `id` — as the full Kubernetes object for
+Own, Watch, and Contribute, as an array for WatchKind, or as `map[string]any` for Definition.
 
 ```yaml
-# Watch — reads an existing ConfigMap into scope
-- id: config
+# Definition — reusable naming values, no Kubernetes resource created
+- id: naming
   template:
-    apiVersion: v1
-    kind: ConfigMap
+    prefix: ${spec.name + '-' + spec.env}
+
+# Own — creates and manages a Deployment using the definition
+- id: deploy
+  template:
+    apiVersion: apps/v1
+    kind: Deployment
     metadata:
-      name: shared-config
+      name: ${naming.prefix + '-deploy'}
+    spec:
+      replicas: 3
+      selector:
+        matchLabels:
+          app: ${naming.prefix}
+      template:
+        metadata:
+          labels:
+            app: ${naming.prefix}
+        spec:
+          containers:
+            - name: app
+              image: nginx
 
-# WatchKind — discovers all Pods matching a selector
-- id: allPods
-  template:
-    apiVersion: v1
-    kind: Pod
-    selector:
-      app: my-app
-
-# Watch — reads the WebApp instance into scope
+# Watch — reads an existing WebApp into scope
 - id: webapp
   template:
     apiVersion: kro.run/v1alpha1
@@ -131,38 +139,31 @@ Watch, and Contribute templates, as an array for WatchKind, or as `map[string]an
       name: ${webapp.metadata.name}
       namespace: ${webapp.metadata.namespace}
     status:
-      deploymentReady: ${deployment.status.availableReplicas == deployment.spec.replicas}
-      address: ${service.status.loadBalancer.ingress[0].hostname}
+      deploymentReady: ${deploy.status.availableReplicas == deploy.spec.replicas}
 
-# Definition — reusable naming values, no Kubernetes resource created
-- id: naming
+# WatchKind — discovers all Pods matching a selector
+- id: appPods
   template:
-    prefix: ${spec.name + '-' + spec.env}
-    sanitized: ${spec.module.replace('.', '-')}
-
-- id: deploy
-  template:
-    apiVersion: apps/v1
-    kind: Deployment
-    metadata:
-      name: ${naming.prefix + '-deploy'}
+    apiVersion: v1
+    kind: Pod
+    selector:
+      app: ${naming.prefix}
 ```
 
 #### forEach
 
-Expands the template once per item in a collection. The collection is a CEL expression referencing a
-WatchKind or any array in scope. Each iteration binds the item to a named variable available
-within the template. The forEach node is a logical parent — it expands into one child node per item.
-Each child is a real node that manages one resource. Child identity is scoped to the parent — the
-child's node ID combines the parent's ID with the rendered resource key (GVK + namespace + name).
+Expands the template once per item in an array. The array is a CEL expression referencing a WatchKind
+or any array in scope. Each iteration binds the item to a named variable available within the
+template. The forEach node is a logical parent — it expands into one child node per item. Each child
+is a real node that manages one resource. Child identity is derived from the parent's ID combined
+with the rendered resource key (GVK + namespace + name).
 
-For definition templates (no `apiVersion`/`kind`), forEach produces `[]any` of values
-instead of managed resources — no children are created.
+For definition templates (no `apiVersion`/`kind`), forEach produces `[]any` of values instead of
+managed resources — no children are created.
 
-After processing, the parent enters scope as an array of child outputs — `${policies}` is `[]any`.
+After evaluation, the parent enters scope as an array of child outputs — `${policies}` is `[]any`.
 Downstream nodes depend on the parent, not individual children. The parent enters scope (enabling
-downstream evaluation) once all children have applied successfully — readyWhen is not required.
-`.ready()` additionally requires all children to satisfy readyWhen.
+downstream evaluation) once all children have applied successfully.
 
 ```yaml
 - id: policies
@@ -202,9 +203,9 @@ downstream evaluation) once all children have applied successfully — readyWhen
 
 #### includeWhen
 
-A list of CEL expressions. All must evaluate to `true` for the node to be included. If any
-condition is false, the node is skipped — nothing is applied and it does not enter scope. Downstream
-nodes that depend on it cannot evaluate (the data is not in scope) and are also Excluded.
+A list of CEL expressions. All must evaluate to `true` for the node to be included. If any condition
+is false, the node is skipped — nothing is applied and it does not enter scope. Downstream nodes
+that depend on it cannot evaluate (the data is not in scope) and are also Excluded.
 
 ```yaml
 - id: ingress
@@ -215,16 +216,16 @@ nodes that depend on it cannot evaluate (the data is not in scope) and are also 
 
 #### readyWhen
 
-A node is ready when its CEL expressions resolve and its apply or read succeeds — no implicit
-status conditions check is performed. This is the default behavior when readyWhen is absent.
+A node is ready when its CEL expressions resolve and its apply or read succeeds — no implicit status
+conditions check is performed. This is the default behavior when readyWhen is absent.
 
 readyWhen overrides this default with explicit CEL conditions. All expressions must evaluate to
 `true` for the node to be considered ready. readyWhen is a health signal — it feeds the Graph's
 aggregated status and tells operators whether the system has converged. It does not gate downstream
-execution. Dependents proceed as soon as the node is processed and its data is in scope, regardless
-of readyWhen. If a downstream CEL expression references a field that does not yet exist on the
+execution. Dependents proceed as soon as the node is applied and its data is in scope, regardless of
+readyWhen. If a downstream CEL expression references a field that does not yet exist on the
 resource, the expression fails to evaluate and the dependent is not applied — data availability is
-an implicit gate. propagateWhen is for the case where the field exists but is not yet valid.
+an implicit gate. propagateWhen (below) is for the case where the field exists but is not yet valid.
 
 Any object in scope exposes a `.ready()` CEL function that returns the graph controller's readiness
 assessment for that node. `.ready()` returns true when the node is applied and its readyWhen
@@ -270,7 +271,8 @@ dependents evaluate against the now-stable data.
 
 readyWhen and propagateWhen are complementary: readyWhen is a health signal (feeds Graph status),
 propagateWhen is a data flow gate (controls when dependents see new values). A node without
-propagateWhen propagates immediately — dependents evaluate on every reconcile.
+propagateWhen propagates immediately — dependents evaluate on every reconcile. A common pattern is
+`propagateWhen: [${node.ready()}]` — gate data flow on the node's own readiness assessment.
 
 ```yaml
 - id: deployment
@@ -283,8 +285,8 @@ propagateWhen propagates immediately — dependents evaluate on every reconcile.
 
 #### finalizes
 
-A node `id`. The resource is created when the target becomes a prune candidate — it does not
-exist during normal operation. It must reach readyWhen before the target's removal completes.
+A node `id`. The resource is created when the target becomes a prune candidate — it does not exist
+during normal operation. It must reach readyWhen before the target's removal completes.
 
 Finalizers fire regardless of why the target is being removed — Graph teardown, spec mutation,
 includeWhen toggle, or forEach scale-down.
@@ -316,9 +318,9 @@ A Graph whose template contains another Graph creates a nested scope. The inner 
 Kubernetes object — it is created via the API server and reconciled independently by its own
 reconciliation. Each level is a separate reconciliation loop with its own resource scope.
 
-The combination of WatchKind, forEach, and nested Graphs creates per-instance controllers. A
-parent Graph watches a kind via WatchKind, forEach creates one child Graph per item, and each
-child Graph independently reconciles resources for its item.
+The combination of WatchKind, forEach, and nested Graphs creates per-instance controllers. A parent
+Graph watches a kind via WatchKind, forEach creates one child Graph per item, and each child Graph
+independently reconciles resources for its item.
 
 ```yaml
 # Parent Graph — watches all Namespaces, creates a child Graph per Namespace
@@ -366,10 +368,9 @@ The parent's CEL evaluation produces the child Graph's spec as data. The child's
 evaluates that spec independently. No shared state between levels beyond what is persisted to the
 Kubernetes API server. The API server is the boundary between evaluation passes.
 
-Each controller does exactly one pass on its own spec. Expressions inside data values (e.g.,
-`${...}` strings stored in a resource's spec fields) survive as opaque strings — they are not
-re-scanned. Nested evaluation is recursive through Kubernetes persistence, not through string
-re-scanning.
+Each controller does exactly one pass on its own spec. Expressions in resource fields (e.g.,
+`${...}` strings stored in a resource's spec) survive as opaque strings — they are not re-scanned.
+Nested evaluation is recursive through Kubernetes persistence, not through string re-scanning.
 
 To pass an expression through to a child Graph, use `$${...}`. The controller strips one `$`,
 producing `${...}` in the output. The child's controller evaluates the resulting expression against
@@ -383,7 +384,13 @@ Escaping depth by target level:
 
 ## Status
 
-The Graph's status is the controller's observation of the Graph's current state.
+The Graph's status is the controller's observation of the Graph's current state. Status conditions
+exist to make the operator's mental model correct — they answer "is this Graph healthy, and if not,
+who needs to act?"
+
+Two failure domains require different responses: a user error is a Graph developer problem (fix the
+spec, resolve conflicts, correct permissions); a system error is an operator problem (infrastructure
+or server failures). The condition structure reflects this split.
 
 ### Conditions
 
@@ -394,28 +401,31 @@ when the status value does not change between reconciles.
 The Graph defines two conditions on orthogonal axes:
 
 **`Compiled`** — the spec is valid. CEL expressions compiled, the dependency graph is acyclic, and
-node definitions are structurally correct. Set once when the spec is processed. Permanent until
-the spec changes. Alarm on `False` immediately — the Graph will never converge until the spec is
-fixed.
+node declarations are structurally correct. Set once when the spec is processed. Permanent until the
+spec changes. A `False` Compiled condition means the Graph will never converge until the developer
+fixes the spec.
 
-| Reason                | Meaning                             |
-| --------------------- | ----------------------------------- |
-| `Compiled`            | Spec is valid                       |
-| `ExpressionError`     | CEL expression is invalid           |
-| `CircularDependency`  | Nodes form a circular dependency    |
-| `DeclarationError`    | Node declaration is malformed       |
+| Reason             | Meaning                          |
+| ------------------ | -------------------------------- |
+| `Compiled`         | Spec is valid                    |
+| `ExpressionError`  | CEL expression is invalid        |
+| `DependencyError`  | Nodes form a circular dependency |
+| `DeclarationError` | Node declaration is malformed    |
 
 **`Ready`** — a rollup of node evaluations. Each reason maps to the node state blocking convergence.
 `True` means converged. `Unknown` means converging — the controller is making progress and no
-intervention is needed. `False` means stuck — something requires operator action. Alarm on `False`
-or `Unknown` for too long.
+intervention is needed. `False` means stuck — something requires operator action.
+
+Alarm on Ready `False` or `Unknown` persisting beyond a reasonable convergence window. Since
+Compiled rolls up into Ready (as `NotCompiled`), a single alarm on the Ready condition covers both
+developer and operator failure modes.
 
 | Reason        | Status    | Node State  | Meaning                                        |
 | ------------- | --------- | ----------- | ---------------------------------------------- |
 | `Ready`       | `True`    | Ready       | All resources reconciled                       |
 | `NotReady`    | `Unknown` | NotReady    | Applied but readyWhen conditions not met       |
 | `Pending`     | `Unknown` | Pending     | Waiting for upstream data                      |
-| `Blocked`     | `Unknown` | Blocked     | Dependency in error state, waiting for resolve     |
+| `Blocked`     | `Unknown` | Blocked     | Dependency in error state, waiting for resolve |
 | `NotCompiled` | `False`   | —           | Spec invalid; rollup of Compiled=False         |
 | `Conflict`    | `False`   | Conflict    | SSA field ownership contested by another actor |
 | `Error`       | `False`   | Error       | Client request failed (4xx)                    |

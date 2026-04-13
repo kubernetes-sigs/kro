@@ -3,21 +3,20 @@
 When a Graph's spec changes, the controller needs to transition managed resources from the old
 desired state to the new desired state in a safe order. This requires a three-way comparison: the
 previous desired state, the new desired state, and the actual state in the cluster. Without a record
-of the previous desired structure, the controller cannot compute this diff — which resources are new,
-which changed, which should be removed, and in what order those operations are safe. A GraphRevision
-is that record — an immutable snapshot of the desired state for a given generation of the Graph spec.
+of the previous desired structure, the controller cannot compute this diff — which resources are
+new, which changed, which should be removed, and in what order those operations are safe. A
+GraphRevision is that record — an immutable snapshot of the desired state for a given generation of
+the Graph spec.
 
 A GraphRevision is a separate Kind, independently addressable. The Graph controller manages both
 Kinds.
 
 ## GraphRevision
 
-A GraphRevision is namespace-scoped, in the same namespace as its parent Graph. It contains the
-materialized resources that will be applied to the cluster. The Graph spec is the authoring
-surface — terse, with CEL expressions and implicit dependencies. The revision is the operational
-form — internal labels injected, resource set finalized. CEL expressions
-referencing other nodes (`${...}`) remain unevaluated and are resolved at runtime against live
-cluster state.
+A GraphRevision is namespace-scoped, in the same namespace as its parent Graph. It is a snapshot of
+the Graph's spec at a point in time. CEL expressions (`${...}`) are preserved as authored — they are
+evaluated at reconcile time against live cluster state, not at snapshot time. Ownership labels and
+other operational metadata are applied at reconciliation, not stored in the revision.
 
 ```yaml
 apiVersion: experimental.kro.run/v1alpha1
@@ -25,9 +24,8 @@ kind: GraphRevision
 metadata:
   name: my-app-g00003
   labels:
-    internal.kro.run/graph-generation: "3"
     internal.kro.run/graph-name: my-app
-    internal.kro.run/hash: a1b2c3d4e5f6
+    internal.kro.run/graph-generation: "3"
   ownerReferences:
     - apiVersion: experimental.kro.run/v1alpha1
       kind: Graph
@@ -43,9 +41,6 @@ spec:
         kind: Deployment
         metadata:
           name: my-app
-          labels:
-            deployment.my-app.default.internal.kro.run/reference: own
-            deployment.my-app.default.internal.kro.run/generation: "3"
         spec:
           replicas: 3
           selector:
@@ -65,9 +60,6 @@ spec:
         kind: Service
         metadata:
           name: ${deployment.metadata.name}-svc
-          labels:
-            service.my-app.default.internal.kro.run/reference: own
-            service.my-app.default.internal.kro.run/generation: "3"
         spec:
           selector: ${deployment.spec.selector.matchLabels}
           ports:
@@ -76,19 +68,12 @@ spec:
 
 ### Spec
 
-The spec contains one field:
+The spec contains the Graph's node declarations — the same structure as Graph `spec.nodes`. The spec
+is immutable. A structural change to the Graph produces a new GraphRevision, never an update to an
+existing one.
 
-- `nodes` — same structure as Graph nodes (`id`, `template`, `readyWhen`, `includeWhen`,
-  `propagateWhen`, `finalizes`, `forEach`) with internal metadata injected. Dependencies between
-  nodes are derived from CEL expression references and cached in memory, not persisted.
-
-The spec is immutable, enforced by CEL validation (`self == oldSelf`). A structural change to the
-Graph produces a new GraphRevision, never an update to an existing one.
-
-Because the revision contains the final resource representations rather than input templates,
-consumers are decoupled from how those resources were produced. If the Graph controller's internals
-change between versions, old revisions remain valid — they describe what was actually produced, not
-what needs to be re-interpreted. This is the migration path.
+Dependencies between nodes are derived from CEL expression references and cached in memory, not
+persisted.
 
 ### Status
 
@@ -106,17 +91,13 @@ what needs to be re-interpreted. This is the migration path.
 ## Lifecycle
 
 GraphRevisions use the Graph's `metadata.generation` as their identity — propagated from the Graph
-to the revision to every managed resource via the `generation` label. One number, one
-source: "which version of the Graph produced this." Gaps in the generation sequence mean
-materialization failed — the spec changed but the revision could not be produced.
+to the revision to every managed resource via the `generation` label. One number, one source: "which
+version of the Graph produced this." Gaps in the generation sequence mean compilation failed — the
+spec changed but the revision could not be produced.
 
-A content hash on each revision identifies semantically identical output across generations. Every
-successful generation gets its own revision object regardless — the content hash enables the
-controller to detect when a spec change produced no actual resource changes and skip the rollforward.
-
-When the Graph's `metadata.generation` advances, the controller materializes a new revision. If
-materialization fails, no revision is created; the failure is reported on the Graph. A revision can
-only exist if processing succeeded. The latest revision is always the reconciliation target — the
+When the Graph's `metadata.generation` advances, the controller snapshots a new revision. If
+compilation fails, no revision is created; the failure is reported on the Graph. A revision can only
+exist if compilation succeeded. The latest revision is always the reconciliation target — the
 controller compares it against the previous revision to determine which resources to create, update,
 or remove, then converges in dependency order.
 
@@ -134,11 +115,6 @@ first post-restart reconcile. The applied set — derived from the watch cache, 
 the authoritative record of what was written to the cluster.
 
 ## Why Not
-
-**Input templates instead of materialized output.** Couples every consumer to the controller's
-internals: to interpret a historical revision, you need the same processing logic that produced it.
-Materialized output decouples consumers and provides a migration path when internals evolve. A
-revision's existence proves processing succeeded, eliminating the "pending" state.
 
 **Inline in Graph status.** Status reports observations, not historical intent. Unbounded growth. GC
 means mutating the parent.

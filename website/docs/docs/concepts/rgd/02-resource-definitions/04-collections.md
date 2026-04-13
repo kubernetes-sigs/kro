@@ -221,6 +221,24 @@ If any iterator's collection is empty, zero resources are created. This follows
 standard cartesian product behavior: `2 × 0 = 0`.
 :::
 
+**Cartesian product does not support dependent iterations.** forEach iterators are
+independent and cannot reference each other. For nested iterations where the inner
+loop depends on the outer item, use a CEL expression with `.map().flatten()` to
+generate the flattened collection:
+
+```kro
+forEach:
+  - item: |
+      ${schema.spec.objectList.map(obj, 
+        lists.range(obj.countOfObject).map(i, 
+          {"object": obj, "index": i}
+        )
+      ).flatten()}
+template:
+  kind: ConfigMap
+  metadata:
+    name: ${item.object.name}-${string(item.index)}
+```
 
 ## Collection Sources
 

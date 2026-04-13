@@ -33,11 +33,13 @@ type DAG struct {
 }
 
 // BuildDAG constructs a dependency graph from a node list.
-// Dependencies are extracted by scanning CEL expressions for variable references.
+// exprPaths contains pre-extracted field paths from CEL ASTs (computed during
+// compilation in compileGraphSpec). These replace string-scanning with AST-walked
+// field paths per 004-graph-execution.md § Change detection.
 // Returns an error if the dependency graph contains a cycle (ErrCycleDetected).
 // Declaration order is not significant — topological order is computed from
 // the dependency graph via Kahn's algorithm.
-func BuildDAG(nodes []Node) (*DAG, error) {
+func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, error) {
 	dag := &DAG{
 		Nodes:      make([]Node, len(nodes)),
 		Index:      make(map[string]int, len(nodes)),
@@ -47,8 +49,7 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 	}
 
 	for i, node := range nodes {
-		node.Dependencies = extractReferencedIDs(node)
-		node.DepSections, node.SelfSections, node.ReadinessDeps = extractReferencedSections(node)
+		node.Dependencies, node.DepPaths, node.SelfPaths, node.ReadinessDeps = extractReferencedPathsFromNode(node, exprPaths)
 		dag.Nodes[i] = node
 		dag.Index[node.ID] = i
 		dag.References[node.ID] = node.Reference()
@@ -65,23 +66,20 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 		}
 	}
 
-	// Push downstream dependency sections into upstream SelfSections.
-	// If node B references deployment.status, the deployment node needs
-	// .status in its SelfSections so self-state changes are detected and
-	// the updated scope propagates to B. Without this, a bare Own node
-	// with no readyWhen/propagateWhen would have empty SelfSections —
-	// status changes would be invisible to downstream consumers.
+	// Push downstream dependency paths into upstream SelfPaths.
+	// If node B references deploy.status.availableReplicas, the deploy node
+	// needs ["status", "availableReplicas"] in its SelfPaths so self-state
+	// changes are detected and the updated scope propagates to B. Without
+	// this, a bare Own node with no readyWhen/propagateWhen would have empty
+	// SelfPaths — status changes would be invisible to downstream consumers.
 	for _, node := range dag.Nodes {
-		for depID, sections := range node.DepSections {
+		for depID, paths := range node.DepPaths {
 			depIdx, exists := dag.Index[depID]
 			if !exists {
 				continue
 			}
-			if dag.Nodes[depIdx].SelfSections == nil {
-				dag.Nodes[depIdx].SelfSections = map[string]bool{}
-			}
-			for section := range sections {
-				dag.Nodes[depIdx].SelfSections[section] = true
+			for _, p := range paths {
+				addFieldPath(&dag.Nodes[depIdx].SelfPaths, p)
 			}
 		}
 	}

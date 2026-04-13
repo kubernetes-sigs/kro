@@ -184,29 +184,31 @@ type Node struct {
 	// Populated by BuildDAG; nil before that.
 	Dependencies map[string]bool
 
-	// DepSections maps each dependency to the set of top-level sections this
-	// node's template expressions reference. For example, if this node's
-	// template contains ${deploy.spec.replicas}, DepSections["deploy"] contains
-	// "spec". Used for section-scoped input hashing — only hash the sections
-	// the node actually reads, because metadata.resourceVersion changes on every
-	// update and full-object hashing would defeat the cache.
+	// DepPaths maps each dependency to the field paths this node's CEL
+	// expressions reference. For example, if this node's template contains
+	// ${deploy.status.availableReplicas}, DepPaths["deploy"] contains
+	// ["status", "availableReplicas"]. Used for field-path-scoped evaluation
+	// hashing — only hash the specific paths the node actually reads.
+	// Per 004-graph-execution.md § Change detection.
 	// Populated by BuildDAG; nil before that.
-	DepSections map[string]map[string]bool
+	DepPaths map[string][]FieldPath
 
-	// SelfSections is the set of top-level sections of this node's own observed
-	// resource that readyWhen and propagateWhen expressions reference. When only
-	// self sections changed (e.g., a Deployment's status updated but config
-	// didn't), the template is unchanged — skip template evaluation and apply,
-	// re-evaluate only the gate conditions.
+	// SelfPaths is the set of field paths into this node's own observed
+	// resource that readyWhen, propagateWhen, and downstream expressions
+	// reference. When only self paths changed (e.g., a Deployment's
+	// status.availableReplicas updated but spec didn't), the template is
+	// unchanged — skip template evaluation and apply, re-evaluate only
+	// the gate conditions. Also used for propagation hashing — the
+	// propagation hash covers only these paths.
 	// Populated by BuildDAG; nil before that.
-	SelfSections map[string]bool
+	SelfPaths []FieldPath
 
 	// ReadinessDeps is the set of upstream node IDs whose readiness state
-	// must be checked even when the section-scoped input hash matches. These
-	// are nodes referenced via .ready() in readyWhen or propagateWhen — a
-	// runtime property that doesn't map to any object section. When any
-	// ReadinessDep's plan state changes between reconcile cycles, the node
-	// re-evaluates its gate conditions instead of skipping entirely.
+	// must be checked even when the evaluation hash matches. These are nodes
+	// referenced via .ready() in readyWhen or propagateWhen — a runtime
+	// property that doesn't map to any field path. When any ReadinessDep's
+	// plan state changes between reconcile cycles, the node re-evaluates
+	// its gate conditions instead of skipping entirely.
 	// Populated by BuildDAG; nil before that.
 	ReadinessDeps map[string]bool
 }

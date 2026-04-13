@@ -113,12 +113,13 @@ func isPending(err error) bool {
 // and BuildDAG produces a read-only structure (verified: zero writes to DAG
 // fields during reconciliation).
 type compiledGraph struct {
-	specHash     string                 // content hash of the compilation inputs
-	env          *cel.Env               // CEL environment (immutable after Extend)
-	programs     map[string]cel.Program // expression string → compiled program
-	declaredVars map[string]bool        // variable names declared in the CEL env
-	spec         *GraphSpec             // parsed spec (immutable)
-	dag          *DAG                   // dependency graph (immutable after BuildDAG)
+	specHash     string                            // content hash of the compilation inputs
+	env          *cel.Env                          // CEL environment (immutable after Extend)
+	programs     map[string]cel.Program            // expression string → compiled program
+	exprPaths    map[string]map[string][]FieldPath // expression string → (scope var → field paths)
+	declaredVars map[string]bool                   // variable names declared in the CEL env
+	spec         *GraphSpec                        // parsed spec (immutable)
+	dag          *DAG                              // dependency graph (immutable after BuildDAG)
 }
 
 // eval evaluates a CEL expression against the given scope.
@@ -424,26 +425,39 @@ func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 		return nil, fmt.Errorf("creating CEL env: %w", err)
 	}
 
-	// Build the dependency graph. Cycle detection happens here — a cycle
-	// in the dependency graph sets Accepted=False with CycleDetected reason.
-	dag, err := BuildDAG(spec.Nodes)
-	if err != nil {
-		return nil, err
+	// Build scope var set for field path extraction.
+	scopeVars := make(map[string]bool, len(allIDs))
+	for _, id := range allIDs {
+		scopeVars[id] = true
 	}
 
 	expressions := spec.AllExpressions()
 	programs := make(map[string]cel.Program, len(expressions))
+	exprPaths := make(map[string]map[string][]FieldPath, len(expressions))
 
 	for _, expr := range expressions {
 		ast, issues := env.Compile(expr)
 		if issues != nil && issues.Err() != nil {
 			return nil, fmt.Errorf("compiling expression %q: %w: %w", expr, ErrCompilationFailed, issues.Err())
 		}
+		// Extract field paths from the AST before creating the program.
+		// Per 004-graph-execution.md § Change detection: "At graph compilation,
+		// the controller walks each compiled expression's AST to extract
+		// reference chains." One walk per expression, at compile time.
+		exprPaths[expr] = extractFieldPathsFromAST(ast.NativeRep().Expr(), scopeVars, nil)
 		prg, err := env.Program(ast)
 		if err != nil {
 			return nil, fmt.Errorf("programming expression %q: %w: %w", expr, ErrCompilationFailed, err)
 		}
 		programs[expr] = prg
+	}
+
+	// Build the dependency graph using pre-extracted field paths.
+	// Cycle detection happens here — a cycle in the dependency graph
+	// sets Accepted=False with CycleDetected reason.
+	dag, err := BuildDAG(spec.Nodes, exprPaths)
+	if err != nil {
+		return nil, err
 	}
 
 	// Track which variable names are declared in the CEL env so that
@@ -458,6 +472,7 @@ func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 		specHash:     spec.Hash(),
 		env:          env,
 		programs:     programs,
+		exprPaths:    exprPaths,
 		declaredVars: declared,
 		spec:         spec,
 		dag:          dag,

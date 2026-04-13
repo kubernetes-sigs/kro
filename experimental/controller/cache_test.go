@@ -1,6 +1,3 @@
-// cache_test.go contains regression tests for content-addressed apply gating
-// and section-scoped hashing. Each test targets a specific correctness
-// invariant that the implementation must maintain.
 package graphcontroller
 
 import (
@@ -13,28 +10,28 @@ import (
 // ---------------------------------------------------------------------------
 // Absent path sentinel regression tests
 //
-// Regression: hashNodeInputs and hashSelfSections previously used `continue`
-// when a referenced section was absent from the observed data. This meant
+// Regression: hashNodeInputs and hashSelfPaths previously used `continue`
+// when a referenced path was absent from the observed data. This meant
 // absent→present transitions (e.g., an upstream resource gaining a `status`
 // block for the first time) produced the same hash as before, so downstream
 // nodes never re-evaluated.
 //
-// Fix: absent sections now hash a fixed sentinel value. The transition from
+// Fix: absent paths now hash a fixed sentinel value. The transition from
 // absent to present changes the hash, triggering re-evaluation.
 // ---------------------------------------------------------------------------
 
 // TestHashNodeInputsAbsentSentinel proves that hashNodeInputs produces
-// different hashes when a referenced section transitions from absent to
+// different hashes when a referenced path transitions from absent to
 // present. Without the sentinel, both cases hash identically.
 func TestHashNodeInputsAbsentSentinel(t *testing.T) {
 	node := &Node{
 		ID: "child",
-		DepSections: map[string]map[string]bool{
-			"parent": {"status": true, "spec": true},
+		DepPaths: map[string][]FieldPath{
+			"parent": {{"status", "ready"}, {"spec", "replicas"}},
 		},
 	}
 
-	// Scope where parent has spec but NOT status (status absent).
+	// Scope where parent has spec but NOT status (status.ready absent).
 	scopeAbsent := map[string]any{
 		"parent": map[string]any{
 			"spec": map[string]any{"replicas": int64(3)},
@@ -42,7 +39,7 @@ func TestHashNodeInputsAbsentSentinel(t *testing.T) {
 		},
 	}
 
-	// Scope where parent has both spec AND status (status present).
+	// Scope where parent has both spec AND status.ready present.
 	scopePresent := map[string]any{
 		"parent": map[string]any{
 			"spec":   map[string]any{"replicas": int64(3)},
@@ -59,7 +56,7 @@ func TestHashNodeInputsAbsentSentinel(t *testing.T) {
 	require.NotEmpty(t, hashPresent)
 
 	assert.NotEqual(t, hashAbsent, hashPresent,
-		"absent→present section transition must change the hash; "+
+		"absent→present path transition must change the hash; "+
 			"without the sentinel, downstream nodes would never re-evaluate")
 }
 
@@ -69,8 +66,8 @@ func TestHashNodeInputsAbsentSentinel(t *testing.T) {
 func TestHashNodeInputsAbsentStable(t *testing.T) {
 	node := &Node{
 		ID: "child",
-		DepSections: map[string]map[string]bool{
-			"parent": {"status": true},
+		DepPaths: map[string][]FieldPath{
+			"parent": {{"status", "ready"}},
 		},
 	}
 
@@ -90,14 +87,14 @@ func TestHashNodeInputsAbsentStable(t *testing.T) {
 		"hashing the same absent state must produce identical results")
 }
 
-// TestHashSelfSectionsAbsentSentinel proves that hashSelfSections produces
-// different hashes when a self-referenced section transitions from absent to
+// TestHashSelfPathsAbsentSentinel proves that hashSelfPaths produces
+// different hashes when a self-referenced path transitions from absent to
 // present. This triggers gate re-evaluation (readyWhen/propagateWhen) when
-// the resource gains a new section.
-func TestHashSelfSectionsAbsentSentinel(t *testing.T) {
+// the resource gains a new field.
+func TestHashSelfPathsAbsentSentinel(t *testing.T) {
 	node := &Node{
-		ID:           "deploy",
-		SelfSections: map[string]bool{"status": true},
+		ID:        "deploy",
+		SelfPaths: []FieldPath{{"status", "availableReplicas"}},
 	}
 
 	// Observed resource without status.
@@ -112,25 +109,25 @@ func TestHashSelfSectionsAbsentSentinel(t *testing.T) {
 		"status": map[string]any{"availableReplicas": int64(3)},
 	}
 
-	hashAbsent, err := hashSelfSections(node, observedAbsent)
+	hashAbsent, err := hashSelfPaths(node, observedAbsent)
 	require.NoError(t, err)
 	require.NotEmpty(t, hashAbsent)
 
-	hashPresent, err := hashSelfSections(node, observedPresent)
+	hashPresent, err := hashSelfPaths(node, observedPresent)
 	require.NoError(t, err)
 	require.NotEmpty(t, hashPresent)
 
 	assert.NotEqual(t, hashAbsent, hashPresent,
-		"absent→present self section transition must change the hash; "+
+		"absent→present self path transition must change the hash; "+
 			"without the sentinel, gate conditions would never re-evaluate")
 }
 
-// TestHashSelfSectionsAbsentStable proves the absent sentinel for
-// hashSelfSections is deterministic.
-func TestHashSelfSectionsAbsentStable(t *testing.T) {
+// TestHashSelfPathsAbsentStable proves the absent sentinel for
+// hashSelfPaths is deterministic.
+func TestHashSelfPathsAbsentStable(t *testing.T) {
 	node := &Node{
-		ID:           "deploy",
-		SelfSections: map[string]bool{"status": true},
+		ID:        "deploy",
+		SelfPaths: []FieldPath{{"status", "availableReplicas"}},
 	}
 
 	observed := map[string]any{
@@ -138,35 +135,72 @@ func TestHashSelfSectionsAbsentStable(t *testing.T) {
 		// "status" is absent
 	}
 
-	hash1, err := hashSelfSections(node, observed)
+	hash1, err := hashSelfPaths(node, observed)
 	require.NoError(t, err)
 
-	hash2, err := hashSelfSections(node, observed)
+	hash2, err := hashSelfPaths(node, observed)
 	require.NoError(t, err)
 
 	assert.Equal(t, hash1, hash2,
-		"hashing the same absent self section must produce identical results")
+		"hashing the same absent self path must produce identical results")
 }
 
-// ---------------------------------------------------------------------------
-// Resource cache regression tests
-//
-// Regression: applyContribution cached the apply hash after the main
-// resource patch succeeded. If the subsequent status subresource patch
-// failed, the cache still held the hash — next reconcile saw a match and
-// skipped the apply entirely. The resource was silently diverged.
-//
-// Fix: on status subresource failure, Resources.remove(cacheKey) is called
-// before returning the error. The next reconcile sees a cache miss and
-// retries both patches.
-// ---------------------------------------------------------------------------
+// TestHashFieldPathGranularity proves that field-path hashing only changes
+// when the referenced path changes, not when sibling fields change.
+// This is the core property: status.availableReplicas changes → hash changes;
+// status.conditions changes → hash does NOT change (if we only reference availableReplicas).
+func TestHashFieldPathGranularity(t *testing.T) {
+	node := &Node{
+		ID:        "deploy",
+		SelfPaths: []FieldPath{{"status", "availableReplicas"}},
+	}
 
-// TestResourceCacheRemoveForcesReapply proves that removing a cache entry
-// causes subsequent gets to return a miss, which forces re-apply on the
-// next reconcile. This is the mechanism the status-fail-revert fix relies on.
-func TestResourceCacheRemoveForcesReapply(t *testing.T) {
+	observed1 := map[string]any{
+		"status": map[string]any{
+			"availableReplicas": int64(3),
+			"conditions":        []any{"old-conditions"},
+		},
+	}
+
+	observed2 := map[string]any{
+		"status": map[string]any{
+			"availableReplicas": int64(3),
+			"conditions":        []any{"new-conditions-changed"},
+		},
+	}
+
+	hash1, err := hashSelfPaths(node, observed1)
+	require.NoError(t, err)
+
+	hash2, err := hashSelfPaths(node, observed2)
+	require.NoError(t, err)
+
+	assert.Equal(t, hash1, hash2,
+		"changing status.conditions should NOT affect the hash when only status.availableReplicas is referenced")
+
+	// Now change the referenced field.
+	observed3 := map[string]any{
+		"status": map[string]any{
+			"availableReplicas": int64(5), // changed!
+			"conditions":        []any{"new-conditions-changed"},
+		},
+	}
+
+	hash3, err := hashSelfPaths(node, observed3)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, hash1, hash3,
+		"changing status.availableReplicas MUST affect the hash")
+}
+
+// TestResourceCache tests the resource cache operations.
+func TestResourceCache(t *testing.T) {
 	rc := newResourceCache()
 	key := "v1/ConfigMap/default/test"
+
+	// Cache miss on empty cache.
+	_, ok := rc.get(key)
+	require.False(t, ok, "cache should miss on empty cache")
 
 	// Simulate a successful apply that populates the cache.
 	rc.set(key, &cachedObject{
@@ -183,9 +217,6 @@ func TestResourceCacheRemoveForcesReapply(t *testing.T) {
 	// Simulate the status-fail fix: remove the entry.
 	rc.remove(key)
 
-	// Cache miss — next reconcile will re-apply.
 	_, ok = rc.get(key)
-	assert.False(t, ok,
-		"cache must miss after remove; without this, status subresource "+
-			"failures would leave the resource silently diverged")
+	require.False(t, ok, "cache should miss after remove")
 }

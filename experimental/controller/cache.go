@@ -10,6 +10,7 @@ package graphcontroller
 import (
 	"encoding/json"
 	"fmt"
+	"hash"
 	"hash/fnv"
 	"sort"
 	"strings"
@@ -126,10 +127,10 @@ func resourceCacheKey(apiVersion, kind, namespace, name string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Section-scoped evaluation hashing
+// Field-path-scoped evaluation hashing
 // ---------------------------------------------------------------------------
 
-// volatileMetadataFields are metadata keys excluded from section-scoped hashing.
+// volatileMetadataFields are metadata keys excluded from field-path hashing.
 // These change on every write without conveying semantic meaning — including them
 // would defeat the evaluation hash (same problem as full-object hashing).
 var volatileMetadataFields = map[string]bool{
@@ -142,27 +143,26 @@ var volatileMetadataFields = map[string]bool{
 	"deletionGracePeriodSeconds": true,
 }
 
-// hashNodeInputs computes a section-scoped hash of a node's dependency inputs.
-// Only the top-level sections that the node's CEL expressions reference are
-// included. For metadata, volatile fields (resourceVersion, managedFields, etc.)
-// are excluded.
+// hashNodeInputs computes a field-path-scoped hash of a node's dependency inputs.
+// Only the specific field paths that the node's CEL expressions reference are
+// included (from node.DepPaths). For metadata paths, volatile fields are excluded.
 //
-// Returns "" if the node has no dependency sections to hash (e.g., Watch nodes
-// with no upstream dependencies).
+// Per 004-graph-execution.md § Change detection: "At graph compilation, the
+// controller walks each compiled expression's AST to extract reference chains."
+//
+// Returns "" if the node has no dependency paths to hash.
 func hashNodeInputs(node *Node, scope map[string]any) (string, error) {
-	if len(node.DepSections) == 0 {
+	if len(node.DepPaths) == 0 {
 		return "", nil
 	}
 
 	h := fnv.New64a()
 	// Process dependencies in sorted order for deterministic hashing.
-	depIDs := sortedMapKeys(node.DepSections)
+	depIDs := sortedMapKeys(node.DepPaths)
 	for _, depID := range depIDs {
-		sections := node.DepSections[depID]
+		paths := node.DepPaths[depID]
 		depData, ok := scope[depID]
 		if !ok {
-			// Dependency not in scope — this node can't be evaluated yet.
-			// Return a sentinel that won't match any previous hash.
 			return "", fmt.Errorf("dependency %q not in scope", depID)
 		}
 		depMap, ok := depData.(map[string]any)
@@ -177,43 +177,21 @@ func hashNodeInputs(node *Node, scope map[string]any) (string, error) {
 			continue
 		}
 
-		sectionNames := sortedMapKeys(sections)
-		for _, section := range sectionNames {
-			sectionData, ok := depMap[section]
-			if !ok {
-				// Absent section: hash a sentinel so absent→present is a change.
-				// Per 004-graph-execution.md: "Absent paths hash to a fixed
-				// sentinel value that is not a valid Kubernetes field value."
-				h.Write([]byte(depID))
-				h.Write([]byte(section))
-				h.Write([]byte("\x00__absent__\x00"))
-				continue
-			}
-			// For metadata, exclude volatile fields.
-			if section == "metadata" {
-				sectionData = filterVolatileMetadata(sectionData)
-			}
-			data, err := json.Marshal(sectionData)
-			if err != nil {
-				return "", fmt.Errorf("hashing %s.%s: %w", depID, section, err)
-			}
-			h.Write([]byte(depID))
-			h.Write([]byte(section))
-			h.Write(data)
+		for _, fp := range paths {
+			hashFieldPath(h, depID, fp, depMap)
 		}
 	}
 
 	return fmt.Sprintf("%016x", h.Sum64()), nil
 }
 
-// hashSelfSections computes a hash of the referenced sections of a node's own
-// observed resource. Used to detect self-state changes (e.g., status updated by
-// another controller) that require gate re-evaluation without template re-evaluation.
+// hashSelfPaths computes a hash of the referenced field paths of a node's own
+// observed resource. Used to detect self-state changes that require gate
+// re-evaluation without template re-evaluation, and for propagation change detection.
 //
-// Returns "" if the node has no self-sections (no readyWhen/propagateWhen
-// referencing self fields).
-func hashSelfSections(node *Node, observed any) (string, error) {
-	if len(node.SelfSections) == 0 {
+// Returns "" if the node has no self-paths.
+func hashSelfPaths(node *Node, observed any) (string, error) {
+	if len(node.SelfPaths) == 0 {
 		return "", nil
 	}
 
@@ -223,29 +201,66 @@ func hashSelfSections(node *Node, observed any) (string, error) {
 	}
 
 	h := fnv.New64a()
-	sectionNames := sortedMapKeys(node.SelfSections)
-	for _, section := range sectionNames {
-		sectionData, ok := observedMap[section]
-		if !ok {
-			// Absent section: hash a sentinel so absent→present is a change.
-			// Per 004-graph-execution.md: "Absent paths hash to a fixed
-			// sentinel value that is not a valid Kubernetes field value."
-			h.Write([]byte(section))
-			h.Write([]byte("\x00__absent__\x00"))
-			continue
-		}
-		if section == "metadata" {
-			sectionData = filterVolatileMetadata(sectionData)
-		}
-		data, err := json.Marshal(sectionData)
-		if err != nil {
-			return "", fmt.Errorf("hashing self.%s: %w", section, err)
-		}
-		h.Write([]byte(section))
-		h.Write(data)
+	for _, fp := range node.SelfPaths {
+		hashFieldPath(h, "", fp, observedMap)
 	}
 
 	return fmt.Sprintf("%016x", h.Sum64()), nil
+}
+
+// hashFieldPath walks into an object at a field path and hashes the value found.
+// If the path is nil (bare reference), the entire object is hashed.
+// If the path leads to an absent value, a sentinel is hashed.
+// Volatile metadata fields are excluded when the path enters "metadata".
+func hashFieldPath(h hash.Hash64, prefix string, fp FieldPath, obj map[string]any) {
+	// Write the prefix (dependency ID) and path for domain separation.
+	h.Write([]byte(prefix))
+	for _, seg := range fp {
+		h.Write([]byte(seg))
+	}
+
+	if len(fp) == 0 {
+		// Bare reference — hash the entire object.
+		data, err := json.Marshal(obj)
+		if err != nil {
+			h.Write([]byte("\x00__error__\x00"))
+			return
+		}
+		h.Write(data)
+		return
+	}
+
+	// Walk the path into the object.
+	var current any = obj
+	for i, segment := range fp {
+		m, ok := current.(map[string]any)
+		if !ok {
+			// Path expects a map but found something else — treat as absent.
+			h.Write([]byte("\x00__absent__\x00"))
+			return
+		}
+		val, exists := m[segment]
+		if !exists {
+			// Per 004-graph-execution.md: "Absent paths hash to a fixed sentinel."
+			h.Write([]byte("\x00__absent__\x00"))
+			return
+		}
+		// At the first segment, check for metadata volatile field filtering.
+		if i == 0 && segment == "metadata" {
+			val = filterVolatileMetadata(val)
+		}
+		if i == len(fp)-1 {
+			// Leaf — hash the value.
+			data, err := json.Marshal(val)
+			if err != nil {
+				h.Write([]byte("\x00__error__\x00"))
+				return
+			}
+			h.Write(data)
+			return
+		}
+		current = val
+	}
 }
 
 // filterVolatileMetadata returns a copy of metadata with volatile fields removed.

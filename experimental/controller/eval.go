@@ -330,100 +330,78 @@ func copyScope(scope map[string]any) map[string]any {
 // scope variable names referenced. Self-references (the node's own ID)
 // are excluded since readyWhen expressions reference the node itself
 // after it's applied, not as a dependency.
-func extractReferencedIDs(node Node) map[string]bool {
-	refs := map[string]bool{}
-
-	// Collect all string values that might contain expressions
-	var strs []string
-	collectStrings(node.Template, &strs)
-	for _, s := range node.IncludeWhen {
-		strs = append(strs, s)
-	}
-	for _, s := range node.ReadyWhen {
-		strs = append(strs, s)
-	}
-	for _, s := range node.PropagateWhen {
-		strs = append(strs, s)
-	}
-	if node.ForEach != nil {
-		for _, v := range node.ForEach {
-			strs = append(strs, v)
-		}
-	}
-
-	// Extract variable names from ${...} expressions
-	for _, s := range strs {
-		pos := 0
-		for {
-			dollars, expr, start, _ := findExpr(s, pos)
-			if start < 0 {
-				break
-			}
-			pos = start + len(dollars) + len(expr) + 2 // skip past this expr
-			if len(dollars) != 1 {
-				continue // $${...} is deferred, not a reference at this level
-			}
-			id := extractFirstIdentifier(expr)
-			if id != "" && id != node.ID { // exclude self-references
-				refs[id] = true
-			}
-		}
-	}
-
-	return refs
-}
-
-// extractReferencedSections scans a Node for all ${...} expressions and returns
-// three maps:
-//   - depSections: for each dependency, which top-level sections are referenced
-//     (e.g., "deploy" → {"spec": true, "metadata": true})
-//   - selfSections: which top-level sections of the node's own observed resource
-//     are referenced by readyWhen and propagateWhen
-//   - readinessDeps: upstream node IDs referenced via .ready() in gate
-//     expressions. These reference runtime readiness state not captured
-//     by section-scoped hashing.
+// extractReferencedPathsFromNode scans a Node's template and gate expressions
+// for ${...} blocks, looks up pre-extracted field paths from exprPaths, and
+// returns per-node dependency paths, self paths, readiness deps, and dependency IDs.
 //
-// Section scoping is the correct mechanism for input hashing — metadata.resourceVersion
-// changes on every update, so full-object hashing would always differ. By hashing only
-// the sections a node's expressions actually reference, the input hash is stable when
-// unrelated fields change.
-func extractReferencedSections(node Node) (depSections map[string]map[string]bool, selfSections map[string]bool, readinessDeps map[string]bool) {
-	depSections = map[string]map[string]bool{}
-	selfSections = map[string]bool{}
+// When exprPaths is nil (e.g., BuildDAG called for deletion ordering without
+// going through compileGraphSpec), falls back to string-based dependency
+// detection. DepPaths/SelfPaths will be nil in this case — hashing won't be
+// available, but dependency detection for topological sort still works.
+//
+// This replaces both extractReferencedIDs and extractReferencedSections with
+// AST-derived field paths. The exprPaths map is computed from CEL ASTs during
+// compilation in compileGraphSpec.
+func extractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][]FieldPath) (
+	dependencies map[string]bool,
+	depPaths map[string][]FieldPath,
+	selfPaths []FieldPath,
+	readinessDeps map[string]bool,
+) {
+	dependencies = map[string]bool{}
+	depPaths = map[string][]FieldPath{}
 	readinessDeps = map[string]bool{}
 
-	// Helper: extract (identifier, section) from a CEL expression.
-	// For "deploy.spec.replicas" → ("deploy", "spec")
-	// For "deploy.metadata.name" → ("deploy", "metadata")
-	// For "deploy.ready()" → ("deploy", "") — function call, not a section
-	// For "size(items)" → ("", "") — builtins filtered out
-	extractIDAndSection := func(expr string) (string, string) {
-		id := extractFirstIdentifier(expr)
-		if id == "" {
-			return "", ""
+	// Helper: process a CEL expression's pre-extracted paths.
+	// When exprPaths is nil, falls back to string-based identifier extraction
+	// for dependency detection (no field paths available).
+	processExpr := func(expr string, isGateExpr bool) {
+		if exprPaths == nil {
+			// Fallback: string-based dependency detection only.
+			id := extractFirstIdentifier(expr)
+			if id != "" && id != node.ID {
+				dependencies[id] = true
+			}
+			return
 		}
-		// Find the section: skip past the ID and the dot
-		rest := strings.TrimSpace(expr)[len(id):]
-		if len(rest) == 0 || rest[0] != '.' {
-			return id, "" // no section (e.g., bare reference or function call)
+		paths, ok := exprPaths[expr]
+		if !ok {
+			return
 		}
-		rest = rest[1:] // skip the dot
-		end := 0
-		for end < len(rest) && isIdentContinue(rest[end]) {
-			end++
+		for scopeVar, fieldPaths := range paths {
+			if scopeVar == node.ID {
+				// Self-reference — only meaningful in gate expressions
+				if isGateExpr {
+					for _, fp := range fieldPaths {
+						addFieldPath(&selfPaths, fp)
+					}
+				}
+				continue
+			}
+			// Upstream dependency reference
+			dependencies[scopeVar] = true
+			for _, fp := range fieldPaths {
+				addPath(depPaths, scopeVar, fp)
+			}
 		}
-		if end == 0 {
-			return id, ""
-		}
-		// Check if this is a function call (followed by '(').
-		// dep.ready() is a CEL function, not a section access.
-		if end < len(rest) && rest[end] == '(' {
-			return id, "" // function call, not a section
-		}
-		return id, rest[:end]
 	}
 
-	// Process template + includeWhen + forEach expressions → depSections
+	// Helper: check if an expression contains a .ready() call on a non-self node.
+	// The field path walker skips ready() targets (no paths extracted), so we
+	// need a separate string-based check for ReadinessDeps. These are also
+	// dependencies — the node needs the upstream in scope to check readiness.
+	checkReadyRef := func(expr string) {
+		if !strings.Contains(expr, ".ready()") {
+			return
+		}
+		id := extractFirstIdentifier(expr)
+		if id != "" && id != node.ID {
+			readinessDeps[id] = true
+			dependencies[id] = true // ready() targets are dependencies too
+		}
+	}
+
+	// Process template + includeWhen + forEach expressions → depPaths
 	var templateStrs []string
 	collectStrings(node.Template, &templateStrs)
 	for _, s := range node.IncludeWhen {
@@ -446,22 +424,11 @@ func extractReferencedSections(node Node) (depSections map[string]map[string]boo
 			if len(dollars) != 1 {
 				continue
 			}
-			id, section := extractIDAndSection(expr)
-			if id == "" || id == node.ID {
-				continue // skip self-references and builtins
-			}
-			if section == "" {
-				continue // bare reference without section
-			}
-			if depSections[id] == nil {
-				depSections[id] = map[string]bool{}
-			}
-			depSections[id][section] = true
+			processExpr(expr, false)
 		}
 	}
 
-	// Process readyWhen + propagateWhen → both depSections (for upstream refs)
-	// and selfSections (for self-refs)
+	// Process readyWhen + propagateWhen → depPaths + selfPaths + readinessDeps
 	var gateStrs []string
 	for _, s := range node.ReadyWhen {
 		gateStrs = append(gateStrs, s)
@@ -481,31 +448,12 @@ func extractReferencedSections(node Node) (depSections map[string]map[string]boo
 			if len(dollars) != 1 {
 				continue
 			}
-			id, section := extractIDAndSection(expr)
-			if id == "" {
-				continue
-			}
-			if section == "" {
-				// Function call on upstream node (e.g., dep.ready()).
-				// This references runtime state that isn't captured by
-				// section-scoped hashing — track it separately.
-				if id != node.ID {
-					readinessDeps[id] = true
-				}
-				continue
-			}
-			if id == node.ID {
-				selfSections[section] = true
-			} else {
-				if depSections[id] == nil {
-					depSections[id] = map[string]bool{}
-				}
-				depSections[id][section] = true
-			}
+			processExpr(expr, true)
+			checkReadyRef(expr)
 		}
 	}
 
-	return depSections, selfSections, readinessDeps
+	return dependencies, depPaths, selfPaths, readinessDeps
 }
 
 // collectStrings recursively collects all string values from a value tree.

@@ -77,7 +77,7 @@ func TestDefinesDAGDependencies(t *testing.T) {
 			},
 		},
 	}
-	dag, err := BuildDAG(nodes)
+	dag, err := BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	namingNode := dag.Nodes[dag.Index["naming"]]
@@ -107,7 +107,7 @@ func TestDefinesCycleDetection(t *testing.T) {
 			},
 		},
 	}
-	_, err := BuildDAG(nodes)
+	_, err := BuildDAG(nodes, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrCycleDetected)
 }
@@ -131,7 +131,7 @@ func TestDefinesChain(t *testing.T) {
 			},
 		},
 	}
-	dag, err := BuildDAG(nodes)
+	dag, err := BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, len(dag.Levels))

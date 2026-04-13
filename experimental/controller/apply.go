@@ -1006,7 +1006,7 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 	if err != nil {
 		return nil, fmt.Errorf("extracting graph spec for deletion order: %w", err)
 	}
-	dag, err := BuildDAG(graphSpec.Nodes)
+	dag, err := BuildDAG(graphSpec.Nodes, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building DAG for deletion order: %w", err)
 	}

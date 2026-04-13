@@ -152,7 +152,7 @@ func BenchmarkBuildDAG(b *testing.B) {
 			nodes := buildBenchNodes(nodeCount)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, err := BuildDAG(nodes)
+				_, err := BuildDAG(nodes, nil)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -261,9 +261,9 @@ func BenchmarkNormalizeTypes(b *testing.B) {
 	}
 }
 
-// BenchmarkExtractReferencedIDs measures dependency extraction from CEL
-// expressions. This runs once per node during DAG construction.
-func BenchmarkExtractReferencedIDs(b *testing.B) {
+// BenchmarkExtractReferencedPaths measures field-path extraction from
+// pre-extracted CEL AST paths. This runs once per node during DAG construction.
+func BenchmarkExtractReferencedPaths(b *testing.B) {
 	node := Node{
 		ID: "service",
 		Template: map[string]any{
@@ -287,24 +287,33 @@ func BenchmarkExtractReferencedIDs(b *testing.B) {
 		},
 	}
 
+	// Simulate pre-extracted paths (as would come from compileGraphSpec).
+	exprPaths := map[string]map[string][]FieldPath{
+		"deploy.metadata.name":             {"deploy": {{"metadata", "name"}}},
+		"deploy.spec.selector.matchLabels": {"deploy": {{"spec", "selector", "matchLabels"}}},
+		"config.data.port":                 {"config": {{"data", "port"}}},
+		"deploy.spec.template.spec.containers[0].ports[0].containerPort": {"deploy": {{"spec", "template"}}},
+		"service.spec.clusterIP != ''":                                   {"service": {{"spec", "clusterIP"}}},
+	}
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = extractReferencedIDs(node)
+		_, _, _, _ = extractReferencedPathsFromNode(node, exprPaths)
 	}
 }
 
-// BenchmarkHashNodeInputs measures section-scoped input hashing — the
-// per-node cost of the change check (step 3 of Wind). This runs once per
+// BenchmarkHashNodeInputs measures field-path-scoped input hashing — the
+// per-node cost of the evaluation check (step 4 of Wind). This runs once per
 // node per reconcile to decide whether evaluation can be skipped.
 func BenchmarkHashNodeInputs(b *testing.B) {
 	for _, depCount := range []int{1, 3, 5, 10} {
 		b.Run(fmt.Sprintf("deps=%d", depCount), func(b *testing.B) {
-			// Build a node with depCount dependencies, each referencing .data and .metadata.
-			depSections := make(map[string]map[string]bool, depCount)
+			// Build a node with depCount dependencies, each referencing data.key1 and metadata.name.
+			depPaths := make(map[string][]FieldPath, depCount)
 			scope := make(map[string]any, depCount)
 			for i := 0; i < depCount; i++ {
 				depID := fmt.Sprintf("dep%d", i)
-				depSections[depID] = map[string]bool{"data": true, "metadata": true}
+				depPaths[depID] = []FieldPath{{"data", "key1"}, {"metadata", "name"}}
 				scope[depID] = map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
@@ -321,7 +330,7 @@ func BenchmarkHashNodeInputs(b *testing.B) {
 					},
 				}
 			}
-			node := &Node{ID: "target", DepSections: depSections}
+			node := &Node{ID: "target", DepPaths: depPaths}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				_, err := hashNodeInputs(node, scope)
@@ -490,7 +499,7 @@ func BenchmarkPropagateState(b *testing.B) {
 	for _, nodeCount := range []int{10, 100, 1000} {
 		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
 			nodes := buildBenchNodes(nodeCount)
-			dag, err := BuildDAG(nodes)
+			dag, err := BuildDAG(nodes, nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -529,7 +538,7 @@ func BenchmarkPropagateStateLinearScan(b *testing.B) {
 	for _, nodeCount := range []int{10, 100, 1000} {
 		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
 			nodes := buildBenchNodes(nodeCount)
-			dag, err := BuildDAG(nodes)
+			dag, err := BuildDAG(nodes, nil)
 			if err != nil {
 				b.Fatal(err)
 			}

@@ -36,7 +36,7 @@ func TestSetStatePropagateSplitExcludedBlocked(t *testing.T) {
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"ref": "${b.metadata.name}"}}},
 	}
-	dag, err := BuildDAG(nodes)
+	dag, err := BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	t.Run("NodeExcluded propagates as NodeExcluded", func(t *testing.T) {
@@ -111,7 +111,7 @@ func TestSummaryCountsBlockedState(t *testing.T) {
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 	}
-	dag, err := BuildDAG(nodes)
+	dag, err := BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	plan := NewPlanState(dag)
@@ -135,7 +135,7 @@ func TestPruneOrderReverseDependency(t *testing.T) {
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"ref": "${b.metadata.name}"}}},
 	}
-	dag, err := BuildDAG(nodes)
+	dag, err := BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	keys := []string{
@@ -160,7 +160,7 @@ func TestPruneOrderUnmatchedKeysFirst(t *testing.T) {
 	nodes := []Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 	}
-	dag, err := BuildDAG(nodes)
+	dag, err := BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	keys := []string{
@@ -182,7 +182,7 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 	}
-	dag, err := BuildDAG(nodes)
+	dag, err := BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	keys := []string{
@@ -320,7 +320,7 @@ func TestFinalizesTargetMustExist(t *testing.T) {
 			"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "snap"},
 		}},
 	}
-	_, err := BuildDAG(nodes)
+	_, err := BuildDAG(nodes, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no node with that ID exists")
 }

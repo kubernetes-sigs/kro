@@ -284,7 +284,7 @@ func (w *walkState) tryDispatch(idx int) {
 			if hashErr == nil && evalHash != "" && evalHash == w.state.previousEvalHashes[node.ID] {
 				prevScope := w.state.previousScope[node.ID]
 				selfChanged := false
-				if len(node.SelfSections) > 0 && w.watcher != nil && prevScope != nil {
+				if len(node.SelfPaths) > 0 && w.watcher != nil && prevScope != nil {
 					if prevMap, ok := prevScope.(map[string]any); ok {
 						prevMD, _ := prevMap["metadata"].(map[string]any)
 						prevRV, _ := prevMD["resourceVersion"].(string)
@@ -829,9 +829,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// Per 004-graph-execution.md § Wind step 7.
 		if res.state == NodeReady || res.state == NodeNotReady {
 			if observed := eval.scope[node.ID]; observed != nil {
-				propagateHash, err := hashSelfSections(node, observed)
+				propagateHash, err := hashSelfPaths(node, observed)
 				if err == nil && propagateHash == "" {
-					// No SelfSections (collection watch, bare reference) —
+					// No SelfPaths (collection watch, bare reference) —
 					// fall back to hashing the full output. Without this,
 					// collection changes would never propagate to forEach.
 					if m, ok := observed.(map[string]any); ok {

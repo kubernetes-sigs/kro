@@ -1168,9 +1168,9 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if node.Template == nil {
 				continue
 			}
-			// Skip Watches and WatchesKind (read-only).
+			// Skip Watches, WatchesKind (read-only), and Defines (no resource).
 			ref := DetectReference(node.Template)
-			if ref == ReferenceWatches || ref == ReferenceWatchesKind {
+			if ref == ReferenceWatches || ref == ReferenceWatchesKind || ref == ReferenceDefines {
 				continue
 			}
 			// Skip finalizer nodes — dormant during normal operation.

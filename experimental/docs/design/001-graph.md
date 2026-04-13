@@ -57,8 +57,8 @@ as the entire string) preserves the CEL return type. An embedded expression
 
 ### Nodes
 
-`spec.nodes` is a list of node entries. Each entry has an `id` and a `template`. Declaration
-order is not significant — execution order is determined by the dependency graph.
+`spec.nodes` is a list of node entries. Each entry has an `id` and a `template`. Declaration order
+is not significant — execution order is determined by the dependency graph.
 
 #### id
 
@@ -73,7 +73,8 @@ downstream nodes. The value and type depend on the reference type — see below.
 
 #### template
 
-A Kubernetes resource declaration. The reference type determines how the controller handles it:
+A Kubernetes resource declaration (or, for definition nodes, a map of values). The
+reference type determines how the controller handles it:
 
 - **Owns** — specifies fields beyond identity (labels, annotations, spec, data). The Graph creates
   the resource if it doesn't exist, applies the specified fields via SSA, and tracks the resource
@@ -88,9 +89,13 @@ A Kubernetes resource declaration. The reference type determines how the control
   status, or only labels). The Graph applies exactly those fields and tracks them for cleanup. This
   is how a Graph writes status to a custom resource, adds labels to an existing object, or
   contributes any partial state.
+- **Defines** — no `apiVersion` and no `kind`. The template is a map of key-value pairs where
+  values are literals or `${...}` CEL expressions. The node produces no Kubernetes resource — it
+  defines values and enters the result into scope as `map[string]any`. No API calls, no
+  drift timer, no cleanup on teardown.
 
 After processing, the resource enters scope under its `id` — as the full Kubernetes object for Owns,
-Watch, and Contribute templates, or as an array for WatchesKind.
+Watch, and Contribute templates, as an array for WatchesKind, or as `map[string]any` for Defines.
 
 ```yaml
 # Watch — reads an existing ConfigMap into scope
@@ -128,6 +133,19 @@ Watch, and Contribute templates, or as an array for WatchesKind.
     status:
       deploymentReady: ${deployment.status.availableReplicas == deployment.spec.replicas}
       address: ${service.status.loadBalancer.ingress[0].hostname}
+
+# Defines — reusable naming values, no Kubernetes resource created
+- id: naming
+  template:
+    prefix: ${spec.name + '-' + spec.env}
+    sanitized: ${spec.module.replace('.', '-')}
+
+- id: deploy
+  template:
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: ${naming.prefix + '-deploy'}
 ```
 
 #### forEach
@@ -137,6 +155,9 @@ WatchesKind or any array in scope. Each iteration binds the item to a named vari
 within the template. The forEach node is a logical parent — it expands into one child node per item.
 Each child is a real node that manages one resource. Child identity is scoped to the parent — the
 child's node ID combines the parent's ID with the rendered resource key (GVK + namespace + name).
+
+For definition templates (no `apiVersion`/`kind`), forEach produces `[]any` of values
+instead of managed resources — no children are created.
 
 After processing, the parent enters scope as an array of child outputs — `${policies}` is `[]any`.
 Downstream nodes depend on the parent, not individual children. The parent enters scope (enabling
@@ -157,6 +178,26 @@ downstream evaluation) once all children have applied successfully — readyWhen
       podSelector: {}
       policyTypes:
         - Ingress
+
+# forEach + definition template: computed container list embedded in a Deployment
+- id: containers
+  forEach:
+    w: ${spec.workers}
+  template:
+    name: ${w}
+    image: ${spec.appImage}
+    args: ["--worker=${w}"]
+
+- id: deployment
+  template:
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: ${spec.name}
+    spec:
+      template:
+        spec:
+          containers: ${containers}
 ```
 
 #### includeWhen

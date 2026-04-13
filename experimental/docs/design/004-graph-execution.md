@@ -6,10 +6,10 @@ state. Performance is structural — work is proportional to change, not to DAG 
 
 ## The DAG
 
-A directed acyclic graph of nodes. Each node declares one Kubernetes resource. A forEach parent is a
-logical node that expands into child nodes at walk time — children are real nodes in the DAG (see
-[forEach](#foreach)). Edges are dependencies inferred from CEL expression references. A revision
-materializes the DAG.
+A directed acyclic graph of nodes. Most nodes declare a Kubernetes resource. forEach parents and
+definition nodes are logical — forEach expands into child nodes at walk time (see [forEach](#foreach)),
+definition nodes put values into scope without creating resources. Edges are dependencies inferred from
+CEL expression references. A revision materializes the DAG.
 
 ### Nodes
 
@@ -19,12 +19,14 @@ A node has:
 - **Template** — desired state declaration with `${...}` CEL expressions referencing other nodes
 - **Dependencies** — nodes this node's CEL expressions reference (edges in the DAG)
 
-Template shape determines how the node is processed and cleaned up:
+Template structure determines how the node is processed and cleaned up:
 
 - **Owns** — creates and manages the resource. Deletes on prune.
 - **Watch** — reads the resource into scope. No management.
 - **WatchesKind** — discovers matching resources by selector. Enters an array into scope.
 - **Contribute** — writes partial state to another actor's resource. Releases fields on prune.
+- **Defines** — defines values in scope as `map[string]any`. No API
+  calls, no drift timer, nothing to clean up on prune or teardown.
 
 ### Dependencies
 
@@ -143,6 +145,8 @@ current-reconcile state for dependencies, which is always available.
    - WatchesKind: GET matching objects. Array enters scope.
    - forEach parent: evaluate collection, determine children, dispatch changed children
      (see [forEach](#foreach)).
+   - Defines: resolve all values in the template (literals and CEL expressions) against the current
+     scope. Result enters scope as `map[string]any`. No API calls. CEL evaluation failure → Error.
    - Owns: evaluate template, hash desired state, compare against in-memory template-hash from
      previous evaluation. Match → skip write (unless drift timer triggered — apply unconditionally).
      Differs → SSA apply. 409 → Conflict.
@@ -180,6 +184,9 @@ Each node's evaluation resolves to exactly one state:
 Ready and NotReady are both "applied and in scope." readyWhen is a health signal — it does not gate
 dependents. Pending and Blocked both represent uncertain absence — previous applied keys are
 retained, not safe to prune. Excluded propagates as Excluded (definitive absence — safe to prune).
+
+Definition nodes can be Ready, NotReady (readyWhen unsatisfied), or Error (CEL evaluation failure).
+They cannot be Pending (no resource to wait for), Conflict (no SSA), or SystemError (no API calls).
 
 ### Prune
 

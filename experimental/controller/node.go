@@ -34,6 +34,8 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 	}
 
 	switch ref {
+	case ReferenceDefines:
+		return nil, r.reconcileDefines(ctx, node, eval)
 	case ReferenceWatchesKind:
 		err := r.reconcileCollectionWatch(ctx, graph, node, eval, watcher)
 		return nil, err
@@ -53,6 +55,28 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 		}
 		return nil, err
 	}
+}
+
+// reconcileDefines evaluates a definition node — resolves values from the template
+// (literals and/or CEL expressions) and enters the result into scope as
+// map[string]any. No Kubernetes API calls are made.
+func (r *GraphReconciler) reconcileDefines(ctx context.Context, node Node, eval *evaluator) error {
+	result, err := eval.toMap(node.Template)
+	if err != nil {
+		return fmt.Errorf("defines %s: %w", node.ID, err)
+	}
+	eval.scope[node.ID] = result
+	log.FromContext(ctx).V(1).Info("evaluated definition node", "node", node.ID, "keys", len(result))
+
+	if len(node.ReadyWhen) > 0 {
+		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
+			eval.markReady(node.ID, false)
+			return err
+		}
+	}
+	eval.markReady(node.ID, true)
+
+	return nil
 }
 
 // resolveReference determines Owns vs Contributes for an Unresolved node by

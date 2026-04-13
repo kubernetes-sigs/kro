@@ -16,7 +16,8 @@ import (
 // model: owned, borrowed mutably, borrowed immutably, or not yet resolved.
 // Watches and WatchesKind are determined by template structure at compile time.
 // Owns and Contributes are determined by resource existence at first reconcile.
-// See 003-ownership.md § References.
+// Defines is determined by the absence of apiVersion and kind in the template.
+// See 003-ownership.md § References and 001-graph.md § template.
 type Reference int
 
 const (
@@ -32,6 +33,12 @@ const (
 	// ReferenceContributes — writes fields on a resource the Graph does not
 	// create. Applied via SSA. Tracked for cleanup. Releases fields on prune.
 	ReferenceContributes
+	// ReferenceDefines — template has no apiVersion and no kind. Defines
+	// values in scope as map[string]any — literals, CEL expressions, or both.
+	// No Kubernetes resource created or managed. No drift timer, no
+	// applied-set entry, nothing to clean up.
+	// See 001-graph.md § template.
+	ReferenceDefines
 	// ReferenceUnresolved — template has fields beyond identity but Owns vs
 	// Contributes cannot be determined from the template alone. Resolved at
 	// first reconcile by checking whether the target resource exists (absent →
@@ -51,6 +58,8 @@ func (r Reference) String() string {
 		return "watches-kind"
 	case ReferenceContributes:
 		return "contributes"
+	case ReferenceDefines:
+		return "defines"
 	case ReferenceUnresolved:
 		return "unresolved"
 	default:
@@ -88,29 +97,38 @@ func ReferenceFromLabelValue(s string) (Reference, bool) {
 // DetectReference returns the Reference type of a node's template map.
 //
 // Detection order (from 003-ownership.md):
-//  1. WatchesKind — apiVersion + kind, no metadata.name
-//  2. Watches — only identity fields (apiVersion, kind, metadata.name/namespace)
-//  3. Unresolved — has fields beyond identity; Owns vs Contributes determined
+//  1. Defines — non-empty template with no apiVersion and no kind
+//  2. WatchesKind — apiVersion + kind, no metadata.name
+//  3. Watches — only identity fields (apiVersion, kind, metadata.name/namespace)
+//  4. Unresolved — has fields beyond identity; Owns vs Contributes determined
 //     at reconcile time by resource existence
 func DetectReference(tmpl map[string]any) Reference {
 	if len(tmpl) == 0 {
 		return ReferenceUnresolved
 	}
 
+	_, hasAPIVersion := tmpl["apiVersion"]
+	_, hasKind := tmpl["kind"]
+
+	// 1. Defines: no apiVersion and no kind — values defined in scope.
+	if !hasAPIVersion && !hasKind {
+		return ReferenceDefines
+	}
+
 	md, _ := tmpl["metadata"].(map[string]any)
 	_, hasName := md["name"]
 
-	// 1. WatchesKind: no metadata.name
+	// 2. WatchesKind: no metadata.name
 	if !hasName {
 		return ReferenceWatchesKind
 	}
 
-	// 2. Watches: only identity fields
+	// 3. Watches: only identity fields
 	if isIdentityOnly(tmpl) {
 		return ReferenceWatches
 	}
 
-	// 3. Unresolved: has fields beyond identity. Owns vs Contributes resolved
+	// 4. Unresolved: has fields beyond identity. Owns vs Contributes resolved
 	//    at first reconcile by checking resource existence.
 	return ReferenceUnresolved
 }
@@ -142,9 +160,10 @@ func isIdentityOnly(tmpl map[string]any) bool {
 }
 
 // Node is a parsed Graph node entry — a user's declaration of intent about
-// a Kubernetes resource (or collection of resources via forEach). It is the
-// unit of the dependency graph: each node has an identity, a template, and
-// computed dependency edges populated by BuildDAG.
+// a Kubernetes resource (or collection of resources via forEach). Definition
+// nodes (no apiVersion/kind) put values into scope without creating resources.
+// It is the unit of the dependency graph: each node has an identity, a template,
+// and computed dependency edges populated by BuildDAG.
 //
 // "Node" (not "Resource") because a node is a graph-theory concept — it
 // occupies a position in the DAG, has edges, and may produce zero, one, or

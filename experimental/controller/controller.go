@@ -53,7 +53,7 @@ var GraphGVK = schema.GroupVersionKind{
 // DefaultDriftInterval is the per-node consistency floor interval.
 // Per 004-graph-execution.md § The Walk: "Each node has an in-memory
 // drift timer with a jittered interval (default 30 minutes)."
-// On expiry, the node bypasses the template-hash check and applies
+// On expiry, the node bypasses the apply-hash check and applies
 // unconditionally.
 var DefaultDriftInterval = 30 * time.Minute
 
@@ -254,7 +254,7 @@ func (w *walkState) tryDispatch(idx int) {
 		return
 	}
 
-	// Step 2: propagateWhen check
+	// Step 3: propagateWhen check
 	if blockedBy := w.plan.DependencyPropagateBlocked(node); blockedBy != "" {
 		logger.V(1).Info("propagateWhen gate — retaining previous state",
 			"node", node.ID, "blockedBy", blockedBy)
@@ -275,13 +275,13 @@ func (w *walkState) tryDispatch(idx int) {
 		return
 	}
 
-	// Step 3: Change check — section-scoped input hashing.
+	// Step 4: Evaluation check — section-scoped evaluation hashing.
 	nodeRef := node.Reference()
 	canHashSkip := nodeRef != ReferenceWatch && nodeRef != ReferenceWatchKind && !w.driftTriggered[node.ID]
 	if canHashSkip {
-		if _, hasPrevHash := w.state.previousInputHashes[node.ID]; hasPrevHash {
-			inputHash, hashErr := hashNodeInputs(node, w.eval.scope)
-			if hashErr == nil && inputHash != "" && inputHash == w.state.previousInputHashes[node.ID] {
+		if _, hasPrevHash := w.state.previousEvalHashes[node.ID]; hasPrevHash {
+			evalHash, hashErr := hashNodeInputs(node, w.eval.scope)
+			if hashErr == nil && evalHash != "" && evalHash == w.state.previousEvalHashes[node.ID] {
 				prevScope := w.state.previousScope[node.ID]
 				selfChanged := false
 				if len(node.SelfSections) > 0 && w.watcher != nil && prevScope != nil {
@@ -315,7 +315,7 @@ func (w *walkState) tryDispatch(idx int) {
 
 				if !selfChanged && !readinessDepChanged {
 					// Path 1: skip everything.
-					logger.V(1).Info("input hash match — skipping evaluation",
+					logger.V(1).Info("evaluation hash match — skipping evaluation",
 						"node", node.ID)
 					if prev, ok := w.state.previousScope[node.ID]; ok {
 						w.eval.scope[node.ID] = prev
@@ -566,7 +566,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// driftTriggered tracks nodes triggered specifically by the drift timer.
 	// Per 004-graph-execution.md § The Walk: "The drift timer bypasses the
 	// template-hash check — apply unconditionally." Drift-triggered nodes
-	// skip the step 3 input hash check AND force the SSA Patch in step 5,
+	// skip the step 3 evaluation hash check AND force the SSA Patch in step 5,
 	// because the question is "does live state match desired state?" not
 	// "did inputs change?" — different questions with different cache semantics.
 	driftTriggered := make(map[string]bool, len(dag.Nodes))
@@ -772,7 +772,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			if state.resolvedReferences[node.ID] == ReferenceContribute &&
 				state.previousPlanStates[node.ID] == NodeConflict {
 				state.resolvedReferences[node.ID] = ReferenceUnresolved
-				delete(state.previousInputHashes, node.ID)
+				delete(state.previousEvalHashes, node.ID)
 			}
 			state.previousPlanStates[node.ID] = NodePending
 			state.previousScope[node.ID] = res.scopeValue
@@ -822,7 +822,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				node.PropagateWhen, eval.scope[node.ID], node.ID)
 		}
 
-		// Step 7: Propagation check — hash the specific field paths
+		// Step 8: Propagation check — hash the specific field paths
 		// dependents reference from this node's output, plus propagateWhen
 		// state. If the hash differs from the previous reconcile, mark
 		// dependents as having a propagation trigger.
@@ -863,9 +863,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		state.previousKeys[node.ID] = res.keys
 		state.previousPlanStates[node.ID] = res.state
 
-		// Store input hash for next reconcile's change check (step 3).
-		if inputHash, err := hashNodeInputs(node, eval.scope); err == nil && inputHash != "" {
-			state.previousInputHashes[node.ID] = inputHash
+		// Store evaluation hash for next reconcile's change check (step 3).
+		if evalHash, err := hashNodeInputs(node, eval.scope); err == nil && evalHash != "" {
+			state.previousEvalHashes[node.ID] = evalHash
 		}
 
 		// Check dependents: dispatch any whose dependencies are now satisfied.
@@ -1262,8 +1262,8 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			continue // already gone
 		}
 		objAnnotations := obj.GetAnnotations()
-		if objAnnotations == nil || objAnnotations[templateHashAnnotation] == "" {
-			logger.V(1).Info("skipping delete for resource without template hash (never successfully applied)", "key", key)
+		if objAnnotations == nil || objAnnotations[applyHashAnnotation] == "" {
+			logger.V(1).Info("skipping delete for resource without apply hash (never successfully applied)", "key", key)
 			continue
 		}
 
@@ -1355,7 +1355,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	}
 
 	// Pass 2: Verify managed resources that we actually deleted are gone.
-	// Only check resources that had our template hash — others (e.g., conflicted
+	// Only check resources that had our apply hash — others (e.g., conflicted
 	// resources that were never successfully applied) are not our responsibility.
 	for key := range deletedKeys {
 		gvk, nn := parseResourceKey(key)

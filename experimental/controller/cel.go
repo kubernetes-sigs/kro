@@ -200,10 +200,10 @@ type instanceState struct {
 	// instanceState).
 	resolvedReferences map[string]Reference
 
-	// Input hashing state — retained across reconciles for change detection.
+	// Evaluation hashing state — retained across reconciles for change detection.
 	// See 004-graph-execution.md § Wind step 3.
-	previousInputHashes map[string]string // node ID → last dependency input hash
-	previousSelfHashes  map[string]string // node ID → last self-section hash
+	previousEvalHashes map[string]string // node ID → last dependency evaluation hash
+	previousSelfHashes map[string]string // node ID → last self-section hash
 
 	// Per-node forEach item state. Outer key is node ID, inner key is item identity.
 	// Structural boundary prevents prefix collisions between node IDs.
@@ -234,17 +234,17 @@ type instanceState struct {
 // newInstanceState creates a fresh instanceState for a compiledGraph.
 func newInstanceState(compiled *compiledGraph) *instanceState {
 	return &instanceState{
-		compiled:            compiled,
-		previousScope:       map[string]any{},
-		previousKeys:        map[string][]string{},
-		previousPlanStates:  map[string]NodeState{},
-		previousInputHashes: map[string]string{},
-		previousSelfHashes:  map[string]string{},
-		forEachItems:        map[string][]any{},
-		forEachItemScope:    map[string]map[string]any{},
-		forEachItemKeys:     map[string]map[string][]string{},
-		resolvedReferences:  make(map[string]Reference, len(compiled.dag.References)),
-		driftTimers:         make(map[string]time.Time),
+		compiled:           compiled,
+		previousScope:      map[string]any{},
+		previousKeys:       map[string][]string{},
+		previousPlanStates: map[string]NodeState{},
+		previousEvalHashes: map[string]string{},
+		previousSelfHashes: map[string]string{},
+		forEachItems:       map[string][]any{},
+		forEachItemScope:   map[string]map[string]any{},
+		forEachItemKeys:    map[string]map[string][]string{},
+		resolvedReferences: make(map[string]Reference, len(compiled.dag.References)),
+		driftTimers:        make(map[string]time.Time),
 	}
 }
 

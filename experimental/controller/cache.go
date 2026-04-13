@@ -2,9 +2,9 @@
 // elision for the Graph controller.
 //
 // The resource cache stores the full object from the last successful read/apply
-// alongside its resourceVersion and template hash. On reconcile, the controller
+// alongside its resourceVersion and apply hash. On reconcile, the controller
 // checks the metadata informer for the current resourceVersion and compares
-// the template hash to decide whether to skip the Patch, skip the GET, or both.
+// the apply hash to decide whether to skip the Patch, skip the GET, or both.
 package graphcontroller
 
 import (
@@ -16,7 +16,7 @@ import (
 	"sync"
 )
 
-const templateHashAnnotation = "internal.kro.run/template-hash"
+const applyHashAnnotation = "internal.kro.run/template-hash"
 
 // hashDesiredState computes a content hash of an evaluated template map.
 // Uses FNV-64a over Go's json.Marshal output. json.Marshal produces
@@ -39,7 +39,7 @@ func hashDesiredState(evalMap map[string]any) (string, error) {
 // cachedObject holds the last known state of a managed resource.
 type cachedObject struct {
 	resourceVersion string         // from the API server
-	templateHash    string         // hash of the template we last applied
+	applyHash       string         // hash of the desired state we last applied
 	object          map[string]any // full object from last GET/Patch response
 }
 
@@ -68,7 +68,7 @@ func (rc *resourceCache) get(key string) (*cachedObject, bool) {
 	// removeForGraph's label iteration races with worker writes.
 	return &cachedObject{
 		resourceVersion: obj.resourceVersion,
-		templateHash:    obj.templateHash,
+		applyHash:       obj.applyHash,
 		object:          deepCopyMap(obj.object),
 	}, true
 }
@@ -126,12 +126,12 @@ func resourceCacheKey(apiVersion, kind, namespace, name string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Section-scoped input hashing
+// Section-scoped evaluation hashing
 // ---------------------------------------------------------------------------
 
 // volatileMetadataFields are metadata keys excluded from section-scoped hashing.
 // These change on every write without conveying semantic meaning — including them
-// would defeat the input hash (same problem as full-object hashing).
+// would defeat the evaluation hash (same problem as full-object hashing).
 var volatileMetadataFields = map[string]bool{
 	"resourceVersion":            true,
 	"managedFields":              true,

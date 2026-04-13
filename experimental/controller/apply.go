@@ -429,9 +429,9 @@ func parseContributeKey(key string) (resourceKey string, hasStatus bool) {
 //     Contribute checks target existence (contributions patch into existing resources).
 //   - Cache miss on NotFound: Own clears cache + returns ErrPending,
 //     Contribute falls through to apply.
-//   - Template hash annotation: Own only (Contribute targets are owned by others).
+//   - Apply hash annotation: Own only (Contribute targets are owned by others).
 //
-// driftCorrection bypasses the content-addressed template hash check.
+// driftCorrection bypasses the content-addressed apply hash check.
 // Per 004-graph-execution.md § The Walk: "The drift timer bypasses the
 // template-hash check — apply unconditionally, because server-side
 // defaulters and mutating webhooks can change fields without changing
@@ -472,7 +472,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	}
 
 	// Content-addressed apply: hash the desired state to detect changes.
-	templateHash, err := hashDesiredState(obj.Object)
+	applyHash, err := hashDesiredState(obj.Object)
 	if err != nil {
 		return nil, fmt.Errorf("hashing template for %s: %w", obj.GetName(), err)
 	}
@@ -482,7 +482,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	// purpose is to re-apply unconditionally so SSA corrects any live-state
 	// divergence from the desired state.
 	if !driftCorrection {
-		if cached, ok := r.Resources.get(cacheKey); ok && cached.templateHash == templateHash {
+		if cached, ok := r.Resources.get(cacheKey); ok && cached.applyHash == applyHash {
 			if watcher != nil {
 				liveRV := watcher.getResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
 				if liveRV != "" && liveRV == cached.resourceVersion {
@@ -504,7 +504,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 			} else {
 				r.Resources.set(cacheKey, &cachedObject{
 					resourceVersion: readBack.GetResourceVersion(),
-					templateHash:    templateHash,
+					applyHash:       applyHash,
 					object:          readBack.Object,
 				})
 				return readBack, nil
@@ -512,13 +512,13 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		}
 	} // !driftCorrection
 
-	// Own: set the template hash annotation for future comparisons.
+	// Own: set the apply hash annotation for future comparisons.
 	if ref == ReferenceOwn {
 		annotations := obj.GetAnnotations()
 		if annotations == nil {
 			annotations = map[string]string{}
 		}
-		annotations[templateHashAnnotation] = templateHash
+		annotations[applyHashAnnotation] = applyHash
 		obj.SetAnnotations(annotations)
 	}
 
@@ -628,7 +628,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 
 	r.Resources.set(cacheKey, &cachedObject{
 		resourceVersion: readBack.GetResourceVersion(),
-		templateHash:    templateHash,
+		applyHash:       applyHash,
 		object:          readBack.Object,
 	})
 
@@ -799,7 +799,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue // already gone
 		}
 
-		// Verify ownership: must have our identity label and template hash
+		// Verify ownership: must have our identity label and apply hash
 		objLabels := obj.GetLabels()
 		hasOurLabel := false
 		if objLabels != nil {
@@ -814,7 +814,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue // not ours
 		}
 		objAnnotations := obj.GetAnnotations()
-		if objAnnotations == nil || objAnnotations[templateHashAnnotation] == "" {
+		if objAnnotations == nil || objAnnotations[applyHashAnnotation] == "" {
 			continue // never successfully applied by us
 		}
 

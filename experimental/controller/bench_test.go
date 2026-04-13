@@ -90,7 +90,7 @@ func TestInstanceStateIsolation(t *testing.T) {
 
 	// Mutate state1's mutable fields.
 	state1.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
-	state1.previousInputHashes["node0"] = "hash-a"
+	state1.previousEvalHashes["node0"] = "hash-a"
 	state1.previousPlanStates["node0"] = NodeReady
 	state1.forEachItems["node0/item"] = []any{"a", "b"}
 
@@ -98,8 +98,8 @@ func TestInstanceStateIsolation(t *testing.T) {
 	if _, ok := state2.previousScope["node0"]; ok {
 		t.Fatal("previousScope leaked between instances")
 	}
-	if _, ok := state2.previousInputHashes["node0"]; ok {
-		t.Fatal("previousInputHashes leaked between instances")
+	if _, ok := state2.previousEvalHashes["node0"]; ok {
+		t.Fatal("previousEvalHashes leaked between instances")
 	}
 	if _, ok := state2.previousPlanStates["node0"]; ok {
 		t.Fatal("previousPlanStates leaked between instances")
@@ -328,47 +328,6 @@ func BenchmarkHashNodeInputs(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-			}
-		})
-	}
-}
-
-// BenchmarkScopeFromTriggers measures BFS scope computation for scoped walks.
-// This runs once per reconcile when a watch event triggers the walk.
-func BenchmarkScopeFromTriggers(b *testing.B) {
-	for _, nodeCount := range []int{5, 10, 25, 50, 100} {
-		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
-			nodes := buildBenchNodes(nodeCount)
-			dag, err := BuildDAG(nodes)
-			if err != nil {
-				b.Fatal(err)
-			}
-			// Trigger from the first node (root) — worst case, walks entire DAG.
-			triggers := map[string]bool{"node0": true}
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_ = ScopeFromTriggers(dag, triggers)
-			}
-		})
-	}
-}
-
-// BenchmarkScopeFromTriggersLeaf measures scoped walk from a leaf node —
-// best case, scope is just the leaf (no dependents).
-func BenchmarkScopeFromTriggersLeaf(b *testing.B) {
-	for _, nodeCount := range []int{5, 10, 25, 50, 100} {
-		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
-			nodes := buildBenchNodes(nodeCount)
-			dag, err := BuildDAG(nodes)
-			if err != nil {
-				b.Fatal(err)
-			}
-			// Trigger from the last node (leaf) — best case.
-			lastNode := fmt.Sprintf("node%d", nodeCount-1)
-			triggers := map[string]bool{lastNode: true}
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_ = ScopeFromTriggers(dag, triggers)
 			}
 		})
 	}

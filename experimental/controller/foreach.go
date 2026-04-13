@@ -70,7 +70,7 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 // Implements forEach item diffing from design 004: the parent diffs the
 // current collection against cached state and only re-evaluates changed items.
 //
-// driftCorrection bypasses the template-hash check in child applies.
+// driftCorrection bypasses the apply-hash check in child applies.
 //
 // forEach state is passed in via the evaluator's forEachPrev* fields and
 // returned via forEachNew* fields. The coordinator merges the output back

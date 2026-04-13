@@ -124,7 +124,7 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 	return revision
 }
 
-// materializeNode injects ownership labels and template hash into a
+// materializeNode injects ownership labels and apply hash into a
 // single node's template metadata. Returns the node as a map
 // suitable for inclusion in the revision spec.
 func materializeNode(node Node, graphName, graphNamespace string, generation string) map[string]any {
@@ -197,7 +197,7 @@ func injectNodeLabels(tmpl map[string]any, graphName, graphNamespace, generation
 	lbls[generationLabelKey(nodeID, graphName, graphNamespace)] = generation
 	md["labels"] = lbls
 
-	// Compute template hash from the template content (before adding the
+	// Compute apply hash from the template content (before adding the
 	// hash itself — same pattern as cache.go's hashDesiredState).
 	hash, err := hashDesiredState(tmpl)
 	if err != nil {
@@ -209,7 +209,7 @@ func injectNodeLabels(tmpl map[string]any, graphName, graphNamespace, generation
 	if anns == nil {
 		anns = map[string]any{}
 	}
-	anns[templateHashAnnotation] = hash
+	anns[applyHashAnnotation] = hash
 	md["annotations"] = anns
 }
 

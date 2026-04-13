@@ -53,7 +53,7 @@ External triggers — events outside the current walk:
 
 Propagation triggers — events from within the current walk:
 
-- A dependency was invalidated during this walk (propagation hash changed at step 7)
+- A dependency was invalidated during this walk (propagation hash changed at step 8)
 
 Watch events on managed resources (Own, Contribute) are routed by the identity label key, which
 encodes the node ID. Watch events on unowned resources (Watch, WatchKind) are routed by GVK +
@@ -68,26 +68,26 @@ consistency floor).
 
 Otherwise — skip. O(1) per skipped node.
 
-After evaluation, the node's output is hashed — only the specific field paths that downstream CEL
-expressions reference (determined statically at graph compilation from expression ASTs). The hash
-input is the union of all downstream-referenced paths. Absent paths hash to a fixed sentinel value
-that is not a valid Kubernetes field value — the transition from absent to present is a change, not
-a skip. If the hash changed — or no previous hash exists — dependents evaluate when visited later in
-topological order. If not, propagation stops. Changes flow forward through the DAG and stop when they
-stop mattering.
+After evaluation, the node's output is hashed over the paths downstream expressions reference
+(see change detection below). If the propagation-hash changed — or no previous hash exists —
+dependents evaluate when visited later in topological order. If not, propagation stops. Changes
+flow forward through the DAG and stop when they stop mattering.
 
-Each node has an in-memory drift timer with a jittered interval (default 30 minutes). On expiry, the
-node runs the full pipeline (steps 1-7). The drift timer bypasses the template-hash check — apply
-unconditionally, because server-side defaulters and mutating webhooks can change fields without
-changing the desired state hash. SSA is idempotent; the apply corrects drift as a side effect.
-An SSA apply resets the drift timer. A skipped write during normal evaluation (hash match from a
-watch event or propagation trigger) does not — the timer still fires to catch server-side drift that
-the hash cannot detect. Jitter decorrelates timers across nodes. On restart, timers reset with fresh
-jitter — bounded burst (10k nodes over a 30-minute interval produces ~5.5 applies/sec). Drift timer
-state is in controller metrics, not on managed resources.
+Each node has an in-memory drift timer with a jittered interval (default 30 minutes). The drift
+timer is a consistency floor that bounds how long any divergence can persist. Event-driven
+reconciliation can miss divergence (watch disconnects, cache staleness) or correctly skip
+re-application when inputs are stable even though server-side state has diverged (external edits,
+admission webhooks). On drift timer expiry, the node evaluates and applies unconditionally.
+
+SSA is idempotent; the apply corrects drift as a side effect. An SSA apply resets the drift timer.
+A skipped write during normal evaluation (hash match from a watch event or propagation trigger) does
+not — the timer still fires to catch divergence that the hash cannot detect. Jitter decorrelates
+timers across nodes. On restart, timers reset with fresh jitter — bounded burst (10k nodes over a
+30-minute interval produces ~5.5 applies/sec). Drift timer state is in controller metrics, not on
+managed resources.
 
 The controller uses metadata-only informers — labels are visible, annotations are not. Full object
-reads happen only during evaluation (step 5). When an evaluated node needs data from a skipped
+reads happen only during evaluation (step 6). When an evaluated node needs data from a skipped
 dependency, the full object is read from the API server on demand. If absent (deleted externally,
 not yet created), the node is Pending.
 
@@ -111,11 +111,31 @@ label exists. The value encodes the relationship (`own` or `contribute`) and is 
 to determine the cleanup action (delete vs release fields). The label key encodes the node ID,
 which routes watch events to the correct node.
 
-Change detection uses two in-memory hashes per node. The template-hash is computed over the desired
-state — match skips the SSA write. The propagate-hash is computed over the specific field paths
-dependents reference plus propagateWhen state — match stops downstream evaluation. On restart, no
-cached hashes exist — the first reconcile evaluates all nodes, applies unconditionally (no hash to
-compare against), and populates the hashes for steady-state. The label prefix is a DNS subdomain
+**Change detection** uses three in-memory hashes per node:
+
+| Hash | Hashes | On match | On miss/change |
+|---|---|---|---|
+| evaluation-hash | referenced dependency field paths | skip template eval | evaluate template |
+| apply-hash | full rendered desired state | skip SSA write | apply patch |
+| propagation-hash | output field paths downstream references | propagation stops | trigger downstream nodes |
+
+Drift timer expiry and cold start (restart, new leader) produce the same effect: cached evaluation-hash
+and apply-hash entries are absent, so every node runs the full pipeline — evaluate, apply, hash.
+The propagation-hash still applies after drift correction; if the corrected output matches the
+previous output, downstream nodes are not triggered.
+
+Evaluation-hash and propagation-hash share the same path extraction. At graph compilation, the controller
+walks each compiled expression's AST to extract reference chains — sequences of select operations
+rooted at a scope variable. Each chain yields a (variable, path) pair.
+`${deploy.status.availableReplicas}` yields `(deploy, status.availableReplicas)` — the scalar is
+hashed. `${a.spec.x + b.data.y}` yields `(a, spec.x)` and `(b, data.y)`. When a chain contains a
+dynamic operation — function call, index, or comprehension — the path terminates at the last static
+select; the value at that prefix is hashed in full. `${deploy.status.conditions.filter(c,
+c.type == 'Available')[0].status}` yields `(deploy, status.conditions)` — the full list is hashed.
+Absent paths hash to a fixed sentinel value — the transition from absent to present is a change,
+not a skip.
+
+The label prefix is a DNS subdomain
 (253-character limit). Graph names and non-forEach node IDs are single DNS labels. forEach children
 extend the prefix with additional labels encoding the resource key (see
 [Child Identity](#child-identity)).
@@ -139,32 +159,39 @@ current-reconcile state for dependencies, which is always available.
    but a gated node still waits for its dependency's propagateWhen to be satisfied before evaluating.
    When the gate opens on a later reconcile, the node evaluates with current informer
    state — changes during the gate period are visible at that point.
-4. **includeWhen** — false → Excluded.
-5. **Dispatch:**
+4. **Evaluation check** — compare the evaluation-hash (dependency paths this node's expressions reference)
+   against the previous reconcile's hash. Match and self-state unchanged (resourceVersion stable in
+   informer cache) → skip template evaluation and apply, retain previous state. Match and self-state
+   changed → skip template evaluation and apply, GET live object, re-evaluate readyWhen and
+   propagateWhen only. Drift timer expiry bypasses this check — the node always evaluates its
+   template. Watch and WatchKind nodes are excluded (their output is determined by cluster state,
+   not scope data).
+5. **includeWhen** — false → Excluded.
+6. **Dispatch:**
     - Watch: GET full object. Data enters scope. Pending if absent.
     - WatchKind: GET matching objects. Array enters scope.
    - forEach parent: evaluate collection, determine children, dispatch changed children
      (see [forEach](#foreach)).
     - Definition: resolve all values in the template (literals and CEL expressions) against the current
       scope. Result enters scope as `map[string]any`. No API calls. CEL evaluation failure → Error.
-    - Own: evaluate template, hash desired state, compare against in-memory template-hash from
-      previous evaluation. Match → skip write (unless drift timer triggered — apply unconditionally).
-      Differs → SSA apply. 409 → Conflict.
+    - Own: evaluate template, hash desired state, compare against in-memory apply-hash from
+      previous evaluation. Match → skip write. Drift timer expiry bypasses this check — apply
+      unconditionally. Differs → SSA apply. 409 → Conflict.
     - Contribute: same as Own. 409 → Conflict. Auto-splits status subresource.
    
    When a template targets both the main resource and the status subresource, the controller
    splits the apply into two operations. If the status subresource apply fails, the controller
-   reverts the in-memory template-hash — the next reconcile sees a mismatch and retries both.
+   reverts the in-memory apply-hash — the next reconcile sees a mismatch and retries both.
    The failure mode is an unnecessary re-apply, which is idempotent.
-6. **readyWhen** — Ready or NotReady. Data is in scope regardless.
-7. **Propagation check** — hash the specific field paths dependents reference (union of downstream CEL
-   access chains) + propagateWhen state, compare against in-memory propagate-hash from previous
-   evaluation. Differs → node invalidated. Matches → propagation stops.
+7. **readyWhen** — Ready or NotReady. Data is in scope regardless.
+8. **Propagation check** — hash the output paths downstream expressions reference plus propagateWhen
+   state, compare against in-memory propagation-hash from previous evaluation. Differs → node
+   invalidated. Matches → propagation stops.
 
 Node's data enters scope after processing. For Own and Contribute, the full object is always read
-during evaluation regardless of whether the write is skipped — the template hash governs the write
-decision, not the read. Two hashing boundaries: template hash (step 5) skips the write, propagation
-hash (step 7) skips downstream evaluation.
+during evaluation regardless of whether the write is skipped — the apply hash governs the write
+decision, not the read. Three hashing boundaries: evaluation hash (step 4) skips template evaluation,
+apply hash (step 6) skips the write, propagation hash (step 8) skips downstream evaluation.
 
 ### Node Evaluation
 
@@ -566,12 +593,12 @@ computed but do not gate evaluation — every node passes the skip check because
 
 | Node       | Action                                                          | Evaluation |
 |------------|-----------------------------------------------------------------|------------|
-| config     | GET full object → template hash unchanged → skip write              | Ready      |
-| namespaces | GET matching objects → template hash unchanged → skip write         | Ready      |
-| deploy     | GET full object → template hash unchanged → skip write              | Ready      |
+| config     | GET full object → apply hash unchanged → skip write              | Ready      |
+| namespaces | GET matching objects → apply hash unchanged → skip write         | Ready      |
+| deploy     | GET full object → apply hash unchanged → skip write              | Ready      |
 | monitoring | New node → evaluate template → SSA apply                        | Ready      |
 | policies   | Evaluate collection → same children as before                   | Ready      |
-| policies/*  | Template hash unchanged → skip write                            | Ready      |
+| policies/*  | Apply hash unchanged → skip write                            | Ready      |
 
 Active revision's applied set: {deploy, monitoring, policies/default-deny/ns-a,
 policies/default-deny/ns-b, policies/default-deny/ns-c, policies/default-deny/ns-d}.

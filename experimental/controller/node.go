@@ -26,7 +26,7 @@ import (
 //
 // driftCorrection is true when the node was triggered by the drift timer.
 // Per 004-graph-execution.md § The Walk: drift-triggered nodes bypass the
-// template-hash check and apply unconditionally via SSA.
+// apply-hash check and apply unconditionally via SSA.
 //
 // After dispatch, reconcileNode evaluates readyWhen as a post-dispatch step
 // for node types that don't handle their own per-item readiness (Definition,
@@ -309,7 +309,7 @@ func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *u
 }
 
 // reconcileOwn evaluates and applies an Own template.
-// driftCorrection bypasses the template-hash check in applyResource.
+// driftCorrection bypasses the apply-hash check in applyResource.
 func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
@@ -331,7 +331,7 @@ func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.
 }
 
 // reconcileContribute evaluates and applies a Contribute template.
-// driftCorrection bypasses the template-hash check in applyContribution.
+// driftCorrection bypasses the apply-hash check in applyContribution.
 func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 

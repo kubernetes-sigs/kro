@@ -151,7 +151,7 @@ func TestHashSelfSectionsAbsentStable(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Resource cache regression tests
 //
-// Regression: applyContribution cached the template hash after the main
+// Regression: applyContribution cached the apply hash after the main
 // resource patch succeeded. If the subsequent status subresource patch
 // failed, the cache still held the hash — next reconcile saw a match and
 // skipped the apply entirely. The resource was silently diverged.
@@ -171,14 +171,14 @@ func TestResourceCacheRemoveForcesReapply(t *testing.T) {
 	// Simulate a successful apply that populates the cache.
 	rc.set(key, &cachedObject{
 		resourceVersion: "1000",
-		templateHash:    "abc123",
+		applyHash:       "abc123",
 		object:          map[string]any{"kind": "ConfigMap"},
 	})
 
 	// Cache hit — normal steady-state behavior.
 	cached, ok := rc.get(key)
 	require.True(t, ok, "cache should hit after set")
-	assert.Equal(t, "abc123", cached.templateHash)
+	assert.Equal(t, "abc123", cached.applyHash)
 
 	// Simulate the status-fail fix: remove the entry.
 	rc.remove(key)

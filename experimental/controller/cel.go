@@ -113,11 +113,12 @@ func isPending(err error) bool {
 // and BuildDAG produces a read-only structure (verified: zero writes to DAG
 // fields during reconciliation).
 type compiledGraph struct {
-	specHash string                 // content hash of the compilation inputs
-	env      *cel.Env               // CEL environment (immutable after Extend)
-	programs map[string]cel.Program // expression string → compiled program
-	spec     *GraphSpec             // parsed spec (immutable)
-	dag      *DAG                   // dependency graph (immutable after BuildDAG)
+	specHash     string                 // content hash of the compilation inputs
+	env          *cel.Env               // CEL environment (immutable after Extend)
+	programs     map[string]cel.Program // expression string → compiled program
+	declaredVars map[string]bool        // variable names declared in the CEL env
+	spec         *GraphSpec             // parsed spec (immutable)
+	dag          *DAG                   // dependency graph (immutable after BuildDAG)
 }
 
 // eval evaluates a CEL expression against the given scope.
@@ -130,21 +131,31 @@ type compiledGraph struct {
 func (c *compiledGraph) eval(expr string, scope map[string]any) (any, error) {
 	prg, ok := c.programs[expr]
 	if !ok {
-		// Expected cache miss during cross-revision finalization. When a
-		// superseded node's readyWhen expression is evaluated using the current
-		// revision's compiled graph (because runFinalization receives the live
-		// evaluator), the expression won't be in programs — it was only compiled
-		// for the old spec. Compile it on-the-fly using the current CEL env.
-		// This path fires only during finalization of superseded nodes (bounded
-		// population, bounded lifetime) so recompilation cost is negligible.
-		// The resulting program is NOT cached to avoid lifecycle coupling between
-		// the program cache and finalization completion.
-		ast, issues := c.env.Compile(expr)
+		// Expected cache miss during cross-revision finalization or forEach
+		// finalization. The expression may reference variables (node IDs,
+		// forEach iterator variables) that aren't declared in the current
+		// revision's CEL env. Extend the env with scope keys not already
+		// declared so the compiler can resolve them.
+		var varDecls []cel.EnvOption
+		for k := range scope {
+			if !c.declaredVars[k] {
+				varDecls = append(varDecls, cel.Variable(k, cel.DynType))
+			}
+		}
+		compileEnv := c.env
+		if len(varDecls) > 0 {
+			dynEnv, extErr := c.env.Extend(varDecls...)
+			if extErr != nil {
+				return nil, fmt.Errorf("expression %q: extending CEL env for dynamic compile: %w", expr, extErr)
+			}
+			compileEnv = dynEnv
+		}
+		ast, issues := compileEnv.Compile(expr)
 		if issues != nil && issues.Err() != nil {
 			return nil, fmt.Errorf("expression %q not in cache, dynamic compile failed: %w", expr, issues.Err())
 		}
 		var err error
-		prg, err = c.env.Program(ast)
+		prg, err = compileEnv.Program(ast)
 		if err != nil {
 			return nil, fmt.Errorf("expression %q not in cache, dynamic program failed: %w", expr, err)
 		}
@@ -435,12 +446,21 @@ func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 		programs[expr] = prg
 	}
 
+	// Track which variable names are declared in the CEL env so that
+	// dynamic compilation during finalization can extend the env with
+	// only new variables (avoiding "overlapping identifier" errors).
+	declared := make(map[string]bool, len(allIDs))
+	for _, id := range allIDs {
+		declared[id] = true
+	}
+
 	return &compiledGraph{
-		specHash: spec.Hash(),
-		env:      env,
-		programs: programs,
-		spec:     spec,
-		dag:      dag,
+		specHash:     spec.Hash(),
+		env:          env,
+		programs:     programs,
+		declaredVars: declared,
+		spec:         spec,
+		dag:          dag,
 	}, nil
 }
 

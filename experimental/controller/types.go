@@ -355,18 +355,6 @@ func parseNodeList(raw any) ([]Node, error) {
 		if fin, ok := m["finalizes"].(string); ok {
 			node.Finalizes = fin
 		}
-		// Validate: finalizes nodes must not have CEL-evaluated names.
-		// Finalizer resources are looked up by static key during prune;
-		// a dynamic name would make the key unpredictable.
-		// Note: ${...} is the only interpolation syntax (see findExpr in eval.go).
-		// If a second interpolation form is added, this check must be updated.
-		if node.Finalizes != "" && node.Template != nil {
-			if md, ok := node.Template["metadata"].(map[string]any); ok {
-				if name, ok := md["name"].(string); ok && strings.Contains(name, "${") {
-					return nil, fmt.Errorf("node[%d] %q: finalizes nodes must not have CEL-evaluated names (found expression in metadata.name)", i, id)
-				}
-			}
-		}
 		if fe, ok := m["forEach"].(map[string]any); ok {
 			node.ForEach = make(map[string]string)
 			for k, v := range fe {
@@ -379,6 +367,18 @@ func parseNodeList(raw any) ([]Node, error) {
 			for varName := range node.ForEach {
 				if seen[varName] {
 					return nil, fmt.Errorf("node[%d] %q: forEach variable %q collides with a node ID", i, id, varName)
+				}
+			}
+		}
+		// Validate: finalizes nodes must not have CEL-evaluated names unless
+		// they also have forEach (which requires dynamic per-item names).
+		// Static-name finalizers are looked up by key during prune; forEach
+		// finalizers use label-based discovery for cleanup.
+		// NOTE: This check must run after forEach is parsed above.
+		if node.Finalizes != "" && node.ForEach == nil && node.Template != nil {
+			if md, ok := node.Template["metadata"].(map[string]any); ok {
+				if name, ok := md["name"].(string); ok && strings.Contains(name, "${") {
+					return nil, fmt.Errorf("node[%d] %q: finalizes nodes must not have CEL-evaluated names (found expression in metadata.name); use forEach for per-item finalizers", i, id)
 				}
 			}
 		}

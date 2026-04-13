@@ -136,7 +136,20 @@ func (r *GraphReconciler) runFinalization(
 		}
 		finNode := &dag.Nodes[idx]
 
-		// Evaluate the finalizer template.
+		// forEach + finalizes: expand the collection and create one resource per item.
+		if finNode.ForEach != nil {
+			ready, fKeys, err := r.runForEachFinalization(ctx, graph, finNode, dag, eval, watcher)
+			createdKeys = append(createdKeys, fKeys...)
+			if err != nil {
+				return false, createdKeys, err
+			}
+			if !ready {
+				allReady = false
+			}
+			continue
+		}
+
+		// Single-resource finalizer (original path).
 		evalMap, err := eval.toMap(finNode.Template)
 		if err != nil {
 			return false, createdKeys, fmt.Errorf("evaluating finalizer template %s: %w", finNodeID, err)
@@ -184,6 +197,116 @@ func (r *GraphReconciler) runFinalization(
 		}
 		// Step 3: Finalizer is ready.
 		logger.V(1).Info("finalizer ready", "finalizer", finNodeID)
+	}
+
+	return allReady, createdKeys, nil
+}
+
+// runForEachFinalization handles the forEach + finalizes case: expand a
+// collection and create one finalizer resource per item. All children must
+// reach readyWhen before the target can be deleted.
+//
+// Finalization children are self-contained and intentionally do not participate
+// in the coordinator's forEach state tracking (forEachNewKeys, forEachNewScope,
+// etc.). They are ephemeral artifacts of the finalization protocol — created to
+// gate target deletion and cleaned up after. Their lifecycle is bounded by the
+// finalization sequence, not by ongoing reconciliation.
+func (r *GraphReconciler) runForEachFinalization(
+	ctx context.Context,
+	graph *unstructured.Unstructured,
+	finNode *Node,
+	dag *DAG,
+	eval *evaluator,
+	watcher *graphWatcher,
+) (bool, []string, error) {
+	logger := log.FromContext(ctx)
+	var createdKeys []string
+	allReady := true
+
+	for varName, collectionExpr := range finNode.ForEach {
+		collection, err := eval.evalString(collectionExpr)
+		if err != nil {
+			return false, createdKeys, fmt.Errorf("forEach finalizer %s: evaluating collection %q: %w", finNode.ID, collectionExpr, err)
+		}
+
+		items, ok := collection.([]any)
+		if !ok {
+			items = []any{collection}
+		}
+		logger.Info("forEach finalization expanding", "finalizer", finNode.ID, "var", varName, "count", len(items))
+
+		for _, item := range items {
+			innerScope := copyScope(eval.scope)
+			innerScope[varName] = item
+			innerEval := eval.withScope(innerScope)
+
+			evalMap, err := innerEval.toMap(finNode.Template)
+			if err != nil {
+				return false, createdKeys, fmt.Errorf("forEach finalizer %s item: %w", finNode.ID, err)
+			}
+
+			// Set namespace default.
+			childObj := &unstructured.Unstructured{Object: evalMap}
+			if childObj.GetNamespace() == "" {
+				childObj.SetNamespace(graph.GetNamespace())
+			}
+
+			// Stamp forEach child identity labels.
+			gvk := childObj.GroupVersionKind()
+			gv, _ := schema.ParseGroupVersion(childObj.GetAPIVersion())
+			generation := fmt.Sprintf("%d", graph.GetGeneration())
+			lbls := childObj.GetLabels()
+			if lbls == nil {
+				lbls = map[string]string{}
+			}
+			lbls = setForEachChildIdentityLabels(
+				lbls, finNode.ID,
+				childObj.GetName(), childObj.GetNamespace(),
+				gvk.Kind, gv.Group,
+				graph.GetName(), graph.GetNamespace(),
+				generation, ReferenceOwns,
+			)
+			childObj.SetLabels(lbls)
+			evalMap = childObj.Object
+
+			// Check if this child already exists.
+			existing := &unstructured.Unstructured{}
+			existing.SetGroupVersionKind(childObj.GroupVersionKind())
+			getErr := r.Client.Get(ctx, client.ObjectKey{
+				Namespace: childObj.GetNamespace(),
+				Name:      childObj.GetName(),
+			}, existing)
+
+			if getErr != nil {
+				if !apierrors.IsNotFound(getErr) {
+					return false, createdKeys, fmt.Errorf("checking forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), getErr)
+				}
+				// Child doesn't exist — create it.
+				logger.Info("creating forEach finalizer child",
+					"finalizer", finNode.ID, "name", childObj.GetName())
+				applied, applyErr := r.applyResource(ctx, graph, evalMap, watcher, finNode.ID)
+				if applyErr != nil {
+					return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
+				}
+				createdKeys = append(createdKeys, resourceKey(applied))
+				allReady = false
+				continue
+			}
+
+			// Child exists — check readyWhen.
+			createdKeys = append(createdKeys, resourceKey(existing))
+			if len(finNode.ReadyWhen) > 0 {
+				innerEval.scope[finNode.ID] = normalizeTypes(existing.Object)
+				if err := innerEval.checkReadiness(finNode.ReadyWhen, innerEval.scope[finNode.ID], finNode.ID); err != nil {
+					logger.V(1).Info("forEach finalizer child not ready",
+						"finalizer", finNode.ID, "name", existing.GetName())
+					allReady = false
+					continue
+				}
+			}
+			logger.V(1).Info("forEach finalizer child ready",
+				"finalizer", finNode.ID, "name", existing.GetName())
+		}
 	}
 
 	return allReady, createdKeys, nil

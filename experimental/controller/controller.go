@@ -1298,10 +1298,12 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 
 		// Finalization: if this target has finalizer nodes, run the
 		// finalization sequence before deleting.
+		var finKeys []string
 		if teardownDAG != nil && teardownEval != nil {
 			nodeID := keyToNodeID[key]
 			if finalizerNodeIDs, ok := teardownDAG.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
-				ready, _, finErr := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, teardownDAG, teardownEval, nil)
+				ready, fk, finErr := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, teardownDAG, teardownEval, nil)
+				finKeys = fk
 				if finErr != nil {
 					logger.Error(finErr, "teardown finalization failed", "key", key)
 					teardownBlocked = true
@@ -1329,10 +1331,11 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if teardownDAG != nil {
 				nodeID := keyToNodeID[key]
 				if finalizerNodeIDs, ok := teardownDAG.Finalizers[nodeID]; ok {
+					// First, clean up static-name finalizer resources.
 					for _, finNodeID := range finalizerNodeIDs {
 						if finIdx, ok2 := teardownDAG.Index[finNodeID]; ok2 {
 							finNode := &teardownDAG.Nodes[finIdx]
-							if finNode.Template != nil {
+							if finNode.Template != nil && finNode.ForEach == nil {
 								if fk := resourceKeyFromTemplate(finNode.Template, graph.GetNamespace()); fk != "" {
 									fGVK, fNN := parseResourceKey(fk)
 									finDel := &unstructured.Unstructured{}
@@ -1346,6 +1349,22 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 									}
 								}
 							}
+						}
+					}
+					// Second, clean up forEach finalizer children via their tracked keys.
+					for _, fk := range finKeys {
+						fGVK, fNN := parseResourceKey(fk)
+						if fGVK.Kind == "" {
+							continue
+						}
+						finDel := &unstructured.Unstructured{}
+						finDel.SetGroupVersionKind(fGVK)
+						finDel.SetName(fNN.Name)
+						finDel.SetNamespace(fNN.Namespace)
+						if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
+							logger.V(1).Info("forEach finalizer child cleanup", "key", fk, "error", delErr)
+						} else {
+							logger.V(1).Info("cleaned up forEach finalizer child", "key", fk)
 						}
 					}
 				}

@@ -54,7 +54,15 @@ func classifyAPIError(err error) apiErrorInfo {
 		apierrors.IsTooManyRequests(err) {
 		return apiErrorInfo{state: NodeSystemError, reason: "ServerError"}
 	}
-	// Default: unrecognized errors are client errors (NodeError).
-	// Server errors are positively identified above.
-	return apiErrorInfo{state: NodeError, reason: err.Error()}
+	// Default: unrecognized errors are infrastructure failures (NodeSystemError).
+	// Client errors (4xx) are positively identified above — every recognized
+	// deterministic failure has an explicit branch. Unrecognized errors include
+	// raw Go network errors (*net.OpError, DNS failures, TLS handshake errors,
+	// connection refused) which are definitionally transient.
+	//
+	// Safe direction: misclassifying a deterministic error as transient means
+	// wasted retries (5s interval). Misclassifying a transient error as
+	// deterministic means the system stops retrying for 30 minutes (drift
+	// timer). The first is annoying; the second is an outage.
+	return apiErrorInfo{state: NodeSystemError, reason: err.Error()}
 }

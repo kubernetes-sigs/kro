@@ -245,11 +245,7 @@ func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *u
 
 	items := make([]any, len(list.Items))
 	for i, item := range list.Items {
-		normalized := normalizeTypes(item.Object)
-		if m, ok := normalized.(map[string]any); ok {
-			m["__ready"] = true // Collection watch items are ready on read
-		}
-		items[i] = normalized
+		items[i] = normalizeTypes(item.Object)
 	}
 	eval.scope[node.ID] = items
 	logger.V(1).Info("resolved collection watch", "node", node.ID, "gvk", gvk, "count", len(items))
@@ -257,11 +253,27 @@ func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *u
 	// Per 001-graph.md: "A collection watch's .ready() returns true when the
 	// node's readyWhen conditions pass (evaluated once against the whole array,
 	// not per-item)."
+	//
+	// Readiness is determined by readyWhen outcome (or absence of readyWhen).
+	// __ready is stamped AFTER readyWhen evaluation — one code path, not two
+	// compensating ones.
+	ready := true
 	if len(node.ReadyWhen) > 0 {
 		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
-			// Mark collection as not ready — .ready() reflects this.
-			eval.scope[node.ID] = items // keep items in scope
+			ready = false
+			// Set __ready on items, then return the error. Items stay in
+			// scope so downstream nodes can still reference the data.
+			for _, item := range items {
+				if m, ok := item.(map[string]any); ok {
+					m["__ready"] = false
+				}
+			}
 			return err
+		}
+	}
+	for _, item := range items {
+		if m, ok := item.(map[string]any); ok {
+			m["__ready"] = ready
 		}
 	}
 

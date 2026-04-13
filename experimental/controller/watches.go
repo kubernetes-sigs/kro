@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/gobuffalo/flect"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -255,9 +256,12 @@ func gvrKindFromInformer(gvr schema.GroupVersionResource, accessor metav1.Object
 	if typed, ok := accessor.(*metav1.PartialObjectMetadata); ok && typed.Kind != "" {
 		return typed.Kind
 	}
-	// Fallback: singular form of the resource name with first letter capitalized.
-	// This is imperfect but covers common cases.
-	singular := strings.TrimSuffix(gvr.Resource, "s")
+	// Fallback: best-effort Kind derivation when PartialObjectMetadata.Kind is
+	// empty. This path is not expected to fire in normal operation — metadata
+	// informers always populate TypeMeta. If it does, the singular form may
+	// not match the canonical CamelCase Kind (e.g., "Configmap" vs "ConfigMap").
+	// Prefer investigating why TypeMeta is empty over relying on this path.
+	singular := flect.Singularize(gvr.Resource)
 	if len(singular) > 0 {
 		return strings.ToUpper(singular[:1]) + singular[1:]
 	}

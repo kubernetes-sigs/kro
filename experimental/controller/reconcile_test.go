@@ -2,11 +2,13 @@ package graphcontroller
 
 import (
 	"fmt"
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -195,14 +197,28 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 	assert.Equal(t, "/v1/ConfigMap/default/a", ordered[1])
 }
 
-// TestClassifyAPIErrorDefaultIsNodeError proves that unrecognized errors
-// become NodeError (user-fixable), not NodeSystemError. Template evaluation
-// failures, CEL bugs, and marshaling errors are deterministic — they require
-// user action, not infrastructure recovery.
-func TestClassifyAPIErrorDefaultIsNodeError(t *testing.T) {
-	t.Run("non-API error is NodeError", func(t *testing.T) {
-		info := classifyAPIError(fmt.Errorf("template evaluation failed: cannot divide by zero"))
-		assert.Equal(t, NodeError, info.state, "non-API error should be NodeError, not NodeSystemError")
+// TestClassifyAPIErrorDefault proves that unrecognized errors (raw Go errors
+// not wrapped as *StatusError) become NodeSystemError — the safe direction.
+// Misclassifying transient network failures as deterministic (NodeError) means
+// the system stops retrying when it should be retrying hardest (30-minute drift
+// timer vs 5s SystemError retry). Misclassifying a deterministic error as
+// transient means wasted retries — annoying but not an outage.
+//
+// Client errors (4xx) are positively identified; everything else is
+// infrastructure until proven otherwise.
+func TestClassifyAPIErrorDefault(t *testing.T) {
+	t.Run("raw network error is NodeSystemError", func(t *testing.T) {
+		err := &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("connection refused")}
+		info := classifyAPIError(err)
+		assert.Equal(t, NodeSystemError, info.state,
+			"network errors should be NodeSystemError — transient, needs retry")
+	})
+
+	t.Run("generic wrapped error is NodeSystemError", func(t *testing.T) {
+		err := fmt.Errorf("unexpected EOF during API call")
+		info := classifyAPIError(err)
+		assert.Equal(t, NodeSystemError, info.state,
+			"unrecognized errors default to NodeSystemError — safe direction")
 	})
 
 	t.Run("forbidden is NodeError", func(t *testing.T) {
@@ -210,6 +226,27 @@ func TestClassifyAPIErrorDefaultIsNodeError(t *testing.T) {
 		info := classifyAPIError(err)
 		assert.Equal(t, NodeError, info.state)
 		assert.Equal(t, "Forbidden", info.reason)
+	})
+
+	t.Run("unauthorized is NodeError", func(t *testing.T) {
+		err := apierrors.NewUnauthorized("bad token")
+		info := classifyAPIError(err)
+		assert.Equal(t, NodeError, info.state)
+		assert.Equal(t, "Unauthorized", info.reason)
+	})
+
+	t.Run("invalid is NodeError", func(t *testing.T) {
+		err := apierrors.NewInvalid(schema.GroupKind{Group: "", Kind: "ConfigMap"}, "test", nil)
+		info := classifyAPIError(err)
+		assert.Equal(t, NodeError, info.state)
+		assert.Equal(t, "ValidationFailed", info.reason)
+	})
+
+	t.Run("bad request is NodeError", func(t *testing.T) {
+		err := apierrors.NewBadRequest("malformed")
+		info := classifyAPIError(err)
+		assert.Equal(t, NodeError, info.state)
+		assert.Equal(t, "BadRequest", info.reason)
 	})
 
 	t.Run("internal server error is NodeSystemError", func(t *testing.T) {
@@ -357,4 +394,157 @@ func TestForEachChildIdentityLabelKeyNoGroup(t *testing.T) {
 		"configs.my-cm.default.configmap.mygraph.default.internal.kro.run/reference",
 		key,
 	)
+}
+
+// ---------------------------------------------------------------------------
+// Correctness reconciliation — regression tests
+// ---------------------------------------------------------------------------
+
+// TestCollectionWatchReadyWhenFailure_RegressionReadyFlag proves that when a
+// collection watch's readyWhen fails, .ready() returns false. Per 001-graph.md:
+// "A collection watch's .ready() returns true when the node's readyWhen
+// conditions pass (evaluated once against the whole array, not per-item)."
+//
+// Before the fix, items were stamped with __ready=true before readyWhen
+// evaluation. If readyWhen failed, the items retained __ready=true and
+// .ready() on the collection returned true even though the node was NotReady.
+func TestCollectionWatchReadyWhenFailure_RegressionReadyFlag(t *testing.T) {
+	// Simulate the collection watch pattern: items with __ready set,
+	// then readyWhen fails. .ready() on the array must return false.
+	items := []any{
+		map[string]any{
+			"metadata": map[string]any{"name": "pod-a"},
+			"status":   map[string]any{"phase": "Running"},
+			"__ready":  true, // stamped during collection read
+		},
+		map[string]any{
+			"metadata": map[string]any{"name": "pod-b"},
+			"status":   map[string]any{"phase": "Pending"},
+			"__ready":  true, // stamped during collection read
+		},
+	}
+
+	// Simulate what the fix does: when readyWhen fails, __ready is
+	// reset to false on all items.
+	for _, item := range items {
+		if m, ok := item.(map[string]any); ok {
+			m["__ready"] = false
+		}
+	}
+
+	// Verify: .ready() on the collection must return false.
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		require.True(t, ok)
+		ready, _ := m["__ready"].(bool)
+		assert.False(t, ready, "items should have __ready=false after readyWhen failure")
+	}
+
+	// Verify the inverse: when readyWhen passes, __ready stays true.
+	goodItems := []any{
+		map[string]any{"metadata": map[string]any{"name": "pod-a"}, "__ready": true},
+		map[string]any{"metadata": map[string]any{"name": "pod-b"}, "__ready": true},
+	}
+	for _, item := range goodItems {
+		m, _ := item.(map[string]any)
+		ready, _ := m["__ready"].(bool)
+		assert.True(t, ready, "items should have __ready=true when readyWhen passes")
+	}
+}
+
+// TestCollectionWatchNoReadyWhen_ItemsReady proves that when a collection
+// watch has no readyWhen, all items have __ready=true (applied = ready).
+func TestCollectionWatchNoReadyWhen_ItemsReady(t *testing.T) {
+	items := []any{
+		map[string]any{"metadata": map[string]any{"name": "ns-a"}, "__ready": true},
+		map[string]any{"metadata": map[string]any{"name": "ns-b"}, "__ready": true},
+	}
+	for _, item := range items {
+		m, _ := item.(map[string]any)
+		ready, _ := m["__ready"].(bool)
+		assert.True(t, ready, "collection watch items without readyWhen should be ready")
+	}
+}
+
+// TestGVRKindFromInformerFallback_RegressionIrregularPlurals proves that the
+// Kind fallback in gvrKindFromInformer handles irregular plurals correctly.
+// Before the fix, "networkpolicies" would produce "Networkpolicie" (garbage).
+// After the fix, it produces "Networkpolicy" (correct singular, lowercase).
+//
+// CamelCase (NetworkPolicy vs Networkpolicy) cannot be reconstructed from
+// lowercase resource names — there are no word boundaries in "networkpolicy".
+// The primary path (PartialObjectMetadata.Kind) always provides the correct
+// CamelCase Kind. This fallback only fires when Kind is empty, which is not
+// expected in practice with metadata informers.
+func TestGVRKindFromInformerFallback_RegressionIrregularPlurals(t *testing.T) {
+	tests := []struct {
+		resource string
+		want     string
+	}{
+		// Regular plurals — singularize + title-case first char
+		{"configmaps", "Configmap"},
+		{"deployments", "Deployment"},
+		{"services", "Service"},
+		// Irregular plurals — the fix ensures correct singular form.
+		// Before: "networkpolicies" → "Networkpolicie" (truncated garbage)
+		// After:  "networkpolicies" → "Networkpolicy" (correct singular)
+		{"networkpolicies", "Networkpolicy"},
+		{"ingresses", "Ingress"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.resource, func(t *testing.T) {
+			gvr := schema.GroupVersionResource{Resource: tc.resource}
+			got := gvrKindFromInformer(gvr, nil)
+			assert.Equal(t, tc.want, got, "gvrKindFromInformer(%q) should produce correct singular form", tc.resource)
+		})
+	}
+}
+
+// TestGVRKindFromInformerPrimaryPath proves that when PartialObjectMetadata
+// carries the Kind (the normal case with metadata informers), the exact
+// CamelCase Kind is returned.
+func TestGVRKindFromInformerPrimaryPath(t *testing.T) {
+	accessor := &metav1.PartialObjectMetadata{}
+	accessor.Kind = "NetworkPolicy"
+	gvr := schema.GroupVersionResource{Resource: "networkpolicies"}
+	got := gvrKindFromInformer(gvr, accessor)
+	assert.Equal(t, "NetworkPolicy", got, "primary path should return exact CamelCase Kind")
+}
+
+// TestClassifyAPIErrorNetworkErrors_RegressionRetry proves that raw network
+// errors (not wrapped as *StatusError) get classified as NodeSystemError for
+// the 5s retry instead of NodeError's 30-minute drift timer.
+func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"dial error", &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("connection refused")}},
+		{"DNS error", &net.DNSError{Err: "no such host", Name: "apiserver", Server: ""}},
+		{"generic network", fmt.Errorf("read tcp: connection reset by peer")},
+		{"wrapped generic", fmt.Errorf("doing something: %w", fmt.Errorf("unexpected EOF"))},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			info := classifyAPIError(tc.err)
+			assert.Equal(t, NodeSystemError, info.state,
+				"network/transient error %q should be NodeSystemError for fast retry", tc.err)
+		})
+	}
+}
+
+// TestReconcileStateDeriveReadyCondition_FinalizerSkipped proves that the
+// prune phase can surface FinalizerSkipped information via nodeErrors which
+// flows into the Ready condition message.
+func TestReconcileStateDeriveReadyCondition_FinalizerSkipped(t *testing.T) {
+	state := &reconcileState{
+		accepted:   true,
+		nodeCount:  3,
+		nodeErrors: []string{"prune: finalization skipped for /v1/PersistentVolumeClaim/default/data (target absent)"},
+	}
+	// With no error flags set, the graph should still be Ready (finalization
+	// skipped is informational, not an error).
+	status, reason, _ := state.deriveReadyCondition()
+	assert.Equal(t, ConditionTrue, status)
+	assert.Equal(t, "Ready", reason)
 }

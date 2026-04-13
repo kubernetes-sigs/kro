@@ -381,6 +381,13 @@ func (gc *graphCaches) getCompiled(specHash string) *compiledGraph {
 	return gc.compiled[specHash]
 }
 
+// CacheSizes returns the number of compiled graphs and instance states.
+func (gc *graphCaches) CacheSizes() (compiledCount, instanceCount int) {
+	gc.mu.RLock()
+	defer gc.mu.RUnlock()
+	return len(gc.compiled), len(gc.instances)
+}
+
 // ---------------------------------------------------------------------------
 // Compilation
 // ---------------------------------------------------------------------------

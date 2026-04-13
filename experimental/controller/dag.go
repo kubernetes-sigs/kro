@@ -121,12 +121,12 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 
 		currID := dag.Nodes[curr].ID
 		// Decrement in-degree for every node that depends on curr.
-		for i, node := range dag.Nodes {
-			if node.Dependencies[currID] {
-				inDegree[i]--
-				if inDegree[i] == 0 {
-					queue = append(queue, i)
-				}
+		// Uses the Dependents reverse adjacency list for O(V+E) traversal
+		// instead of scanning all nodes — same optimization as propagateState.
+		for _, depIdx := range dag.Dependents[currID] {
+			inDegree[depIdx]--
+			if inDegree[depIdx] == 0 {
+				queue = append(queue, depIdx)
 			}
 		}
 	}

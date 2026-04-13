@@ -1118,11 +1118,10 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		r.Watcher.removeGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
 	}
 
-	// Clean up all expression caches for this Graph's revisions.
+	// List revisions early — needed for key extraction and finalization.
+	// Cache eviction is deferred to after finalization (which calls
+	// compileRevision and would re-add entries if evicted too early).
 	revisions, _ := listRevisions(ctx, r.Client, graph.GetName(), graph.GetNamespace())
-	for _, rev := range revisions {
-		r.Caches.remove(rev.GetNamespace() + "/" + rev.GetName())
-	}
 
 	// Clean up the resource cache for this Graph only.
 	r.Resources.removeForGraph(graph.GetName(), graph.GetNamespace())
@@ -1435,6 +1434,14 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 	}
 
+	// Clean up expression caches AFTER finalization and revision deletion.
+	// This must happen after compileRevision calls in the teardown phase
+	// (line ~1219), which re-populate the cache to get the DAG and evaluator
+	// for finalization. Evicting earlier would be immediately undone.
+	for _, rev := range revisions {
+		r.Caches.remove(rev.GetNamespace() + "/" + rev.GetName())
+	}
+
 	controllerutil.RemoveFinalizer(graph, finalizer)
 	if err := r.Client.Update(ctx, graph); err != nil {
 		return ctrl.Result{}, err
@@ -1563,7 +1570,7 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchMan
 // must invoke this on teardown.
 //
 // driftInterval overrides the per-node drift timer interval. 0 uses the default (30m).
-func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int, driftInterval time.Duration) (shutdown func(), err error) {
+func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int, driftInterval time.Duration) (shutdown func(), caches *graphCaches, err error) {
 	RegisterMetrics(crmetrics.Registry)
 
 	if maxWorkers <= 0 {
@@ -1572,7 +1579,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 
 	metadataClient, err := metadata.NewForConfig(restConfig)
 	if err != nil {
-		return nil, fmt.Errorf("creating metadata client: %w", err)
+		return nil, nil, fmt.Errorf("creating metadata client: %w", err)
 	}
 
 	watchChan := make(chan event.GenericEvent, 256)
@@ -1609,8 +1616,8 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxWorkers}).
 		WatchesRawSource(source.Channel(watchChan, &handler.EnqueueRequestForObject{})).
 		Complete(reconciler); err != nil {
-		return nil, fmt.Errorf("building controller: %w", err)
+		return nil, nil, fmt.Errorf("building controller: %w", err)
 	}
 
-	return watchMgr.shutdown, nil
+	return watchMgr.shutdown, reconciler.Caches, nil
 }

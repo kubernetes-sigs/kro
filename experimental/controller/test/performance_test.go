@@ -3,6 +3,9 @@ package graphcontroller_test
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -777,4 +780,183 @@ func TestIdempotentReReconcileZeroWrites(t *testing.T) {
 			"ConfigMap %s resourceVersion should be unchanged — idempotent reconcile", name)
 	}
 	t.Log("All managed resources have stable resourceVersions — idempotent re-reconcile proved")
+}
+
+// TestPropagationStopsOnIrrelevantChange verifies the design's core performance
+// claim: "If [propagation-hash matches], propagation stops."
+// (004-graph-execution.md § The Walk, step 8)
+//
+// The test creates a 3-node chain: source (Watch) → middle (Own) → leaf (Own).
+// middle references source.data.version. leaf references middle.data.fromSource.
+// After convergence, the test changes source.data.irrelevant — a field middle
+// does NOT reference. The propagation-hash for source covers only the paths
+// middle references (data.version), which didn't change. Therefore:
+//
+//   - middle is NOT propagation-triggered → retains previous state, skip
+//   - leaf is NOT propagation-triggered → retains previous state, skip
+//
+// Both managed resources' resourceVersions must be stable — proving that
+// the walk used the propagation-hash to skip downstream evaluation.
+//
+// The test uses two levels of assertion: (1) resourceVersion stability on
+// middle and leaf, and (2) controller log scraping to verify middle was
+// applied exactly once (initial creation only, not re-applied after the
+// irrelevant field change). The log assertion distinguishes "propagation
+// stopped" from "evaluated but same output" — the latter would produce a
+// second "applied resource" log entry even if the resourceVersion is stable
+// (because apply-hash idempotency catches duplicates before the API write).
+func TestPropagationStopsOnIrrelevantChange(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// 1. Create the watch target with both a relevant and irrelevant field.
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "prop-source",
+				"namespace": ns,
+			},
+			"data": map[string]any{
+				"version":    "v1",
+				"irrelevant": "aaa",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	// 2. Create a Graph with 3 nodes: source → middle → leaf.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-prop-stop",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "source",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "prop-source"},
+						},
+					},
+					map[string]any{
+						"id": "middle",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "prop-middle"},
+							"data": map[string]any{
+								"fromSource": "${source.data.version}",
+							},
+						},
+					},
+					map[string]any{
+						"id": "leaf",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "prop-leaf"},
+							"data": map[string]any{
+								"fromMiddle": "${middle.data.fromSource}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// 3. Wait for full convergence.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-prop-stop", Namespace: ns}))
+
+	// Let it settle.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-prop-stop", Namespace: ns}))
+
+	// 4. Record resourceVersions for middle and leaf.
+	middle := &unstructured.Unstructured{}
+	middle.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "prop-middle", Namespace: ns}, middle))
+	middleRV := middle.GetResourceVersion()
+
+	leaf := &unstructured.Unstructured{}
+	leaf.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "prop-leaf", Namespace: ns}, leaf))
+	leafRV := leaf.GetResourceVersion()
+	t.Logf("Before: middle RV=%s, leaf RV=%s", middleRV, leafRV)
+
+	// 5. Update the watch target — change ONLY the irrelevant field.
+	// middle references source.data.version, NOT source.data.irrelevant.
+	latestSource := &unstructured.Unstructured{}
+	latestSource.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "prop-source", Namespace: ns}, latestSource))
+	unstructured.SetNestedField(latestSource.Object, "bbb", "data", "irrelevant")
+	require.NoError(t, k8sClient.Update(ctx, latestSource))
+	t.Log("Updated source.data.irrelevant=bbb (source.data.version unchanged)")
+
+	// 6. Wait for the reconcile triggered by the watch event to settle.
+	// The source node evaluates (watch trigger), but propagation stops because
+	// the propagation-hash (scoped to data.version) didn't change.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-prop-stop", Namespace: ns}))
+
+	// 7. THE KEY ASSERTIONS: middle and leaf must NOT have been re-applied.
+	middleAfter := &unstructured.Unstructured{}
+	middleAfter.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "prop-middle", Namespace: ns}, middleAfter))
+	assert.Equal(t, middleRV, middleAfter.GetResourceVersion(),
+		"middle resourceVersion should be unchanged — propagation stopped at source")
+
+	leafAfter := &unstructured.Unstructured{}
+	leafAfter.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "prop-leaf", Namespace: ns}, leafAfter))
+	assert.Equal(t, leafRV, leafAfter.GetResourceVersion(),
+		"leaf resourceVersion should be unchanged — propagation stopped at source")
+
+	// 8. Stronger assertion: verify middle was never entered (no apply) by
+	// scanning the controller log for apply events after the source update.
+	// The controller logs "applied resource" for every SSA apply. If propagation
+	// stopped, there should be ZERO apply events for prop-middle after the update.
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	// Walk up to find the module root (where go.mod lives).
+	moduleRoot := wd
+	for {
+		if _, err := os.Stat(filepath.Join(moduleRoot, "go.mod")); err == nil {
+			break
+		}
+		moduleRoot = filepath.Dir(moduleRoot)
+	}
+	logPath := filepath.Join(moduleRoot, "build", "controller.log")
+	logData, err := os.ReadFile(logPath)
+	require.NoError(t, err, "reading controller log")
+	// Find all "applied resource" lines for prop-middle, extract timestamps.
+	logLines := strings.Split(string(logData), "\n")
+	var middleApplyCount int
+	for _, line := range logLines {
+		if strings.Contains(line, "applied resource") && strings.Contains(line, "prop-middle") {
+			middleApplyCount++
+		}
+	}
+	t.Logf("Middle apply count in controller log: %d", middleApplyCount)
+	// There should be exactly 1 apply (the initial creation). If propagation-stop
+	// broke, there would be 2+ (re-apply after source update).
+	assert.Equal(t, 1, middleApplyCount,
+		"middle should have been applied exactly once (initial creation) — "+
+			"additional applies indicate propagation did not stop")
+
+	t.Log("Propagation stopped — irrelevant field change did not re-apply downstream resources")
 }

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -335,10 +336,21 @@ func startBinary(binaryPath, kubeconfigPath string, logFile *os.File) (healthAdd
 	healthAddr = ln.Addr().String()
 	ln.Close()
 
+	// Pick a random port for pprof. Load tests read PPROF_ADDR to
+	// scrape heap profiles from the controller process.
+	pprofLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", nil, fmt.Errorf("picking pprof port: %w", err)
+	}
+	pprofAddr := pprofLn.Addr().String()
+	pprofLn.Close()
+	os.Setenv("PPROF_ADDR", pprofAddr)
+
 	cmd = exec.Command(binaryPath,
 		"--bootstrap",
 		"--health-probe-bind-address="+healthAddr,
 		"--metrics-bind-address=0",
+		"--pprof-bind-address="+pprofAddr,
 		"--max-workers=32",
 		"--drift-interval=2s",
 	)
@@ -349,6 +361,7 @@ func startBinary(binaryPath, kubeconfigPath string, logFile *os.File) (healthAdd
 	if err := cmd.Start(); err != nil {
 		return "", nil, fmt.Errorf("starting binary: %w", err)
 	}
+	os.Setenv("CONTROLLER_PID", strconv.Itoa(cmd.Process.Pid))
 	return healthAddr, cmd, nil
 }
 

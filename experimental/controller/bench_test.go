@@ -134,6 +134,7 @@ func BenchmarkCompileGraph(b *testing.B) {
 		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
 			spec := buildBenchSpec(nodeCount)
 			b.ResetTimer()
+			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				_, err := compileGraphSpec(spec)
 				if err != nil {
@@ -151,6 +152,7 @@ func BenchmarkBuildDAG(b *testing.B) {
 		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
 			nodes := buildBenchNodes(nodeCount)
 			b.ResetTimer()
+			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				_, err := BuildDAG(nodes, nil)
 				if err != nil {
@@ -168,6 +170,7 @@ func BenchmarkHashDesiredState(b *testing.B) {
 		b.Run(fmt.Sprintf("fields=%d", fieldCount), func(b *testing.B) {
 			obj := buildBenchObject(fieldCount)
 			b.ResetTimer()
+			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				_, err := hashDesiredState(obj)
 				if err != nil {
@@ -204,6 +207,7 @@ func BenchmarkTemplateEvaluation(b *testing.B) {
 			}
 			tmpl := spec.Nodes[1].Template
 			b.ResetTimer()
+			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				_, err := eval.toMap(tmpl)
 				if err != nil {
@@ -256,6 +260,7 @@ func BenchmarkNormalizeTypes(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_ = normalizeTypes(obj)
 	}
@@ -297,6 +302,7 @@ func BenchmarkExtractReferencedPaths(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_, _, _, _ = extractReferencedPathsFromNode(node, exprPaths)
 	}
@@ -332,6 +338,7 @@ func BenchmarkHashNodeInputs(b *testing.B) {
 			}
 			node := &Node{ID: "target", DepPaths: depPaths}
 			b.ResetTimer()
+			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				_, err := hashNodeInputs(node, scope)
 				if err != nil {
@@ -553,6 +560,110 @@ func BenchmarkPropagateStateLinearScan(b *testing.B) {
 	}
 }
 
+// BenchmarkHashSelfPaths measures the cost of hashSelfPaths — the propagation
+// hash that determines whether downstream dependents need re-evaluation.
+// This runs once per node per reconcile (step 8 of Wind). Without this
+// benchmark, GC pressure from per-call allocations would be invisible.
+//
+// Per 004-graph-execution.md § Change detection: "hash the output paths
+// downstream expressions reference [...] compare against in-memory
+// propagation-hash from previous evaluation."
+func BenchmarkHashSelfPaths(b *testing.B) {
+	for _, pathCount := range []int{1, 3, 5, 10} {
+		b.Run(fmt.Sprintf("paths=%d", pathCount), func(b *testing.B) {
+			// Build a node with pathCount self-paths, each at depth 2.
+			selfPaths := make([]FieldPath, pathCount)
+			observed := map[string]any{
+				"metadata": map[string]any{
+					"name":      "test",
+					"namespace": "default",
+				},
+			}
+			statusFields := make(map[string]any, pathCount)
+			for i := 0; i < pathCount; i++ {
+				field := fmt.Sprintf("field%d", i)
+				selfPaths[i] = FieldPath{"status", field}
+				statusFields[field] = fmt.Sprintf("value%d", i)
+			}
+			observed["status"] = statusFields
+			node := &Node{ID: "target", SelfPaths: selfPaths}
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_, err := hashSelfPaths(node, observed)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkWalkSkip measures the cost of the O(1) skip check per untriggered
+// node during the DAG walk. The design commits: "Otherwise — skip. O(1) per
+// skipped node." (004-graph-execution.md § The Walk). This benchmark compiles
+// a large DAG, builds the walk infrastructure, and measures the amortized
+// per-node cost of restoring previous scope + dispatching dependents.
+//
+// The benchmark exercises the skip path only (no trigger, no propagation) —
+// the hot path during steady-state reconciliation where no events have fired.
+//
+// The 9 constant allocs per iteration are map creation for NewPlanState (States
+// + PropagateReady) and the scope map — pure setup, not walk-path overhead.
+func BenchmarkWalkSkip(b *testing.B) {
+	for _, nodeCount := range []int{10, 50, 100, 500} {
+		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
+			spec := buildBenchSpec(nodeCount)
+			compiled, err := compileGraphSpec(spec)
+			if err != nil {
+				b.Fatal(err)
+			}
+			dag := compiled.dag
+
+			// Pre-build steady-state data once — not part of the measured path.
+			prevScope := make(map[string]any, len(dag.Nodes))
+			for _, node := range dag.Nodes {
+				prevScope[node.ID] = map[string]any{
+					"metadata": map[string]any{"name": node.ID},
+					"data":     map[string]any{"key": "value"},
+				}
+			}
+			triggered := map[string]bool{}            // nothing triggered
+			propagationTriggered := map[string]bool{} // no propagation
+
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				// Allocate only the per-walk state (plan + scope map).
+				plan := NewPlanState(dag)
+				scope := make(map[string]any, len(dag.Nodes))
+
+				// Walk all nodes — every node hits the skip path.
+				walkSkipBench(dag, plan, scope, prevScope, triggered, propagationTriggered)
+			}
+		})
+	}
+}
+
+// walkSkipBench simulates the skip path of tryDispatch for all nodes.
+// Extracted so the benchmark measures only the walk, not setup.
+func walkSkipBench(dag *DAG, plan *PlanState, scope, prevScope map[string]any, triggered, propagationTriggered map[string]bool) {
+	for _, idx := range dag.TopologicalOrder {
+		node := &dag.Nodes[idx]
+		if plan.States[node.ID] != nodeUnvisited {
+			continue
+		}
+		// This is the skip check from tryDispatch step 1:
+		// no trigger + no propagation + has previous scope → skip.
+		if !triggered[node.ID] && !propagationTriggered[node.ID] {
+			if prev, ok := prevScope[node.ID]; ok {
+				scope[node.ID] = prev
+			}
+			continue
+		}
+	}
+}
+
 // BenchmarkSpecHash measures the cost of computing the spec content hash —
 // the gate that enables compiled graph sharing. This must be significantly
 // cheaper than compilation to justify the indirection.
@@ -561,6 +672,7 @@ func BenchmarkSpecHash(b *testing.B) {
 		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
 			spec := buildBenchSpec(nodeCount)
 			b.ResetTimer()
+			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				_ = spec.Hash()
 			}

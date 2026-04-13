@@ -13,7 +13,11 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof/* on DefaultServeMux
 	"os"
+	"runtime/debug"
 	"time"
 
 	"k8s.io/client-go/kubernetes/scheme"
@@ -31,6 +35,7 @@ func main() {
 		bootstrapFlag          bool
 		healthProbeBindAddress string
 		metricsBindAddress     string
+		pprofBindAddress       string
 		maxWorkers             int
 		driftInterval          time.Duration
 	)
@@ -38,12 +43,21 @@ func main() {
 	flag.BoolVar(&bootstrapFlag, "bootstrap", false, "Install CRDs before starting the controller")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to. Use :0 for a random port.")
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", "0", "The address the metrics endpoint binds to. Use 0 to disable.")
+	flag.StringVar(&pprofBindAddress, "pprof-bind-address", "", "The address the pprof endpoint binds to. Empty to disable.")
 	flag.IntVar(&maxWorkers, "max-workers", 0, "Maximum concurrent reconcile workers. 0 uses the default.")
 	flag.DurationVar(&driftInterval, "drift-interval", 0, "Per-node drift timer interval. 0 uses the default (30m).")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 	log := ctrl.Log.WithName("main")
+
+	if pprofBindAddress != "" {
+		// Register pprof handlers — will start after SetupWithManager.
+		http.HandleFunc("/debug/freeosmemory", func(w http.ResponseWriter, r *http.Request) {
+			debug.FreeOSMemory()
+			w.Write([]byte("ok\n"))
+		})
+	}
 
 	cfg := ctrl.GetConfigOrDie()
 
@@ -76,10 +90,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	shutdown, err := graphcontroller.SetupWithManager(mgr, cfg, maxWorkers, driftInterval)
+	shutdown, caches, err := graphcontroller.SetupWithManager(mgr, cfg, maxWorkers, driftInterval)
 	if err != nil {
 		log.Error(err, "setting up controller")
 		os.Exit(1)
+	}
+
+	if pprofBindAddress != "" {
+		http.HandleFunc("/debug/cachestats", func(w http.ResponseWriter, r *http.Request) {
+			compiled, instances := caches.CacheSizes()
+			fmt.Fprintf(w, "compiled=%d instances=%d\n", compiled, instances)
+		})
+		go func() {
+			log.Info("starting pprof server", "addr", pprofBindAddress)
+			if err := http.ListenAndServe(pprofBindAddress, nil); err != nil {
+				log.Error(err, "pprof server failed")
+			}
+		}()
 	}
 
 	log.Info("starting graph controller")

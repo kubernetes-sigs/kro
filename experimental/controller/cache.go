@@ -156,7 +156,7 @@ func hashNodeInputs(node *Node, scope map[string]any) (string, error) {
 
 	h := fnv.New64a()
 	// Process dependencies in sorted order for deterministic hashing.
-	depIDs := sortedKeys(node.DepSections)
+	depIDs := sortedMapKeys(node.DepSections)
 	for _, depID := range depIDs {
 		sections := node.DepSections[depID]
 		depData, ok := scope[depID]
@@ -177,7 +177,7 @@ func hashNodeInputs(node *Node, scope map[string]any) (string, error) {
 			continue
 		}
 
-		sectionNames := sortedBoolKeys(sections)
+		sectionNames := sortedMapKeys(sections)
 		for _, section := range sectionNames {
 			sectionData, ok := depMap[section]
 			if !ok {
@@ -223,7 +223,7 @@ func hashSelfSections(node *Node, observed any) (string, error) {
 	}
 
 	h := fnv.New64a()
-	sectionNames := sortedBoolKeys(node.SelfSections)
+	sectionNames := sortedMapKeys(node.SelfSections)
 	for _, section := range sectionNames {
 		sectionData, ok := observedMap[section]
 		if !ok {
@@ -263,18 +263,8 @@ func filterVolatileMetadata(metadata any) any {
 	return filtered
 }
 
-// sortedKeys returns the keys of a map[string]map[string]bool in sorted order.
-func sortedKeys(m map[string]map[string]bool) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// sortedBoolKeys returns the keys of a map[string]bool in sorted order.
-func sortedBoolKeys(m map[string]bool) []string {
+// sortedMapKeys returns the keys of any map[string]V in sorted order.
+func sortedMapKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

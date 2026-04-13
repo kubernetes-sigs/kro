@@ -38,15 +38,9 @@ type reconcileState struct {
 	accepted    bool
 	acceptedErr error // non-nil when accepted=false
 
-	hasPending     bool
-	hasNotReady    bool
-	hasBlocked     bool
-	hasConflict    bool
-	hasError       bool     // any node in NodeError (4xx) or prune 4xx
-	hasSystemError bool     // any node in NodeSystemError (5xx) or prune 5xx
-	nodeErrors     []string // "nodeID: reason" for status message
-	nodeCount      int
-	appliedCount   int
+	PlanSummary
+	nodeErrors []string // "nodeID: reason" for status message
+	nodeCount  int
 }
 
 // deriveAcceptedCondition computes the Accepted condition.
@@ -85,29 +79,29 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	if !s.accepted {
 		return ConditionFalse, "NotAccepted", "Spec is not valid; resources cannot be reconciled"
 	}
-	if s.hasSystemError {
+	if s.HasSystemError {
 		return ConditionFalse, "SystemError",
 			fmt.Sprintf("Resources with server/infrastructure errors: %s",
 				strings.Join(s.nodeErrors, "; "))
 	}
-	if s.hasError {
+	if s.HasError {
 		return ConditionFalse, "Error",
 			fmt.Sprintf("Resources with errors: %s",
 				strings.Join(s.nodeErrors, "; "))
 	}
-	if s.hasConflict {
+	if s.HasConflict {
 		return ConditionFalse, "Conflict", "One or more resources have SSA field ownership conflicts"
 	}
-	if s.hasPending {
+	if s.HasPending {
 		return ConditionUnknown, "Pending", "One or more resources waiting for upstream data"
 	}
-	if s.hasBlocked {
+	if s.HasBlocked {
 		return ConditionUnknown, "Blocked", "One or more resources blocked by upstream errors"
 	}
-	if s.hasNotReady {
+	if s.HasNotReady {
 		return ConditionUnknown, "NotReady", "One or more resources have not satisfied their readyWhen conditions"
 	}
-	msg := fmt.Sprintf("All %d resources reconciled", s.appliedCount)
+	msg := fmt.Sprintf("All %d resources reconciled", s.ReadyCount)
 	// Surface informational notes (e.g., FinalizerSkipped) that don't
 	// constitute errors but are operationally useful. Per 004-graph-execution.md
 	// § Finalization: "The Graph's status surfaces this: FinalizerSkipped

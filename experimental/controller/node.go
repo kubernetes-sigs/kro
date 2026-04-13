@@ -28,6 +28,12 @@ import (
 // Per 004-graph-execution.md § The Walk: drift-triggered nodes bypass the
 // template-hash check and apply unconditionally via SSA.
 //
+// After dispatch, reconcileNode evaluates readyWhen as a post-dispatch step
+// for node types that don't handle their own per-item readiness (Definition,
+// Watch, Own, Contribute). CollectionWatch and ForEach return early — they
+// handle readiness internally (per-item for ForEach, per-collection for
+// CollectionWatch).
+//
 // All paths return (keys, error) with a uniform error contract:
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
@@ -39,26 +45,61 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 
 	switch ref {
 	case ReferenceDefinition:
-		return nil, r.reconcileDefinition(ctx, node, eval)
+		if err := r.reconcileDefinition(ctx, node, eval); err != nil {
+			return nil, err
+		}
 	case ReferenceWatchKind:
 		err := r.reconcileCollectionWatch(ctx, graph, node, eval, watcher)
-		return nil, err
+		return nil, err // CollectionWatch handles its own readiness
 	case ReferenceWatch:
-		err := r.reconcileWatch(ctx, graph, node, eval, watcher)
-		return nil, err
+		if err := r.reconcileWatch(ctx, graph, node, eval, watcher); err != nil {
+			return nil, err
+		}
 	case ReferenceContribute:
 		key, err := r.reconcileContribute(ctx, graph, node, eval, watcher, driftCorrection)
-		if key != "" {
-			return []string{key}, err
+		if err != nil {
+			if key != "" {
+				return []string{key}, err
+			}
+			return nil, err
 		}
-		return nil, err
+		// readyWhen post-dispatch
+		if len(node.ReadyWhen) > 0 {
+			if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
+				eval.markReady(node.ID, false)
+				return []string{key}, err
+			}
+		}
+		eval.markReady(node.ID, true)
+		return []string{key}, nil
 	default: // ReferenceOwn
 		key, err := r.reconcileOwn(ctx, graph, node, eval, watcher, driftCorrection)
-		if key != "" {
-			return []string{key}, err
+		if err != nil {
+			if key != "" {
+				return []string{key}, err
+			}
+			return nil, err
 		}
-		return nil, err
+		// readyWhen post-dispatch
+		if len(node.ReadyWhen) > 0 {
+			if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
+				eval.markReady(node.ID, false)
+				return []string{key}, err
+			}
+		}
+		eval.markReady(node.ID, true)
+		return []string{key}, nil
 	}
+
+	// Post-dispatch readyWhen for Definition and Watch (no keys to return).
+	if len(node.ReadyWhen) > 0 {
+		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
+			eval.markReady(node.ID, false)
+			return nil, err
+		}
+	}
+	eval.markReady(node.ID, true)
+	return nil, nil
 }
 
 // reconcileDefinition evaluates a definition node — resolves values from the template
@@ -71,15 +112,6 @@ func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node Node, ev
 	}
 	eval.scope[node.ID] = result
 	log.FromContext(ctx).V(1).Info("evaluated definition node", "node", node.ID, "keys", len(result))
-
-	if len(node.ReadyWhen) > 0 {
-		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
-			eval.markReady(node.ID, false)
-			return err
-		}
-	}
-	eval.markReady(node.ID, true)
-
 	return nil
 }
 
@@ -181,14 +213,6 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 	eval.scope[node.ID] = normalizeTypes(obj.Object)
 	logger.V(1).Info("resolved watch", "node", node.ID, "gvk", gvk, "name", obj.GetName())
 
-	if len(node.ReadyWhen) > 0 {
-		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
-			eval.markReady(node.ID, false)
-			return err
-		}
-	}
-	eval.markReady(node.ID, true)
-
 	return nil
 }
 
@@ -284,7 +308,7 @@ func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *u
 	return nil
 }
 
-// reconcileOwn evaluates and applies an Own template, checks readyWhen.
+// reconcileOwn evaluates and applies an Own template.
 // driftCorrection bypasses the template-hash check in applyResource.
 func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
@@ -302,14 +326,6 @@ func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.
 	eval.scope[node.ID] = normalizeTypes(applied.Object)
 	key := resourceKey(applied)
 	logger.V(1).Info("applied resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
-
-	if len(node.ReadyWhen) > 0 {
-		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
-			eval.markReady(node.ID, false)
-			return key, err
-		}
-	}
-	eval.markReady(node.ID, true)
 
 	return key, nil
 }
@@ -330,19 +346,6 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 	}
 	eval.scope[node.ID] = normalizeTypes(applied.Object)
 	logger.V(1).Info("contributed to resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
-
-	// Evaluate readyWhen if present, matching the reconcileOwn pattern.
-	// Without readyWhen, applied = ready.
-	if len(node.ReadyWhen) > 0 {
-		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
-			eval.markReady(node.ID, false)
-			// Track the contribution in the applied set with a "contribute:" prefix.
-			hasStatus := evalMap["status"] != nil
-			key := contributeKey(applied, hasStatus)
-			return key, err
-		}
-	}
-	eval.markReady(node.ID, true)
 
 	// Track the contribution in the applied set with a "contribute:" prefix.
 	// This lets prune and teardown distinguish Contribute keys (skeleton apply

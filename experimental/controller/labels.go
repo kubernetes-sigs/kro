@@ -39,12 +39,19 @@ const (
 	LabelRevisionHash      = "internal.kro.run/hash"
 )
 
+// nodeLabelPrefix returns the DNS subdomain prefix shared by identity and
+// generation labels for a node in a graph.
+// Format: <nodeID>.<graphName>.<namespace>
+func nodeLabelPrefix(nodeID, graphName, namespace string) string {
+	return strings.ToLower(nodeID) + "." + strings.ToLower(graphName) + "." + strings.ToLower(namespace)
+}
+
 // identityLabelKey returns the identity label key for a node in a graph.
 // Format: <nodeID>.<graphName>.<namespace>.internal.kro.run/role
 // All segments are lowercased to satisfy the RFC 1123 subdomain requirement
 // for Kubernetes label key prefixes.
 func identityLabelKey(nodeID, graphName, namespace string) string {
-	return strings.ToLower(nodeID) + "." + strings.ToLower(graphName) + "." + strings.ToLower(namespace) + identityLabelSuffix
+	return nodeLabelPrefix(nodeID, graphName, namespace) + identityLabelSuffix
 }
 
 // validateIdentityLabelKey checks that the identity label key for a node
@@ -63,7 +70,7 @@ func validateIdentityLabelKey(nodeID, graphName, namespace string) error {
 // generationLabelKey returns the generation label key for a node in a graph.
 // Format: <nodeID>.<graphName>.<namespace>.internal.kro.run/generation
 func generationLabelKey(nodeID, graphName, namespace string) string {
-	return strings.ToLower(nodeID) + "." + strings.ToLower(graphName) + "." + strings.ToLower(namespace) + generationLabelSuffix
+	return nodeLabelPrefix(nodeID, graphName, namespace) + generationLabelSuffix
 }
 
 // graphLabelSuffix returns the suffix shared by all identity labels for a graph.
@@ -144,6 +151,23 @@ func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, g
 	return labels
 }
 
+// forEachChildLabelPrefix returns the DNS subdomain prefix shared by forEach
+// child identity and generation labels.
+// Format: <parentID>.<name>.<namespace>.<kind>[.<group>].<graph>.<graphns>
+func forEachChildLabelPrefix(parentID, resName, resNamespace, kind, group, graphName, graphNamespace string) string {
+	segments := []string{
+		strings.ToLower(parentID),
+		strings.ToLower(resName),
+		strings.ToLower(resNamespace),
+		strings.ToLower(kind),
+	}
+	if group != "" {
+		segments = append(segments, strings.ToLower(group))
+	}
+	segments = append(segments, strings.ToLower(graphName), strings.ToLower(graphNamespace))
+	return strings.Join(segments, ".")
+}
+
 // forEachChildIdentityLabelKey returns the identity label key for a forEach child.
 // Per 004-graph-execution.md § Child Identity:
 //
@@ -152,33 +176,12 @@ func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, g
 // This encodes the full resource key as DNS subdomain labels within the label key,
 // making each child uniquely identifiable in the applied set.
 func forEachChildIdentityLabelKey(parentID, resName, resNamespace, kind, group, graphName, graphNamespace string) string {
-	// Lowercase all segments per RFC 1123 subdomain requirement.
-	segments := []string{
-		strings.ToLower(parentID),
-		strings.ToLower(resName),
-		strings.ToLower(resNamespace),
-		strings.ToLower(kind),
-	}
-	if group != "" {
-		segments = append(segments, strings.ToLower(group))
-	}
-	segments = append(segments, strings.ToLower(graphName), strings.ToLower(graphNamespace))
-	return strings.Join(segments, ".") + identityLabelSuffix
+	return forEachChildLabelPrefix(parentID, resName, resNamespace, kind, group, graphName, graphNamespace) + identityLabelSuffix
 }
 
 // forEachChildGenerationLabelKey returns the generation label key for a forEach child.
 func forEachChildGenerationLabelKey(parentID, resName, resNamespace, kind, group, graphName, graphNamespace string) string {
-	segments := []string{
-		strings.ToLower(parentID),
-		strings.ToLower(resName),
-		strings.ToLower(resNamespace),
-		strings.ToLower(kind),
-	}
-	if group != "" {
-		segments = append(segments, strings.ToLower(group))
-	}
-	segments = append(segments, strings.ToLower(graphName), strings.ToLower(graphNamespace))
-	return strings.Join(segments, ".") + generationLabelSuffix
+	return forEachChildLabelPrefix(parentID, resName, resNamespace, kind, group, graphName, graphNamespace) + generationLabelSuffix
 }
 
 // setForEachChildIdentityLabels stamps forEach child identity and generation labels.

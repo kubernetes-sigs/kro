@@ -122,7 +122,7 @@ func (r *GraphReconciler) runFinalization(
 	// Put the target's data in scope so finalizer templates can reference it.
 	// The target is still alive (no deletionTimestamp).
 	for _, node := range dag.Nodes {
-		if resourceKey(target) == resourceKeyFromObj(node.Template, graph.GetNamespace()) {
+		if resourceKey(target) == resourceKeyFromEvaluatedTemplate(node.Template, graph.GetNamespace()) {
 			eval.scope[node.ID] = normalizeTypes(target.Object)
 			break
 		}
@@ -312,10 +312,10 @@ func (r *GraphReconciler) runForEachFinalization(
 	return allReady, createdKeys, nil
 }
 
-// resourceKeyFromObj builds a resource key from a template map, matching
-// the key format used by resourceKey(). Used to map template content to
-// resource keys for finalizer lookup.
-func resourceKeyFromObj(tmpl map[string]any, defaultNS string) string {
+// resourceKeyFromEvaluatedTemplate builds a resource key from an evaluated
+// template map, matching the key format used by resourceKey(). Used to map
+// template content to resource keys for finalizer lookup.
+func resourceKeyFromEvaluatedTemplate(tmpl map[string]any, defaultNS string) string {
 	if tmpl == nil {
 		return ""
 	}
@@ -421,7 +421,15 @@ func parseContributeKey(key string) (resourceKey string, hasStatus bool) {
 // Apply
 // ---------------------------------------------------------------------------
 
-// applyResource applies an Own template via SSA.
+// applySSA applies a template via server-side apply (SSA). Handles both Own
+// and Contribute references — the ref parameter controls:
+//   - Identity labels: Own skips if present (forEach children stamp their own),
+//     Contribute always stamps.
+//   - Pre-apply check: Own does a kro label check (cross-Graph ownership guard),
+//     Contribute checks target existence (contributions patch into existing resources).
+//   - Cache miss on NotFound: Own clears cache + returns ErrPending,
+//     Contribute falls through to apply.
+//   - Template hash annotation: Own only (Contribute targets are owned by others).
 //
 // driftCorrection bypasses the content-addressed template hash check.
 // Per 004-graph-execution.md § The Walk: "The drift timer bypasses the
@@ -429,7 +437,7 @@ func parseContributeKey(key string) (resourceKey string, hasStatus bool) {
 // defaulters and mutating webhooks can change fields without changing
 // the desired state hash. SSA is idempotent; the apply corrects drift
 // as a side effect."
-func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, driftCorrection bool) (*unstructured.Unstructured, error) {
+func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, ref Reference, driftCorrection bool) (*unstructured.Unstructured, error) {
 	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
@@ -438,76 +446,62 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 	}
 
 	// Stamp identity labels per 004-graph-execution.md § Storage model.
-	// Each managed resource carries two labels encoding the node-graph-namespace
-	// triple in DNS subdomain format. These labels are the basis for the applied
-	// set (derived from the watch cache) and the kro label check.
-	//
-	// Skip stamping if identity labels are already present (e.g., forEach
-	// children stamp their own child-scoped labels before calling applyResource).
-	// The child's identity IS the forEach-derived label; the parent label
-	// would be a conflicting claim on the resource's identity.
 	generation := fmt.Sprintf("%d", graph.GetGeneration())
 	lbls := obj.GetLabels()
 	if lbls == nil {
 		lbls = map[string]string{}
 	}
-	if !hasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
-		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceOwn)
+	if ref == ReferenceOwn {
+		// Own: skip stamping if identity labels are already present (e.g., forEach
+		// children stamp their own child-scoped labels before calling applyResource).
+		if !hasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
+			lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceOwn)
+			obj.SetLabels(lbls)
+		}
+	} else {
+		// Contribute: always stamp identity labels so resources are discoverable via
+		// deriveAppliedSet() after controller restart.
+		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceContribute)
 		obj.SetLabels(lbls)
 	}
 
-	// Buffer a watch for this resource. The request is flushed to the
-	// coordinator's indexes at done(true), not immediately — this avoids
-	// per-node Lock acquisitions on the coordinator. Use the DAG node ID
-	// so that scoped walks can map watch events back to DAG nodes.
+	// Buffer a watch for this resource (flushed at done(true)).
 	gvr := gvkToGVR(obj.GroupVersionKind())
 	if watcher != nil {
 		watcher.watchScalar(nodeID, gvr, obj.GetName(), obj.GetNamespace())
 	}
 
 	// Content-addressed apply: hash the desired state to detect changes.
-	// The hash is computed before adding the hash annotation itself.
 	templateHash, err := hashDesiredState(obj.Object)
 	if err != nil {
 		return nil, fmt.Errorf("hashing template for %s: %w", obj.GetName(), err)
 	}
 	cacheKey := resourceCacheKey(obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName())
 
-	// Check the resource cache + metadata informer for change detection.
-	// Drift correction bypasses this check entirely — the drift timer's
+	// Drift correction bypasses the cache check entirely — the drift timer's
 	// purpose is to re-apply unconditionally so SSA corrects any live-state
-	// divergence from the desired state. The template hash answers "did the
-	// desired state change?" — during drift correction the question is "does
-	// live state match desired state?" which can only be answered by applying.
+	// divergence from the desired state.
 	if !driftCorrection {
 		if cached, ok := r.Resources.get(cacheKey); ok && cached.templateHash == templateHash {
-			// Our desired state hasn't changed. Check if the live object has changed
-			// (e.g., status updated by another controller) via the metadata informer.
 			if watcher != nil {
 				liveRV := watcher.getResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
 				if liveRV != "" && liveRV == cached.resourceVersion {
-					// Nothing changed at all — skip both Patch and GET.
 					return &unstructured.Unstructured{Object: cached.object}, nil
 				}
 			}
-			// Metadata changed (status update, etc.) but our template hasn't.
-			// Skip the Patch, but GET to refresh the scope with current status.
 			readBack := &unstructured.Unstructured{}
 			readBack.SetGroupVersionKind(obj.GroupVersionKind())
 			if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, readBack); err != nil {
 				if !apierrors.IsNotFound(err) {
 					return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
 				}
-				// Template hash matches (desired state unchanged) but object
-				// is gone — externally deleted. Clear cache so the next
-				// reconcile with changed inputs will re-create it. Don't
-				// re-create now: the template hasn't changed, so re-applying
-				// the same content is a no-information write that widens race
-				// windows (e.g., finalization between delete and spec update).
-				r.Resources.remove(cacheKey)
-				return nil, fmt.Errorf("resource %s externally deleted: %w", obj.GetName(), ErrPending)
+				if ref == ReferenceOwn {
+					// Own: externally deleted. Clear cache + ErrPending.
+					r.Resources.remove(cacheKey)
+					return nil, fmt.Errorf("resource %s externally deleted: %w", obj.GetName(), ErrPending)
+				}
+				// Contribute: object might not exist yet (race), fall through to apply
 			} else {
-				// Update the cache with fresh data
 				r.Resources.set(cacheKey, &cachedObject{
 					resourceVersion: readBack.GetResourceVersion(),
 					templateHash:    templateHash,
@@ -518,28 +512,42 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 		}
 	} // !driftCorrection
 
-	// Set the template hash annotation for future comparisons.
-	annotations := obj.GetAnnotations()
-	if annotations == nil {
-		annotations = map[string]string{}
+	// Own: set the template hash annotation for future comparisons.
+	if ref == ReferenceOwn {
+		annotations := obj.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations[templateHashAnnotation] = templateHash
+		obj.SetAnnotations(annotations)
 	}
-	annotations[templateHashAnnotation] = templateHash
-	obj.SetAnnotations(annotations)
 
 	forceApply := isForceApply(obj)
 
-	// kro label check: if the existing resource has a different Graph's identity
-	// label, require Force to proceed. Prevents accidental cross-Graph ownership.
-	// Per 003-ownership.md § kro Label Check.
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(obj.GroupVersionKind())
-	if getErr := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing); getErr == nil {
-		existingLabels := existing.GetLabels()
-		if otherGraph, found := hasOtherGraphIdentityLabel(existingLabels, graph.GetName(), graph.GetNamespace()); found {
-			if !forceApply {
-				return nil, fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use kro.run/apply: Force to take ownership): %w",
-					obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, graph.GetName(), ErrFieldConflict)
+	// Pre-apply check differs by reference type.
+	if ref == ReferenceOwn {
+		// kro label check: if the existing resource has a different Graph's identity
+		// label, require Force to proceed. Prevents accidental cross-Graph ownership.
+		existing := &unstructured.Unstructured{}
+		existing.SetGroupVersionKind(obj.GroupVersionKind())
+		if getErr := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing); getErr == nil {
+			existingLabels := existing.GetLabels()
+			if otherGraph, found := hasOtherGraphIdentityLabel(existingLabels, graph.GetName(), graph.GetNamespace()); found {
+				if !forceApply {
+					return nil, fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use kro.run/apply: Force to take ownership): %w",
+						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, graph.GetName(), ErrFieldConflict)
+				}
 			}
+		}
+	} else {
+		// Contribute: target must exist — contributions patch into existing resources.
+		targetCheck := &unstructured.Unstructured{}
+		targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
+		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("contribute target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), ErrPending)
+			}
+			return nil, fmt.Errorf("checking contribute target %s: %w", obj.GetName(), err)
 		}
 	}
 
@@ -549,9 +557,7 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 		patchOpts = append(patchOpts, client.ForceOwnership)
 	}
 
-	// Per 003-ownership.md § Status Subresource: "When a template contains
-	// .status fields, the controller splits the apply into two operations —
-	// metadata/spec via the main resource, status via the status subresource."
+	// Split status from main payload — status subresource requires a separate patch.
 	statusData, hasStatus := obj.Object["status"]
 	mainPayload := obj.Object
 	if hasStatus && statusData != nil {
@@ -581,7 +587,6 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 	}
 
 	// Status subresource patch if .status is present.
-	// Per 003-ownership.md: "Each subresource has its own managedFields entries."
 	if hasStatus && statusData != nil {
 		statusPayload := map[string]any{
 			"apiVersion": obj.GetAPIVersion(),
@@ -606,9 +611,6 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 			statusOpts = append(statusOpts, client.ForceOwnership)
 		}
 		if err := r.Client.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, sData), statusOpts...); err != nil {
-			// Revert the cached template hash so the next reconcile retries both.
-			// Per 004-graph-execution.md: "If the status subresource apply fails,
-			// the controller reverts the in-memory template-hash."
 			r.Resources.remove(cacheKey)
 			if apierrors.IsConflict(err) {
 				return nil, fmt.Errorf("SSA status conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
@@ -617,14 +619,13 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 		}
 	}
 
-	// Read back to get status fields that the Patch response may not include.
+	// Read back the full object to populate scope.
 	readBack := &unstructured.Unstructured{}
 	readBack.SetGroupVersionKind(obj.GroupVersionKind())
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(applied), readBack); err != nil {
 		return nil, fmt.Errorf("reading back %s: %w", obj.GetName(), err)
 	}
 
-	// Populate the resource cache.
 	r.Resources.set(cacheKey, &cachedObject{
 		resourceVersion: readBack.GetResourceVersion(),
 		templateHash:    templateHash,
@@ -634,174 +635,14 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 	return readBack, nil
 }
 
-// applyContribution applies a contribution resource — partial SSA.
-// Contributions intentionally write fields on objects someone else owns.
-// Auto-splits into two API calls when the template contains status fields:
-//   - Regular SSA patch for metadata/spec/other fields (skips .status)
-//   - Status subresource patch for .status fields
-//
-// Hash-gated: if the contribution's evaluated output hasn't changed, the Patch
-// is skipped. When it does change, the new state is applied.
-// Uses non-force SSA by default; force only with kro.run/apply: Force.
-// Surfaces SSA conflicts as ErrFieldConflict.
+// applyResource applies an Own template via SSA.
+func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, driftCorrection bool) (*unstructured.Unstructured, error) {
+	return r.applySSA(ctx, graph, evalMap, watcher, nodeID, ReferenceOwn, driftCorrection)
+}
+
 // applyContribution applies a Contribute template via SSA.
-// driftCorrection bypasses the content-addressed template hash check.
 func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, driftCorrection bool) (*unstructured.Unstructured, error) {
-	fieldOwner := graphFieldOwner(graph)
-	obj := &unstructured.Unstructured{Object: evalMap}
-
-	if obj.GetNamespace() == "" {
-		obj.SetNamespace(graph.GetNamespace())
-	}
-
-	// Stamp identity labels so Contribute resources are discoverable via
-	// deriveAppliedSet() after controller restart. Without this, teardown
-	// after restart can't find contributed resources and orphans their fields.
-	// Per 004-graph-execution.md § Applied Set: "Both Own and Contribute
-	// targets are in the applied set — one mechanism."
-	generation := fmt.Sprintf("%d", graph.GetGeneration())
-	lbls := obj.GetLabels()
-	if lbls == nil {
-		lbls = map[string]string{}
-	}
-	lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceContribute)
-	obj.SetLabels(lbls)
-
-	// Buffer a watch for the target resource (flushed at done(true)).
-	// Use the DAG node ID for scoped walk trigger resolution.
-	gvr := gvkToGVR(obj.GroupVersionKind())
-	if watcher != nil {
-		watcher.watchScalar(nodeID, gvr, obj.GetName(), obj.GetNamespace())
-	}
-
-	// Content-addressed apply: hash the desired state to detect changes.
-	templateHash, err := hashDesiredState(evalMap)
-	if err != nil {
-		return nil, fmt.Errorf("hashing contribution for %s: %w", obj.GetName(), err)
-	}
-	cacheKey := resourceCacheKey(obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName())
-
-	// Check cache for hash match — skip Patch if contribution output unchanged.
-	// Drift correction bypasses this — same reasoning as applyResource.
-	if !driftCorrection {
-		if cached, ok := r.Resources.get(cacheKey); ok && cached.templateHash == templateHash {
-			if watcher != nil {
-				liveRV := watcher.getResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
-				if liveRV != "" && liveRV == cached.resourceVersion {
-					return &unstructured.Unstructured{Object: cached.object}, nil
-				}
-			}
-			// Metadata changed but our contribution hasn't — GET to refresh.
-			readBack := &unstructured.Unstructured{}
-			readBack.SetGroupVersionKind(obj.GroupVersionKind())
-			if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, readBack); err != nil {
-				if !apierrors.IsNotFound(err) {
-					return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
-				}
-				// Object might not exist yet (race), fall through to apply
-			} else {
-				r.Resources.set(cacheKey, &cachedObject{
-					resourceVersion: readBack.GetResourceVersion(),
-					templateHash:    templateHash,
-					object:          readBack.Object,
-				})
-				return readBack, nil
-			}
-		}
-	} // !driftCorrection
-
-	// Target must exist — contributions patch into existing resources.
-	targetCheck := &unstructured.Unstructured{}
-	targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
-	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("contribute target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), ErrPending)
-		}
-		return nil, fmt.Errorf("checking contribute target %s: %w", obj.GetName(), err)
-	}
-
-	forceApply := isForceApply(obj)
-
-	var patchOpts []client.PatchOption
-	patchOpts = append(patchOpts, fieldOwner)
-	if forceApply {
-		patchOpts = append(patchOpts, client.ForceOwnership)
-	}
-
-	// Regular SSA for non-status fields. Strip .status to avoid silent
-	// stripping by the API server when the status subresource is enabled.
-	mainPayload := make(map[string]any, len(evalMap))
-	for k, v := range evalMap {
-		if k != "status" {
-			mainPayload[k] = v
-		}
-	}
-	data, err := json.Marshal(mainPayload)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling contribution: %w", err)
-	}
-	target := &unstructured.Unstructured{}
-	target.SetGroupVersionKind(obj.GroupVersionKind())
-	target.SetName(obj.GetName())
-	target.SetNamespace(obj.GetNamespace())
-	if err := r.Client.Patch(ctx, target, client.RawPatch(types.ApplyPatchType, data), patchOpts...); err != nil {
-		if apierrors.IsConflict(err) {
-			return nil, fmt.Errorf("SSA conflict on contribution %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
-		}
-		return nil, fmt.Errorf("applying contribution %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
-	}
-
-	// Status subresource patch if .status is present
-	if status, ok := evalMap["status"]; ok && status != nil {
-		statusPayload := map[string]any{
-			"apiVersion": obj.GetAPIVersion(),
-			"kind":       obj.GetKind(),
-			"metadata": map[string]any{
-				"name":      obj.GetName(),
-				"namespace": obj.GetNamespace(),
-			},
-			"status": status,
-		}
-		data, err := json.Marshal(statusPayload)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling status contribution: %w", err)
-		}
-		statusTarget := &unstructured.Unstructured{}
-		statusTarget.SetGroupVersionKind(obj.GroupVersionKind())
-		statusTarget.SetName(obj.GetName())
-		statusTarget.SetNamespace(obj.GetNamespace())
-		var statusOpts []client.SubResourcePatchOption
-		statusOpts = append(statusOpts, fieldOwner)
-		if forceApply {
-			statusOpts = append(statusOpts, client.ForceOwnership)
-		}
-		if err := r.Client.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, data), statusOpts...); err != nil {
-			// Revert the cached template hash so the next reconcile retries
-			// both the main resource and status subresource patches.
-			// Per 004-graph-execution.md: "If the status subresource apply
-			// fails, the controller reverts the in-memory template-hash."
-			r.Resources.remove(cacheKey)
-			if apierrors.IsConflict(err) {
-				return nil, fmt.Errorf("SSA status conflict on contribution %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
-			}
-			return nil, fmt.Errorf("applying status contribution %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
-		}
-	}
-
-	// Read back the full object to populate scope.
-	readBack := &unstructured.Unstructured{}
-	readBack.SetGroupVersionKind(obj.GroupVersionKind())
-	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, readBack); err != nil {
-		return nil, fmt.Errorf("reading back %s after contribution: %w", obj.GetName(), err)
-	}
-
-	r.Resources.set(cacheKey, &cachedObject{
-		resourceVersion: readBack.GetResourceVersion(),
-		templateHash:    templateHash,
-		object:          readBack.Object,
-	})
-
-	return readBack, nil
+	return r.applySSA(ctx, graph, evalMap, watcher, nodeID, ReferenceContribute, driftCorrection)
 }
 
 // ---------------------------------------------------------------------------
@@ -1155,9 +996,7 @@ func pruneOrder(keys []string, dags []*DAG, defaultNS string) []string {
 
 // deletionOrder returns resource keys ordered for deletion: reverse
 // topological order from the DAG. Rebuilds the DAG from the Graph spec.
-// Maps resource keys to topological positions by matching kind/name.
-// Unmatched keys (dynamic names, forEach) are deleted first (highest
-// position) since their dependencies are unknown.
+// Delegates to pruneOrder for the actual ordering logic.
 //
 // Returns an error if the Graph spec cannot be parsed or the DAG cannot
 // be built. Per the design (004-graph-execution): "Teardown is blocked
@@ -1171,61 +1010,7 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 	if err != nil {
 		return nil, fmt.Errorf("building DAG for deletion order: %w", err)
 	}
-
-	// Build a map from node index → topological position. Position 0 is
-	// the first node in apply order (no dependencies); higher positions
-	// depend on lower ones. Reverse topological = delete highest first.
-	topoPosition := make(map[int]int, len(dag.TopologicalOrder))
-	for pos, nodeIdx := range dag.TopologicalOrder {
-		topoPosition[nodeIdx] = pos
-	}
-
-	// Map kind/name to topological position from static template metadata.
-	kindNameToPosition := map[string]int{}
-	for i, node := range dag.Nodes {
-		tmpl := node.Template
-		if tmpl == nil {
-			continue
-		}
-		kind, _ := tmpl["kind"].(string)
-		md, _ := tmpl["metadata"].(map[string]any)
-		if md == nil {
-			continue
-		}
-		name, _ := md["name"].(string)
-		if kind == "" || name == "" || strings.Contains(name, "${") {
-			continue
-		}
-		kindNameToPosition[kind+"/"+name] = topoPosition[i]
-	}
-
-	type scored struct {
-		key      string
-		position int
-	}
-	scoredKeys := make([]scored, 0, len(keys))
-	for _, key := range keys {
-		if key == "" {
-			continue
-		}
-		gvk, nn := parseResourceKey(key)
-		pos, ok := kindNameToPosition[gvk.Kind+"/"+nn.Name]
-		if !ok {
-			pos = len(dag.Nodes) // unmatched → deleted first
-		}
-		scoredKeys = append(scoredKeys, scored{key: key, position: pos})
-	}
-
-	// Reverse topological: highest position first.
-	sort.Slice(scoredKeys, func(i, j int) bool {
-		return scoredKeys[i].position > scoredKeys[j].position
-	})
-
-	result := make([]string, len(scoredKeys))
-	for i, s := range scoredKeys {
-		result[i] = s.key
-	}
-	return result, nil
+	return pruneOrder(keys, []*DAG{dag}, graph.GetNamespace()), nil
 }
 
 // ---------------------------------------------------------------------------

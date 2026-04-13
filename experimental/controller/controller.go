@@ -108,6 +108,359 @@ type GraphReconciler struct {
 	DriftJitter   time.Duration     // max drift jitter; 0 = use MaxDriftJitter
 }
 
+// nodeResult carries a worker's output back to the coordinator.
+type nodeResult struct {
+	idx        int
+	keys       []string
+	state      NodeState
+	err        error
+	scopeKey   string // node ID to set in scope
+	scopeValue any    // value to set (the full K8s object or collection)
+	// forEach state updates — returned by forEach workers for the
+	// coordinator to merge back into the instance state.
+	forEachUpdates map[string]map[string][]string // nodeID → itemID → keys
+	forEachScopes  map[string]map[string]any      // nodeID → itemID → scope
+	forEachItems   map[string][]any               // cache key → collection items
+}
+
+// walkState holds coordinator-local state for a single DAG walk.
+// Extracted from the Reconcile closure for readability — the coordinator
+// loop in Reconcile reads/writes these fields directly.
+type walkState struct {
+	r       *GraphReconciler
+	ctx     context.Context
+	graph   *unstructured.Unstructured
+	dag     *DAG
+	eval    *evaluator
+	state   *instanceState
+	plan    *PlanState
+	watcher *graphWatcher
+
+	// Trigger maps
+	triggered            map[string]bool
+	driftTriggered       map[string]bool
+	propagationTriggered map[string]bool
+
+	// Walk-local tracking
+	dispatched   map[int]bool
+	outputsReady map[string]bool
+	appliedKeys  []string
+	nodeErrors   []string // "nodeID: reason" for status reporting
+	results      chan nodeResult
+	inflight     int
+}
+
+// tryDispatch checks if a node can be dispatched. Three outcomes:
+// 1. All dependencies resolved → dispatch to worker
+// 2. Some dependency still inflight → skip, retried when dependency completes
+// 3. Some dependency permanently blocked → mark Excluded
+func (w *walkState) tryDispatch(idx int) {
+	node := &w.dag.Nodes[idx]
+	logger := log.FromContext(w.ctx)
+
+	if w.plan.States[node.ID] != nodeUnvisited {
+		return // already processed or excluded
+	}
+	if w.dispatched[idx] {
+		return // goroutine already running for this node
+	}
+
+	// Finalizer nodes are dormant during normal operation — they only
+	// materialize during prune/teardown. Skip them in the walk.
+	if node.Finalizes != "" {
+		w.plan.SetState(w.dag, node.ID, NodeReady)
+		return
+	}
+
+	// Step 1: Skip check — no external trigger and no propagation trigger.
+	if !w.triggered[node.ID] && !w.propagationTriggered[node.ID] {
+		if prev, ok := w.state.previousScope[node.ID]; ok {
+			w.eval.scope[node.ID] = prev
+		}
+		if prevKeys, ok := w.state.previousKeys[node.ID]; ok {
+			w.appliedKeys = append(w.appliedKeys, prevKeys...)
+		}
+		if w.watcher != nil {
+			w.watcher.retainWatches(node.ID)
+		}
+		if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
+			if (prevState == NodeReady || prevState == NodeNotReady) &&
+				len(node.PropagateWhen) > 0 && w.state.previousScope[node.ID] != nil {
+				w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
+					node.PropagateWhen, w.state.previousScope[node.ID], node.ID)
+			}
+		}
+		w.outputsReady[node.ID] = true
+		for _, depIdx := range w.dag.Dependents[node.ID] {
+			w.tryDispatch(depIdx)
+		}
+		return
+	}
+
+	// Check dependencies.
+	hasExcluded := false
+	hasBlocked := false
+	hasPending := false
+	hasInflight := false
+	for depID := range node.Dependencies {
+		depState, exists := w.plan.States[depID]
+		if !exists {
+			continue
+		}
+		switch depState {
+		case NodeReady, NodeNotReady:
+			continue
+		case nodeUnvisited:
+			if w.outputsReady[depID] {
+				if prevState, ok := w.state.previousPlanStates[depID]; ok {
+					switch prevState {
+					case NodeReady, NodeNotReady:
+						continue
+					case NodeExcluded:
+						hasExcluded = true
+						continue
+					case NodePending:
+						hasPending = true
+						continue
+					default:
+						hasBlocked = true
+						continue
+					}
+				}
+				continue
+			}
+			hasInflight = true
+		case NodeExcluded:
+			hasExcluded = true
+		case NodePending:
+			hasPending = true
+		default:
+			hasBlocked = true
+		}
+	}
+	if hasExcluded {
+		w.plan.SetState(w.dag, node.ID, NodeExcluded)
+		return
+	}
+	if hasBlocked {
+		w.plan.SetState(w.dag, node.ID, NodeBlocked)
+		return
+	}
+	if hasPending {
+		w.plan.SetState(w.dag, node.ID, NodePending)
+		return
+	}
+	if hasInflight {
+		return
+	}
+
+	// Step 2: propagateWhen check
+	if blockedBy := w.plan.DependencyPropagateBlocked(node); blockedBy != "" {
+		logger.V(1).Info("propagateWhen gate — retaining previous state",
+			"node", node.ID, "blockedBy", blockedBy)
+		if prev, ok := w.state.previousScope[node.ID]; ok {
+			w.eval.scope[node.ID] = prev
+		}
+		if prevKeys, ok := w.state.previousKeys[node.ID]; ok {
+			w.appliedKeys = append(w.appliedKeys, prevKeys...)
+		}
+		if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
+			w.plan.States[node.ID] = prevState
+		} else {
+			w.plan.States[node.ID] = NodePending
+		}
+		for _, depIdx := range w.dag.Dependents[node.ID] {
+			w.tryDispatch(depIdx)
+		}
+		return
+	}
+
+	// Step 3: Change check — section-scoped input hashing.
+	nodeRef := node.Reference()
+	canHashSkip := nodeRef != ReferenceWatch && nodeRef != ReferenceWatchKind && !w.driftTriggered[node.ID]
+	if canHashSkip {
+		if _, hasPrevHash := w.state.previousInputHashes[node.ID]; hasPrevHash {
+			inputHash, hashErr := hashNodeInputs(node, w.eval.scope)
+			if hashErr == nil && inputHash != "" && inputHash == w.state.previousInputHashes[node.ID] {
+				prevScope := w.state.previousScope[node.ID]
+				selfChanged := false
+				if len(node.SelfSections) > 0 && w.watcher != nil && prevScope != nil {
+					if prevMap, ok := prevScope.(map[string]any); ok {
+						prevMD, _ := prevMap["metadata"].(map[string]any)
+						prevRV, _ := prevMD["resourceVersion"].(string)
+						prevAPIVersion, _ := prevMap["apiVersion"].(string)
+						prevKind, _ := prevMap["kind"].(string)
+						prevNS, _ := prevMD["namespace"].(string)
+						prevName, _ := prevMD["name"].(string)
+						if prevRV != "" && prevAPIVersion != "" && prevKind != "" {
+							gv, _ := schema.ParseGroupVersion(prevAPIVersion)
+							gvr := gvkToGVR(gv.WithKind(prevKind))
+							liveRV := w.watcher.getResourceVersion(gvr, prevNS, prevName)
+							if liveRV != "" && liveRV != prevRV {
+								selfChanged = true
+							}
+						}
+					}
+				}
+
+				readinessDepChanged := false
+				for depID := range node.ReadinessDeps {
+					prevState, hasPrev := w.state.previousPlanStates[depID]
+					currState, hasCurr := w.plan.States[depID]
+					if !hasPrev || !hasCurr || prevState != currState {
+						readinessDepChanged = true
+						break
+					}
+				}
+
+				if !selfChanged && !readinessDepChanged {
+					// Path 1: skip everything.
+					logger.V(1).Info("input hash match — skipping evaluation",
+						"node", node.ID)
+					if prev, ok := w.state.previousScope[node.ID]; ok {
+						w.eval.scope[node.ID] = prev
+					}
+					if prevKeys, ok := w.state.previousKeys[node.ID]; ok {
+						w.appliedKeys = append(w.appliedKeys, prevKeys...)
+					}
+					if w.watcher != nil {
+						w.watcher.retainWatches(node.ID)
+					}
+					if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
+						w.plan.States[node.ID] = prevState
+						if prevState == NodeReady || prevState == NodeNotReady {
+							if len(node.PropagateWhen) > 0 && prevScope != nil {
+								w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
+									node.PropagateWhen, prevScope, node.ID)
+							}
+						}
+					}
+					for _, depIdx := range w.dag.Dependents[node.ID] {
+						w.tryDispatch(depIdx)
+					}
+					return
+				}
+
+				// Path 2: self-state changed — refresh scope.
+				logger.V(1).Info("self-state changed — refreshing scope",
+					"node", node.ID)
+				if prevMap, ok := prevScope.(map[string]any); ok {
+					prevMD, _ := prevMap["metadata"].(map[string]any)
+					prevAPIVersion, _ := prevMap["apiVersion"].(string)
+					prevKind, _ := prevMap["kind"].(string)
+					prevNS, _ := prevMD["namespace"].(string)
+					prevName, _ := prevMD["name"].(string)
+					gv, _ := schema.ParseGroupVersion(prevAPIVersion)
+					gvk := gv.WithKind(prevKind)
+					readBack := &unstructured.Unstructured{}
+					readBack.SetGroupVersionKind(gvk)
+					if err := w.r.Client.Get(w.ctx, types.NamespacedName{Namespace: prevNS, Name: prevName}, readBack); err == nil {
+						w.eval.scope[node.ID] = readBack.Object
+					} else {
+						w.eval.scope[node.ID] = prevScope
+					}
+				} else if prevScope != nil {
+					w.eval.scope[node.ID] = prevScope
+				}
+				if prevKeys, ok := w.state.previousKeys[node.ID]; ok {
+					w.appliedKeys = append(w.appliedKeys, prevKeys...)
+				}
+				if w.watcher != nil {
+					w.watcher.retainWatches(node.ID)
+				}
+				nodeState := NodeReady
+				observed := w.eval.scope[node.ID]
+				if len(node.ReadyWhen) > 0 && observed != nil {
+					if err := w.eval.checkReadiness(node.ReadyWhen, observed, node.ID); err != nil {
+						nodeState = NodeNotReady
+					}
+				}
+				w.plan.States[node.ID] = nodeState
+				if (nodeState == NodeReady || nodeState == NodeNotReady) &&
+					len(node.PropagateWhen) > 0 && observed != nil {
+					w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
+						node.PropagateWhen, observed, node.ID)
+				}
+				w.state.previousPlanStates[node.ID] = nodeState
+				for _, depIdx := range w.dag.Dependents[node.ID] {
+					w.tryDispatch(depIdx)
+				}
+				return
+			}
+			// Path 3: hash mismatch → full evaluation.
+		}
+	} // canHashSkip
+
+	// includeWhen
+	if len(node.IncludeWhen) > 0 {
+		included, err := w.eval.includeWhen(node.IncludeWhen)
+		if err != nil {
+			if errors.Is(err, ErrPending) {
+				w.plan.SetState(w.dag, node.ID, NodePending)
+			} else {
+				w.plan.SetState(w.dag, node.ID, NodeError)
+			}
+			return
+		}
+		if !included {
+			w.plan.SetState(w.dag, node.ID, NodeExcluded)
+			return
+		}
+	}
+
+	// Build snapshot evaluator for the worker.
+	workerEval := w.eval.snapshotFor(node, w.state)
+
+	// Resolve Unresolved references in the coordinator.
+	nodeRef = w.state.resolvedReferences[node.ID]
+	if nodeRef == ReferenceUnresolved && node.ForEach == nil {
+		resolved, err := w.r.resolveReference(w.ctx, w.graph, *node, workerEval)
+		if err != nil {
+			nodeState := NodePending
+			if !errors.Is(err, ErrPending) {
+				info := classifyAPIError(err)
+				nodeState = info.state
+			}
+			w.plan.SetState(w.dag, node.ID, nodeState)
+			return
+		}
+		nodeRef = resolved
+		w.state.resolvedReferences[node.ID] = resolved
+	}
+
+	// Dispatch to worker goroutine.
+	w.dispatched[idx] = true
+	isDrift := w.driftTriggered[node.ID]
+	go func(n Node, we *evaluator, ref Reference, driftCorrection bool) {
+		keys, err := w.r.reconcileNode(w.ctx, w.graph, n, ref, we, w.watcher, driftCorrection)
+		state := NodeReady
+		if err != nil {
+			switch {
+			case errors.Is(err, ErrPending):
+				state = NodePending
+			case errors.Is(err, ErrWaitingForReadiness):
+				state = NodeNotReady
+			case errors.Is(err, ErrFieldConflict):
+				state = NodeConflict
+			default:
+				state = NodeError
+			}
+		}
+		w.results <- nodeResult{
+			idx:            idx,
+			keys:           keys,
+			state:          state,
+			err:            err,
+			scopeKey:       n.ID,
+			scopeValue:     we.scope[n.ID],
+			forEachUpdates: we.forEachNewKeys,
+			forEachScopes:  we.forEachNewScope,
+			forEachItems:   we.forEachNewItems,
+		}
+	}(*node, workerEval, nodeRef, isDrift)
+	w.inflight++
+}
+
 // driftInterval returns the effective drift interval for this reconciler.
 func (r *GraphReconciler) driftInterval() time.Duration {
 	if r.DriftInterval > 0 {
@@ -205,7 +558,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	dag := state.compiled.dag
 	state.initResolvedReferences()
 	plan := NewPlanState(dag)
-	var appliedKeys []string
 
 	// Determine which nodes are triggered this reconcile.
 	// Per 004-graph-execution.md § The Walk: nodes evaluate on external
@@ -347,432 +699,32 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// dependencies are satisfied. Workers are pure functions — they receive
 	// a read-only scope snapshot and return results. The coordinator is the
 	// single writer to shared state (scope, plan, applied keys).
-	type nodeResult struct {
-		idx        int
-		keys       []string
-		state      NodeState
-		err        error
-		scopeKey   string // node ID to set in scope
-		scopeValue any    // value to set (the full K8s object or collection)
-		// forEach state updates — returned by forEach workers for the
-		// coordinator to merge back into the instance state.
-		forEachUpdates map[string]map[string][]string // nodeID → itemID → keys
-		forEachScopes  map[string]map[string]any      // nodeID → itemID → scope
-		forEachItems   map[string][]any               // cache key → collection items
-	}
-
-	results := make(chan nodeResult, len(dag.Nodes))
-	inflight := 0
-	// dispatched guards against double-dispatch: when a node has multiple
-	// parents that complete, each parent's completion calls tryDispatch on
-	// shared dependents. Without this guard the second call sees nodeUnvisited
-	// (state hasn't changed yet) and spawns a duplicate goroutine — two
-	// goroutines writing to the same maps causes concurrent-map-writes panic.
-	// Coordinator-local (single-threaded), no synchronization needed.
-	dispatched := make(map[int]bool, len(dag.Nodes))
-	// outputsReady tracks nodes whose outputs are available from a previous
-	// reconcile (via the skip path) but whose dispatch eligibility remains
-	// open. This separates "outputs available" from "evaluation complete."
-	// A skipped node makes its outputs available so dependents can check
-	// dependencies, but stays nodeUnvisited so a propagation trigger can
-	// reclaim it for re-evaluation later in the same walk.
-	outputsReady := make(map[string]bool, len(dag.Nodes))
-	var nodeErrors []string // "nodeID: reason" for status reporting
-
-	// tryDispatch checks if a node can be dispatched. Three outcomes:
-	// 1. All dependencies resolved → dispatch to worker
-	// 2. Some dependency still inflight (Pending) → skip, it'll be retried
-	//    when that dependency completes
-	// 3. Some dependency permanently blocked → mark Excluded
-	var tryDispatch func(idx int)
-	tryDispatch = func(idx int) {
-		node := &dag.Nodes[idx]
-
-		if plan.States[node.ID] != nodeUnvisited {
-			return // already processed or excluded
-		}
-		if dispatched[idx] {
-			return // goroutine already running for this node
-		}
-
-		// Finalizer nodes are dormant during normal operation — they only
-		// materialize during prune/teardown. Skip them in the walk.
-		if node.Finalizes != "" {
-			plan.SetState(dag, node.ID, NodeReady) // mark as "done" so dependents can proceed
-			return
-		}
-
-		// Step 1: Skip check — no external trigger and no propagation trigger.
-		// Per 004-graph-execution.md § Wind step 1: retain previous evaluation.
-		//
-		// Carry forward previous outputs (scope, keys, propagateWhen) so
-		// dependents can read them, but leave plan.States as nodeUnvisited.
-		// This keeps the node dispatch-eligible: if a propagation trigger
-		// arrives later in this walk (upstream output changed), tryDispatch
-		// can reclaim the node for re-evaluation. Setting NodeReady here
-		// would block re-dispatch — tryDispatch returns early for non-Pending.
-		if !triggered[node.ID] && !propagationTriggered[node.ID] {
-			if prev, ok := state.previousScope[node.ID]; ok {
-				eval.scope[node.ID] = prev
-			}
-			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				appliedKeys = append(appliedKeys, prevKeys...)
-			}
-			// Carry forward watch registrations so doneGraph doesn't
-			// treat this node's watches as stale. Without this, a
-			// trigger-scoped walk would remove watches for skipped nodes.
-			if watcher != nil {
-				watcher.retainWatches(node.ID)
-			}
-			// Restore propagateWhen from previous cycle.
-			if prevState, ok := state.previousPlanStates[node.ID]; ok {
-				if (prevState == NodeReady || prevState == NodeNotReady) &&
-					len(node.PropagateWhen) > 0 && state.previousScope[node.ID] != nil {
-					plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
-						node.PropagateWhen, state.previousScope[node.ID], node.ID)
-				}
-			}
-			// Mark outputs available without setting plan.States — node
-			// remains dispatch-eligible for propagation triggers.
-			outputsReady[node.ID] = true
-			// Dispatch dependents — they check outputsReady for dependency
-			// satisfaction alongside plan.States.
-			for _, depIdx := range dag.Dependents[node.ID] {
-				tryDispatch(depIdx)
-			}
-			return
-		}
-
-		// Check dependencies. Per 004-graph-execution.md § Wind step 2:
-		// "Any dependency Excluded → Excluded. Any dependency in an error state
-		// (Conflict, Error, SystemError, or Blocked) → inherit Blocked. Any
-		// dependency Pending → inherit Pending. Precedence where multiple apply:
-		// Excluded > Blocked > Pending."
-		hasExcluded := false
-		hasBlocked := false
-		hasPending := false
-		hasInflight := false
-		for depID := range node.Dependencies {
-			depState, exists := plan.States[depID]
-			if !exists {
-				continue // not a DAG node
-			}
-			switch depState {
-			case NodeReady, NodeNotReady:
-				continue // resolved, good
-			case nodeUnvisited:
-				// Dependency still inflight — unless its outputs are ready
-				// from the skip path (previous reconcile's state carried forward).
-				if outputsReady[depID] {
-					if prevState, ok := state.previousPlanStates[depID]; ok {
-						switch prevState {
-						case NodeReady, NodeNotReady:
-							continue // outputs available, dependency satisfied
-						case NodeExcluded:
-							hasExcluded = true
-							continue
-						case NodePending:
-							hasPending = true
-							continue
-						default:
-							hasBlocked = true
-							continue
-						}
-					}
-					continue // no previous state, assume satisfied
-				}
-				hasInflight = true
-			case NodeExcluded:
-				hasExcluded = true
-			case NodePending:
-				// Dependency data not yet available — this node inherits Pending.
-				hasPending = true
-			default:
-				// Blocked, Error, SystemError, Conflict — dependency in error state.
-				hasBlocked = true
-			}
-		}
-		// Precedence: Excluded (definitive absence) > Blocked (error state) > Pending (data unavailable).
-		if hasExcluded {
-			plan.SetState(dag, node.ID, NodeExcluded)
-			return
-		}
-		if hasBlocked {
-			plan.SetState(dag, node.ID, NodeBlocked)
-			return
-		}
-		if hasPending {
-			plan.SetState(dag, node.ID, NodePending)
-			return
-		}
-		if hasInflight {
-			return // dependency still inflight — don't dispatch yet
-		}
-
-		// Step 2: propagateWhen check
-		if blockedBy := plan.DependencyPropagateBlocked(node); blockedBy != "" {
-			logger.V(1).Info("propagateWhen gate — retaining previous state",
-				"node", node.ID, "blockedBy", blockedBy)
-			if prev, ok := state.previousScope[node.ID]; ok {
-				eval.scope[node.ID] = prev
-			}
-			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				appliedKeys = append(appliedKeys, prevKeys...)
-			}
-			if prevState, ok := state.previousPlanStates[node.ID]; ok {
-				plan.States[node.ID] = prevState
-			} else {
-				// Gated and never evaluated — data genuinely unavailable.
-				// Per 004-graph-execution.md § Wind step 3: "If never evaluated,
-				// the node remains Pending — dependents see a dependency that
-				// hasn't produced data and inherit Pending."
-				plan.States[node.ID] = NodePending
-			}
-			// Dispatch dependents — this node retained previous state but
-			// dependents still need to be evaluated.
-			for _, depIdx := range dag.Dependents[node.ID] {
-				tryDispatch(depIdx)
-			}
-			return
-		}
-
-		// Step 3: Change check — section-scoped input hashing.
-		// Hash the node's dependency inputs (only referenced sections) and
-		// compare against the previous reconcile's hash. Three outcomes:
-		//
-		// 1. Dependency hash match + self-state unchanged + no upstream
-		//    readiness change → skip everything
-		// 2. Dependency hash match + (self-state changed OR upstream
-		//    readiness changed) → skip template/apply, re-evaluate
-		//    readyWhen/propagateWhen only
-		// 3. Dependency hash mismatch → full evaluation (dispatch to worker)
-		//
-		// Watch and CollectionWatch nodes are excluded from input hashing
-		// because their output is determined by cluster state (GET/List),
-		// not by scope data. A Watch node's dependency inputs can be unchanged
-		// while a new resource was created in the cluster.
-		//
-		// Drift-triggered nodes bypass input hashing entirely. The drift
-		// timer asks "does live state match desired state?" — not "did
-		// inputs change?" The input hash has no information relevant to
-		// that question (step 3 compares dependency data kro last observed,
-		// not live cluster state). Per 004-graph-execution.md § The Walk:
-		// "The drift timer bypasses the template-hash check."
-		nodeRef := node.Reference()
-		canHashSkip := nodeRef != ReferenceWatch && nodeRef != ReferenceWatchKind && !driftTriggered[node.ID]
-		if canHashSkip {
-			if _, hasPrevHash := state.previousInputHashes[node.ID]; hasPrevHash {
-				inputHash, hashErr := hashNodeInputs(node, eval.scope)
-				if hashErr == nil && inputHash != "" && inputHash == state.previousInputHashes[node.ID] {
-					// Dependency inputs unchanged. Check self-state and
-					// gate function deps (e.g., dep.ready()).
-					prevScope := state.previousScope[node.ID]
-					selfChanged := false
-					if len(node.SelfSections) > 0 && watcher != nil && prevScope != nil {
-						// Extract identity from previousScope to query the informer.
-						if prevMap, ok := prevScope.(map[string]any); ok {
-							prevMD, _ := prevMap["metadata"].(map[string]any)
-							prevRV, _ := prevMD["resourceVersion"].(string)
-							prevAPIVersion, _ := prevMap["apiVersion"].(string)
-							prevKind, _ := prevMap["kind"].(string)
-							prevNS, _ := prevMD["namespace"].(string)
-							prevName, _ := prevMD["name"].(string)
-							if prevRV != "" && prevAPIVersion != "" && prevKind != "" {
-								gv, _ := schema.ParseGroupVersion(prevAPIVersion)
-								gvr := gvkToGVR(gv.WithKind(prevKind))
-								liveRV := watcher.getResourceVersion(gvr, prevNS, prevName)
-								if liveRV != "" && liveRV != prevRV {
-									selfChanged = true
-								}
-							}
-						}
-					}
-
-					// Check if any upstream node referenced via .ready()
-					// changed plan state. Readiness is a runtime property
-					// outside section scope — compare plan states directly.
-					readinessDepChanged := false
-					for depID := range node.ReadinessDeps {
-						prevState, hasPrev := state.previousPlanStates[depID]
-						currState, hasCurr := plan.States[depID]
-						if !hasPrev || !hasCurr || prevState != currState {
-							readinessDepChanged = true
-							break
-						}
-					}
-
-					if !selfChanged && !readinessDepChanged {
-						// Path 1: dependency hash match + self unchanged → skip everything.
-						logger.V(1).Info("input hash match — skipping evaluation",
-							"node", node.ID)
-						if prev, ok := state.previousScope[node.ID]; ok {
-							eval.scope[node.ID] = prev
-						}
-						if prevKeys, ok := state.previousKeys[node.ID]; ok {
-							appliedKeys = append(appliedKeys, prevKeys...)
-						}
-						if watcher != nil {
-							watcher.retainWatches(node.ID)
-						}
-						if prevState, ok := state.previousPlanStates[node.ID]; ok {
-							plan.States[node.ID] = prevState
-							// Propagate readyWhen result from previous cycle.
-							if prevState == NodeReady || prevState == NodeNotReady {
-								if len(node.PropagateWhen) > 0 && prevScope != nil {
-									plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
-										node.PropagateWhen, prevScope, node.ID)
-								}
-							}
-						}
-						// Dispatch dependents — this node is done with retained state.
-						for _, depIdx := range dag.Dependents[node.ID] {
-							tryDispatch(depIdx)
-						}
-						return
-					}
-
-					// Path 2: dependency hash match + self-state changed → skip
-					// template evaluation and apply (template inputs unchanged),
-					// but GET the live object to refresh scope for downstream
-					// consumers and re-evaluate readyWhen/propagateWhen gates.
-					logger.V(1).Info("self-state changed — refreshing scope",
-						"node", node.ID)
-					if prevMap, ok := prevScope.(map[string]any); ok {
-						prevMD, _ := prevMap["metadata"].(map[string]any)
-						prevAPIVersion, _ := prevMap["apiVersion"].(string)
-						prevKind, _ := prevMap["kind"].(string)
-						prevNS, _ := prevMD["namespace"].(string)
-						prevName, _ := prevMD["name"].(string)
-						gv, _ := schema.ParseGroupVersion(prevAPIVersion)
-						gvk := gv.WithKind(prevKind)
-						readBack := &unstructured.Unstructured{}
-						readBack.SetGroupVersionKind(gvk)
-						if err := r.Client.Get(ctx, types.NamespacedName{Namespace: prevNS, Name: prevName}, readBack); err == nil {
-							eval.scope[node.ID] = readBack.Object
-						} else {
-							// GET failed — retain previous scope.
-							eval.scope[node.ID] = prevScope
-						}
-					} else if prevScope != nil {
-						eval.scope[node.ID] = prevScope
-					}
-					if prevKeys, ok := state.previousKeys[node.ID]; ok {
-						appliedKeys = append(appliedKeys, prevKeys...)
-					}
-					if watcher != nil {
-						watcher.retainWatches(node.ID)
-					}
-					nodeState := NodeReady
-					observed := eval.scope[node.ID]
-					if len(node.ReadyWhen) > 0 && observed != nil {
-						if err := eval.checkReadiness(node.ReadyWhen, observed, node.ID); err != nil {
-							nodeState = NodeNotReady
-						}
-					}
-					plan.States[node.ID] = nodeState
-					if (nodeState == NodeReady || nodeState == NodeNotReady) &&
-						len(node.PropagateWhen) > 0 && observed != nil {
-						plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
-							node.PropagateWhen, observed, node.ID)
-					}
-					state.previousPlanStates[node.ID] = nodeState
-					// Dispatch dependents — this node is done with gate re-evaluation.
-					for _, depIdx := range dag.Dependents[node.ID] {
-						tryDispatch(depIdx)
-					}
-					return
-				}
-				// Path 3: dependency hash mismatch or hash error → full evaluation.
-				// Fall through to dispatch.
-			}
-		} // canHashSkip
-
-		// Step 3: includeWhen (evaluated in coordinator — reads shared scope)
-		if len(node.IncludeWhen) > 0 {
-			included, err := eval.includeWhen(node.IncludeWhen)
-			if err != nil {
-				if errors.Is(err, ErrPending) {
-					plan.SetState(dag, node.ID, NodePending)
-				} else {
-					plan.SetState(dag, node.ID, NodeError)
-				}
-				return
-			}
-			if !included {
-				plan.SetState(dag, node.ID, NodeExcluded)
-				return
-			}
-		}
-
-		// Build a snapshot evaluator for the worker. Contains the node's
-		// dependency data and forEach previous state — the worker can't
-		// see or mutate any shared state.
-		workerEval := eval.snapshotFor(node, state)
-
-		// Resolve Unresolved references in the coordinator (single-threaded)
-		// before dispatching to workers. This ensures the resolvedReferences
-		// map is only written from the coordinator goroutine.
-		// ForEach nodes handle their own per-item reference detection — skip.
-		nodeRef = state.resolvedReferences[node.ID]
-		if nodeRef == ReferenceUnresolved && node.ForEach == nil {
-			resolved, err := r.resolveReference(ctx, graph, *node, workerEval)
-			if err != nil {
-				// Reference resolution failed — treat like a node error.
-				nodeState := NodePending
-				if !errors.Is(err, ErrPending) {
-					info := classifyAPIError(err)
-					nodeState = info.state
-				}
-				plan.SetState(dag, node.ID, nodeState)
-				return
-			}
-			nodeRef = resolved
-			state.resolvedReferences[node.ID] = resolved
-		}
-
-		// Dispatch to worker goroutine.
-		dispatched[idx] = true
-		isDrift := driftTriggered[node.ID]
-		go func(n Node, we *evaluator, ref Reference, driftCorrection bool) {
-			keys, err := r.reconcileNode(ctx, graph, n, ref, we, watcher, driftCorrection)
-			state := NodeReady
-			if err != nil {
-				switch {
-				case errors.Is(err, ErrPending):
-					state = NodePending
-				case errors.Is(err, ErrWaitingForReadiness):
-					state = NodeNotReady
-				case errors.Is(err, ErrFieldConflict):
-					state = NodeConflict
-				default:
-					state = NodeError
-				}
-			}
-			// The worker's scope now contains the node's output under node.ID.
-			results <- nodeResult{
-				idx:            idx,
-				keys:           keys,
-				state:          state,
-				err:            err,
-				scopeKey:       n.ID,
-				scopeValue:     we.scope[n.ID],
-				forEachUpdates: we.forEachNewKeys,
-				forEachScopes:  we.forEachNewScope,
-				forEachItems:   we.forEachNewItems,
-			}
-		}(*node, workerEval, nodeRef, isDrift)
-		inflight++
+	walk := &walkState{
+		r:                    r,
+		ctx:                  ctx,
+		graph:                graph,
+		dag:                  dag,
+		eval:                 eval,
+		state:                state,
+		plan:                 plan,
+		watcher:              watcher,
+		triggered:            triggered,
+		driftTriggered:       driftTriggered,
+		propagationTriggered: propagationTriggered,
+		dispatched:           make(map[int]bool, len(dag.Nodes)),
+		outputsReady:         make(map[string]bool, len(dag.Nodes)),
+		results:              make(chan nodeResult, len(dag.Nodes)),
 	}
 
 	// Seed: dispatch all nodes with no in-graph dependencies.
 	for _, idx := range dag.Levels[0] {
-		tryDispatch(idx)
+		walk.tryDispatch(idx)
 	}
 
 	// Coordinator loop: receive completions, merge into scope, dispatch dependents.
-	for inflight > 0 {
-		res := <-results
-		inflight--
+	for walk.inflight > 0 {
+		res := <-walk.results
+		walk.inflight--
 
 		node := &dag.Nodes[res.idx]
 
@@ -785,17 +737,17 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			info := classifyAPIError(res.err)
 			plan.SetState(dag, node.ID, info.state)
 			state.previousPlanStates[node.ID] = info.state
-			nodeErrors = append(nodeErrors, fmt.Sprintf("%s: %s", node.ID, info.reason))
+			walk.nodeErrors = append(walk.nodeErrors, fmt.Sprintf("%s: %s", node.ID, info.reason))
 			logger.V(0).Info("error on node", "node", node.ID,
 				"state", info.state, "reason", info.reason, "error", res.err)
 			// Retain previous keys — the resource may still exist in the cluster.
 			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				appliedKeys = append(appliedKeys, prevKeys...)
+				walk.appliedKeys = append(walk.appliedKeys, prevKeys...)
 			}
 			// Dispatch dependents — tryDispatch will see the error state
 			// and mark them as Blocked via the dependency check.
 			for _, depIdx := range dag.Dependents[node.ID] {
-				tryDispatch(depIdx)
+				walk.tryDispatch(depIdx)
 			}
 			continue
 		}
@@ -804,13 +756,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.previousPlanStates[node.ID] = NodeConflict
 			state.previousScope[node.ID] = res.scopeValue
 			state.previousKeys[node.ID] = res.keys
-			nodeErrors = append(nodeErrors, fmt.Sprintf("%s: field conflict", node.ID))
+			walk.nodeErrors = append(walk.nodeErrors, fmt.Sprintf("%s: field conflict", node.ID))
 			logger.V(0).Info("conflict on node", "node", node.ID, "error", res.err)
 			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				appliedKeys = append(appliedKeys, prevKeys...)
+				walk.appliedKeys = append(walk.appliedKeys, prevKeys...)
 			}
 			for _, depIdx := range dag.Dependents[node.ID] {
-				tryDispatch(depIdx)
+				walk.tryDispatch(depIdx)
 			}
 			continue
 		}
@@ -827,10 +779,10 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.previousKeys[node.ID] = res.keys
 			logger.V(1).Info("data pending for node", "node", node.ID, "error", res.err)
 			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				appliedKeys = append(appliedKeys, prevKeys...)
+				walk.appliedKeys = append(walk.appliedKeys, prevKeys...)
 			}
 			for _, depIdx := range dag.Dependents[node.ID] {
-				tryDispatch(depIdx)
+				walk.tryDispatch(depIdx)
 			}
 			continue
 		}
@@ -854,12 +806,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// Update plan state.
 		plan.SetState(dag, node.ID, res.state)
 		if res.state == NodeReady || res.state == NodeNotReady {
-			appliedKeys = append(appliedKeys, res.keys...)
+			walk.appliedKeys = append(walk.appliedKeys, res.keys...)
 		} else {
 			// Non-success states that reach here (e.g., NodeNotReady with keys) —
 			// retain previous keys since the resource may still exist.
 			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				appliedKeys = append(appliedKeys, prevKeys...)
+				walk.appliedKeys = append(walk.appliedKeys, prevKeys...)
 			}
 		}
 
@@ -897,13 +849,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				if err == nil && propagateHash != "" {
 					prevHash := state.previousSelfHashes[node.ID]
 					if prevHash == "" || propagateHash != prevHash {
-						// Propagation hash changed (or first time node
-						// produced output) — trigger dependents.
-						// Per 004-graph-execution.md § Wind step 7: "If
-						// the hash changed — or no previous hash exists —
-						// dependents evaluate."
 						for _, depIdx := range dag.Dependents[node.ID] {
-							propagationTriggered[dag.Nodes[depIdx].ID] = true
+							walk.propagationTriggered[dag.Nodes[depIdx].ID] = true
 						}
 					}
 					state.previousSelfHashes[node.ID] = propagateHash
@@ -917,17 +864,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		state.previousPlanStates[node.ID] = res.state
 
 		// Store input hash for next reconcile's change check (step 3).
-		// This enables the content-addressed skip: if dependency inputs
-		// haven't changed, template evaluation is deterministic and the
-		// write can be skipped. Without this, every triggered node does
-		// a full apply cycle including re-creating externally deleted resources.
 		if inputHash, err := hashNodeInputs(node, eval.scope); err == nil && inputHash != "" {
 			state.previousInputHashes[node.ID] = inputHash
 		}
 
 		// Check dependents: dispatch any whose dependencies are now satisfied.
 		for _, depIdx := range dag.Dependents[node.ID] {
-			tryDispatch(depIdx)
+			walk.tryDispatch(depIdx)
 		}
 	}
 
@@ -935,7 +878,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// re-dispatched via propagation trigger still have plan.States = Pending.
 	// Restore their previous state for the plan summary (status reporting).
 	walkAttempted = true
-	for nodeID := range outputsReady {
+	for nodeID := range walk.outputsReady {
 		if plan.States[nodeID] == nodeUnvisited {
 			if prevState, ok := state.previousPlanStates[nodeID]; ok {
 				plan.States[nodeID] = prevState
@@ -954,10 +897,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	for _, node := range dag.Nodes {
 		if plan.States[node.ID] == NodeBlocked || plan.States[node.ID] == NodePending {
 			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				appliedKeys = append(appliedKeys, prevKeys...)
+				walk.appliedKeys = append(walk.appliedKeys, prevKeys...)
 			}
 		}
 	}
+
+	appliedKeys := walk.appliedKeys
+	nodeErrors := walk.nodeErrors
 
 	// Derive aggregate state from the DAG plan
 	summary := plan.Summary()
@@ -1079,16 +1025,10 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Update status on Graph and revision
 	// -----------------------------------------------------------------------
 	rstate := &reconcileState{
-		accepted:       true,
-		nodeCount:      len(revisionSpec.Nodes),
-		appliedCount:   summary.ReadyCount,
-		hasPending:     summary.HasPending,
-		hasNotReady:    summary.HasNotReady,
-		hasBlocked:     summary.HasBlocked,
-		hasConflict:    summary.HasConflict,
-		hasError:       summary.HasError,
-		hasSystemError: summary.HasSystemError,
-		nodeErrors:     nodeErrors,
+		accepted:    true,
+		nodeCount:   len(revisionSpec.Nodes),
+		PlanSummary: summary,
+		nodeErrors:  nodeErrors,
 	}
 	if err := r.updateStatus(ctx, graph, rstate); err != nil {
 		logger.Error(err, "status update")
@@ -1097,8 +1037,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// The graph is fully converged when every node is Ready and the spec is
 	// accepted. Everything else — errors, conflicts, pending data, not-ready
 	// — retries via watch events, not periodic requeue.
-	allReady := rstate.accepted && !summary.HasPending && !summary.HasNotReady &&
-		!summary.HasBlocked && !summary.HasConflict && !summary.HasError && !summary.HasSystemError
+	allReady := rstate.accepted && !rstate.HasPending && !rstate.HasNotReady &&
+		!rstate.HasBlocked && !rstate.HasConflict && !rstate.HasError && !rstate.HasSystemError
 	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK && !prunePending)
 
 	// Reset drift timers for nodes that were successfully evaluated.
@@ -1437,9 +1377,9 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	if teardownBlocked {
 		logger.Info("teardown blocked: waiting for third-party field managers to release")
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{
-			accepted:   true,
-			hasBlocked: true,
-			nodeErrors: []string{"teardown blocked: waiting for third-party field managers to release"},
+			accepted:    true,
+			PlanSummary: PlanSummary{HasBlocked: true},
+			nodeErrors:  []string{"teardown blocked: waiting for third-party field managers to release"},
 		}); statusErr != nil {
 			logger.Error(statusErr, "updating status during teardown")
 		}

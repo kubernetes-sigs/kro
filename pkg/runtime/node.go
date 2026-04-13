@@ -56,15 +56,23 @@ type Node struct {
 	resourceSchema *spec.Schema
 }
 
-// identityPaths are the template field path prefixes resolved in identity mode,
-// keyed by node type. Only paths relevant to identifying the resource for
-// observation or deletion are included — full template resolution is not needed.
-var identityPaths = map[graph.NodeType][]string{
-	// Single resources are identified by name and namespace.
-	graph.NodeTypeResource: {"metadata.name", "metadata.namespace"},
-	graph.NodeTypeExternal: {"metadata.name", "metadata.namespace"},
+// defaultIdentityPaths are the template field paths used to identify most resource types.
+var defaultIdentityPaths = []string{"metadata.name", "metadata.namespace"}
+
+// identityPathsOverride specifies non-default identity paths for specific node types.
+// Most resources use name and namespace; only special cases need an override.
+var identityPathsOverride = map[graph.NodeType][]string{
 	// External collections have no name; the selector is their identity.
 	graph.NodeTypeExternalCollection: {"metadata.namespace", "metadata.selector"},
+}
+
+// identityPathsForNodeType returns the template field path prefixes that should
+// be resolved when getting a node's identity for observation or deletion.
+func identityPathsForNodeType(nodeType graph.NodeType) []string {
+	if override, ok := identityPathsOverride[nodeType]; ok {
+		return override
+	}
+	return defaultIdentityPaths
 }
 
 // resolveMode controls how template resolution behaves.
@@ -225,7 +233,7 @@ func (n *Node) resolve(mode resolveMode) (result []*unstructured.Unstructured, e
 	// Select vars based on mode.
 	vars := n.templateVars
 	if mode == resolveIdentity {
-		vars = n.templateVarsForPaths(identityPaths[n.Spec.Meta.Type])
+		vars = n.templateVarsForPaths(identityPathsForNodeType(n.Spec.Meta.Type))
 	}
 
 	switch n.Spec.Meta.Type {

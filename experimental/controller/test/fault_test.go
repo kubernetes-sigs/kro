@@ -230,7 +230,7 @@ func TestOwnedResourceDeletedExternally(t *testing.T) {
 
 // TestInvalidCELExpressionSurfacesError proves that a Graph with an invalid
 // CEL expression is rejected at compile time — Compiled=False with
-// CompilationFailed reason (design 001-graph § Status § Conditions).
+// ExpressionError reason (design 001-graph § Status § Conditions).
 // The controller does not crash and the Graph can be fixed.
 func TestInvalidCELExpressionSurfacesError(t *testing.T) {
 	t.Parallel()

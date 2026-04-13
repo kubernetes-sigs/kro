@@ -52,15 +52,15 @@ func (s *reconcileState) deriveCompiledCondition() (status ConditionStatus, reas
 	}
 	if s.compiledErr != nil {
 		// Classify the error
-		if errors.Is(s.compiledErr, ErrCompilationFailed) {
-			return ConditionFalse, "CompilationFailed", s.compiledErr.Error()
+		if errors.Is(s.compiledErr, ErrInvalidExpression) {
+			return ConditionFalse, "ExpressionError", s.compiledErr.Error()
 		}
-		if errors.Is(s.compiledErr, ErrCycleDetected) {
-			return ConditionFalse, "CycleDetected", s.compiledErr.Error()
+		if errors.Is(s.compiledErr, ErrCircularDependency) {
+			return ConditionFalse, "CircularDependency", s.compiledErr.Error()
 		}
-		return ConditionFalse, "InvalidSpec", s.compiledErr.Error()
+		return ConditionFalse, "DeclarationError", s.compiledErr.Error()
 	}
-	return ConditionFalse, "InvalidSpec", "Spec validation failed"
+	return ConditionFalse, "DeclarationError", "Spec validation failed"
 }
 
 // deriveReadyCondition computes the Ready condition from the reconcile outcome.

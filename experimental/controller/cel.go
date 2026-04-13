@@ -45,9 +45,9 @@ var ErrPending = errors.New("data pending")
 // its readyWhen conditions yet. Downstream resources should wait.
 var ErrWaitingForReadiness = errors.New("waiting for readiness")
 
-// ErrCompilationFailed indicates that one or more CEL expressions in the Graph
+// ErrInvalidExpression indicates that one or more CEL expressions in the Graph
 // spec failed to compile. This is a permanent error until the spec is fixed.
-var ErrCompilationFailed = errors.New("compilation failed")
+var ErrInvalidExpression = errors.New("invalid expression")
 
 // ErrFieldConflict indicates that an SSA apply received a 409 Conflict because
 // another actor has taken ownership of fields the controller manages. This is
@@ -55,9 +55,9 @@ var ErrCompilationFailed = errors.New("compilation failed")
 // field or the Graph spec changes to no longer write that field.
 var ErrFieldConflict = errors.New("field conflict")
 
-// ErrCycleDetected indicates that the dependency graph contains a cycle.
+// ErrCircularDependency indicates that the dependency graph contains a cycle.
 // This is a permanent error until the spec is fixed.
-var ErrCycleDetected = errors.New("cycle detected")
+var ErrCircularDependency = errors.New("circular dependency")
 
 // celPendingPatterns are CEL error patterns that indicate data is not yet
 // available (retryable). Other CEL errors are considered expression bugs.
@@ -438,7 +438,7 @@ func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 	for _, expr := range expressions {
 		ast, issues := env.Compile(expr)
 		if issues != nil && issues.Err() != nil {
-			return nil, fmt.Errorf("compiling expression %q: %w: %w", expr, ErrCompilationFailed, issues.Err())
+			return nil, fmt.Errorf("compiling expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
 		}
 		// Extract field paths from the AST before creating the program.
 		// Per 004-graph-execution.md § Change detection: "At graph compilation,
@@ -447,14 +447,14 @@ func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 		exprPaths[expr] = extractFieldPathsFromAST(ast.NativeRep().Expr(), scopeVars, nil)
 		prg, err := env.Program(ast)
 		if err != nil {
-			return nil, fmt.Errorf("programming expression %q: %w: %w", expr, ErrCompilationFailed, err)
+			return nil, fmt.Errorf("programming expression %q: %w: %w", expr, ErrInvalidExpression, err)
 		}
 		programs[expr] = prg
 	}
 
 	// Build the dependency graph using pre-extracted field paths.
 	// Cycle detection happens here — a cycle in the dependency graph
-	// sets Compiled=False with CycleDetected reason.
+	// sets Compiled=False with CircularDependency reason.
 	dag, err := BuildDAG(spec.Nodes, exprPaths)
 	if err != nil {
 		return nil, err

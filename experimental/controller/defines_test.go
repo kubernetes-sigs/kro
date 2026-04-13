@@ -109,7 +109,7 @@ func TestDefinesCycleDetection(t *testing.T) {
 	}
 	_, err := BuildDAG(nodes, nil)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrCycleDetected)
+	assert.ErrorIs(t, err, ErrCircularDependency)
 }
 
 func TestDefinesChain(t *testing.T) {

@@ -36,7 +36,7 @@ type DAG struct {
 // exprPaths contains pre-extracted field paths from CEL ASTs (computed during
 // compilation in compileGraphSpec). These replace string-scanning with AST-walked
 // field paths per 004-graph-execution.md § Change detection.
-// Returns an error if the dependency graph contains a cycle (ErrCycleDetected).
+// Returns an error if the dependency graph contains a cycle (ErrCircularDependency).
 // Declaration order is not significant — topological order is computed from
 // the dependency graph via Kahn's algorithm.
 func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, error) {
@@ -139,7 +139,7 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 				cycleIDs = append(cycleIDs, dag.Nodes[i].ID)
 			}
 		}
-		return nil, fmt.Errorf("nodes %v form a dependency cycle: %w", cycleIDs, ErrCycleDetected)
+		return nil, fmt.Errorf("nodes %v form a dependency cycle: %w", cycleIDs, ErrCircularDependency)
 	}
 
 	dag.TopologicalOrder = order

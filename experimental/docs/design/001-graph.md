@@ -398,12 +398,12 @@ node definitions are structurally correct. Set once when the spec is processed. 
 the spec changes. Alarm on `False` immediately — the Graph will never converge until the spec is
 fixed.
 
-| Reason              | Meaning                           |
-| ------------------- | --------------------------------- |
-| `Compiled`          | Spec is valid                     |
-| `CompilationFailed` | CEL expression failed to compile  |
-| `CycleDetected`     | Dependency graph contains a cycle |
-| `InvalidSpec`       | Structural spec error             |
+| Reason                | Meaning                             |
+| --------------------- | ----------------------------------- |
+| `Compiled`            | Spec is valid                       |
+| `ExpressionError`     | CEL expression is invalid           |
+| `CircularDependency`  | Nodes form a circular dependency    |
+| `DeclarationError`    | Node declaration is malformed       |
 
 **`Ready`** — a rollup of node evaluations. Each reason maps to the node state blocking convergence.
 `True` means converged. `Unknown` means converging — the controller is making progress and no

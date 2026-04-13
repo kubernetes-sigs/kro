@@ -268,10 +268,10 @@ func TestPropagateWhenDoesNotBlockIndependentBranches(t *testing.T) {
 // Cycle detection — safety invariant
 // ---------------------------------------------------------------------------
 
-// TestCycleDetectionRejectsSpec proves that a Graph with circular dependencies
-// is rejected with Compiled=False, CycleDetected reason. No revision is created
+// TestCircularDependencyRejectsSpec proves that a Graph with circular dependencies
+// is rejected with Compiled=False, CircularDependency reason. No revision is created
 // and no resources are applied.
-func TestCycleDetectionRejectsSpec(t *testing.T) {
+func TestCircularDependencyRejectsSpec(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -318,7 +318,7 @@ func TestCycleDetectionRejectsSpec(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Graph should reach Compiled=False with CycleDetected reason
+	// Graph should reach Compiled=False with CircularDependency reason
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
@@ -347,12 +347,12 @@ func TestCycleDetectionRejectsSpec(t *testing.T) {
 	compiled, found := findCondition(conditions, "Compiled")
 	require.True(t, found, "Compiled condition should exist")
 	assert.Equal(t, "False", compiled["status"])
-	assert.Equal(t, "CycleDetected", compiled["reason"],
-		"reason should be CycleDetected")
-	t.Logf("Cycle correctly detected: reason=%s, message=%s", compiled["reason"], compiled["message"])
+	assert.Equal(t, "CircularDependency", compiled["reason"],
+		"reason should be CircularDependency")
+	t.Logf("Circular dependency correctly detected: reason=%s, message=%s", compiled["reason"], compiled["message"])
 
-	// Verify Compiled condition is False (spec error — cycle detected)
-	assert.Equal(t, "False", compiled["status"], "Compiled should be False when cycle detected")
+	// Verify Compiled condition is False (spec error — circular dependency)
+	assert.Equal(t, "False", compiled["status"], "Compiled should be False when circular dependency detected")
 
 	// No revision should be created
 	count, err := countRevisions(ctx, k8sClient, "test-cycle", ns)
@@ -824,9 +824,9 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 // Invalid spec structural errors
 // ---------------------------------------------------------------------------
 
-// TestInvalidSpecMissingNodeID proves that a Graph with a node missing its
-// id field is rejected with Compiled=False, InvalidSpec reason.
-func TestInvalidSpecMissingNodeID(t *testing.T) {
+// TestDeclarationErrorMissingNodeID proves that a Graph with a node missing its
+// id field is rejected with Compiled=False, DeclarationError reason.
+func TestDeclarationErrorMissingNodeID(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -856,7 +856,7 @@ func TestInvalidSpecMissingNodeID(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Should be rejected with InvalidSpec
+	// Should be rejected with DeclarationError
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
@@ -872,7 +872,7 @@ func TestInvalidSpecMissingNodeID(t *testing.T) {
 		if !found {
 			return false, nil
 		}
-		return cond["status"] == "False" && cond["reason"] == "InvalidSpec", nil
+		return cond["status"] == "False" && cond["reason"] == "DeclarationError", nil
 	}))
 
 	g := &unstructured.Unstructured{}
@@ -883,12 +883,12 @@ func TestInvalidSpecMissingNodeID(t *testing.T) {
 	compiled, found := findCondition(conditions, "Compiled")
 	require.True(t, found, "Compiled condition should exist")
 	assert.Equal(t, "False", compiled["status"])
-	t.Log("Missing node ID correctly rejected with InvalidSpec")
+	t.Log("Missing node ID correctly rejected with DeclarationError")
 }
 
-// TestInvalidSpecDuplicateNodeID proves that a Graph with duplicate node IDs
-// is rejected with Compiled=False, InvalidSpec reason.
-func TestInvalidSpecDuplicateNodeID(t *testing.T) {
+// TestDeclarationErrorDuplicateNodeID proves that a Graph with duplicate node IDs
+// is rejected with Compiled=False, DeclarationError reason.
+func TestDeclarationErrorDuplicateNodeID(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -943,7 +943,7 @@ func TestInvalidSpecDuplicateNodeID(t *testing.T) {
 		if !found {
 			return false, nil
 		}
-		return cond["status"] == "False" && cond["reason"] == "InvalidSpec", nil
+		return cond["status"] == "False" && cond["reason"] == "DeclarationError", nil
 	}))
 
 	g := &unstructured.Unstructured{}
@@ -954,12 +954,12 @@ func TestInvalidSpecDuplicateNodeID(t *testing.T) {
 	compiled, found := findCondition(conditions, "Compiled")
 	require.True(t, found, "Compiled condition should exist")
 	assert.Equal(t, "False", compiled["status"])
-	t.Log("Duplicate node ID correctly rejected with InvalidSpec")
+	t.Log("Duplicate node ID correctly rejected with DeclarationError")
 }
 
-// TestInvalidSpecCompilationFailure proves that a Graph with an invalid CEL
-// expression is rejected with Compiled=False, CompilationFailed reason.
-func TestInvalidSpecCompilationFailure(t *testing.T) {
+// TestExpressionErrorRejectsSpec proves that a Graph with an invalid CEL
+// expression is rejected with Compiled=False, ExpressionError reason.
+func TestExpressionErrorRejectsSpec(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -1008,7 +1008,7 @@ func TestInvalidSpecCompilationFailure(t *testing.T) {
 		if !found {
 			return false, nil
 		}
-		return cond["status"] == "False" && cond["reason"] == "CompilationFailed", nil
+		return cond["status"] == "False" && cond["reason"] == "ExpressionError", nil
 	}))
 
 	g := &unstructured.Unstructured{}
@@ -1024,7 +1024,7 @@ func TestInvalidSpecCompilationFailure(t *testing.T) {
 	count, err := countRevisions(ctx, k8sClient, "test-bad-cel", ns)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
-	t.Log("Invalid CEL correctly rejected with CompilationFailed")
+	t.Log("Invalid CEL correctly rejected with ExpressionError")
 }
 
 // ---------------------------------------------------------------------------

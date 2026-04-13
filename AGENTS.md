@@ -32,6 +32,12 @@ unless upstreaming a change to `kubernetes-sigs/kro`.
 Experimental work lives under `experimental/`. Read
 `experimental/docs/design/` before implementing changes.
 
+## Skills
+
+Project-local skills live in `.skills/`. These are operational checklists
+the agent loads and executes — distinct from designs, which declare
+desired state.
+
 ## Dependency Invariant
 
 `experimental/` may import from `pkg/`. `pkg/` must never import from

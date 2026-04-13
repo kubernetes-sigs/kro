@@ -34,22 +34,22 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 	}
 
 	switch ref {
-	case ReferenceDefines:
-		return nil, r.reconcileDefines(ctx, node, eval)
-	case ReferenceWatchesKind:
+	case ReferenceDefinition:
+		return nil, r.reconcileDefinition(ctx, node, eval)
+	case ReferenceWatchKind:
 		err := r.reconcileCollectionWatch(ctx, graph, node, eval, watcher)
 		return nil, err
-	case ReferenceWatches:
+	case ReferenceWatch:
 		err := r.reconcileWatch(ctx, graph, node, eval, watcher)
 		return nil, err
-	case ReferenceContributes:
+	case ReferenceContribute:
 		key, err := r.reconcileContribute(ctx, graph, node, eval, watcher)
 		if key != "" {
 			return []string{key}, err
 		}
 		return nil, err
-	default: // ReferenceOwns
-		key, err := r.reconcileOwns(ctx, graph, node, eval, watcher)
+	default: // ReferenceOwn
+		key, err := r.reconcileOwn(ctx, graph, node, eval, watcher)
 		if key != "" {
 			return []string{key}, err
 		}
@@ -57,13 +57,13 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 	}
 }
 
-// reconcileDefines evaluates a definition node — resolves values from the template
+// reconcileDefinition evaluates a definition node — resolves values from the template
 // (literals and/or CEL expressions) and enters the result into scope as
 // map[string]any. No Kubernetes API calls are made.
-func (r *GraphReconciler) reconcileDefines(ctx context.Context, node Node, eval *evaluator) error {
+func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node Node, eval *evaluator) error {
 	result, err := eval.toMap(node.Template)
 	if err != nil {
-		return fmt.Errorf("defines %s: %w", node.ID, err)
+		return fmt.Errorf("definition %s: %w", node.ID, err)
 	}
 	eval.scope[node.ID] = result
 	log.FromContext(ctx).V(1).Info("evaluated definition node", "node", node.ID, "keys", len(result))
@@ -79,11 +79,11 @@ func (r *GraphReconciler) reconcileDefines(ctx context.Context, node Node, eval 
 	return nil
 }
 
-// resolveReference determines Owns vs Contributes for an Unresolved node by
-// checking whether the target resource exists. Absent → Owns, exists → check
-// the kro label. If the resource has this Graph's label, it's Owns (we created
+// resolveReference determines Own vs Contribute for an Unresolved node by
+// checking whether the target resource exists. Absent → Own, exists → check
+// the kro label. If the resource has this Graph's label, it's Own (we created
 // it on a previous revision). If it has no kro label or another Graph's label,
-// it's Contributes. Force annotation always resolves to Owns.
+// it's Contribute. Force annotation always resolves to Own.
 func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator) (Reference, error) {
 	logger := log.FromContext(ctx)
 
@@ -94,11 +94,11 @@ func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructu
 		return ReferenceUnresolved, fmt.Errorf("resolving reference for %s: %w", node.ID, err)
 	}
 
-	// Force annotation is an explicit ownership claim — always Owns.
+	// Force annotation is an explicit ownership claim — always Own.
 	obj := &unstructured.Unstructured{Object: evalMap}
 	if isForceApply(obj) {
-		logger.V(1).Info("reference resolved: Owns (Force annotation)", "node", node.ID)
-		return ReferenceOwns, nil
+		logger.V(1).Info("reference resolved: Own (Force annotation)", "node", node.ID)
+		return ReferenceOwn, nil
 	}
 
 	if obj.GetNamespace() == "" {
@@ -110,34 +110,34 @@ func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructu
 	err = r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.V(1).Info("reference resolved: Owns (resource absent)", "node", node.ID)
-			return ReferenceOwns, nil
+			logger.V(1).Info("reference resolved: Own (resource absent)", "node", node.ID)
+			return ReferenceOwn, nil
 		}
 		return ReferenceUnresolved, fmt.Errorf("checking resource existence for reference detection %s: %w", node.ID, err)
 	}
 
 	// Resource exists. Check if this Graph created it (identity label match).
-	// Per 003-ownership.md: Contributes templates also stamp identity labels
-	// (with reference=contributes) so the applied set can find them on restart.
+	// Per 003-ownership.md: Contribute templates also stamp identity labels
+	// (with reference=contribute) so the applied set can find them on restart.
 	// We must check the REFERENCE VALUE — not just label presence — to
-	// distinguish Contributes (reference=contributes) from Owns (reference=owns).
-	// Without this check, a Contributes node misidentifies as Owns on the second
+	// distinguish Contribute (reference=contribute) from Own (reference=own).
+	// Without this check, a Contribute node misidentifies as Own on the second
 	// reconcile, triggering the kro label conflict check against co-contributing
 	// Graphs.
 	existingLabels := existing.GetLabels()
 	for key, val := range existingLabels {
 		if isGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
-			if val == ReferenceContributes.String() {
-				logger.V(1).Info("reference resolved: Contributes (resource has our contributes label)", "node", node.ID)
-				return ReferenceContributes, nil
+			if val == ReferenceContribute.String() {
+				logger.V(1).Info("reference resolved: Contribute (resource has our contribute label)", "node", node.ID)
+				return ReferenceContribute, nil
 			}
-			logger.V(1).Info("reference resolved: Owns (resource has our identity label)", "node", node.ID)
-			return ReferenceOwns, nil
+			logger.V(1).Info("reference resolved: Own (resource has our identity label)", "node", node.ID)
+			return ReferenceOwn, nil
 		}
 	}
 
-	logger.V(1).Info("reference resolved: Contributes (resource exists, not ours)", "node", node.ID)
-	return ReferenceContributes, nil
+	logger.V(1).Info("reference resolved: Contribute (resource exists, not ours)", "node", node.ID)
+	return ReferenceContribute, nil
 }
 
 // reconcileWatch reads a single existing object from the API server into scope.
@@ -268,8 +268,8 @@ func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *u
 	return nil
 }
 
-// reconcileOwns evaluates and applies an Owns template, checks readyWhen.
-func (r *GraphReconciler) reconcileOwns(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) (string, error) {
+// reconcileOwn evaluates and applies an Own template, checks readyWhen.
+func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) (string, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMap(node.Template)
@@ -313,7 +313,7 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 	eval.scope[node.ID] = normalizeTypes(applied.Object)
 	logger.V(1).Info("contributed to resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
-	// Evaluate readyWhen if present, matching the reconcileOwns pattern.
+	// Evaluate readyWhen if present, matching the reconcileOwn pattern.
 	// Without readyWhen, applied = ready.
 	if len(node.ReadyWhen) > 0 {
 		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
@@ -328,7 +328,7 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 
 	// Track the contribution in the applied set with a "contribute:" prefix.
 	// This lets prune and teardown distinguish Contribute keys (skeleton apply
-	// to release fields) from Owns keys (delete).
+	// to release fields) from Own keys (delete).
 	hasStatus := evalMap["status"] != nil
 	key := contributeKey(applied, hasStatus)
 	return key, nil

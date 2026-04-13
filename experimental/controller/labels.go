@@ -3,7 +3,7 @@
 // Each managed resource carries two labels per Graph-node pair. The label
 // key is a DNS subdomain that encodes the node ID, graph name, and namespace:
 //
-//	<nodeID>.<graphName>.<namespace>.internal.kro.run/reference  → "owns" | "contributes"
+//	<nodeID>.<graphName>.<namespace>.internal.kro.run/reference  → "own" | "contribute"
 //	<nodeID>.<graphName>.<namespace>.internal.kro.run/generation → graph.metadata.generation
 //
 // The identity label key is unique per node-graph-namespace triple. Multiple
@@ -90,7 +90,7 @@ func hasGraphIdentityLabels(labels map[string]string, graphName, namespace strin
 
 // hasOtherGraphIdentityLabel checks if a resource's labels contain any
 // identity labels from a DIFFERENT graph than the specified one. Used by
-// the kro label check before applying an Owns template — if present,
+// the kro label check before applying an Own template — if present,
 // another kro Graph manages this resource.
 func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespace string) (otherGraph string, found bool) {
 	mySuffix := graphLabelSuffix(myGraphName, myNamespace)
@@ -102,7 +102,7 @@ func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 		if !strings.HasSuffix(key, mySuffix) {
 			// Different graph. Extract graph name for the error message.
 			_, gName, _, ok := parseIdentityLabel(key)
-			if ok && (val == ReferenceOwns.String() || val == ReferenceContributes.String()) {
+			if ok && (val == ReferenceOwn.String() || val == ReferenceContribute.String()) {
 				return gName, true
 			}
 		}
@@ -111,9 +111,9 @@ func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 }
 
 // setIdentityLabels stamps identity and generation labels onto a resource's
-// metadata labels map. Called during apply for Owns and Contributes references.
+// metadata labels map. Called during apply for Own and Contribute references.
 // Panics if ref does not have a label value — this is an invariant violation,
-// as all call sites pass ReferenceOwns or ReferenceContributes directly.
+// as all call sites pass ReferenceOwn or ReferenceContribute directly.
 func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, generation string, ref Reference) map[string]string {
 	lv, ok := ref.LabelValue()
 	if !ok {
@@ -166,7 +166,7 @@ func forEachChildGenerationLabelKey(parentID, resName, resNamespace, kind, group
 
 // setForEachChildIdentityLabels stamps forEach child identity and generation labels.
 // Panics if ref does not have a label value — this is an invariant violation,
-// as all call sites pass ReferenceOwns or ReferenceContributes directly.
+// as all call sites pass ReferenceOwn or ReferenceContribute directly.
 func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation string, ref Reference) map[string]string {
 	lv, ok := ref.LabelValue()
 	if !ok {
@@ -184,7 +184,7 @@ func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, 
 // watch cache by scanning identity labels.
 type appliedEntry struct {
 	NodeID    string
-	Reference Reference // ReferenceOwns or ReferenceContributes
+	Reference Reference // ReferenceOwn or ReferenceContribute
 	Key       string    // resource key (group/version/Kind/namespace/name)
 	HasStatus bool      // for contributes: whether status subresource was applied
 }

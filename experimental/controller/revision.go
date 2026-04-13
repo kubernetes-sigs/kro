@@ -135,10 +135,10 @@ func materializeNode(node Node, graphName, graphNamespace string, generation str
 	if node.Template != nil {
 		tmpl := deepCopyMap(node.Template)
 		ref := DetectReference(tmpl)
-		// Only inject ownership labels for structurally-known Owns references.
-		// Unresolved references (Owns vs Contributes unknown until reconcile time)
-		// get labels injected at apply time if they resolve to Owns.
-		if ref == ReferenceOwns {
+		// Only inject ownership labels for structurally-known Own references.
+		// Unresolved references (Own vs Contribute unknown until reconcile time)
+		// get labels injected at apply time if they resolve to Own.
+		if ref == ReferenceOwn {
 			injectNodeLabels(tmpl, graphName, graphNamespace, generation, node.ID)
 		}
 		entry["template"] = tmpl
@@ -192,8 +192,8 @@ func injectNodeLabels(tmpl map[string]any, graphName, graphNamespace, generation
 	if lbls == nil {
 		lbls = map[string]any{}
 	}
-	ownsLabel, _ := ReferenceOwns.LabelValue()
-	lbls[identityLabelKey(nodeID, graphName, graphNamespace)] = ownsLabel
+	ownLabel, _ := ReferenceOwn.LabelValue()
+	lbls[identityLabelKey(nodeID, graphName, graphNamespace)] = ownLabel
 	lbls[generationLabelKey(nodeID, graphName, graphNamespace)] = generation
 	md["labels"] = lbls
 

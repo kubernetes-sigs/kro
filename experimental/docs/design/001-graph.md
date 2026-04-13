@@ -76,26 +76,26 @@ downstream nodes. The value and type depend on the reference type — see below.
 A Kubernetes resource declaration (or, for definition nodes, a map of values). The
 reference type determines how the controller handles it:
 
-- **Owns** — specifies fields beyond identity (labels, annotations, spec, data). The Graph creates
+- **Own** — specifies fields beyond identity (labels, annotations, spec, data). The Graph creates
   the resource if it doesn't exist, applies the specified fields via SSA, and tracks the resource
   for cleanup.
 - **Watch** — specifies only identity (`apiVersion`, `kind`, `metadata.name`, `metadata.namespace`).
   The Graph reads the resource into scope without managing it. If the resource does not exist, the
   node is Pending.
-- **WatchesKind** — specifies `apiVersion` and `kind` with an optional `selector` but no
+- **WatchKind** — specifies `apiVersion` and `kind` with an optional `selector` but no
   `metadata.name`. The Graph discovers matching resources and enters them into scope as an array.
   Create and delete events on matching objects trigger re-reconciliation.
 - **Contribute** — specifies a subset of fields on a resource that another actor manages (e.g., only
   status, or only labels). The Graph applies exactly those fields and tracks them for cleanup. This
   is how a Graph writes status to a custom resource, adds labels to an existing object, or
   contributes any partial state.
-- **Defines** — no `apiVersion` and no `kind`. The template is a map of key-value pairs where
+- **Definition** — no `apiVersion` and no `kind`. The template is a map of key-value pairs where
   values are literals or `${...}` CEL expressions. The node produces no Kubernetes resource — it
   defines values and enters the result into scope as `map[string]any`. No API calls, no
   drift timer, no cleanup on teardown.
 
-After processing, the resource enters scope under its `id` — as the full Kubernetes object for Owns,
-Watch, and Contribute templates, as an array for WatchesKind, or as `map[string]any` for Defines.
+After processing, the resource enters scope under its `id` — as the full Kubernetes object for Own,
+Watch, and Contribute templates, as an array for WatchKind, or as `map[string]any` for Definition.
 
 ```yaml
 # Watch — reads an existing ConfigMap into scope
@@ -106,7 +106,7 @@ Watch, and Contribute templates, as an array for WatchesKind, or as `map[string]
     metadata:
       name: shared-config
 
-# WatchesKind — discovers all Pods matching a selector
+# WatchKind — discovers all Pods matching a selector
 - id: allPods
   template:
     apiVersion: v1
@@ -134,7 +134,7 @@ Watch, and Contribute templates, as an array for WatchesKind, or as `map[string]
       deploymentReady: ${deployment.status.availableReplicas == deployment.spec.replicas}
       address: ${service.status.loadBalancer.ingress[0].hostname}
 
-# Defines — reusable naming values, no Kubernetes resource created
+# Definition — reusable naming values, no Kubernetes resource created
 - id: naming
   template:
     prefix: ${spec.name + '-' + spec.env}
@@ -151,7 +151,7 @@ Watch, and Contribute templates, as an array for WatchesKind, or as `map[string]
 #### forEach
 
 Expands the template once per item in a collection. The collection is a CEL expression referencing a
-WatchesKind or any array in scope. Each iteration binds the item to a named variable available
+WatchKind or any array in scope. Each iteration binds the item to a named variable available
 within the template. The forEach node is a logical parent — it expands into one child node per item.
 Each child is a real node that manages one resource. Child identity is scoped to the parent — the
 child's node ID combines the parent's ID with the rendered resource key (GVK + namespace + name).
@@ -233,7 +233,7 @@ Kubernetes conditions check.
 
 For forEach nodes, readyWhen is evaluated per-child — each child checks readyWhen independently
 using the standard per-node mechanism. `.ready()` on a forEach parent returns true when all children
-are ready. A WatchesKind's `.ready()` returns true when the node's readyWhen conditions pass
+are ready. A WatchKind's `.ready()` returns true when the node's readyWhen conditions pass
 (evaluated once against the whole array, not per-item).
 
 `.ready()` is not transitive across the DAG — it reflects only the node's own readiness, not its
@@ -316,8 +316,8 @@ A Graph whose template contains another Graph creates a nested scope. The inner 
 Kubernetes object — it is created via the API server and reconciled independently by its own
 reconciliation. Each level is a separate reconciliation loop with its own resource scope.
 
-The combination of WatchesKind, forEach, and nested Graphs creates per-instance controllers. A
-parent Graph watches a kind via WatchesKind, forEach creates one child Graph per item, and each
+The combination of WatchKind, forEach, and nested Graphs creates per-instance controllers. A
+parent Graph watches a kind via WatchKind, forEach creates one child Graph per item, and each
 child Graph independently reconciles resources for its item.
 
 ```yaml

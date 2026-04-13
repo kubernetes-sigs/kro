@@ -438,7 +438,7 @@ func TestContributeCleanupOnTeardown(t *testing.T) {
 // dependency has no readyWhen/propagateWhen gates.
 //
 // Regression: SelfSections was only populated from the node's own
-// readyWhen/propagateWhen. A bare Owns node (no gates) whose .data was
+// readyWhen/propagateWhen. A bare Own node (no gates) whose .data was
 // referenced by a downstream Contribute would have empty SelfSections. The
 // change-check optimization would retain stale scope, and the Contribute
 // would never re-evaluate. The fix pushes downstream dependency sections
@@ -498,7 +498,7 @@ func TestContributionUpdatesWhenDependencyChanges(t *testing.T) {
 						},
 					},
 					// Owned resource that references the source. This is a bare
-					// Owns node with NO readyWhen/propagateWhen gates.
+					// Own node with NO readyWhen/propagateWhen gates.
 					map[string]any{
 						"id": "owned",
 						"template": map[string]any{
@@ -681,7 +681,7 @@ func TestCollectionWatchClusterScopedResource(t *testing.T) {
 //
 // Setup:
 //   - Watch node reads an external ConfigMap
-//   - Dependent Owns node references the watched data
+//   - Dependent Own node references the watched data
 //   - Delete the external ConfigMap → Watch enters Pending → dependent is Blocked
 //   - Recreate the external ConfigMap → Watch resolves → dependent reconverges
 //   - Assert: Graph reaches Ready, dependent resource exists with correct data
@@ -908,7 +908,7 @@ func TestContributeReadyWhenGatesGraphReadiness(t *testing.T) {
 }
 
 // TestContributeIdentityLabels proves that Contribute resources carry identity
-// labels with role "contributes". These labels make Contribute resources
+// labels with role "contribute". These labels make Contribute resources
 // discoverable via deriveAppliedSet() after controller restart, ensuring
 // teardown can release their fields via skeleton apply.
 //
@@ -991,15 +991,15 @@ func TestContributeIdentityLabels(t *testing.T) {
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-label-target", Namespace: ns}, result))
 
 	// THE KEY ASSERTION: The contributed resource must have an identity label
-	// with role "contributes" for our graph. This makes it discoverable by
+	// with role "contribute" for our graph. This makes it discoverable by
 	// deriveAppliedSet() after controller restart.
 	resultLabels := result.GetLabels()
 	labelSuffix := "." + graphName + "." + ns + ".internal.kro.run/reference"
 	foundContribLabel := false
 	for key, val := range resultLabels {
 		if strings.HasSuffix(key, labelSuffix) {
-			assert.Equal(t, "contributes", val,
-				"Contribute resource must have role 'contributes', not 'owns'")
+			assert.Equal(t, "contribute", val,
+				"Contribute resource must have role 'contribute', not 'own'")
 			foundContribLabel = true
 			break
 		}
@@ -1029,8 +1029,8 @@ func TestContributeIdentityLabels(t *testing.T) {
 // Setup:
 //   - source ConfigMap: data.status = "pending"
 //   - upstream: Watch on source, readyWhen: ${upstream.data.status == 'active'}
-//   - relay: Owns ConfigMap, propagateWhen: [${upstream.ready()}]
-//   - downstream: Owns ConfigMap, data.relayStatus: ${relay.data.status}
+//   - relay: Own ConfigMap, propagateWhen: [${upstream.ready()}]
+//   - downstream: Own ConfigMap, data.relayStatus: ${relay.data.status}
 //
 // Scenario:
 //  1. Graph created — relay is created, downstream is blocked (relay.propagateWhen = false)

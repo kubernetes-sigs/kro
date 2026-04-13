@@ -82,14 +82,14 @@ func TestIsGraphIdentityLabel(t *testing.T) {
 func TestHasOtherGraphIdentityLabel(t *testing.T) {
 	// Resource with our label only — no conflict
 	labels1 := map[string]string{
-		"deploy.my-app.default.internal.kro.run/reference": "owns",
+		"deploy.my-app.default.internal.kro.run/reference": "own",
 	}
 	_, found := hasOtherGraphIdentityLabel(labels1, "my-app", "default")
 	assert.False(t, found)
 
 	// Resource with another graph's label — conflict
 	labels2 := map[string]string{
-		"deploy.other-app.default.internal.kro.run/reference": "owns",
+		"deploy.other-app.default.internal.kro.run/reference": "own",
 	}
 	otherGraph, found := hasOtherGraphIdentityLabel(labels2, "my-app", "default")
 	assert.True(t, found)
@@ -97,8 +97,8 @@ func TestHasOtherGraphIdentityLabel(t *testing.T) {
 
 	// Resource with both our label and another graph's label — conflict
 	labels3 := map[string]string{
-		"deploy.my-app.default.internal.kro.run/reference":    "owns",
-		"deploy.other-app.default.internal.kro.run/reference": "contributes",
+		"deploy.my-app.default.internal.kro.run/reference":    "own",
+		"deploy.other-app.default.internal.kro.run/reference": "contribute",
 	}
 	otherGraph, found = hasOtherGraphIdentityLabel(labels3, "my-app", "default")
 	assert.True(t, found)
@@ -113,7 +113,7 @@ func TestHasOtherGraphIdentityLabel(t *testing.T) {
 }
 
 func TestSetIdentityLabels(t *testing.T) {
-	labels := setIdentityLabels(nil, "deploy", "my-app", "default", "3", ReferenceOwns)
-	assert.Equal(t, "owns", labels["deploy.my-app.default.internal.kro.run/reference"])
+	labels := setIdentityLabels(nil, "deploy", "my-app", "default", "3", ReferenceOwn)
+	assert.Equal(t, "own", labels["deploy.my-app.default.internal.kro.run/reference"])
 	assert.Equal(t, "3", labels["deploy.my-app.default.internal.kro.run/generation"])
 }

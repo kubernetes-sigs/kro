@@ -34,7 +34,7 @@ func TestMultiGraphFieldCoexistence(t *testing.T) {
 	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 
 	// Pre-create the shared resource. Both Graphs will detect Contribute shape
-	// (resource exists on first reconcile → Contribute, not Owns).
+	// (resource exists on first reconcile → Contribute, not Own).
 	shared := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -324,15 +324,15 @@ func TestContribution(t *testing.T) {
 	assert.Equal(t, "3", data["replicas"],
 		"contribution should preserve existing data fields")
 
-	// THE KEY ASSERTION: The external object should NOT have an Owns identity
-	// label from our Graph. Contributions are partial — they set a "contributes"
-	// role, not "owns".
+	// THE KEY ASSERTION: The external object should NOT have an Own identity
+	// label from our Graph. Contributions are partial — they set a "contribute"
+	// role, not "own".
 	extLabels := updatedExternal.GetLabels()
-	// Check that no identity label for this graph has role "owns"
+	// Check that no identity label for this graph has role "own"
 	for key, val := range extLabels {
 		if strings.HasSuffix(key, ".test-contribution."+ns+".internal.kro.run/reference") {
-			assert.NotEqual(t, "owns", val,
-				"contribution should NOT set 'owns' role label on external object")
+			assert.NotEqual(t, "own", val,
+				"contribution should NOT set 'own' role label on external object")
 		}
 	}
 
@@ -434,9 +434,9 @@ func TestResourcePruning(t *testing.T) {
 // TestContributeReferenceDetectedByExistence proves that when a resource
 // pre-exists before the Graph creates it, the controller detects Contribute
 // shape — behavioral consequence: the resource is NOT deleted when the
-// template is removed from the Graph spec. Owns shape would delete it.
+// template is removed from the Graph spec. Own shape would delete it.
 //
-// Design 003-ownership § Template Shapes: "Owns — Creates the resource if
+// Design 003-ownership § Template Shapes: "Own — Creates the resource if
 // absent. Deletes on prune." vs "Contribute — Writes fields on a resource
 // the Graph does not create. Releases fields on prune, never deletes."
 //
@@ -536,7 +536,7 @@ func TestContributeReferenceDetectedByExistence(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, latest))
 	t.Log("Removed both nodes from spec — prune triggered")
 
-	// Wait for the owned resource to be deleted (Owns shape → delete on prune).
+	// Wait for the owned resource to be deleted (Own shape → delete on prune).
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			check := &unstructured.Unstructured{}
@@ -545,7 +545,7 @@ func TestContributeReferenceDetectedByExistence(t *testing.T) {
 				types.NamespacedName{Name: "contribute-owned", Namespace: ns}, check)
 			return err != nil, nil // gone = true
 		}))
-	t.Log("Owned resource deleted on prune — Owns shape confirmed")
+	t.Log("Owned resource deleted on prune — Own shape confirmed")
 
 	// THE KEY ASSERTION: the contributed resource should still exist
 	// (Contribute shape → release fields on prune, never delete).

@@ -672,7 +672,7 @@ func TestDeepDagChain(t *testing.T) {
 }
 
 // TestGraphWithZeroOwnsNodes proves that a Graph with only Watch and
-// Contribute nodes (no Owns) is valid and converges.
+// Contribute nodes (no Own) is valid and converges.
 func TestGraphWithZeroOwnsNodes(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -749,7 +749,7 @@ func TestGraphWithZeroOwnsNodes(t *testing.T) {
 
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-zero-owns", Namespace: ns}))
-	t.Log("Graph with zero Owns nodes (Watch + Contribute only) converged to Ready")
+	t.Log("Graph with zero Own nodes (Watch + Contribute only) converged to Ready")
 
 	// Verify watched UID was passed to the contribution.
 	contribCM := &unstructured.Unstructured{}

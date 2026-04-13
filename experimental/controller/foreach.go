@@ -157,7 +157,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 			// Definition forEach: evaluate the template per item, collect
 			// values into []any. No resource is created or tracked.
-			if DetectReference(node.Template) == ReferenceDefines {
+			if DetectReference(node.Template) == ReferenceDefinition {
 				evalMap, err := innerEval.toMap(node.Template)
 				if err != nil {
 					childErrors = append(childErrors, fmt.Errorf("forEach defines %s item: %w", node.ID, err))
@@ -186,7 +186,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			gv, _ := schema.ParseGroupVersion(childObj.GetAPIVersion())
 			generation := fmt.Sprintf("%d", graph.GetGeneration())
 
-			// Resolve Owns vs Contributes per child. Each child targets a
+			// Resolve Own vs Contribute per child. Each child targets a
 			// different resource, so the reference type is item-specific.
 			childRef := r.resolveForEachChildReference(ctx, graph, childObj)
 
@@ -205,7 +205,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			evalMap = childObj.Object
 
 			var applied *unstructured.Unstructured
-			if childRef == ReferenceContributes {
+			if childRef == ReferenceContribute {
 				applied, err = r.applyContribution(ctx, graph, evalMap, watcher, node.ID)
 			} else {
 				applied, err = r.applyResource(ctx, graph, evalMap, watcher, node.ID)
@@ -223,7 +223,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			}
 			allApplied = append(allApplied, applied.Object)
 			var itemKeys []string
-			if childRef == ReferenceContributes {
+			if childRef == ReferenceContribute {
 				hasStatus := evalMap["status"] != nil
 				itemKeys = []string{contributeKey(applied, hasStatus)}
 			} else {
@@ -339,22 +339,22 @@ func forEachItemUnchanged(prev, current any) bool {
 }
 
 // resolveForEachChildReference determines whether a forEach child targets a
-// pre-existing resource (Contributes) or creates a new one (Owns). This is
+// pre-existing resource (Contribute) or creates a new one (Own). This is
 // the per-child version of resolveReference in node.go — forEach children
 // can't be resolved at the parent level because each item targets a different
 // resource.
 //
-// Force annotation → Owns.
-// Resource absent → Owns.
-// Resource exists with this Graph's "contributes" label → Contributes.
-// Resource exists with this Graph's "owns" label → Owns.
-// Resource exists without any kro label → Contributes.
+// Force annotation → Own.
+// Resource absent → Own.
+// Resource exists with this Graph's "contribute" label → Contribute.
+// Resource exists with this Graph's "own" label → Own.
+// Resource exists without any kro label → Contribute.
 func (r *GraphReconciler) resolveForEachChildReference(ctx context.Context, graph *unstructured.Unstructured, child *unstructured.Unstructured) Reference {
 	logger := log.FromContext(ctx)
 
 	// Force annotation is an explicit ownership claim.
 	if isForceApply(child) {
-		return ReferenceOwns
+		return ReferenceOwn
 	}
 
 	existing := &unstructured.Unstructured{}
@@ -365,28 +365,28 @@ func (r *GraphReconciler) resolveForEachChildReference(ctx context.Context, grap
 	}, existing)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return ReferenceOwns
+			return ReferenceOwn
 		}
-		// On error, default to Owns (safe: won't accidentally delete a
-		// pre-existing resource because Owns creates-then-manages).
-		logger.V(1).Info("forEach child reference resolution failed, defaulting to Owns",
+		// On error, default to Own (safe: won't accidentally delete a
+		// pre-existing resource because Own creates-then-manages).
+		logger.V(1).Info("forEach child reference resolution failed, defaulting to Own",
 			"name", child.GetName(), "error", err)
-		return ReferenceOwns
+		return ReferenceOwn
 	}
 
 	// Resource exists. Check identity labels to determine reference type.
 	existingLabels := existing.GetLabels()
 	for key, val := range existingLabels {
 		if isGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
-			if val == ReferenceContributes.String() {
-				return ReferenceContributes
+			if val == ReferenceContribute.String() {
+				return ReferenceContribute
 			}
-			return ReferenceOwns // Has our label with "owns" value
+			return ReferenceOwn // Has our label with "own" value
 		}
 	}
 
-	// Resource exists without our label — we didn't create it → Contributes.
-	logger.V(1).Info("forEach child reference resolved: Contributes (resource exists, not ours)",
+	// Resource exists without our label — we didn't create it → Contribute.
+	logger.V(1).Info("forEach child reference resolved: Contribute (resource exists, not ours)",
 		"name", child.GetName())
-	return ReferenceContributes
+	return ReferenceContribute
 }

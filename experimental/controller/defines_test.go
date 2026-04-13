@@ -15,12 +15,12 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestDefinesReference(t *testing.T) {
-	t.Run("no apiVersion no kind returns ReferenceDefines", func(t *testing.T) {
+	t.Run("no apiVersion no kind returns ReferenceDefinition", func(t *testing.T) {
 		n := Node{
 			ID:       "naming",
 			Template: map[string]any{"prefix": "${spec.name}"},
 		}
-		assert.Equal(t, ReferenceDefines, n.Reference())
+		assert.Equal(t, ReferenceDefinition, n.Reference())
 	})
 
 	t.Run("empty template returns ReferenceUnresolved", func(t *testing.T) {
@@ -33,7 +33,7 @@ func TestDefinesReference(t *testing.T) {
 		assert.Equal(t, ReferenceUnresolved, n.Reference())
 	})
 
-	t.Run("with apiVersion and kind returns non-Defines", func(t *testing.T) {
+	t.Run("with apiVersion and kind returns non-Definition", func(t *testing.T) {
 		n := Node{
 			ID: "cfg",
 			Template: map[string]any{
@@ -43,12 +43,12 @@ func TestDefinesReference(t *testing.T) {
 				"data":       map[string]any{"k": "v"},
 			},
 		}
-		assert.NotEqual(t, ReferenceDefines, n.Reference())
+		assert.NotEqual(t, ReferenceDefinition, n.Reference())
 	})
 }
 
 func TestDefinesReferenceString(t *testing.T) {
-	assert.Equal(t, "defines", ReferenceDefines.String())
+	assert.Equal(t, "definition", ReferenceDefinition.String())
 }
 
 func TestDefinesDAGDependencies(t *testing.T) {
@@ -143,11 +143,11 @@ func TestDefinesChain(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests — reconcileDefines and forEach defines code paths
+// Unit tests — reconcileDefinition and forEach defines code paths
 // ---------------------------------------------------------------------------
 
 // compileDefinesSpec is a test helper that compiles a GraphSpec and returns an
-// evaluator ready for reconcileDefines calls. Fails the test on compile error.
+// evaluator ready for reconcileDefinition calls. Fails the test on compile error.
 func compileDefinesSpec(t *testing.T, spec *GraphSpec) *evaluator {
 	t.Helper()
 	compiled, err := compileGraphSpec(spec)
@@ -168,7 +168,7 @@ func TestDefinesReconcile(t *testing.T) {
 		}}
 		eval := compileDefinesSpec(t, spec)
 
-		err := r.reconcileDefines(ctx, spec.Nodes[0], eval)
+		err := r.reconcileDefinition(ctx, spec.Nodes[0], eval)
 		require.NoError(t, err)
 
 		result, ok := eval.scope["cfg"].(map[string]any)
@@ -187,7 +187,7 @@ func TestDefinesReconcile(t *testing.T) {
 		// Populate upstream in scope first (simulates DAG walk order).
 		eval.scope["upstream"] = map[string]any{"name": "myapp"}
 
-		err := r.reconcileDefines(ctx, spec.Nodes[1], eval)
+		err := r.reconcileDefinition(ctx, spec.Nodes[1], eval)
 		require.NoError(t, err)
 
 		result, ok := eval.scope["derived"].(map[string]any)
@@ -205,7 +205,7 @@ func TestDefinesReconcile(t *testing.T) {
 		}}
 		eval := compileDefinesSpec(t, spec)
 
-		err := r.reconcileDefines(ctx, spec.Nodes[0], eval)
+		err := r.reconcileDefinition(ctx, spec.Nodes[0], eval)
 		require.NoError(t, err)
 
 		result, ok := eval.scope["cfg"].(map[string]any)
@@ -223,7 +223,7 @@ func TestDefinesReconcile(t *testing.T) {
 		}}
 		eval := compileDefinesSpec(t, spec)
 
-		err := r.reconcileDefines(ctx, spec.Nodes[0], eval)
+		err := r.reconcileDefinition(ctx, spec.Nodes[0], eval)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, ErrWaitingForReadiness))
 
@@ -246,9 +246,9 @@ func TestDefinesReconcile(t *testing.T) {
 		eval := compileDefinesSpec(t, spec)
 		// upstream is declared but NOT populated in scope — eval fails at runtime.
 
-		err := r.reconcileDefines(ctx, spec.Nodes[1], eval)
+		err := r.reconcileDefinition(ctx, spec.Nodes[1], eval)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "defines bad")
+		assert.Contains(t, err.Error(), "definition bad")
 	})
 }
 

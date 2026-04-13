@@ -21,11 +21,11 @@ A node has:
 
 Template structure determines how the node is processed and cleaned up:
 
-- **Owns** — creates and manages the resource. Deletes on prune.
+- **Own** — creates and manages the resource. Deletes on prune.
 - **Watch** — reads the resource into scope. No management.
-- **WatchesKind** — discovers matching resources by selector. Enters an array into scope.
+- **WatchKind** — discovers matching resources by selector. Enters an array into scope.
 - **Contribute** — writes partial state to another actor's resource. Releases fields on prune.
-- **Defines** — defines values in scope as `map[string]any`. No API
+- **Definition** — defines values in scope as `map[string]any`. No API
   calls, no drift timer, nothing to clean up on prune or teardown.
 
 ### Dependencies
@@ -55,11 +55,11 @@ Propagation triggers — events from within the current walk:
 
 - A dependency was invalidated during this walk (propagation hash changed at step 7)
 
-Watch events on managed resources (Owns, Contribute) are routed by the identity label key, which
-encodes the node ID. Watch events on unowned resources (Watch, WatchesKind) are routed by GVK +
+Watch events on managed resources (Own, Contribute) are routed by the identity label key, which
+encodes the node ID. Watch events on unowned resources (Watch, WatchKind) are routed by GVK +
 namespace + name (scalar) or GVK + selector (collection) — the controller maintains a mapping from
 these keys to node IDs, populated at graph compilation. A watch event on a GVK the controller
-monitors triggers all nodes that declare a Watch or WatchesKind matching that resource; the
+monitors triggers all nodes that declare a Watch or WatchKind matching that resource; the
 propagation hash skips downstream evaluation if the node's referenced paths didn't actually change.
 
 Deterministic errors (4xx) are not retried — same inputs produce the same failure. They resolve via
@@ -98,16 +98,16 @@ store and the DAG. Revision status is a write-only observation surface — not a
 
 | Label key | Value | Purpose |
 |---|---|---|
-| `<node>.<graph>.<ns>.internal.kro.run/reference` | `owns` or `contributes` | Identity, selection, prune reference |
+| `<node>.<graph>.<ns>.internal.kro.run/reference` | `own` or `contribute` | Identity, selection, prune reference |
 | `<node>.<graph>.<ns>.internal.kro.run/generation` | `graph.metadata.generation` | Observational |
 
 Each Graph gets its own label keys. Multiple Graphs targeting the same resource coexist without
-collision — a Contribute template on one Graph and an Owns template on another produce independent
+collision — a Contribute template on one Graph and an Own template on another produce independent
 labels. Typically 1-2 Graphs per resource; label count scales linearly with managing Graphs (2N
 labels for N Graphs).
 
 The identity label enables selection: the applied set is all resources where the Graph's identity
-label exists. The value encodes the relationship (`owns` or `contributes`) and is read at prune time
+label exists. The value encodes the relationship (`own` or `contribute`) and is read at prune time
 to determine the cleanup action (delete vs release fields). The label key encodes the node ID,
 which routes watch events to the correct node.
 
@@ -141,16 +141,16 @@ current-reconcile state for dependencies, which is always available.
    state — changes during the gate period are visible at that point.
 4. **includeWhen** — false → Excluded.
 5. **Dispatch:**
-   - Watch: GET full object. Data enters scope. Pending if absent.
-   - WatchesKind: GET matching objects. Array enters scope.
+    - Watch: GET full object. Data enters scope. Pending if absent.
+    - WatchKind: GET matching objects. Array enters scope.
    - forEach parent: evaluate collection, determine children, dispatch changed children
      (see [forEach](#foreach)).
-   - Defines: resolve all values in the template (literals and CEL expressions) against the current
-     scope. Result enters scope as `map[string]any`. No API calls. CEL evaluation failure → Error.
-   - Owns: evaluate template, hash desired state, compare against in-memory template-hash from
-     previous evaluation. Match → skip write (unless drift timer triggered — apply unconditionally).
-     Differs → SSA apply. 409 → Conflict.
-   - Contribute: same as Owns. 409 → Conflict. Auto-splits status subresource.
+    - Definition: resolve all values in the template (literals and CEL expressions) against the current
+      scope. Result enters scope as `map[string]any`. No API calls. CEL evaluation failure → Error.
+    - Own: evaluate template, hash desired state, compare against in-memory template-hash from
+      previous evaluation. Match → skip write (unless drift timer triggered — apply unconditionally).
+      Differs → SSA apply. 409 → Conflict.
+    - Contribute: same as Own. 409 → Conflict. Auto-splits status subresource.
    
    When a template targets both the main resource and the status subresource, the controller
    splits the apply into two operations. If the status subresource apply fails, the controller
@@ -161,7 +161,7 @@ current-reconcile state for dependencies, which is always available.
    access chains) + propagateWhen state, compare against in-memory propagate-hash from previous
    evaluation. Differs → node invalidated. Matches → propagation stops.
 
-Node's data enters scope after processing. For Owns and Contribute, the full object is always read
+Node's data enters scope after processing. For Own and Contribute, the full object is always read
 during evaluation regardless of whether the write is skipped — the template hash governs the write
 decision, not the read. Two hashing boundaries: template hash (step 5) skips the write, propagation
 hash (step 7) skips downstream evaluation.
@@ -200,9 +200,9 @@ conflicts during revision transitions — the old revision's resource is removed
 set, and the new revision's template creates it fresh without the contested field ownership. A
 template change clears the conflict state — the new template doesn't contest the same fields.
 
-Prune in reverse dependency order. Owns → delete. Contribute → release fields via skeleton apply
+Prune in reverse dependency order. Own → delete. Contribute → release fields via skeleton apply
 (SSA apply with Contribute fields omitted, relinquishing field manager ownership; field values
-persist under the remaining manager). Watch/WatchesKind → no action. If reverse ordering is
+persist under the remaining manager). Watch/WatchKind → no action. If reverse ordering is
 unavailable, prune is blocked — never degrade to unordered deletion. If a prune candidate has `finalizes` references, finalization runs
 first (see [Teardown](#teardown)).
 
@@ -212,8 +212,8 @@ The applied set is derived from the watch cache — all resources where the Grap
 exists in the controller's informer stores. Not persisted. The controller already watches every GVK
 it manages; every managed resource carries the identity label. The applied set is a view over
 data that already exists in memory, hydrated on startup from informer list and kept current by watch
-events. No crash window, no stale state, no status size limits. Both Owns and Contribute targets are
-in the applied set — one mechanism. The identity label value (`owns` or `contributes`) determines the
+events. No crash window, no stale state, no status size limits. Both Own and Contribute targets are
+in the applied set — one mechanism. The identity label value (`own` or `contribute`) determines the
 prune action (delete vs release fields).
 
 Prune candidates are the set difference: resources in the applied set minus the current walk's output
@@ -461,11 +461,11 @@ spec:
 This produces the following DAG:
 
 ```
-Level 0:  config (Watch)      namespaces (WatchesKind)
+Level 0:  config (Watch)      namespaces (WatchKind)
               │                       │
-Level 1:  deploy (Owns)       policies (forEach parent)
+Level 1:  deploy (Own)       policies (forEach parent)
               │                  ┌────┼────┐
-Level 2:  service (Owns)     default-deny  default-deny  default-deny  (forEach children)
+Level 2:  service (Own)     default-deny  default-deny  default-deny  (forEach children)
                                /ns-a        /ns-b         /ns-c
 ```
 
@@ -493,7 +493,7 @@ Pruning requires reverse dependency ordering — if B depends on A and both are 
 deleted before A. The ordering comes from the most recent revision that defined each pruned resource.
 
 A superseded revision is retained until its unique resources are pruned. This is its only purpose —
-providing prune ordering, reference type (Owns vs Contribute), and finalizes metadata for each
+providing prune ordering, reference type (Own vs Contribute), and finalizes metadata for each
 pruned resource. The old revision's `finalizes` declarations govern the prune of its resources — if a
 new revision changes or drops `finalizes`, the old revision's metadata still applies to resources
 being pruned from it. Fast spec
@@ -586,8 +586,8 @@ revision's DAG. If the revision was deleted (ownerReference cascade race), the c
 it from the current spec. Teardown is blocked until ordering is available — never degrade to
 unordered deletion.
 
-Owns nodes delete the resource. Contribute nodes release fields via skeleton apply. Watch and
-WatchesKind take no action. If resources persist (child Graphs with finalizers, external
+Own nodes delete the resource. Contribute nodes release fields via skeleton apply. Watch and
+WatchKind take no action. If resources persist (child Graphs with finalizers, external
 finalizers), requeue. Once all managed resources are processed, remove the Graph's finalizer.
 
 ### Finalization

@@ -51,8 +51,8 @@ func TestRecoveryPartialForEachExpansion(t *testing.T) {
 					"labels": map[string]any{
 						// Stamp an identity label as if the controller created this.
 						// The exact label format is:
-						// <nodeID>.<graphName>.<ns>.internal.kro.run/reference: owns
-						fmt.Sprintf("items.%s.%s.internal.kro.run/reference", graphName, ns): "owns",
+						// <nodeID>.<graphName>.<ns>.internal.kro.run/reference: own
+						fmt.Sprintf("items.%s.%s.internal.kro.run/reference", graphName, ns): "own",
 					},
 				},
 				"data": map[string]any{
@@ -321,7 +321,7 @@ func TestRecoveryContributeFieldsPreserved(t *testing.T) {
 				"namespace": ns,
 				"labels": map[string]any{
 					// Identity label from a previous controller incarnation.
-					fmt.Sprintf("contrib.%s.%s.internal.kro.run/reference", graphName, ns): "contributes",
+					fmt.Sprintf("contrib.%s.%s.internal.kro.run/reference", graphName, ns): "contribute",
 				},
 				"annotations": map[string]any{
 					"kro.run/managed": "true",
@@ -385,7 +385,7 @@ func TestRecoveryContributeFieldsPreserved(t *testing.T) {
 }
 
 // TestRecoveryPartialTeardown simulates a crash during teardown where some
-// Owns resources were deleted but others remain. The controller should
+// Own resources were deleted but others remain. The controller should
 // complete teardown by deleting the remaining resources.
 func TestRecoveryPartialTeardown(t *testing.T) {
 	t.Parallel()

@@ -487,15 +487,15 @@ func TestWatchAbsentResourceIsPending(t *testing.T) {
 }
 
 // TestAbsentResourceIsOwnedByDefault proves that when a node's target resource
-// does not exist, the Graph creates it (Owns). With existence-based shape
-// detection, absent → Owns — the Graph always creates resources it doesn't find.
+// does not exist, the Graph creates it (Own). With existence-based shape
+// detection, absent → Own — the Graph always creates resources it doesn't find.
 func TestAbsentResourceIsOwnedByDefault(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
 	// Graph: target a non-existent ConfigMap with only metadata fields.
 	// Under the old heuristic, this was Contribute (key subset check).
-	// Under existence-based detection, this is Owns (resource absent).
+	// Under existence-based detection, this is Own (resource absent).
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "experimental.kro.run/v1alpha1",
@@ -525,17 +525,17 @@ func TestAbsentResourceIsOwnedByDefault(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// The Graph should create the resource (Owns) and reach Ready.
+	// The Graph should create the resource (Own) and reach Ready.
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-absent-owned", Namespace: ns}))
-	t.Log("Graph reached Ready — absent resource was created (Owns)")
+	t.Log("Graph reached Ready — absent resource was created (Own)")
 
-	// Verify the resource was created and has the kro label (Owns stamps it)
+	// Verify the resource was created and has the kro label (Own stamps it)
 	cm := &unstructured.Unstructured{}
 	cm.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "absent-target", Namespace: ns}, cm))
 	assertManagedBy(t, cm, "test-absent-owned")
-	t.Log("Resource created with kro label — Owns shape confirmed")
+	t.Log("Resource created with kro label — Own shape confirmed")
 }
 
 // ---------------------------------------------------------------------------
@@ -652,7 +652,7 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 				"name":      "contested-resource",
 				"namespace": ns,
 				"labels": map[string]any{
-					"somenode.other-graph." + ns + ".internal.kro.run/reference": "owns",
+					"somenode.other-graph." + ns + ".internal.kro.run/reference": "own",
 				},
 			},
 			"data": map[string]any{
@@ -720,7 +720,7 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 		"resource should retain original owner's data")
 	labels := existing.GetLabels()
 	// With the new identity label scheme, the original graph's label should still be present
-	assert.Equal(t, "owns", labels["somenode.other-graph."+ns+".internal.kro.run/reference"],
+	assert.Equal(t, "own", labels["somenode.other-graph."+ns+".internal.kro.run/reference"],
 		"resource should retain original graph's identity label")
 	t.Log("Cross-Graph ownership conflict correctly detected and blocked")
 }
@@ -747,7 +747,7 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 				"name":      "force-target",
 				"namespace": ns,
 				"labels": map[string]any{
-					"somenode.other-graph." + ns + ".internal.kro.run/reference": "owns",
+					"somenode.other-graph." + ns + ".internal.kro.run/reference": "own",
 				},
 			},
 			"data": map[string]any{
@@ -810,7 +810,7 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 	newLabelKey := "imported.test-force-apply." + ns + ".internal.kro.run/reference"
 	t.Logf("Looking for label key: %s", newLabelKey)
 	t.Logf("All labels on resource: %v", resultLabels)
-	assert.Equal(t, "owns", resultLabels[newLabelKey],
+	assert.Equal(t, "own", resultLabels[newLabelKey],
 		"new graph's identity label should be present after Force apply")
 
 	// Verify the data was overwritten
@@ -1099,7 +1099,7 @@ func TestIdentityLabelsOnManagedResources(t *testing.T) {
 		roleKey := tc.nodeID + ".test-identity-labels." + ns + ".internal.kro.run/reference"
 		genKey := tc.nodeID + ".test-identity-labels." + ns + ".internal.kro.run/generation"
 
-		assert.Equal(t, "owns", labels[roleKey],
+		assert.Equal(t, "own", labels[roleKey],
 			"resource should have identity role label for node %s", tc.nodeID)
 		assert.NotEmpty(t, labels[genKey],
 			"resource should have generation label for node %s", tc.nodeID)

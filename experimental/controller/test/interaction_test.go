@@ -364,7 +364,7 @@ func TestIncludeWhenPropagateWhenPrecedence(t *testing.T) {
 // of a Contribute node gates the Contribute's re-evaluation. While gated,
 // the Contribute retains its previous fields.
 //
-// Important: We use a Watch node to feed data into an Owns upstream node.
+// Important: We use a Watch node to feed data into an Own upstream node.
 // Changes to the watched resource close the gate WITHOUT triggering a
 // revision transition (which would create a new instanceState with no
 // previous data to retain).
@@ -426,7 +426,7 @@ func TestPropagateWhenContribute(t *testing.T) {
 							"metadata":   map[string]any{"name": "prop-contrib-control"},
 						},
 					},
-					// Upstream: Owns a resource, propagateWhen gated on control.
+					// Upstream: Own a resource, propagateWhen gated on control.
 					map[string]any{
 						"id":            "upstream",
 						"propagateWhen": []any{"${control.data.ready == 'true'}"},
@@ -704,7 +704,7 @@ func TestForEachContributeScaleDown(t *testing.T) {
 		types.NamespacedName{Name: "test-foreach-contrib", Namespace: ns}))
 	t.Log("All 3 contributions applied")
 
-	// Verify children have "contributes" role labels.
+	// Verify children have "contribute" role labels.
 	for _, name := range targets {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(gvk)
@@ -713,8 +713,8 @@ func TestForEachContributeScaleDown(t *testing.T) {
 		labels := check.GetLabels()
 		for key, val := range labels {
 			if strings.HasSuffix(key, ".internal.kro.run/reference") {
-				assert.Equal(t, "contributes", val,
-					"%s should have 'contributes' role label (pre-existing target)", name)
+				assert.Equal(t, "contribute", val,
+					"%s should have 'contribute' role label (pre-existing target)", name)
 			}
 		}
 	}
@@ -1532,7 +1532,7 @@ func TestIncludeWhenFinalizesNeverCreatedTarget(t *testing.T) {
 }
 
 // TestContributeIdentityLabelsPerGraph proves that when two Graphs contribute
-// to the same resource, each gets its own identity labels with "contributes" role.
+// to the same resource, each gets its own identity labels with "contribute" role.
 func TestContributeIdentityLabelsPerGraph(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -1596,11 +1596,11 @@ func TestContributeIdentityLabelsPerGraph(t *testing.T) {
 	foundA, foundB := false, false
 	for key, val := range labels {
 		if strings.Contains(key, ".test-labels-a.") && strings.HasSuffix(key, ".internal.kro.run/reference") {
-			assert.Equal(t, "contributes", val)
+			assert.Equal(t, "contribute", val)
 			foundA = true
 		}
 		if strings.Contains(key, ".test-labels-b.") && strings.HasSuffix(key, ".internal.kro.run/reference") {
-			assert.Equal(t, "contributes", val)
+			assert.Equal(t, "contribute", val)
 			foundB = true
 		}
 	}

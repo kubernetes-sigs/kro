@@ -518,7 +518,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// not by scope data. A Watch node's dependency inputs can be unchanged
 		// while a new resource was created in the cluster.
 		nodeRef := node.Reference()
-		canHashSkip := nodeRef != ReferenceWatches && nodeRef != ReferenceWatchesKind
+		canHashSkip := nodeRef != ReferenceWatch && nodeRef != ReferenceWatchKind
 		if canHashSkip {
 			if _, hasPrevHash := state.previousInputHashes[node.ID]; hasPrevHash {
 				inputHash, hashErr := hashNodeInputs(node, eval.scope)
@@ -774,8 +774,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 		if res.state == NodePending {
 			plan.SetState(dag, node.ID, NodePending)
-			// Reset Contributes reference when a conflicted target disappears.
-			if state.resolvedReferences[node.ID] == ReferenceContributes &&
+			// Reset Contribute reference when a conflicted target disappears.
+			if state.resolvedReferences[node.ID] == ReferenceContribute &&
 				state.previousPlanStates[node.ID] == NodeConflict {
 				state.resolvedReferences[node.ID] = ReferenceUnresolved
 				delete(state.previousInputHashes, node.ID)
@@ -1142,18 +1142,18 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// Keys come from two sources:
 	// 1. Watch cache — informer stores scanned for identity labels
 	// 2. Static spec extraction (fallback for resources not in cache)
-	ownsKeys := map[string]bool{}
+	ownKeys := map[string]bool{}
 	contributeKeys := map[string]bool{} // key → hasStatus encoded in the key
 
 	// Derive applied set from watch cache if available.
 	if r.Watcher != nil {
 		appliedSet := r.Watcher.watches.deriveAppliedSet(graph.GetName(), graph.GetNamespace())
 		for key, entry := range appliedSet {
-			if entry.Reference == ReferenceContributes {
+			if entry.Reference == ReferenceContribute {
 				// For contribute keys, we need the contribute prefix format.
 				contributeKeys[contributeKeyPrefix+key] = true
 			} else {
-				ownsKeys[key] = true
+				ownKeys[key] = true
 			}
 		}
 	}
@@ -1168,9 +1168,9 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if node.Template == nil {
 				continue
 			}
-			// Skip Watches, WatchesKind (read-only), and Defines (no resource).
+			// Skip Watch, WatchKind (read-only), and Definition (no resource).
 			ref := DetectReference(node.Template)
-			if ref == ReferenceWatches || ref == ReferenceWatchesKind || ref == ReferenceDefines {
+			if ref == ReferenceWatch || ref == ReferenceWatchKind || ref == ReferenceDefinition {
 				continue
 			}
 			// Skip finalizer nodes — dormant during normal operation.
@@ -1178,7 +1178,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 				continue
 			}
 			if key := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); key != "" {
-				ownsKeys[key] = true
+				ownKeys[key] = true
 			}
 		}
 	}
@@ -1203,9 +1203,9 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 	}
 
-	// Convert Owns keys to slice for ordered deletion.
+	// Convert Own keys to slice for ordered deletion.
 	var keys []string
-	for k := range ownsKeys {
+	for k := range ownKeys {
 		keys = append(keys, k)
 	}
 
@@ -1213,7 +1213,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// This catches forEach-stamped resources that aren't in the static spec.
 	dynamicKeys, _ := r.findManagedResourceKeys(ctx, graph)
 	for _, k := range dynamicKeys {
-		if !ownsKeys[k] {
+		if !ownKeys[k] {
 			keys = append(keys, k)
 		}
 	}

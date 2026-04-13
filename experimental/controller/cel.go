@@ -195,7 +195,7 @@ type instanceState struct {
 	forEachItems       map[string][]any     // "nodeID/varName" → cached collection items
 
 	// Resolved references for Unresolved nodes. Set on first reconcile when the
-	// existence check determines Owns vs Contributes. Persists across
+	// existence check determines Own vs Contribute. Persists across
 	// reconciles within the same revision. Reset on new revision (new
 	// instanceState).
 	resolvedReferences map[string]Reference
@@ -592,7 +592,7 @@ func celPluralFunction() []cel.EnvOption {
 //   - No readyWhen: __ready = true (applied = ready)
 //   - With readyWhen: __ready = (all conditions passed)
 //
-// For scalar nodes (Watch, Owns, Contribute), .ready() reads __ready from
+// For scalar nodes (Watch, Own, Contribute), .ready() reads __ready from
 // the object map. For collection nodes (forEach, collection watch), .ready()
 // returns true when ALL items have __ready == true — the collection's
 // readiness is a function of its children's readiness.

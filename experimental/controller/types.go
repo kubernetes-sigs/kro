@@ -14,35 +14,35 @@ import (
 // relates to its target Kubernetes resource: what it does at reconcile time and
 // what it owes on cleanup. Think of it like pointer types in a PL's ownership
 // model: owned, borrowed mutably, borrowed immutably, or not yet resolved.
-// Watches and WatchesKind are determined by template structure at compile time.
-// Owns and Contributes are determined by resource existence at first reconcile.
-// Defines is determined by the absence of apiVersion and kind in the template.
+// Watch and WatchKind are determined by template structure at compile time.
+// Own and Contribute are determined by resource existence at first reconcile.
+// Definition is determined by the absence of apiVersion and kind in the template.
 // See 003-ownership.md § References and 001-graph.md § template.
 type Reference int
 
 const (
-	// ReferenceOwns — the Graph creates the resource. Applied via SSA. Tracked
+	// ReferenceOwn — the Graph creates the resource. Applied via SSA. Tracked
 	// for cleanup. Deleted on prune.
-	ReferenceOwns Reference = iota
-	// ReferenceWatches — identity-only template (apiVersion, kind, metadata.name,
+	ReferenceOwn Reference = iota
+	// ReferenceWatch — identity-only template (apiVersion, kind, metadata.name,
 	// optionally metadata.namespace). Read-only GET. Not tracked.
-	ReferenceWatches
-	// ReferenceWatchesKind — apiVersion + kind with optional selector, no
+	ReferenceWatch
+	// ReferenceWatchKind — apiVersion + kind with optional selector, no
 	// metadata.name. Read-only List of all resources of that kind. Not tracked.
-	ReferenceWatchesKind
-	// ReferenceContributes — writes fields on a resource the Graph does not
+	ReferenceWatchKind
+	// ReferenceContribute — writes fields on a resource the Graph does not
 	// create. Applied via SSA. Tracked for cleanup. Releases fields on prune.
-	ReferenceContributes
-	// ReferenceDefines — template has no apiVersion and no kind. Defines
+	ReferenceContribute
+	// ReferenceDefinition — template has no apiVersion and no kind. Puts
 	// values in scope as map[string]any — literals, CEL expressions, or both.
 	// No Kubernetes resource created or managed. No drift timer, no
 	// applied-set entry, nothing to clean up.
 	// See 001-graph.md § template.
-	ReferenceDefines
-	// ReferenceUnresolved — template has fields beyond identity but Owns vs
-	// Contributes cannot be determined from the template alone. Resolved at
+	ReferenceDefinition
+	// ReferenceUnresolved — template has fields beyond identity but Own vs
+	// Contribute cannot be determined from the template alone. Resolved at
 	// first reconcile by checking whether the target resource exists (absent →
-	// Owns, present → Contributes). Should never appear in dag.References after
+	// Own, present → Contribute). Should never appear in dag.References after
 	// the first reconcile of a revision.
 	ReferenceUnresolved
 )
@@ -50,16 +50,16 @@ const (
 // String returns the human-readable name of the Reference for logging and display.
 func (r Reference) String() string {
 	switch r {
-	case ReferenceOwns:
-		return "owns"
-	case ReferenceWatches:
-		return "watches"
-	case ReferenceWatchesKind:
-		return "watches-kind"
-	case ReferenceContributes:
-		return "contributes"
-	case ReferenceDefines:
-		return "defines"
+	case ReferenceOwn:
+		return "own"
+	case ReferenceWatch:
+		return "watch"
+	case ReferenceWatchKind:
+		return "watch-kind"
+	case ReferenceContribute:
+		return "contribute"
+	case ReferenceDefinition:
+		return "definition"
 	case ReferenceUnresolved:
 		return "unresolved"
 	default:
@@ -72,10 +72,10 @@ func (r Reference) String() string {
 // are never stamped with an identity label.
 func (r Reference) LabelValue() (string, bool) {
 	switch r {
-	case ReferenceOwns:
-		return "owns", true
-	case ReferenceContributes:
-		return "contributes", true
+	case ReferenceOwn:
+		return "own", true
+	case ReferenceContribute:
+		return "contribute", true
 	default:
 		return "", false
 	}
@@ -85,10 +85,10 @@ func (r Reference) LabelValue() (string, bool) {
 // Returns (0, false) if the value is not a recognized label value.
 func ReferenceFromLabelValue(s string) (Reference, bool) {
 	switch s {
-	case "owns":
-		return ReferenceOwns, true
-	case "contributes":
-		return ReferenceContributes, true
+	case "own":
+		return ReferenceOwn, true
+	case "contribute":
+		return ReferenceContribute, true
 	default:
 		return 0, false
 	}
@@ -97,10 +97,10 @@ func ReferenceFromLabelValue(s string) (Reference, bool) {
 // DetectReference returns the Reference type of a node's template map.
 //
 // Detection order (from 003-ownership.md):
-//  1. Defines — non-empty template with no apiVersion and no kind
-//  2. WatchesKind — apiVersion + kind, no metadata.name
-//  3. Watches — only identity fields (apiVersion, kind, metadata.name/namespace)
-//  4. Unresolved — has fields beyond identity; Owns vs Contributes determined
+//  1. Definition — non-empty template with no apiVersion and no kind
+//  2. WatchKind — apiVersion + kind, no metadata.name
+//  3. Watch — only identity fields (apiVersion, kind, metadata.name/namespace)
+//  4. Unresolved — has fields beyond identity; Own vs Contribute determined
 //     at reconcile time by resource existence
 func DetectReference(tmpl map[string]any) Reference {
 	if len(tmpl) == 0 {
@@ -110,25 +110,25 @@ func DetectReference(tmpl map[string]any) Reference {
 	_, hasAPIVersion := tmpl["apiVersion"]
 	_, hasKind := tmpl["kind"]
 
-	// 1. Defines: no apiVersion and no kind — values defined in scope.
+	// 1. Definition: no apiVersion and no kind — values defined in scope.
 	if !hasAPIVersion && !hasKind {
-		return ReferenceDefines
+		return ReferenceDefinition
 	}
 
 	md, _ := tmpl["metadata"].(map[string]any)
 	_, hasName := md["name"]
 
-	// 2. WatchesKind: no metadata.name
+	// 2. WatchKind: no metadata.name
 	if !hasName {
-		return ReferenceWatchesKind
+		return ReferenceWatchKind
 	}
 
-	// 3. Watches: only identity fields
+	// 3. Watch: only identity fields
 	if isIdentityOnly(tmpl) {
-		return ReferenceWatches
+		return ReferenceWatch
 	}
 
-	// 4. Unresolved: has fields beyond identity. Owns vs Contributes resolved
+	// 4. Unresolved: has fields beyond identity. Own vs Contribute resolved
 	//    at first reconcile by checking resource existence.
 	return ReferenceUnresolved
 }

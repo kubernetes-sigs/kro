@@ -46,25 +46,25 @@ omit the field. Initial value and ongoing ownership are the same declaration.
 
 Four reference types:
 
-- **Owns** — specifies fields beyond identity. Creates the resource if absent. Applied via SSA.
+- **Own** — specifies fields beyond identity. Creates the resource if absent. Applied via SSA.
   Tracked for cleanup. Deletes the resource on prune.
 - **Watch** — specifies only identity. Read-only GET. Not tracked. Pending if absent.
-- **WatchesKind** — specifies a kind with optional selector, no name. Read-only list. Not
+- **WatchKind** — specifies a kind with optional selector, no name. Read-only list. Not
   tracked.
-- **Contributes** — writes fields on a resource the Graph does not create. Applied via SSA. Tracked
+- **Contribute** — writes fields on a resource the Graph does not create. Applied via SSA. Tracked
   for cleanup. Releases fields on prune, never deletes. Pending if target absent.
 
-Reference type detection has two phases. Template structure determines Watches and WatchesKind at compile
-time. Resource existence determines Owns vs Contributes at first reconcile.
+Reference type detection has two phases. Template structure determines Watch and WatchKind at compile
+time. Resource existence determines Own vs Contribute at first reconcile.
 
-1. **WatchesKind** — no `metadata.name`.
-2. **Watches** — identity-only fields (`apiVersion`, `kind`, `metadata.name`, optionally
+1. **WatchKind** — no `metadata.name`.
+2. **Watch** — identity-only fields (`apiVersion`, `kind`, `metadata.name`, optionally
    `metadata.namespace`). No other fields.
-3. **Owns** — resource absent. The Graph creates it.
-4. **Contributes** — resource exists. The Graph did not create it.
+3. **Own** — resource absent. The Graph creates it.
+4. **Contribute** — resource exists. The Graph did not create it.
 
-A new revision re-evaluates the reference. A Contributes reference with `kro.run/apply: Force` takes ownership
-and promotes to Owns — the previous owner detects the takeover and relinquishes.
+A new revision re-evaluates the reference. A Contribute reference with `kro.run/apply: Force` takes ownership
+and promotes to Own — the previous owner detects the takeover and relinquishes.
 
 ### kro.run/apply
 
@@ -92,9 +92,9 @@ The annotation flows to the managed resource — anyone inspecting the cluster s
 ### kro Label Check
 
 Every managed resource carries an identity label with key
-`<node>.<graph>.<ns>.internal.kro.run/reference` and value `owns` or `contributes`
+`<node>.<graph>.<ns>.internal.kro.run/reference` and value `own` or `contribute`
 (injected during materialization). Each Graph gets its own label key — multiple Graphs targeting the
-same resource coexist without collision. Before applying an Owns template, the controller checks for
+same resource coexist without collision. Before applying an Own template, the controller checks for
 existing identity labels from other Graphs on the resource. If present, the resource is managed by
 another kro Graph. The controller requires `kro.run/apply: Force` to proceed — without it, the apply
 is rejected before SSA is attempted.
@@ -109,7 +109,7 @@ design — the label indicating another Graph's ownership is expected, not a con
 
 ```yaml
 nodes:
-  # Owns — default non-force SSA
+  # Own — default non-force SSA
   - id: deployment
     template:
       apiVersion: apps/v1
@@ -150,15 +150,15 @@ status-only Contribute releases only the status subresource.
 
 forEach expands into child nodes — each child manages one resource. The ownership model applies
 per-child: each child's managed resource carries the child's identity label and follows the same
-Owns/Contributes rules as any other node. The parent is a logical node with no managed resource and
+Own/Contribute rules as any other node. The parent is a logical node with no managed resource and
 no ownership semantics.
 
 ## Actions
 
-The rows below represent the apply sequence for Owns and Contribute templates. Watch and Collection
+The rows below represent the apply sequence for Own and Contribute templates. Watch and Collection
 Watch are read-only — only the Resource absent and Apply rows apply to them.
 
-| Action | Owns | Contribute | Watches | WatchesKind |
+| Action | Own | Contribute | Watch | WatchKind |
 |--------|------|------------|-------|------------------|
 | **Resource absent** | Create | Pending | Pending | Empty array |
 | **Label check** | Reject if another kro Graph (unless Force) | — | — | — |
@@ -182,7 +182,7 @@ non-kro actors after the apply — the API server's enforcement. Both surface as
 the Graph's status. Both are blocking. A template change clears the conflict and triggers a
 re-apply.
 
-**Import.** Add an Owns template with `kro.run/apply: Force`. The Graph force-applies, taking
+**Import.** Add an Own template with `kro.run/apply: Force`. The Graph force-applies, taking
 ownership from whatever manager previously held the fields. Once adopted, remove the annotation to
 return to cooperative non-force SSA.
 
@@ -199,8 +199,8 @@ the fields. The exporting side detects the change (label check for kro-to-kro, 4
 errors. The user removes the template from the exporting side. Conflict state prevents deletion.
 
 **Multi-graph coexistence.** Two Graphs can manage different fields on the same resource. Each
-Graph's field manager owns its fields. No 409 because the fields are disjoint. A Contributes reference
-on one Graph and an Owns template on another is the standard pattern.
+Graph's field manager owns its fields. No 409 because the fields are disjoint. A Contribute reference
+on one Graph and an Own template on another is the standard pattern.
 
 **Shared ownership.** Two non-kro managers applying the same value to the same field silently co-own
 it. The 409 fires when values diverge. Between kro Graphs, the label check prevents this — the
@@ -212,8 +212,8 @@ second Graph must use Force.
 
 The controller tracks every resource it has applied to — the applied set, derived from the watch
 cache by identity label existence. On prune or teardown, the controller iterates this set to know
-which resources need cleanup. The identity label value (`owns` or `contributes`) determines the
-cleanup action — delete for Owns, release fields for Contribute. Reference type and subresource
+which resources need cleanup. The identity label value (`own` or `contribute`) determines the
+cleanup action — delete for Own, release fields for Contribute. Reference type and subresource
 information are derived from the revision spec.
 
 In-memory hashes provide change detection — skip the apply when desired state hasn't changed.
@@ -235,7 +235,7 @@ active revision is unavailable during teardown (e.g., manually deleted), the con
 it from the current spec. Teardown is blocked until ordering is available — never degrade to
 unordered deletion.
 
-Before deleting an Owns resource during prune or teardown, the controller checks managedFields for
+Before deleting an Own resource during prune or teardown, the controller checks managedFields for
 other field managers (excluding the API server's own field manager). If present, deletion is
 blocked — another actor is managing fields on this resource and depends on its existence. The
 condition message names the blocking field manager.
@@ -265,7 +265,7 @@ Non-force SSA makes conflicts visible. `kro.run/apply: Force` is the opt-in.
 **Runtime existence detection.** Makes ownership a function of timing.
 
 **Prune without delete.** Surprises the common case — removing a Deployment from the spec should
-clean it up. Owns deletes, Contribute releases.
+clean it up. Own deletes, Contribute releases.
 
 **OwnerReferences for managed resources.** Don't work across scopes. Bind to UIDs that break on
 delete+recreate.

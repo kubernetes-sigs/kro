@@ -1,5 +1,5 @@
 // apply.go contains the cluster-mutating operations for the Graph controller:
-// resource apply (Owns and Contribute), pruning, deletion ordering, and the
+// resource apply (Own and Contribute), pruning, deletion ordering, and the
 // applied set key format.
 //
 // The reconcile loop in controller.go dispatches nodes; this file executes
@@ -52,7 +52,7 @@ func graphFieldOwner(graph *unstructured.Unstructured) client.FieldOwner {
 // not this Graph's own manager and not the API server's defaulting manager.
 // Only SSA Apply managers are considered — Update managers (from kubectl edit,
 // plain client.Update, etc.) don't declare field ownership and shouldn't block
-// deletion. Per 003-ownership.md: before deleting an Owns resource, check
+// deletion. Per 003-ownership.md: before deleting an Own resource, check
 // managedFields for other field managers (excluding the API server's own).
 func thirdPartyFieldManagers(obj *unstructured.Unstructured, ownFieldManager string) []string {
 	managedFields := obj.GetManagedFields()
@@ -264,7 +264,7 @@ func (r *GraphReconciler) runForEachFinalization(
 				childObj.GetName(), childObj.GetNamespace(),
 				gvk.Kind, gv.Group,
 				graph.GetName(), graph.GetNamespace(),
-				generation, ReferenceOwns,
+				generation, ReferenceOwn,
 			)
 			childObj.SetLabels(lbls)
 			evalMap = childObj.Object
@@ -344,7 +344,7 @@ func resourceKeyFromObj(tmpl map[string]any, defaultNS string) string {
 // Keys in the applied set identify resources the controller has written to.
 // Two formats:
 //
-//   Owns:       group/version/Kind/namespace/name
+//   Own:        group/version/Kind/namespace/name
 //   Contribute: contribute:group/version/Kind/namespace/name[+status]
 //
 // The "contribute:" prefix distinguishes resources where cleanup means
@@ -356,7 +356,7 @@ func resourceKeyFromObj(tmpl map[string]any, defaultNS string) string {
 // resourceKey, contributeKey, and parseContributeKey are the sole
 // constructors and parsers for these formats.
 
-// contributeKeyPrefix distinguishes Contribute keys from Owns keys.
+// contributeKeyPrefix distinguishes Contribute keys from Own keys.
 const contributeKeyPrefix = "contribute:"
 
 // contributeStatusSuffix marks that the contribution included status fields.
@@ -367,7 +367,7 @@ func resourceKey(obj *unstructured.Unstructured) string {
 	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, obj.GetNamespace(), obj.GetName()}, "/")
 }
 
-// resourceKeyFromTemplate builds an Owns key from template metadata fields.
+// resourceKeyFromTemplate builds an Own key from template metadata fields.
 // This is the static-name equivalent of resourceKey — used when the resource
 // hasn't been applied yet (e.g., during spec-based prune diffing).
 func resourceKeyFromTemplate(tmpl map[string]any, fallbackNamespace string) string {
@@ -444,7 +444,7 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 		lbls = map[string]string{}
 	}
 	if !hasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
-		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceOwns)
+		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceOwn)
 		obj.SetLabels(lbls)
 	}
 
@@ -640,14 +640,14 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 	// Stamp identity labels so Contribute resources are discoverable via
 	// deriveAppliedSet() after controller restart. Without this, teardown
 	// after restart can't find contributed resources and orphans their fields.
-	// Per 004-graph-execution.md § Applied Set: "Both Owns and Contribute
+	// Per 004-graph-execution.md § Applied Set: "Both Own and Contribute
 	// targets are in the applied set — one mechanism."
 	generation := fmt.Sprintf("%d", graph.GetGeneration())
 	lbls := obj.GetLabels()
 	if lbls == nil {
 		lbls = map[string]string{}
 	}
-	lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceContributes)
+	lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceContribute)
 	obj.SetLabels(lbls)
 
 	// Buffer a watch for the target resource (flushed at done(true)).
@@ -914,7 +914,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue
 		}
 
-		// Owns keys: delete the resource.
+		// Own keys: delete the resource.
 		gvk, nn := parseResourceKey(key)
 		if gvk.Kind == "" {
 			continue
@@ -1024,7 +1024,7 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 				continue
 			}
 			ref := DetectReference(node.Template)
-			if ref == ReferenceWatches || ref == ReferenceWatchesKind {
+			if ref == ReferenceWatch || ref == ReferenceWatchKind {
 				continue // read-only references don't create resources
 			}
 			apiVersion, _ := node.Template["apiVersion"].(string)

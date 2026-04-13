@@ -367,22 +367,20 @@ func TestPruneManagedCheckOnSpecChange(t *testing.T) {
 	t.Log("External manager applied to CM-A — CM-A now has two SSA managers")
 
 	// 4. Update Graph spec: remove nodeA. This makes CM-A a prune candidate.
-	latestGraph := &unstructured.Unstructured{}
-	latestGraph.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-prune-managed-spec", Namespace: ns}, latestGraph))
-	unstructured.SetNestedSlice(latestGraph.Object, []any{
-		map[string]any{
-			"id": "nodeB",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "prune-managed-b"},
-				"data":       map[string]any{"role": "permanent"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latestGraph))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-prune-managed-spec", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "nodeB",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "prune-managed-b"},
+						"data":       map[string]any{"role": "permanent"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 	t.Log("Removed nodeA from spec — prune candidate created")
 
 	// 5. Wait for Graph to settle on the new spec.
@@ -568,12 +566,10 @@ func TestPruneSweptOnSpecNodeRemoval(t *testing.T) {
 	// nodes — triggered is empty, but the prune phase must still run.
 	// This is the exact scenario needsPruneSweep / isRevisionTransition
 	// guards are meant to handle.
-	latestGraph := &unstructured.Unstructured{}
-	latestGraph.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-prune-sweep", Namespace: ns}, latestGraph))
-	unstructured.SetNestedSlice(latestGraph.Object, []any{}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latestGraph))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-prune-sweep", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{}, "spec", "nodes")
+		}))
 	t.Log("Spec emptied — zero nodes in new revision")
 
 	// 4. THE KEY ASSERTION: both ConfigMaps must be pruned.

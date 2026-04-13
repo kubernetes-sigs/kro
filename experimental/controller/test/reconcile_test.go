@@ -267,27 +267,25 @@ func TestGraphReconcilesOnUpdate(t *testing.T) {
 	assert.Equal(t, "v1", data["version"])
 
 	// Update the Graph — change the configmap data
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-update", Namespace: ns}, latest))
-
-	nodes := []any{
-		map[string]any{
-			"id": "configmap",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]any{
-					"name": "update-test",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-update", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			nodes := []any{
+				map[string]any{
+					"id": "configmap",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata": map[string]any{
+							"name": "update-test",
+						},
+						"data": map[string]any{
+							"version": "v2",
+						},
+					},
 				},
-				"data": map[string]any{
-					"version": "v2",
-				},
-			},
-		},
-	}
-	unstructured.SetNestedSlice(latest.Object, nodes, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+			}
+			unstructured.SetNestedSlice(obj.Object, nodes, "spec", "nodes")
+		}))
 
 	// Wait for the ConfigMap to be updated
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {

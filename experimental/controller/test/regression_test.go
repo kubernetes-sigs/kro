@@ -151,18 +151,19 @@ func TestMultiHopRevisionPrune(t *testing.T) {
 	t.Log("Rev 1: hop-alpha created")
 
 	// Rev 2: replaces "hop-alpha" with "hop-beta"
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-multihop", Namespace: ns}, graph))
-	unstructured.SetNestedSlice(graph.Object, []any{
-		map[string]any{
-			"id": "resource",
-			"template": map[string]any{
-				"apiVersion": "v1", "kind": "ConfigMap",
-				"metadata": map[string]any{"name": "hop-beta"},
-				"data":     map[string]any{"rev": "2"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, graph))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-multihop", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "resource",
+					"template": map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						"metadata": map[string]any{"name": "hop-beta"},
+						"data":     map[string]any{"rev": "2"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 
 	cm2 := &unstructured.Unstructured{}
 	cm2.SetGroupVersionKind(regressionCMGVK)
@@ -178,18 +179,19 @@ func TestMultiHopRevisionPrune(t *testing.T) {
 	t.Log("Rev 2: hop-beta created, hop-alpha pruned")
 
 	// Rev 3: replaces "hop-beta" with "hop-gamma"
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-multihop", Namespace: ns}, graph))
-	unstructured.SetNestedSlice(graph.Object, []any{
-		map[string]any{
-			"id": "resource",
-			"template": map[string]any{
-				"apiVersion": "v1", "kind": "ConfigMap",
-				"metadata": map[string]any{"name": "hop-gamma"},
-				"data":     map[string]any{"rev": "3"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, graph))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-multihop", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "resource",
+					"template": map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						"metadata": map[string]any{"name": "hop-gamma"},
+						"data":     map[string]any{"rev": "3"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 
 	cm3 := &unstructured.Unstructured{}
 	cm3.SetGroupVersionKind(regressionCMGVK)
@@ -298,17 +300,18 @@ func TestContributeCleanupOnPrune(t *testing.T) {
 	t.Log("Contribution applied — target has graph-contributed annotation")
 
 	// Update the Graph to remove the Contribute node (keep only the Watch).
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-contrib-prune", Namespace: ns}, graph))
-	unstructured.SetNestedSlice(graph.Object, []any{
-		map[string]any{
-			"id": "target",
-			"template": map[string]any{
-				"apiVersion": "v1", "kind": "ConfigMap",
-				"metadata": map[string]any{"name": "contribute-target"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, graph))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-contrib-prune", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "target",
+					"template": map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						"metadata": map[string]any{"name": "contribute-target"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 
 	// Wait for the new revision to be reconciled.
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-contrib-prune", Namespace: ns}))

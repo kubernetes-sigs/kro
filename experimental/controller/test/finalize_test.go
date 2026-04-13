@@ -94,26 +94,23 @@ func TestFinalizesBasicSequence(t *testing.T) {
 
 	// Phase 2: Remove the target from the spec (keep "keep" and "snapshot").
 	// This makes "target" a prune candidate. The finalizer should fire.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-finalize-basic", Namespace: ns}, latest))
-
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "keep",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "fin-keep"},
-				"data":       map[string]any{"role": "permanent"},
-			},
-		},
-		// snapshot node is removed from spec — it was only needed as a finalizer
-		// for the target node. Since target is pruned, the finalizer fires, and
-		// then the snapshot resource is itself a prune candidate.
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-finalize-basic", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "keep",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "fin-keep"},
+						"data":       map[string]any{"role": "permanent"},
+					},
+				},
+				// snapshot node is removed from spec — it was only needed as a finalizer
+				// for the target node. Since target is pruned, the finalizer fires, and
+				// then the snapshot resource is itself a prune candidate.
+			}, "spec", "nodes")
+		}))
 	t.Log("Updated spec: removed target and snapshot nodes")
 
 	// Wait for the target to be deleted — this proves finalization ran
@@ -192,13 +189,10 @@ func TestFinalizesTargetAbsentSkips(t *testing.T) {
 	t.Log("Externally deleted target before spec change")
 
 	// Update spec to remove the target node.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-finalize-absent", Namespace: ns}, latest))
-
-	unstructured.SetNestedSlice(latest.Object, []any{}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-finalize-absent", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{}, "spec", "nodes")
+		}))
 	t.Log("Updated spec: removed all nodes")
 
 	// The finalizer resource should NOT be created — target was already gone.
@@ -405,24 +399,22 @@ func TestFinalizesReadyWhenGatesTargetRemoval(t *testing.T) {
 	// The gatewatch node IS kept so it continues to be evaluated in the
 	// wind phase and its data is available to the snapshot's readyWhen
 	// expression when runFinalization checks it.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-finalize-readywhen", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "gatewatch",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "fin-rw-gate"},
-			},
-		},
-		// snapshot is intentionally REMOVED from the new spec.
-		// The superseded revision still knows: snapshot finalizes target.
-		// Finalization proceeds from the superseded DAG.
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-finalize-readywhen", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "gatewatch",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "fin-rw-gate"},
+					},
+				},
+				// snapshot is intentionally REMOVED from the new spec.
+				// The superseded revision still knows: snapshot finalizes target.
+				// Finalization proceeds from the superseded DAG.
+			}, "spec", "nodes")
+		}))
 	t.Log("Removed target and snapshot from spec — finalization triggered via superseded DAG")
 
 	// Wait for snapshot to be created (finalization started running).

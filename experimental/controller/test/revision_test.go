@@ -93,17 +93,15 @@ func TestRevisionRecoveryAfterManualDeletion(t *testing.T) {
 	// Trigger a reconcile by touching the Graph's labels. The controller does
 	// not watch revisions for deletion events — a reconcile must be triggered
 	// externally so the controller notices the missing revision and regenerates it.
-	latestForTrigger := &unstructured.Unstructured{}
-	latestForTrigger.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "rev-recovery-test", Namespace: ns}, latestForTrigger))
-	lbls := latestForTrigger.GetLabels()
-	if lbls == nil {
-		lbls = map[string]string{}
-	}
-	lbls["trigger"] = "rev-recovery"
-	latestForTrigger.SetLabels(lbls)
-	require.NoError(t, k8sClient.Update(ctx, latestForTrigger))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "rev-recovery-test", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			lbls := obj.GetLabels()
+			if lbls == nil {
+				lbls = map[string]string{}
+			}
+			lbls["trigger"] = "rev-recovery"
+			obj.SetLabels(lbls)
+		}))
 	t.Log("Graph touched to trigger reconcile")
 
 	// THE KEY ASSERTION: the revision must be regenerated with the same name
@@ -183,20 +181,20 @@ func TestRevisionContentHashDeduplication(t *testing.T) {
 	t.Logf("Original revision hash: %s", hash1)
 
 	// Change the spec (increment generation).
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "rev-hash-test", Namespace: ns}, latestGraph))
-	unstructured.SetNestedSlice(latestGraph.Object, []any{
-		map[string]any{
-			"id": "cm",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "rev-hash-cm"},
-				"data":       map[string]any{"content": "changed"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latestGraph))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "rev-hash-test", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "cm",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "rev-hash-cm"},
+						"data":       map[string]any{"content": "changed"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 
 	// Wait for Graph convergence on the new spec.
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
@@ -238,17 +236,15 @@ func TestRevisionContentHashDeduplication(t *testing.T) {
 		}))
 
 	// Trigger a reconcile to make the controller notice the missing revision.
-	triggerGraph := &unstructured.Unstructured{}
-	triggerGraph.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "rev-hash-test", Namespace: ns}, triggerGraph))
-	triggerLbls := triggerGraph.GetLabels()
-	if triggerLbls == nil {
-		triggerLbls = map[string]string{}
-	}
-	triggerLbls["trigger"] = "hash-dedup"
-	triggerGraph.SetLabels(triggerLbls)
-	require.NoError(t, k8sClient.Update(ctx, triggerGraph))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "rev-hash-test", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			triggerLbls := obj.GetLabels()
+			if triggerLbls == nil {
+				triggerLbls = map[string]string{}
+			}
+			triggerLbls["trigger"] = "hash-dedup"
+			obj.SetLabels(triggerLbls)
+		}))
 
 	recovered2, err := waitForRevision(ctx, k8sClient,
 		types.NamespacedName{Name: revName2, Namespace: ns})
@@ -467,24 +463,25 @@ func TestRevisionCreatedOnSpecChange(t *testing.T) {
 	t.Logf("First revision: %s (generation %d)", rev1Name, gen1)
 
 	// Update the Graph spec
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "rev-update-test", Namespace: ns}, latestGraph))
-	nodes := []any{
-		map[string]any{
-			"id": "configmap",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]any{
-					"name": "rev-update-cm",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "rev-update-test", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			nodes := []any{
+				map[string]any{
+					"id": "configmap",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata": map[string]any{
+							"name": "rev-update-cm",
+						},
+						"data": map[string]any{
+							"version": "v2",
+						},
+					},
 				},
-				"data": map[string]any{
-					"version": "v2",
-				},
-			},
-		},
-	}
-	unstructured.SetNestedSlice(latestGraph.Object, nodes, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latestGraph))
+			}
+			unstructured.SetNestedSlice(obj.Object, nodes, "spec", "nodes")
+		}))
 	t.Log("Updated Graph spec: version v1 → v2")
 
 	// Wait for the ConfigMap to be updated

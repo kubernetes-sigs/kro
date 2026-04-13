@@ -1610,49 +1610,48 @@ func TestCollectionReadyFalseWhenItemNotReady(t *testing.T) {
 	t.Log("Graph InProgress — items.ready() is false (items have ready=false)")
 
 	// Update spec to make items ready
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-coll-ready-false", Namespace: ns}, latest))
-	latest.Object["spec"] = map[string]any{
-		"nodes": []any{
-			map[string]any{
-				"id": "items",
-				"forEach": map[string]any{
-					"value": "${['x', 'y']}",
-				},
-				"template": map[string]any{
-					"apiVersion": "v1",
-					"kind":       "ConfigMap",
-					"metadata": map[string]any{
-						"name": "coll-item-${value}",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-coll-ready-false", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			obj.Object["spec"] = map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "items",
+						"forEach": map[string]any{
+							"value": "${['x', 'y']}",
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "coll-item-${value}",
+							},
+							"data": map[string]any{
+								"ready": "true",
+							},
+						},
+						"readyWhen": []any{
+							"${items.data.ready == 'true'}",
+						},
 					},
-					"data": map[string]any{
-						"ready": "true",
+					map[string]any{
+						"id": "output",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "coll-ready-output",
+							},
+							"data": map[string]any{
+								"done": "true",
+							},
+						},
+						"readyWhen": []any{
+							"${items.ready()}",
+						},
 					},
 				},
-				"readyWhen": []any{
-					"${items.data.ready == 'true'}",
-				},
-			},
-			map[string]any{
-				"id": "output",
-				"template": map[string]any{
-					"apiVersion": "v1",
-					"kind":       "ConfigMap",
-					"metadata": map[string]any{
-						"name": "coll-ready-output",
-					},
-					"data": map[string]any{
-						"done": "true",
-					},
-				},
-				"readyWhen": []any{
-					"${items.ready()}",
-				},
-			},
-		},
-	}
-	require.NoError(t, k8sClient.Update(ctx, latest))
+			}
+		}))
 
 	// Graph should reach Ready — all items ready, items.ready() is true
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
@@ -1878,28 +1877,27 @@ func TestSupersededRevisionGC(t *testing.T) {
 	t.Log("Revision g00001 created")
 
 	// Update spec — creates revision g00002
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-revision-gc", Namespace: ns}, latest))
-	// Update the whole spec to trigger generation bump
-	latest.Object["spec"] = map[string]any{
-		"nodes": []any{
-			map[string]any{
-				"id": "alpha",
-				"template": map[string]any{
-					"apiVersion": "v1",
-					"kind":       "ConfigMap",
-					"metadata": map[string]any{
-						"name": "gc-alpha",
-					},
-					"data": map[string]any{
-						"version": "v2",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-revision-gc", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			// Update the whole spec to trigger generation bump
+			obj.Object["spec"] = map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "alpha",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "gc-alpha",
+							},
+							"data": map[string]any{
+								"version": "v2",
+							},
+						},
 					},
 				},
-			},
-		},
-	}
-	require.NoError(t, k8sClient.Update(ctx, latest))
+			}
+		}))
 	t.Log("Updated spec — expecting revision g00002")
 
 	// Wait for the Graph to settle again with the new revision

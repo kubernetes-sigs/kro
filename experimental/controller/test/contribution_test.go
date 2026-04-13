@@ -149,26 +149,24 @@ func TestMultiGraphFieldCoexistence(t *testing.T) {
 	t.Log("Both Graphs' fields coexist — no conflict, original data preserved")
 
 	// Update Graph A: write a new annotation value.
-	latestA := &unstructured.Unstructured{}
-	latestA.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-coexist-a", Namespace: ns}, latestA))
-	unstructured.SetNestedSlice(latestA.Object, []any{
-		map[string]any{
-			"id": "contribute",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]any{
-					"name": "shared-coexist-cm",
-					"annotations": map[string]any{
-						"kro.run/managed-by-a": "graph-a-updated",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-coexist-a", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "contribute",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata": map[string]any{
+							"name": "shared-coexist-cm",
+							"annotations": map[string]any{
+								"kro.run/managed-by-a": "graph-a-updated",
+							},
+						},
 					},
 				},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latestA))
+			}, "spec", "nodes")
+		}))
 	t.Log("Updated Graph A: new annotation value")
 
 	// Wait for Graph A's update to propagate.
@@ -525,12 +523,10 @@ func TestContributeReferenceDetectedByExistence(t *testing.T) {
 	t.Log("Contribution applied — annotation set on external resource")
 
 	// Remove both nodes from the spec (prune).
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-contribute-shape", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-contribute-shape", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{}, "spec", "nodes")
+		}))
 	t.Log("Removed both nodes from spec — prune triggered")
 
 	// Wait for the owned resource to be deleted (Own shape → delete on prune).

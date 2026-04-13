@@ -720,29 +720,27 @@ func TestForEachContributeScaleDown(t *testing.T) {
 	}
 
 	// Scale down: remove item "c" from the collection.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-foreach-contrib", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "items",
-			"forEach": map[string]any{
-				"name": "${['fe-contrib-a', 'fe-contrib-b']}",
-			},
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]any{
-					"name": "${name}",
-					"annotations": map[string]any{
-						"kro.run/managed": "true",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-contrib", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "items",
+					"forEach": map[string]any{
+						"name": "${['fe-contrib-a', 'fe-contrib-b']}",
+					},
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata": map[string]any{
+							"name": "${name}",
+							"annotations": map[string]any{
+								"kro.run/managed": "true",
+							},
+						},
 					},
 				},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+			}, "spec", "nodes")
+		}))
 	t.Log("Scaled down: removed item c from collection")
 
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
@@ -814,30 +812,28 @@ func TestForEachRevisionTransition(t *testing.T) {
 	t.Log("Rev1: old-a, old-b created")
 
 	// Change the collection to new items.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-foreach-rev", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "items",
-			"forEach": map[string]any{
-				"value": "${['new-x', 'new-y']}",
-			},
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]any{
-					"name": "rev-${value}",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-rev", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "items",
+					"forEach": map[string]any{
+						"value": "${['new-x', 'new-y']}",
+					},
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata": map[string]any{
+							"name": "rev-${value}",
+						},
+						"data": map[string]any{
+							"item":    "${value}",
+							"version": "v2",
+						},
+					},
 				},
-				"data": map[string]any{
-					"item":    "${value}",
-					"version": "v2",
-				},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+			}, "spec", "nodes")
+		}))
 	t.Log("Updated spec: new collection items new-x, new-y")
 
 	for _, name := range []string{"rev-new-x", "rev-new-y"} {
@@ -1006,34 +1002,32 @@ func TestNestedGraphRevisionTransition(t *testing.T) {
 	t.Log("V1 child Graph and resource created")
 
 	// Update parent spec: change child name.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-nested-rev", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "child",
-			"template": map[string]any{
-				"apiVersion": "experimental.kro.run/v1alpha1",
-				"kind":       "Graph",
-				"metadata":   map[string]any{"name": "nested-child-v2"},
-				"spec": map[string]any{
-					"nodes": []any{
-						map[string]any{
-							"id": "resource",
-							"template": map[string]any{
-								"apiVersion": "v1",
-								"kind":       "ConfigMap",
-								"metadata":   map[string]any{"name": "nested-cm-v2"},
-								"data":       map[string]any{"version": "v2"},
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-nested-rev", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "child",
+					"template": map[string]any{
+						"apiVersion": "experimental.kro.run/v1alpha1",
+						"kind":       "Graph",
+						"metadata":   map[string]any{"name": "nested-child-v2"},
+						"spec": map[string]any{
+							"nodes": []any{
+								map[string]any{
+									"id": "resource",
+									"template": map[string]any{
+										"apiVersion": "v1",
+										"kind":       "ConfigMap",
+										"metadata":   map[string]any{"name": "nested-cm-v2"},
+										"data":       map[string]any{"version": "v2"},
+									},
+								},
 							},
 						},
 					},
 				},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+			}, "spec", "nodes")
+		}))
 	t.Log("Updated parent: child Graph name changed to v2")
 
 	newChild := &unstructured.Unstructured{}
@@ -1211,37 +1205,35 @@ func TestMultipleForEachNodesIndependence(t *testing.T) {
 	t.Log("All 5 children created (3 from A, 2 from B)")
 
 	// Scale down groupA to 1 item. groupB should be unaffected.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-multi-foreach", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "groupA",
-			"forEach": map[string]any{
-				"value": "${['a1']}",
-			},
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "multi-a-${value}"},
-				"data":       map[string]any{"group": "A", "item": "${value}"},
-			},
-		},
-		map[string]any{
-			"id": "groupB",
-			"forEach": map[string]any{
-				"value": "${['b1', 'b2']}",
-			},
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "multi-b-${value}"},
-				"data":       map[string]any{"group": "B", "item": "${value}"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-multi-foreach", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "groupA",
+					"forEach": map[string]any{
+						"value": "${['a1']}",
+					},
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "multi-a-${value}"},
+						"data":       map[string]any{"group": "A", "item": "${value}"},
+					},
+				},
+				map[string]any{
+					"id": "groupB",
+					"forEach": map[string]any{
+						"value": "${['b1', 'b2']}",
+					},
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "multi-b-${value}"},
+						"data":       map[string]any{"group": "B", "item": "${value}"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 	t.Log("Scaled down groupA to 1 item")
 
 	for _, name := range []string{"multi-a-a2", "multi-a-a3"} {
@@ -1400,22 +1392,20 @@ func TestForEachFinalizesSequence(t *testing.T) {
 
 	// Phase 2: Remove the target from the spec. This makes it a prune
 	// candidate and triggers finalization via the superseded DAG.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-foreach-finalizes", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "keep",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "fe-fin-keep"},
-				"data":       map[string]any{"role": "permanent"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-finalizes", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "keep",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "fe-fin-keep"},
+						"data":       map[string]any{"role": "permanent"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 	t.Log("Removed target and snapshots from spec — finalization triggered")
 
 	// Wait for at least one snapshot child to be created (proves finalization ran).

@@ -296,16 +296,15 @@ func TestHashSkipApplyOnUnchangedSpec(t *testing.T) {
 	t.Logf("template hash: %s", annotations["internal.kro.run/template-hash"])
 
 	// Trigger a reconcile by touching the Graph's labels (doesn't change spec/generation).
-	graphLatest := &unstructured.Unstructured{}
-	graphLatest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-hash-skip", Namespace: ns}, graphLatest))
-	labels := graphLatest.GetLabels()
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	labels["trigger"] = "reconcile"
-	graphLatest.SetLabels(labels)
-	require.NoError(t, k8sClient.Update(ctx, graphLatest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-hash-skip", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			labels := obj.GetLabels()
+			if labels == nil {
+				labels = map[string]string{}
+			}
+			labels["trigger"] = "reconcile"
+			obj.SetLabels(labels)
+		}))
 	t.Log("triggered reconcile via label change")
 
 	// Wait for the reconcile to settle (RV stability check, not a fixed sleep).
@@ -372,24 +371,23 @@ func TestHashAppliesOnSpecChange(t *testing.T) {
 	t.Logf("original template hash: %s", originalHash)
 
 	// Update the Graph spec.
-	graphLatest := &unstructured.Unstructured{}
-	graphLatest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-hash-change", Namespace: ns}, graphLatest))
-	nodes := []any{
-		map[string]any{
-			"id": "cm",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "hash-change-target"},
-				"data": map[string]any{
-					"version": "v2",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-hash-change", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			nodes := []any{
+				map[string]any{
+					"id": "cm",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "hash-change-target"},
+						"data": map[string]any{
+							"version": "v2",
+						},
+					},
 				},
-			},
-		},
-	}
-	unstructured.SetNestedSlice(graphLatest.Object, nodes, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, graphLatest))
+			}
+			unstructured.SetNestedSlice(obj.Object, nodes, "spec", "nodes")
+		}))
 	t.Log("updated Graph spec: version=v2")
 
 	// Wait for the new value and a new hash.
@@ -754,13 +752,15 @@ func TestIdempotentReReconcileZeroWrites(t *testing.T) {
 	t.Logf("Recorded RVs: graph=%s resources=%v", graphRV, rvBefore)
 
 	// Trigger a reconcile by touching the Graph's labels (doesn't change spec).
-	labels := g.GetLabels()
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	labels["trigger"] = "idempotency-check"
-	g.SetLabels(labels)
-	require.NoError(t, k8sClient.Update(ctx, g))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-idempotent", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			labels := obj.GetLabels()
+			if labels == nil {
+				labels = map[string]string{}
+			}
+			labels["trigger"] = "idempotency-check"
+			obj.SetLabels(labels)
+		}))
 	t.Log("Triggered reconcile via label change")
 
 	// Wait for the reconcile to settle.

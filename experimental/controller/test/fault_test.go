@@ -296,22 +296,20 @@ func TestInvalidCELExpressionSurfacesError(t *testing.T) {
 	assert.Error(t, err, "no resource should be created for rejected Graph")
 
 	// Fix the CEL expression — Graph should recover.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-fault-invalid-cel", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "fixed",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "fixed-cm"},
-				"data":       map[string]any{"value": "fixed"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-fault-invalid-cel", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "fixed",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "fixed-cm"},
+						"data":       map[string]any{"value": "fixed"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 	t.Log("Fixed CEL expression")
 
 	// Wait for the fixed resource to be created.
@@ -375,24 +373,22 @@ func TestConflictThenSpecChangeResolvesConflict(t *testing.T) {
 	t.Log("Graph shows Conflict")
 
 	// Fix: change the spec to remove the contested field.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-fault-spec-resolve", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "target",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "spec-conflict-cm"},
-				"data": map[string]any{
-					"noncontested": "graph-only-value",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-fault-spec-resolve", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "target",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "spec-conflict-cm"},
+						"data": map[string]any{
+							"noncontested": "graph-only-value",
+						},
+					},
 				},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+			}, "spec", "nodes")
+		}))
 	t.Log("Updated spec to remove contested field")
 
 	// Graph should become Ready.

@@ -140,14 +140,14 @@ func TestFullLifecycle(t *testing.T) {
 	t.Log("Status: Ready=True")
 
 	// --- Phase 2: Update and verify ---
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, g))
-	spec := g.Object["spec"].(map[string]any)
-	nodes := spec["nodes"].([]any)
-	deployRes := nodes[0].(map[string]any)
-	tmpl := deployRes["template"].(map[string]any)
-	deploySpec := tmpl["spec"].(map[string]any)
-	deploySpec["replicas"] = int64(5)
-	require.NoError(t, k8sClient.Update(ctx, g))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, func(obj *unstructured.Unstructured) {
+		spec := obj.Object["spec"].(map[string]any)
+		nodes := spec["nodes"].([]any)
+		deployRes := nodes[0].(map[string]any)
+		tmpl := deployRes["template"].(map[string]any)
+		deploySpec := tmpl["spec"].(map[string]any)
+		deploySpec["replicas"] = int64(5)
+	}))
 	t.Log("Updated Graph: replicas 2 → 5")
 
 	// Wait for Deployment to be updated
@@ -804,25 +804,22 @@ func TestDriftCorrectedByTimer(t *testing.T) {
 	t.Log("Drift corrected by drift timer — managed field restored to desired state")
 
 	// Now update the Graph spec to change the desired value — this SHOULD apply
-	graphLatest := &unstructured.Unstructured{}
-	graphLatest.SetGroupVersionKind(schema.GroupVersionKind{Group: "experimental.kro.run", Version: "v1alpha1", Kind: "Graph"})
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-drift", Namespace: ns}, graphLatest))
-
-	nodes := []any{
-		map[string]any{
-			"id": "managed",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "drift-target"},
-				"data": map[string]any{
-					"desired": "new-value",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-drift", Namespace: ns}, func(obj *unstructured.Unstructured) {
+		nodes := []any{
+			map[string]any{
+				"id": "managed",
+				"template": map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]any{"name": "drift-target"},
+					"data": map[string]any{
+						"desired": "new-value",
+					},
 				},
 			},
-		},
-	}
-	unstructured.SetNestedSlice(graphLatest.Object, nodes, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, graphLatest))
+		}
+		unstructured.SetNestedSlice(obj.Object, nodes, "spec", "nodes")
+	}))
 	t.Log("Updated Graph spec: desired=new-value")
 
 	// Wait for the new value to be applied (template hash changed → Patch fires)

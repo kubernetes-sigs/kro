@@ -437,47 +437,45 @@ func TestForEachReadyWhenDoesNotGateDownstream(t *testing.T) {
 	t.Log("Graph status is InProgress (workers not ready)")
 
 	// Update the Graph spec: change worker template to ready = "true"
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, latest))
-
-	updatedNodes := []any{
-		map[string]any{
-			"id": "workers",
-			"forEach": map[string]any{
-				"value": "${['alpha', 'beta', 'gamma']}",
-			},
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]any{
-					"name": "worker-${value}",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			updatedNodes := []any{
+				map[string]any{
+					"id": "workers",
+					"forEach": map[string]any{
+						"value": "${['alpha', 'beta', 'gamma']}",
+					},
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata": map[string]any{
+							"name": "worker-${value}",
+						},
+						"data": map[string]any{
+							"item":  "${value}",
+							"ready": "true",
+						},
+					},
+					"readyWhen": []any{
+						"${workers.data.ready == 'true'}",
+					},
 				},
-				"data": map[string]any{
-					"item":  "${value}",
-					"ready": "true",
+				map[string]any{
+					"id": "summary",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata": map[string]any{
+							"name": "worker-summary",
+						},
+						"data": map[string]any{
+							"firstWorker": "${workers[0].data.item}",
+						},
+					},
 				},
-			},
-			"readyWhen": []any{
-				"${workers.data.ready == 'true'}",
-			},
-		},
-		map[string]any{
-			"id": "summary",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]any{
-					"name": "worker-summary",
-				},
-				"data": map[string]any{
-					"firstWorker": "${workers[0].data.item}",
-				},
-			},
-		},
-	}
-	unstructured.SetNestedSlice(latest.Object, updatedNodes, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+			}
+			unstructured.SetNestedSlice(obj.Object, updatedNodes, "spec", "nodes")
+		}))
 	t.Log("Updated Graph: workers now have ready=true")
 
 	// Summary should now be created

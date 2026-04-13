@@ -256,24 +256,22 @@ func TestErrorToSpecChangeRecovery(t *testing.T) {
 	t.Log("Graph in Conflict state")
 
 	// Fix: remove the contested field from the spec.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-error-recovery", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "resource",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "error-recovery-cm"},
-				"data": map[string]any{
-					"noncontested": "graph-only-fixed",
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-error-recovery", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "resource",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "error-recovery-cm"},
+						"data": map[string]any{
+							"noncontested": "graph-only-fixed",
+						},
+					},
 				},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+			}, "spec", "nodes")
+		}))
 	t.Log("Spec fixed: removed contested field")
 
 	// Graph should recover to Ready.
@@ -349,22 +347,20 @@ func TestConflictDoesNotBlockIndependentPrune(t *testing.T) {
 	t.Log("Removable created, Graph in Conflict state")
 
 	// Remove the removable node from spec. It should be pruned despite Conflict.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-conflict-indep-prune", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "contested",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "conflict-indep-contested"},
-				"data":       map[string]any{"key": "graph-wants-different"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-conflict-indep-prune", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "contested",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "conflict-indep-contested"},
+						"data":       map[string]any{"key": "graph-wants-different"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 	t.Log("Removed removable node from spec")
 
 	// Removable should be pruned (independent of Conflict).
@@ -424,21 +420,21 @@ func TestIdenticalSpecAcrossGenerationSkipsRevision(t *testing.T) {
 	// hash should match, so no new revision is created.
 	latest := &unstructured.Unstructured{}
 	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-identical-spec", Namespace: ns}, latest))
-	// Update spec with identical content to trigger generation bump.
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "resource",
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "identical-spec-cm"},
-				"data":       map[string]any{"version": "v1"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-identical-spec", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			// Update spec with identical content to trigger generation bump.
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "resource",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "identical-spec-cm"},
+						"data":       map[string]any{"version": "v1"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-identical-spec", Namespace: ns}))
@@ -494,22 +490,21 @@ func TestRapidSpecChanges(t *testing.T) {
 
 	// Rapid updates: v1→v2→v3→v4 without waiting for convergence.
 	for _, version := range []string{"v2", "v3", "v4"} {
-		latest := &unstructured.Unstructured{}
-		latest.SetGroupVersionKind(GraphGVK)
-		require.NoError(t, k8sClient.Get(ctx,
-			types.NamespacedName{Name: "test-rapid-spec", Namespace: ns}, latest))
-		unstructured.SetNestedSlice(latest.Object, []any{
-			map[string]any{
-				"id": "resource",
-				"template": map[string]any{
-					"apiVersion": "v1",
-					"kind":       "ConfigMap",
-					"metadata":   map[string]any{"name": "rapid-" + version},
-					"data":       map[string]any{"version": version},
-				},
-			},
-		}, "spec", "nodes")
-		require.NoError(t, k8sClient.Update(ctx, latest))
+		v := version // capture loop var for closure
+		require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+			types.NamespacedName{Name: "test-rapid-spec", Namespace: ns}, func(obj *unstructured.Unstructured) {
+				unstructured.SetNestedSlice(obj.Object, []any{
+					map[string]any{
+						"id": "resource",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "rapid-" + v},
+							"data":       map[string]any{"version": v},
+						},
+					},
+				}, "spec", "nodes")
+			}))
 		t.Logf("Submitted rapid update: %s", version)
 	}
 
@@ -579,25 +574,23 @@ func TestForEachScaleFromZeroToN(t *testing.T) {
 	t.Log("Graph ready with empty collection")
 
 	// Scale up: add items.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "test-foreach-zero-to-n", Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "items",
-			"forEach": map[string]any{
-				"value": "${['alpha', 'beta', 'gamma']}",
-			},
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "zero-to-n-${value}"},
-				"data":       map[string]any{"item": "${value}"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-zero-to-n", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "items",
+					"forEach": map[string]any{
+						"value": "${['alpha', 'beta', 'gamma']}",
+					},
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "zero-to-n-${value}"},
+						"data":       map[string]any{"item": "${value}"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 	t.Log("Scaled up: added 3 items")
 
 	for _, value := range []string{"alpha", "beta", "gamma"} {

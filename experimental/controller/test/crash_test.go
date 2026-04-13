@@ -175,17 +175,15 @@ func TestRecoveryIdempotentReApply(t *testing.T) {
 	// Phase 2: Trigger a no-op re-reconcile by updating a label on the Graph.
 	// This forces a fresh reconcile with the same spec. The controller should
 	// detect hash matches and skip writes (idempotent).
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: graphName, Namespace: ns}, latest))
-	labels := latest.GetLabels()
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	labels["recovery-test"] = "trigger"
-	latest.SetLabels(labels)
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: graphName, Namespace: ns}, func(obj *unstructured.Unstructured) {
+			labels := obj.GetLabels()
+			if labels == nil {
+				labels = map[string]string{}
+			}
+			labels["recovery-test"] = "trigger"
+			obj.SetLabels(labels)
+		}))
 	t.Log("Phase 2: Triggered re-reconcile via label change")
 
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
@@ -255,25 +253,23 @@ func TestRecoveryForEachScaleDownFullLifecycle(t *testing.T) {
 	t.Log("Phase 1: 5 forEach children created")
 
 	// Scale down to 3 items.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: graphName, Namespace: ns}, latest))
-	unstructured.SetNestedSlice(latest.Object, []any{
-		map[string]any{
-			"id": "items",
-			"forEach": map[string]any{
-				"value": "${['a', 'b', 'c']}",
-			},
-			"template": map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "scale-${value}"},
-				"data":       map[string]any{"item": "${value}"},
-			},
-		},
-	}, "spec", "nodes")
-	require.NoError(t, k8sClient.Update(ctx, latest))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: graphName, Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "items",
+					"forEach": map[string]any{
+						"value": "${['a', 'b', 'c']}",
+					},
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "scale-${value}"},
+						"data":       map[string]any{"item": "${value}"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
 	t.Log("Phase 2: Scaled down to 3 items")
 
 	// 3 children should survive.

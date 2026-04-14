@@ -218,7 +218,29 @@ func (w *CRDWrapper) Delete(ctx context.Context, name string) error {
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete CRD: %w", err)
 	}
-	return nil
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return w.waitForDelete(ctx, name)
+}
+
+// waitForDelete waits for a CRD to be fully removed from the API server.
+func (w *CRDWrapper) waitForDelete(ctx context.Context, name string) error {
+	log := logr.FromContext(ctx)
+	log.Info("Waiting for CRD to be deleted", "name", name)
+
+	return wait.PollUntilContextTimeout(ctx, w.pollInterval, w.timeout, true,
+		func(ctx context.Context) (bool, error) {
+			_, err := w.Get(ctx, name)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					return true, nil
+				}
+				return false, err
+			}
+
+			return false, nil
+		})
 }
 
 // waitForReady waits for a CRD to become ready

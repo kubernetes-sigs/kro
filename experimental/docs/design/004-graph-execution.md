@@ -111,18 +111,21 @@ label exists. The value encodes the relationship (`own` or `contribute`) and is 
 to determine the cleanup action (delete vs release fields). The label key encodes the node ID,
 which routes watch events to the correct node.
 
-**Change detection** uses three in-memory hashes per node:
+**Change detection** uses three hashes per node:
 
-| Hash | Hashes | On match | On miss/change |
-|---|---|---|---|
-| evaluation-hash | referenced dependency field paths | skip template eval | evaluate template |
-| apply-hash | full rendered desired state | skip SSA write | apply patch |
-| propagation-hash | output field paths downstream references | propagation stops | trigger downstream nodes |
+| Hash | Hashes | On match | On miss/change | Storage |
+|---|---|---|---|---|
+| evaluation-hash | referenced dependency field paths | skip template eval | evaluate template | in-memory |
+| apply-hash | full rendered desired state | skip SSA write | apply patch | annotation (`internal.kro.run/template-hash`) |
+| propagation-hash | output field paths downstream references | propagation stops | trigger downstream nodes | in-memory |
 
-Drift timer expiry and cold start (restart, new leader) produce the same effect: cached evaluation-hash
-and apply-hash entries are absent, so every node runs the full pipeline — evaluate, apply, hash.
-The propagation-hash still applies after drift correction; if the corrected output matches the
-previous output, downstream nodes are not triggered.
+Evaluation-hash and propagation-hash are ephemeral — recomputed on cold start. The apply-hash is
+persisted as an annotation because recomputing it requires re-applying via SSA (side effects).
+Without the annotation, cold start produces an N-write burst.
+
+Drift timer expiry bypasses the apply-hash check entirely (apply unconditionally). The
+propagation-hash still applies after drift correction; if the corrected output matches the previous
+output, downstream nodes are not triggered.
 
 Evaluation-hash and propagation-hash share the same path extraction. At graph compilation, the controller
 walks each compiled expression's AST to extract reference chains — sequences of select operations

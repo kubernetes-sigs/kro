@@ -596,3 +596,108 @@ func TestPruneSweptOnSpecNodeRemoval(t *testing.T) {
 		"both ConfigMaps must be pruned after all nodes are removed from spec")
 	t.Log("Both ConfigMaps pruned — spec-emptying triggers prune sweep")
 }
+
+// TestPrune_RegressionCrossNamespace proves that resources with an explicit
+// metadata.namespace in the template are pruned correctly when removed from
+// the spec. The prune key must use the template's namespace, not the Graph's.
+//
+// Per 004-graph-execution.md § Applied Set: resource keys encode
+// group/version/Kind/namespace/name.
+//
+// Bug: staticResourceKey always used the Graph's namespace, making
+// cross-namespace resources invisible to the prune diff.
+func TestPrune_RegressionCrossNamespace(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+	targetNS := createNamespace(t) // Different namespace for the resource
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "cross-ns-prune",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// Resource in a different namespace
+					map[string]any{
+						"id": "crossns",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name":      "cross-ns-config",
+								"namespace": targetNS,
+							},
+							"data": map[string]any{"source": "original"},
+						},
+					},
+					// Resource in the Graph's own namespace (for comparison)
+					map[string]any{
+						"id": "local",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "local-config"},
+							"data":       map[string]any{"source": "local"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for both resources to be created
+	crossNSCM := &unstructured.Unstructured{}
+	crossNSCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "cross-ns-config", Namespace: targetNS}, crossNSCM),
+		"cross-namespace resource should be created")
+
+	localCM := &unstructured.Unstructured{}
+	localCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "local-config", Namespace: ns}, localCM))
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "cross-ns-prune", Namespace: ns}))
+
+	// Now remove the cross-namespace node from the spec
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "cross-ns-prune", Namespace: ns},
+		func(obj *unstructured.Unstructured) {
+			obj.Object["spec"] = map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "local",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "local-config"},
+							"data":       map[string]any{"source": "local"},
+						},
+					},
+				},
+			}
+		}))
+
+	// The cross-namespace resource should be pruned
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			obj := &unstructured.Unstructured{}
+			obj.SetGroupVersionKind(cmGVK)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: "cross-ns-config", Namespace: targetNS}, obj)
+			return err != nil, nil // wait until NotFound
+		}),
+		"cross-namespace resource should be pruned after node removed from spec")
+
+	// Local resource should still exist
+	localCheck := &unstructured.Unstructured{}
+	localCheck.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "local-config", Namespace: ns}, localCheck),
+		"local resource should survive the prune")
+}

@@ -2374,3 +2374,170 @@ func TestPropagateWhenGateOpenTriggersDownstream(t *testing.T) {
 
 	t.Log("Step 5: consumer sees updated-name — propagateWhen gate transition triggered propagation")
 }
+
+// ---------------------------------------------------------------------------
+// Validation — spec rejection at compile time
+//
+// Per 001-graph.md: invalid specs must be rejected during compilation, not
+// at runtime. The Graph's Compiled condition shows the specific error.
+// These were upleveled from unit tests to verify the full path through
+// the controller (spec → compile → status condition).
+// ---------------------------------------------------------------------------
+
+// TestDeclarationError_HyphenInNodeID proves that node IDs with
+// hyphens are rejected at compile time. Per 001-graph.md: "Hyphens are not
+// allowed — they are parsed as subtraction by the CEL evaluator."
+func TestDeclarationError_HyphenInNodeID(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata":   map[string]any{"name": "hyphen-id", "namespace": ns},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "my-app",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "cm"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "hyphen-id", Namespace: ns}, "False"))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "hyphen-id", Namespace: ns}, g))
+	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
+}
+
+// TestDeclarationError_CaseCollision proves that node IDs that
+// collide after lowercasing are rejected. Per 001-graph.md: "IDs that
+// collide after lowercasing are rejected at compile time."
+func TestDeclarationError_CaseCollision(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata":   map[string]any{"name": "case-collision", "namespace": ns},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "Deploy",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "a"},
+						},
+					},
+					map[string]any{
+						"id": "deploy",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "b"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "case-collision", Namespace: ns}, "False"))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "case-collision", Namespace: ns}, g))
+	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
+}
+
+// TestDeclarationError_FinalizesTargetMissing proves that a
+// finalizes declaration pointing at a nonexistent node ID is rejected
+// at compile time as a DeclarationError.
+func TestDeclarationError_FinalizesTargetMissing(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata":   map[string]any{"name": "finalizes-missing", "namespace": ns},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id":        "snapshot",
+						"finalizes": "nonexistent",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "snap"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "finalizes-missing", Namespace: ns}, "False"))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "finalizes-missing", Namespace: ns}, g))
+	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
+}
+
+// TestDeclarationError_ForEachVariableCollision proves that
+// forEach iterator variable names that shadow node IDs are rejected.
+func TestDeclarationError_ForEachVariableCollision(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata":   map[string]any{"name": "foreach-collision", "namespace": ns},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "items",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "Namespace",
+						},
+					},
+					map[string]any{
+						"id":      "policy",
+						"forEach": map[string]any{"items": "${items}"},
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "cm"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "foreach-collision", Namespace: ns}, "False"))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "foreach-collision", Namespace: ns}, g))
+	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
+}

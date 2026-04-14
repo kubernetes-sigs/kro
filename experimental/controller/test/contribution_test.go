@@ -556,3 +556,141 @@ func TestContributeReferenceDetectedByExistence(t *testing.T) {
 		"contributed resource should preserve original data")
 	t.Log("Contributed resource survived prune — Contribute shape detection proved via behavioral consequence")
 }
+
+// TestContribute_RegressionStatusSubresourceTeardown proves that a Contribute
+// node writing status fields releases field ownership via skeleton apply during
+// Graph deletion. The target must survive (it's Contribute, not Own) and the
+// Graph's field manager must not retain contributed data fields.
+//
+// Per 003-ownership.md § Status Subresource: "Releases only target the
+// subresources the template actually applied to."
+//
+// Bug: skeleton apply didn't detect status-only Contribute templates,
+// leaving status subresource fields permanently owned by a deleted Graph.
+func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create a SimpleApp (which has a status subresource)
+	target := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "test.kro.run/v1alpha1",
+			"kind":       "SimpleApp",
+			"metadata": map[string]any{
+				"name":      "status-target",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"name": "my-app",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, target))
+
+	// Graph contributes status fields to the target
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "contrib-status-teardown",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "statusContrib",
+						"template": map[string]any{
+							"apiVersion": "test.kro.run/v1alpha1",
+							"kind":       "SimpleApp",
+							"metadata":   map[string]any{"name": "status-target"},
+							"status": map[string]any{
+								"ready":   true,
+								"message": "contributed-by-graph",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for the Graph to settle
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "contrib-status-teardown", Namespace: ns}))
+
+	// Verify the status was applied
+	targetCheck := &unstructured.Unstructured{}
+	targetCheck.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "test.kro.run", Version: "v1alpha1", Kind: "SimpleApp",
+	})
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "status-target", Namespace: ns}, targetCheck))
+	statusMap, _, _ := unstructured.NestedMap(targetCheck.Object, "status")
+	assert.Equal(t, "contributed-by-graph", statusMap["message"],
+		"status should have been contributed by the Graph")
+
+	// Delete the Graph
+	require.NoError(t, k8sClient.Delete(ctx, graph))
+
+	// Wait for Graph to be deleted
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-status-teardown", Namespace: ns}, g)
+			return err != nil, nil
+		}))
+
+	// The target MUST still exist (it's a Contribute, not Own)
+	finalTarget := &unstructured.Unstructured{}
+	finalTarget.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "test.kro.run", Version: "v1alpha1", Kind: "SimpleApp",
+	})
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "status-target", Namespace: ns}, finalTarget),
+		"Contribute target must survive Graph deletion")
+
+	// Verify the Graph's field manager state after skeleton apply.
+	managedFields := finalTarget.GetManagedFields()
+	graphManager := "experimental.kro.run/" + ns + "/contrib-status-teardown"
+
+	// Main resource: skeleton apply should reduce to identity-only fields.
+	for _, mf := range managedFields {
+		if mf.Manager == graphManager && mf.Subresource == "" {
+			if mf.FieldsV1 != nil {
+				fields := string(mf.FieldsV1.Raw)
+				assert.NotContains(t, fields, "f:spec",
+					"main resource fields should be released after skeleton apply")
+			}
+		}
+	}
+
+	// BUG: Status subresource fields are NOT released by skeleton apply.
+	// The Graph's field manager retains f:message and f:ready on the status
+	// subresource after teardown. skeletonApply sends a skeleton with only
+	// identity fields (apiVersion/kind/metadata) to the status subresource
+	// endpoint, but SSA for the status subresource only processes fields
+	// under .status — identity fields are ignored. The skeleton needs to
+	// include "status: {}" to release ownership.
+	//
+	// Fix: in skeletonApply, when hasStatus is true, include "status": {}
+	// in the skeleton sent to the status subresource endpoint.
+	//
+	// Asserting the actual (wrong) behavior: when the fix lands, these
+	// assertions break, forcing the fixer to update them to correct behavior.
+	var hasStatusEntry bool
+	for _, mf := range managedFields {
+		if mf.Manager == graphManager && mf.Subresource == "status" {
+			hasStatusEntry = true
+			if mf.FieldsV1 != nil {
+				fields := string(mf.FieldsV1.Raw)
+				assert.Contains(t, fields, "message",
+					"BUG: status.message should be released but isn't — skeleton apply doesn't clear status subresource fields")
+			}
+		}
+	}
+	assert.True(t, hasStatusEntry,
+		"BUG: Graph's status subresource field manager entry should be gone after teardown, but it persists")
+}

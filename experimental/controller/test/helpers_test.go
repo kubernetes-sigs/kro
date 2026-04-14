@@ -443,6 +443,38 @@ func findCondition(conditions []any, condType string) (map[string]any, bool) {
 	return nil, false
 }
 
+// graphCompiledReason returns the reason from the Compiled condition.
+func graphCompiledReason(g *unstructured.Unstructured) string {
+	status, _ := g.Object["status"].(map[string]any)
+	conditions, _ := status["conditions"].([]any)
+	cond, ok := findCondition(conditions, "Compiled")
+	if !ok {
+		return ""
+	}
+	reason, _ := cond["reason"].(string)
+	return reason
+}
+
+// waitForGraphCompiledStatus polls until the Graph's Compiled condition
+// reaches the given status ("True" or "False").
+func waitForGraphCompiledStatus(ctx context.Context, c client.Client, key types.NamespacedName, wantStatus string) error {
+	return wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := c.Get(ctx, key, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		conditions, _ := status["conditions"].([]any)
+		cond, ok := findCondition(conditions, "Compiled")
+		if !ok {
+			return false, nil
+		}
+		s, _ := cond["status"].(string)
+		return s == wantStatus, nil
+	})
+}
+
 // ---------------------------------------------------------------------------
 // GraphRevision CRD + helpers
 // ---------------------------------------------------------------------------

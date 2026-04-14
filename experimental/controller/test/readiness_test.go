@@ -447,3 +447,73 @@ func TestReadyWhenNotReadyThenReady(t *testing.T) {
 	t.Logf("Full readyWhen lifecycle proved: Pending → blocked; Running → app-config created with infraPhase=%s",
 		data["infraPhase"])
 }
+
+// TestReadyWhen_RegressionNonBoolReturn proves that a readyWhen expression
+// returning a non-bool type (e.g., int from size()) is classified as
+// NodeNotReady, not NodeError. NodeError would block dependents, violating
+// the design invariant that readyWhen is a health signal, not a gate.
+//
+// Per 001-graph.md: "readyWhen is a health signal — it does not gate
+// downstream execution."
+//
+// Bug: readyWhen returning int was classified as NodeError, blocking
+// all dependents. Fix: classify as NodeNotReady. Dependents proceed
+// because data is in scope.
+func TestReadyWhen_RegressionNonBoolReturn(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "readywhen-nonbool",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// Node A: created normally, readyWhen returns int (not bool).
+					// size() returns int64 — this is a permanent expression error.
+					map[string]any{
+						"id": "source",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "nonbool-source"},
+							"data":       map[string]any{"value": "hello"},
+						},
+						"readyWhen": []any{"${size(source.data.value)}"},
+					},
+					// Node B: depends on A's data. Must be created even though
+					// A's readyWhen returned non-bool — readyWhen doesn't gate.
+					map[string]any{
+						"id": "dependent",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "nonbool-dependent"},
+							"data":       map[string]any{"ref": "${source.data.value}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// The dependent MUST be created — readyWhen is a health signal, not a gate.
+	dependent := &unstructured.Unstructured{}
+	dependent.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "nonbool-dependent", Namespace: ns}, dependent),
+		"dependent should be created even though source's readyWhen returned non-bool")
+
+	data, _, _ := unstructured.NestedStringMap(dependent.Object, "data")
+	assert.Equal(t, "hello", data["ref"],
+		"dependent should have source's data — readyWhen doesn't gate data flow")
+
+	// Graph should be NotReady (the readyWhen expression is permanently broken)
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient,
+		types.NamespacedName{Name: "readywhen-nonbool", Namespace: ns}, "NotReady"))
+}

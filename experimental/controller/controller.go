@@ -442,7 +442,23 @@ func (w *walkState) tryDispatch(idx int) {
 			if !errors.Is(err, ErrPending) {
 				info := classifyAPIError(err)
 				nodeState = info.state
+				// Store deterministic errors in previousPlanStates so the
+				// state survives the skip path on subsequent reconciles.
+				// Without this, the error is overwritten with Ready on the
+				// next reconcile (plan.States stays nodeUnvisited → Summary
+				// ignores the node). Pending errors are NOT stored — the
+				// data may become available on the next reconcile.
+				w.state.previousPlanStates[node.ID] = nodeState
+				w.nodeErrors = append(w.nodeErrors, fmt.Sprintf("%s: %s", node.ID, err))
+				logger.V(0).Info("error resolving reference", "node", node.ID, "state", nodeState, "error", err)
 			}
+			// Retain previous applied keys — the resource may still exist
+			// from a prior successful apply. Without this, the resource
+			// would be a prune candidate. The prune gate independently
+			// blocks on error states, but key retention makes the error
+			// path self-contained rather than relying on a distant safety
+			// net.
+			w.carryForwardKeys(node.ID)
 			w.plan.SetState(w.dag, node.ID, nodeState)
 			w.notifyDependents(node.ID)
 			return
@@ -1119,6 +1135,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.resetDriftTimer(node.ID, 1*time.Second, 0)
 		case NodeSystemError:
 			state.resetDriftTimer(node.ID, systemErrorRequeueInterval, 0)
+		case NodeError:
+			// Safety net: NodeError resolves primarily via propagation
+			// (upstream data changes) or revision transition (user fixes
+			// the spec). The drift timer catches missed watch events —
+			// without it, a node with a deterministic error on stable
+			// upstream data would never be re-evaluated.
+			state.resetDriftTimer(node.ID, r.driftInterval(), r.driftJitter())
 		}
 	}
 

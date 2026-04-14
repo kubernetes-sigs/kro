@@ -406,3 +406,67 @@ func TestConflictThenSpecChangeResolvesConflict(t *testing.T) {
 	assert.Equal(t, "external-value", data["contested"])
 	t.Log("Conflict resolved via spec change — Graph and external manager coexist")
 }
+
+// TestErrorClassification_RegressionCELRuntime proves that a CEL expression
+// that compiles but fails at runtime (division by zero) is classified as a
+// deterministic user error (Error) — not SystemError (transient/retriable).
+//
+// Per 004-graph-execution.md: "Definition nodes can be Ready, NotReady,
+// or Error. They cannot be SystemError (no API calls)."
+//
+// Two bugs were found:
+//  1. resolveReference error path didn't store previousPlanStates — the
+//     Error state was lost on the next reconcile, overwritten with Ready.
+//  2. NodeError had no drift timer case — the node was never re-evaluated
+//     when upstream data was stable.
+func TestErrorClassification_RegressionCELRuntime(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create a ConfigMap with divisor=0. The expression 100/int("0")
+	// compiles but hits division-by-zero at runtime.
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{"name": "cel-error-source", "namespace": ns},
+			"data":     map[string]any{"divisor": "0"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "cel-runtime-error",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "source",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "cel-error-source"},
+						},
+					},
+					map[string]any{
+						"id": "broken",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "cel-error-output"},
+							"data":     map[string]any{"result": "${100 / int(source.data.divisor)}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// The Graph must reach Error (not Ready, not SystemError). The division
+	// by zero is a deterministic spec error — classifyAPIError returns NodeError.
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient,
+		types.NamespacedName{Name: "cel-runtime-error", Namespace: ns}, "Error"))
+}

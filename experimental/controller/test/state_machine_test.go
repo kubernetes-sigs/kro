@@ -2,6 +2,7 @@ package graphcontroller_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -753,4 +754,227 @@ func TestGraphWithZeroOwnsNodes(t *testing.T) {
 	assert.NotEmpty(t, ann["kro.run/watched-uid"],
 		"contribution should contain server-assigned UID from watched resource")
 	t.Logf("Contribute has watched UID: %s", ann["kro.run/watched-uid"])
+}
+
+// TestDiamondStatePrecedence_RegressionExcludedOverBlocked proves that in a
+// diamond DAG where one parent is Excluded (includeWhen=false) and another
+// is Pending (Watch target absent), the child inherits Excluded — not Blocked.
+//
+// Per 004-graph-execution.md § Wind step 2: "Any dependency Excluded →
+// Excluded, regardless of other dependencies' states. Precedence where
+// multiple apply: Excluded > Blocked > Pending."
+//
+// Bug: first-wins flood fill gave the wrong answer depending on traversal
+// order. Fix: evaluate all dependencies with full precedence in tryDispatch.
+func TestDiamondStatePrecedence_RegressionExcludedOverBlocked(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create the root ConfigMap externally so the Graph watches it
+	// (not owns). The test needs to flip root.data.enabled without SSA
+	// conflict, which requires the Graph to observe root via Watch.
+	rootCM := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "diamond-root",
+				"namespace": ns,
+			},
+			"data": map[string]any{"enabled": "false"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, rootCM))
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "diamond-precedence",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// Root: Watch over externally-managed ConfigMap
+					map[string]any{
+						"id": "root",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "diamond-root"},
+						},
+					},
+					// Parent A: Excluded via includeWhen=false
+					map[string]any{
+						"id": "parentA",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "diamond-parent-a"},
+							"data":       map[string]any{"ref": "${root.data.enabled}"},
+						},
+						"includeWhen": []any{"${root.data.enabled == 'true'}"},
+					},
+					// Parent B: Watch targeting an absent resource → Pending
+					map[string]any{
+						"id": "parentB",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "diamond-parent-b-absent"},
+						},
+					},
+					// Child: depends on both parents via data references
+					map[string]any{
+						"id": "child",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "diamond-child"},
+							"data": map[string]any{
+								"fromA": "${parentA.data.ref}",
+								"fromB": "${parentB.data.enabled}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Parent A is Excluded (includeWhen false).
+	// Parent B is Pending (Watch target absent).
+	// Child depends on both → should be Excluded (Excluded > Pending).
+	// The child resource MUST NOT be created.
+	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "diamond-child", Namespace: ns}, 3*time.Second),
+		"child should not be created — Excluded parent takes precedence")
+
+	// Parent A's resource should also not exist (it's excluded)
+	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "diamond-parent-a", Namespace: ns}, 1*time.Second))
+
+	// Now flip the toggle: enable parent A. updateWithRetry is safe here
+	// because root is a Watch (the Graph doesn't SSA-apply root).
+	require.NoError(t, updateWithRetry(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "diamond-root", Namespace: ns},
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedField(obj.Object, "true", "data", "enabled")
+		}))
+
+	// Create parent B's watch target so it resolves
+	parentBTarget := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "diamond-parent-b-absent",
+				"namespace": ns,
+			},
+			"data": map[string]any{"enabled": "yes"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, parentBTarget))
+
+	// Now both parents are resolved. Child should be created.
+	child := &unstructured.Unstructured{}
+	child.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "diamond-child", Namespace: ns}, child),
+		"child should be created once both parents are resolved")
+}
+
+// TestPendingPropagatesAsPending_RegressionNotBlocked proves that when a
+// Watch target is absent (Pending), dependents inherit Pending — not Blocked.
+// The distinction matters for operator triage: Blocked means "upstream error,
+// someone needs to act." Pending means "just waiting for an external resource."
+//
+// Per 004-graph-execution.md § Wind step 2: "Any dependency Pending →
+// inherit Pending."
+//
+// Bug: Pending was conflated with Blocked in the propagation path.
+// Fix: separate Pending from Blocked in dependency check.
+func TestPendingPropagatesAsPending_RegressionNotBlocked(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "pending-propagation",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// Watch: target doesn't exist → Pending
+					map[string]any{
+						"id": "upstream",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "absent-upstream"},
+						},
+					},
+					// Dependent: references upstream → inherits Pending
+					map[string]any{
+						"id": "downstream",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "pending-downstream"},
+							"data":     map[string]any{"ref": "${upstream.data.value}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Graph should report Pending (not Blocked, not Error)
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient,
+		types.NamespacedName{Name: "pending-propagation", Namespace: ns}, "Pending"))
+
+	// Verify the status message doesn't mention "blocked"
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "pending-propagation", Namespace: ns}, g))
+	status, _ := g.Object["status"].(map[string]any)
+	conditions, _ := status["conditions"].([]any)
+	cond, found := findCondition(conditions, "Ready")
+	require.True(t, found)
+	msg, _ := cond["message"].(string)
+	assert.False(t, strings.Contains(strings.ToLower(msg), "blocked"),
+		"Pending propagation should NOT report 'blocked' — got: %s", msg)
+
+	// Downstream should NOT be created (upstream data not available)
+	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "pending-downstream", Namespace: ns}, 2*time.Second))
+
+	// Now create the upstream resource — everything should resolve
+	upstream := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "absent-upstream",
+				"namespace": ns,
+			},
+			"data": map[string]any{"value": "resolved"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, upstream))
+
+	// Downstream should now be created
+	downstream := &unstructured.Unstructured{}
+	downstream.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "pending-downstream", Namespace: ns}, downstream))
+
+	data, _, _ := unstructured.NestedStringMap(downstream.Object, "data")
+	assert.Equal(t, "resolved", data["ref"])
+
+	// Graph should now be Ready
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "pending-propagation", Namespace: ns}))
 }

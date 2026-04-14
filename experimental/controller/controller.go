@@ -1066,27 +1066,38 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		!rstate.HasBlocked && !rstate.HasConflict && !rstate.HasError && !rstate.HasSystemError
 	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK && !prunePending)
 
-	// Reset drift timers for nodes that were successfully evaluated.
+	// Reset drift timers for nodes that were dispatched to workers.
 	// Per 004-graph-execution.md § The Walk: "An SSA apply resets the
-	// drift timer." We reset on evaluation (Ready or NotReady) since
-	// the node was fully processed.
+	// drift timer. A skipped write during normal evaluation (hash match
+	// from a watch event or propagation trigger) does not — the timer
+	// still fires to catch divergence that the hash cannot detect."
 	//
-	// For nodes in transient non-converged states (Pending,
-	// SystemError), set a short drift timer so they retry quickly.
-	// Pending: the common case (dependency resolves → propagation
-	// trigger) is watch-driven. The 1s timer is a fallback for edge
-	// cases where no watch event arrives — e.g., externally deleted
-	// owned resource where the delete event was consumed but the
-	// re-creation needs a second reconcile to clear the cache.
+	// Only dispatched nodes (which evaluated and potentially applied via
+	// SSA) reset their drift timers. Nodes that were skipped — no
+	// trigger, evaluation-hash match, propagateWhen gate, or
+	// coordinator-resolved states (Excluded, Blocked) — retain their
+	// existing timer so the consistency floor is preserved. Without
+	// this guard, frequent reconciles (driven by watch events on other
+	// nodes) perpetually reset timers for stable nodes, preventing the
+	// drift timer from ever firing.
+	//
+	// Drift-triggered dispatches always write (applySSA bypasses the
+	// apply-hash check when driftCorrection=true), so resetting after
+	// dispatch is correct. Non-drift dispatches may skip the write if
+	// the apply-hash matches — the timer reset is at most one-interval
+	// imprecise, bounded by the next drift expiry.
+	//
+	// Pending and SystemError get short timers regardless of dispatch
+	// status — these are retry mechanisms, not drift detection.
+	// Pending: fallback for edge cases where no watch event arrives.
 	// SystemError: transient server failure needs backoff retry.
-	// NotReady nodes don't need short timers — watch events fire when
-	// the resource's status changes. Error/Conflict/Blocked resolve via
-	// propagation, revision transition, or the standard drift timer.
-	for _, node := range dag.Nodes {
+	for i, node := range dag.Nodes {
 		nodeState := plan.States[node.ID]
 		switch nodeState {
 		case NodeReady, NodeNotReady:
-			state.resetDriftTimer(node.ID, r.driftInterval(), r.driftJitter())
+			if walk.dispatched[i] {
+				state.resetDriftTimer(node.ID, r.driftInterval(), r.driftJitter())
+			}
 		case NodePending:
 			state.resetDriftTimer(node.ID, 1*time.Second, 0)
 		case NodeSystemError:

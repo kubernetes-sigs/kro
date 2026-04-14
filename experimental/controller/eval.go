@@ -8,6 +8,7 @@
 package graphcontroller
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -76,14 +77,23 @@ func (e *evaluator) markReady(nodeID string, ready bool) {
 
 // evalReadiness evaluates readyWhen conditions and stamps __ready in scope.
 // Returns ErrWaitingForReadiness if any condition is false or data-pending.
-// Combines checkReadiness + markReady into a single call — the three-step
-// pattern (check → mark false on failure → mark true on success) was
-// duplicated across every post-dispatch path in reconcileNode.
+// Returns ErrReadyWhenFailed wrapping the underlying error if the expression
+// itself is broken (wrong return type, CEL error). Per 001-graph.md:
+// "readyWhen is a health signal — it does not gate downstream execution."
+// The ErrReadyWhenFailed sentinel lets the coordinator classify this as
+// NodeNotReady (not NodeError), preserving the design invariant.
 func (e *evaluator) evalReadiness(nodeID string, readyWhen []string) error {
 	if len(readyWhen) > 0 {
 		if err := e.checkReadiness(readyWhen, nodeID); err != nil {
 			e.markReady(nodeID, false)
-			return err
+			// ErrWaitingForReadiness and ErrPending are transient — pass through.
+			// All other errors are permanent expression failures that must not
+			// produce NodeError (which would gate dependents). Wrap with
+			// ErrReadyWhenFailed so the coordinator classifies as NodeNotReady.
+			if errors.Is(err, ErrWaitingForReadiness) || errors.Is(err, ErrPending) {
+				return err
+			}
+			return fmt.Errorf("%w: %w", ErrReadyWhenFailed, err)
 		}
 	}
 	e.markReady(nodeID, true)

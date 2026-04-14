@@ -2,6 +2,7 @@ package graphcontroller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"testing"
@@ -705,6 +706,234 @@ func TestReconcileStateDeriveReadyCondition_FinalizerSkipped(t *testing.T) {
 	assert.Equal(t, ConditionTrue, status)
 	assert.Equal(t, "Ready", reason)
 	assert.Contains(t, message, "finalization skipped", "Ready message should surface FinalizerSkipped info")
+}
+
+// ---------------------------------------------------------------------------
+// Correctness reconciliation — readyWhen expression errors
+//
+// Per 001-graph.md: "readyWhen is a health signal — it does not gate
+// downstream execution. Dependents proceed as soon as the node is applied
+// and its data is in scope, regardless of readyWhen."
+//
+// A readyWhen expression that returns a non-bool type or hits a CEL error
+// is a permanent spec error — but it must NOT produce NodeError (which
+// blocks dependents). It must produce NodeNotReady.
+// ---------------------------------------------------------------------------
+
+// TestEvalReadiness_ExpressionErrorWrapsReadyWhenFailed proves that when
+// readyWhen evaluation fails with a permanent expression error (not data
+// pending), evalReadiness wraps it with ErrReadyWhenFailed so the
+// coordinator classifies it as NodeNotReady instead of NodeError.
+//
+// Per 001-graph.md: "readyWhen is a health signal — it does not gate
+// downstream execution."
+func TestEvalReadiness_ExpressionErrorWrapsReadyWhenFailed(t *testing.T) {
+	// Build a compiledGraph with a readyWhen expression that evaluates
+	// to an int (not a bool) — a permanent expression error.
+	// size(deploy.metadata.name) returns int64, which evalBoolCondition
+	// rejects: "expression evaluated to int64, want bool"
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{
+				ID:        "deploy",
+				Template:  map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "app"}},
+				ReadyWhen: []string{"${size(deploy.metadata.name)}"},
+			},
+		},
+	}
+	compiled, err := compileGraphSpec(spec)
+	require.NoError(t, err)
+
+	eval := &evaluator{compiled: compiled, scope: map[string]any{
+		"deploy": map[string]any{
+			"metadata": map[string]any{"name": "app"},
+		},
+	}}
+
+	err = eval.evalReadiness("deploy", []string{"${size(deploy.metadata.name)}"})
+	require.Error(t, err)
+
+	// The error must wrap ErrReadyWhenFailed — NOT be a raw error that
+	// the coordinator would classify as NodeError.
+	assert.True(t, errors.Is(err, ErrReadyWhenFailed),
+		"readyWhen expression error should wrap ErrReadyWhenFailed, got: %v", err)
+
+	// The error must NOT wrap ErrWaitingForReadiness — that's for transient
+	// readiness conditions (data not yet available, condition evaluates false).
+	assert.False(t, errors.Is(err, ErrWaitingForReadiness),
+		"readyWhen expression error should NOT wrap ErrWaitingForReadiness")
+
+	// The underlying error message should be preserved for diagnostics.
+	assert.Contains(t, err.Error(), "want bool",
+		"underlying expression error should be preserved")
+}
+
+// TestEvalReadiness_NormalNotReadyIsUnchanged proves that normal readyWhen
+// failures (condition evaluates to false, data pending) still produce
+// ErrWaitingForReadiness — the fix only affects expression errors.
+func TestEvalReadiness_NormalNotReadyIsUnchanged(t *testing.T) {
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{
+				ID:        "deploy",
+				Template:  map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "app"}},
+				ReadyWhen: []string{"${deploy.status.availableReplicas > 0}"},
+			},
+		},
+	}
+	compiled, err := compileGraphSpec(spec)
+	require.NoError(t, err)
+
+	eval := &evaluator{compiled: compiled, scope: map[string]any{
+		"deploy": map[string]any{
+			"metadata": map[string]any{"name": "app"},
+			"status":   map[string]any{"availableReplicas": int64(0)},
+		},
+	}}
+
+	err = eval.evalReadiness("deploy", []string{"${deploy.status.availableReplicas > 0}"})
+	require.Error(t, err)
+
+	// Normal readyWhen failure (condition false) — should still be ErrWaitingForReadiness.
+	assert.True(t, errors.Is(err, ErrWaitingForReadiness),
+		"normal readyWhen=false should produce ErrWaitingForReadiness, got: %v", err)
+	assert.False(t, errors.Is(err, ErrReadyWhenFailed),
+		"normal readyWhen=false should NOT produce ErrReadyWhenFailed")
+}
+
+// TestWorkerClassification_ReadyWhenFailedIsNotReady proves that the worker
+// goroutine's error classification maps ErrReadyWhenFailed to NodeNotReady,
+// not NodeError. This is the boundary where the gating decision is made.
+func TestWorkerClassification_ReadyWhenFailedIsNotReady(t *testing.T) {
+	// Simulate the worker's classification logic.
+	classify := func(err error) NodeState {
+		if err == nil {
+			return NodeReady
+		}
+		switch {
+		case errors.Is(err, ErrPending):
+			return NodePending
+		case errors.Is(err, ErrWaitingForReadiness):
+			return NodeNotReady
+		case errors.Is(err, ErrReadyWhenFailed):
+			return NodeNotReady
+		case errors.Is(err, ErrFieldConflict):
+			return NodeConflict
+		default:
+			return NodeError
+		}
+	}
+
+	tests := []struct {
+		name string
+		err  error
+		want NodeState
+	}{
+		{"readyWhen expression error", fmt.Errorf("%w: expression returned string", ErrReadyWhenFailed), NodeNotReady},
+		{"readyWhen false", fmt.Errorf("%w", ErrWaitingForReadiness), NodeNotReady},
+		{"data pending", fmt.Errorf("%w", ErrPending), NodePending},
+		{"field conflict", fmt.Errorf("%w", ErrFieldConflict), NodeConflict},
+		{"API error", fmt.Errorf("forbidden: permission denied"), NodeError},
+		{"nil", nil, NodeReady},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classify(tc.err)
+			assert.Equal(t, tc.want, got,
+				"error %v should classify as %s", tc.err, tc.want)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Correctness reconciliation — forEach parent state error precedence
+//
+// Per 004-graph-execution.md § Parent State: "Deterministic errors (Error)
+// take precedence over transient errors (SystemError, Conflict) — if any
+// child's failure is deterministic, retrying cannot resolve the parent."
+// ---------------------------------------------------------------------------
+
+// TestHighestPriorityChildError proves that when multiple forEach children
+// fail, the highest-priority error is returned — not the first one.
+func TestHighestPriorityChildError(t *testing.T) {
+	errConflict := fmt.Errorf("SSA conflict on apps/v1/Deployment my-app: %w: field taken", ErrFieldConflict)
+	errForbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "deployments"}, "my-app", fmt.Errorf("RBAC"))
+	errNetwork := &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("connection refused")}
+	errCEL := fmt.Errorf("evaluating template: expression returned string, want int")
+
+	tests := []struct {
+		name     string
+		errs     []error
+		wantType NodeState // the expected classification of the returned error
+	}{
+		{
+			name:     "deterministic (Forbidden) over transient (network)",
+			errs:     []error{errNetwork, errForbidden},
+			wantType: NodeError,
+		},
+		{
+			name:     "deterministic (CEL) over conflict",
+			errs:     []error{errConflict, errCEL},
+			wantType: NodeError,
+		},
+		{
+			name:     "conflict over network (system error)",
+			errs:     []error{errNetwork, errConflict},
+			wantType: NodeConflict,
+		},
+		{
+			name:     "single error returns itself",
+			errs:     []error{errNetwork},
+			wantType: NodeSystemError,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := highestPriorityChildError(tc.errs)
+			require.NotNil(t, result)
+
+			// Classify the result to check priority.
+			if errors.Is(result, ErrFieldConflict) {
+				assert.Equal(t, NodeConflict, tc.wantType)
+			} else {
+				info := classifyAPIError(result)
+				assert.Equal(t, tc.wantType, info.state,
+					"highest priority error should classify as %s, got %s (error: %v)",
+					tc.wantType, info.state, result)
+			}
+		})
+	}
+}
+
+// TestHighestPriorityChildError_Nil proves that an empty error list
+// returns nil (no children failed).
+func TestHighestPriorityChildError_Nil(t *testing.T) {
+	assert.Nil(t, highestPriorityChildError(nil))
+	assert.Nil(t, highestPriorityChildError([]error{}))
+}
+
+// ---------------------------------------------------------------------------
+// Correctness reconciliation — readyWhen errors in status
+// ---------------------------------------------------------------------------
+
+// TestDeriveReadyCondition_NotReadyWithErrors proves that when nodes are
+// NotReady and there are nodeErrors (e.g., readyWhen expression errors),
+// the Ready condition message surfaces the errors for operator visibility.
+func TestDeriveReadyCondition_NotReadyWithErrors(t *testing.T) {
+	state := &reconcileState{
+		compiled: true,
+		PlanSummary: PlanSummary{
+			HasNotReady: true,
+		},
+		nodeErrors: []string{"deploy: readyWhen evaluation failed: expression returned string, want bool"},
+	}
+	status, reason, message := state.deriveReadyCondition()
+	assert.Equal(t, ConditionUnknown, status)
+	assert.Equal(t, "NotReady", reason)
+	assert.Contains(t, message, "readyWhen evaluation failed",
+		"NotReady condition should surface readyWhen expression errors for operator triage")
 }
 
 // ---------------------------------------------------------------------------

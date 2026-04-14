@@ -99,7 +99,15 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 		return ConditionUnknown, "Pending", "One or more resources waiting for upstream data"
 	}
 	if s.HasNotReady {
-		return ConditionUnknown, "NotReady", "One or more resources have not satisfied their readyWhen conditions"
+		msg := "One or more resources have not satisfied their readyWhen conditions"
+		// Surface readyWhen expression errors so operators can distinguish
+		// "waiting for Deployment to roll out" from "your CEL expression
+		// returns int64, expected bool." Without this, broken readyWhen
+		// expressions appear as transient NotReady with no actionable signal.
+		if len(s.nodeErrors) > 0 {
+			msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
+		}
+		return ConditionUnknown, "NotReady", msg
 	}
 	msg := fmt.Sprintf("All %d resources reconciled", s.ReadyCount)
 	// Surface informational notes (e.g., FinalizerSkipped) that don't

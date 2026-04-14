@@ -55,6 +55,14 @@ var ErrInvalidExpression = errors.New("invalid expression")
 // field or the Graph spec changes to no longer write that field.
 var ErrFieldConflict = errors.New("field conflict")
 
+// ErrReadyWhenFailed indicates that a readyWhen expression failed to evaluate
+// due to a permanent expression error (not data pending, not a transient
+// condition). Per 001-graph.md: "readyWhen is a health signal — it does not
+// gate downstream execution." The coordinator classifies this as NodeNotReady
+// (not NodeError) so dependents proceed. The underlying error is preserved in
+// the chain for logging and status reporting.
+var ErrReadyWhenFailed = errors.New("readyWhen evaluation failed")
+
 // ErrDependencyError indicates that the dependency graph contains a cycle.
 // This is a permanent error until the spec is fixed.
 var ErrDependencyError = errors.New("circular dependency")

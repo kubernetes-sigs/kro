@@ -463,6 +463,12 @@ func (w *walkState) tryDispatch(idx int) {
 				state = NodePending
 			case errors.Is(err, ErrWaitingForReadiness):
 				state = NodeNotReady
+			case errors.Is(err, ErrReadyWhenFailed):
+				// Per 001-graph.md: "readyWhen is a health signal — it does
+				// not gate downstream execution." A broken readyWhen expression
+				// (wrong return type, CEL error) must not produce NodeError
+				// (which blocks dependents). NodeNotReady preserves the invariant.
+				state = NodeNotReady
 			case errors.Is(err, ErrFieldConflict):
 				state = NodeConflict
 			default:
@@ -822,6 +828,17 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 		// Update plan state.
 		plan.SetState(dag, node.ID, res.state)
+
+		// Surface readyWhen expression errors. Per 001-graph.md: readyWhen
+		// errors produce NodeNotReady (not NodeError), so they don't gate
+		// dependents. But the user needs to know their expression is broken
+		// and won't self-heal — log it and include in nodeErrors for status.
+		if res.state == NodeNotReady && res.err != nil && errors.Is(res.err, ErrReadyWhenFailed) {
+			walk.nodeErrors = append(walk.nodeErrors, fmt.Sprintf("%s: %s", node.ID, res.err.Error()))
+			logger.V(0).Info("readyWhen expression error (not gating dependents)",
+				"node", node.ID, "error", res.err)
+		}
+
 		if res.state == NodeReady || res.state == NodeNotReady {
 			walk.appliedKeys = append(walk.appliedKeys, res.keys...)
 		} else {

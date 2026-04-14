@@ -117,3 +117,90 @@ func TestSetIdentityLabels(t *testing.T) {
 	assert.Equal(t, "own", labels["deploy.my-app.default.internal.kro.run/reference"])
 	assert.Equal(t, "3", labels["deploy.my-app.default.internal.kro.run/generation"])
 }
+
+// TestIdentityLabelKeyProducesValidSubdomain verifies the invariant that
+// validateIdentityLabelKey rejects node IDs producing invalid DNS-1123
+// subdomain label prefixes. Kubernetes requires the prefix portion of a
+// qualified label key (everything before the /) to be a valid DNS subdomain.
+// Node IDs are embedded directly in that prefix.
+func TestIdentityLabelKeyProducesValidSubdomain(t *testing.T) {
+	tests := []struct {
+		name    string
+		nodeID  string
+		graph   string
+		ns      string
+		wantErr bool
+	}{
+		{
+			name:    "simple alphanumeric",
+			nodeID:  "deploy",
+			graph:   "myapp",
+			ns:      "default",
+			wantErr: false,
+		},
+		{
+			name:    "underscore in node ID",
+			nodeID:  "prstatus_test_app",
+			graph:   "myapp",
+			ns:      "default",
+			wantErr: true,
+		},
+		{
+			name:    "single underscore",
+			nodeID:  "foo_bar",
+			graph:   "g",
+			ns:      "default",
+			wantErr: true,
+		},
+		{
+			name:    "space in node ID",
+			nodeID:  "foo bar",
+			graph:   "g",
+			ns:      "default",
+			wantErr: true,
+		},
+		{
+			name:    "trailing dot in node ID",
+			nodeID:  "foo.",
+			graph:   "g",
+			ns:      "default",
+			wantErr: true,
+		},
+		{
+			name:    "mixed case lowered is still valid",
+			nodeID:  "Deploy",
+			graph:   "MyApp",
+			ns:      "Default",
+			wantErr: false,
+		},
+		{
+			name:    "single character",
+			nodeID:  "a",
+			graph:   "g",
+			ns:      "default",
+			wantErr: false,
+		},
+		{
+			name:    "multi-segment all valid",
+			nodeID:  "promotionstep",
+			graph:   "myapp",
+			ns:      "production",
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateIdentityLabelKey(tc.nodeID, tc.graph, tc.ns)
+			if tc.wantErr {
+				assert.Error(t, err,
+					"node ID %q should be rejected — produces invalid DNS subdomain label prefix",
+					tc.nodeID)
+			} else {
+				assert.NoError(t, err,
+					"node ID %q should be accepted — produces valid DNS subdomain label prefix",
+					tc.nodeID)
+			}
+		})
+	}
+}

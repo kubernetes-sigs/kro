@@ -17,6 +17,8 @@ package graphcontroller
 import (
 	"fmt"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // maxLabelPrefixLength is the Kubernetes limit for the prefix part of a
@@ -54,14 +56,19 @@ func identityLabelKey(nodeID, graphName, namespace string) string {
 }
 
 // validateIdentityLabelKey checks that the identity label key for a node
-// doesn't exceed the Kubernetes label key prefix limit (253 characters).
-// Returns an error describing the violation if the key is too long.
+// produces a valid Kubernetes label key. The prefix (everything before the /)
+// must be a valid DNS-1123 subdomain: [a-z0-9.-], max 253 characters.
+// Returns an error if the prefix exceeds the length limit or contains
+// characters invalid in DNS subdomains (e.g., underscores, spaces).
 func validateIdentityLabelKey(nodeID, graphName, namespace string) error {
-	key := identityLabelKey(nodeID, graphName, namespace)
-	// The prefix is everything before the /
-	if idx := strings.Index(key, "/"); idx > maxLabelPrefixLength {
+	prefix := nodeLabelPrefix(nodeID, graphName, namespace)
+	if len(prefix) > maxLabelPrefixLength {
 		return fmt.Errorf("identity label key prefix for node %q exceeds the %d-character DNS subdomain limit (%d characters: %s)",
-			nodeID, maxLabelPrefixLength, idx, key[:idx])
+			nodeID, maxLabelPrefixLength, len(prefix), prefix)
+	}
+	if errs := validation.IsDNS1123Subdomain(prefix); len(errs) > 0 {
+		return fmt.Errorf("node %q produces invalid DNS subdomain in label key prefix %q: %s",
+			nodeID, prefix, strings.Join(errs, "; "))
 	}
 	return nil
 }

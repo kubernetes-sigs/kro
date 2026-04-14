@@ -470,6 +470,50 @@ func TestNodeIDCaseCollisionRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "collides with")
 }
 
+// TestParseNodeListEnforcesValidDNSLabels verifies that parseNodeList rejects
+// node IDs that are not valid DNS-1123 labels. Node IDs are embedded in
+// identity label key prefixes as DNS subdomain segments — invalid IDs would
+// cause the API server to reject resources at apply time.
+func TestParseNodeListEnforcesValidDNSLabels(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      string
+		wantErr bool
+	}{
+		// Valid cases — must not be rejected
+		{name: "simple alphanumeric", id: "deploy", wantErr: false},
+		{name: "single character", id: "a", wantErr: false},
+		{name: "numbers only", id: "123", wantErr: false},
+		{name: "alphanumeric mix", id: "app2v3", wantErr: false},
+		{name: "max length 63", id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", wantErr: false},
+
+		// Invalid cases — must be rejected
+		{name: "empty string", id: "", wantErr: true},
+		{name: "underscore", id: "foo_bar", wantErr: true},
+		{name: "multiple underscores", id: "prstatus_test_app_uat", wantErr: true},
+		{name: "dot", id: "foo.bar", wantErr: true},
+		{name: "space", id: "foo bar", wantErr: true},
+		{name: "exceeds 63 chars", id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", wantErr: true},
+		{name: "leading dot", id: ".foo", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []any{
+				map[string]any{
+					"id":       tc.id,
+					"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "cm"}},
+				},
+			}
+			_, err := parseNodeList(raw)
+			if tc.wantErr {
+				require.Error(t, err, "node ID %q must be rejected", tc.id)
+			} else {
+				require.NoError(t, err, "node ID %q must be accepted", tc.id)
+			}
+		})
+	}
+}
+
 // TestFinalizesTargetMustExist verifies that a finalizes declaration pointing
 // at a nonexistent node ID is rejected at DAG build time.
 func TestFinalizesTargetMustExist(t *testing.T) {

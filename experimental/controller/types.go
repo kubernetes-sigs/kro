@@ -8,6 +8,8 @@ package graphcontroller
 import (
 	"fmt"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // Reference is the reference type of a Graph node — it classifies how the node
@@ -340,6 +342,13 @@ func parseNodeList(raw any) ([]Node, error) {
 		// subtraction by the CEL evaluator (e.g., my-app is my minus app)."
 		if strings.Contains(id, "-") {
 			return nil, fmt.Errorf("node[%d] %q: hyphens are not allowed in node IDs (parsed as subtraction by CEL)", i, id)
+		}
+		// Node IDs are embedded in identity label key prefixes as DNS
+		// subdomain segments. Reject IDs that would produce invalid DNS
+		// subdomains (e.g., underscores, spaces). This catches the entire
+		// class of invalid characters rather than enumerating them.
+		if errs := validation.IsDNS1123Label(strings.ToLower(id)); len(errs) > 0 {
+			return nil, fmt.Errorf("node[%d] %q: invalid DNS subdomain segment for identity label key: %s", i, id, strings.Join(errs, "; "))
 		}
 		if seen[id] {
 			return nil, fmt.Errorf("node[%d]: duplicate id %q", i, id)

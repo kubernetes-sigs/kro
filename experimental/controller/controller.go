@@ -165,6 +165,16 @@ func (w *walkState) notifyDependents(nodeID string) {
 	}
 }
 
+// carryForwardKeys appends a node's previous applied keys to the walk's
+// applied key set. Used when a node is skipped, blocked, or in error — the
+// resource may still exist in the cluster, so its keys must remain in the
+// applied set to prevent spurious pruning.
+func (w *walkState) carryForwardKeys(nodeID string) {
+	if prevKeys, ok := w.state.previousKeys[nodeID]; ok {
+		w.appliedKeys = append(w.appliedKeys, prevKeys...)
+	}
+}
+
 // tryDispatch checks if a node can be dispatched. Three outcomes:
 // 1. All dependencies resolved → dispatch to worker
 // 2. Some dependency still inflight → skip, retried when dependency completes
@@ -192,9 +202,7 @@ func (w *walkState) tryDispatch(idx int) {
 		if prev, ok := w.state.previousScope[node.ID]; ok {
 			w.eval.scope[node.ID] = prev
 		}
-		if prevKeys, ok := w.state.previousKeys[node.ID]; ok {
-			w.appliedKeys = append(w.appliedKeys, prevKeys...)
-		}
+		w.carryForwardKeys(node.ID)
 		if w.watcher != nil {
 			w.watcher.retainWatches(node.ID)
 		}
@@ -279,9 +287,7 @@ func (w *walkState) tryDispatch(idx int) {
 		if prev, ok := w.state.previousScope[node.ID]; ok {
 			w.eval.scope[node.ID] = prev
 		}
-		if prevKeys, ok := w.state.previousKeys[node.ID]; ok {
-			w.appliedKeys = append(w.appliedKeys, prevKeys...)
-		}
+		w.carryForwardKeys(node.ID)
 		if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
 			w.plan.States[node.ID] = prevState
 		} else {
@@ -338,9 +344,7 @@ func (w *walkState) tryDispatch(idx int) {
 					if prev, ok := w.state.previousScope[node.ID]; ok {
 						w.eval.scope[node.ID] = prev
 					}
-					if prevKeys, ok := w.state.previousKeys[node.ID]; ok {
-						w.appliedKeys = append(w.appliedKeys, prevKeys...)
-					}
+					w.carryForwardKeys(node.ID)
 					if w.watcher != nil {
 						w.watcher.retainWatches(node.ID)
 					}
@@ -380,9 +384,7 @@ func (w *walkState) tryDispatch(idx int) {
 				} else if prevScope != nil {
 					w.eval.scope[node.ID] = prevScope
 				}
-				if prevKeys, ok := w.state.previousKeys[node.ID]; ok {
-					w.appliedKeys = append(w.appliedKeys, prevKeys...)
-				}
+				w.carryForwardKeys(node.ID)
 				if w.watcher != nil {
 					w.watcher.retainWatches(node.ID)
 				}
@@ -762,9 +764,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			logger.V(0).Info("error on node", "node", node.ID,
 				"state", info.state, "reason", info.reason, "error", res.err)
 			// Retain previous keys — the resource may still exist in the cluster.
-			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				walk.appliedKeys = append(walk.appliedKeys, prevKeys...)
-			}
+			walk.carryForwardKeys(node.ID)
 			// Dispatch dependents — tryDispatch will see the error state
 			// and mark them as Blocked via the dependency check.
 			for _, depIdx := range dag.Dependents[node.ID] {
@@ -779,9 +779,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.previousKeys[node.ID] = res.keys
 			walk.nodeErrors = append(walk.nodeErrors, fmt.Sprintf("%s: field conflict", node.ID))
 			logger.V(0).Info("conflict on node", "node", node.ID, "error", res.err)
-			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				walk.appliedKeys = append(walk.appliedKeys, prevKeys...)
-			}
+			walk.carryForwardKeys(node.ID)
 			for _, depIdx := range dag.Dependents[node.ID] {
 				walk.tryDispatch(depIdx)
 			}
@@ -799,9 +797,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.previousScope[node.ID] = res.scopeValue
 			state.previousKeys[node.ID] = res.keys
 			logger.V(1).Info("data pending for node", "node", node.ID, "error", res.err)
-			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				walk.appliedKeys = append(walk.appliedKeys, prevKeys...)
-			}
+			walk.carryForwardKeys(node.ID)
 			for _, depIdx := range dag.Dependents[node.ID] {
 				walk.tryDispatch(depIdx)
 			}
@@ -831,9 +827,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		} else {
 			// Non-success states that reach here (e.g., NodeNotReady with keys) —
 			// retain previous keys since the resource may still exist.
-			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				walk.appliedKeys = append(walk.appliedKeys, prevKeys...)
-			}
+			walk.carryForwardKeys(node.ID)
 		}
 
 		// Evaluate propagateWhen (coordinator reads from now-merged scope).
@@ -929,9 +923,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// retention is the surgical fallback if the gate logic ever changes.
 	for _, node := range dag.Nodes {
 		if plan.States[node.ID] == NodeBlocked || plan.States[node.ID] == NodePending {
-			if prevKeys, ok := state.previousKeys[node.ID]; ok {
-				walk.appliedKeys = append(walk.appliedKeys, prevKeys...)
-			}
+			walk.carryForwardKeys(node.ID)
 		}
 	}
 

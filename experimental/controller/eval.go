@@ -341,11 +341,6 @@ func copyScope(scope map[string]any) map[string]any {
 	return result
 }
 
-// extractReferencedIDs scans a Node for all ${...} expressions (at the
-// current evaluation level — not $${...}) and returns the set of top-level
-// scope variable names referenced. Self-references (the node's own ID)
-// are excluded since readyWhen expressions reference the node itself
-// after it's applied, not as a dependency.
 // extractReferencedPathsFromNode scans a Node's template and gate expressions
 // for ${...} blocks, looks up pre-extracted field paths from exprPaths, and
 // returns per-node dependency paths, self paths, readiness deps, and dependency IDs.
@@ -355,9 +350,8 @@ func copyScope(scope map[string]any) map[string]any {
 // detection. DepPaths/SelfPaths will be nil in this case — hashing won't be
 // available, but dependency detection for topological sort still works.
 //
-// This replaces both extractReferencedIDs and extractReferencedSections with
-// AST-derived field paths. The exprPaths map is computed from CEL ASTs during
-// compilation in compileGraphSpec.
+// The exprPaths map is computed from CEL ASTs during compilation in
+// compileGraphSpec. See 004-graph-execution.md § Change detection.
 func extractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][]FieldPath) (
 	dependencies map[string]bool,
 	depPaths map[string][]FieldPath,

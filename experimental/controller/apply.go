@@ -417,7 +417,7 @@ func contributeKey(obj *unstructured.Unstructured, hasStatus bool) string {
 
 // parseContributeKey extracts the resource key and status flag from a
 // contribute applied set key. Returns ("", false) if not a contribute key.
-func parseContributeKey(key string) (resourceKey string, hasStatus bool) {
+func parseContributeKey(key string) (resKey string, hasStatus bool) {
 	if !strings.HasPrefix(key, contributeKeyPrefix) {
 		return "", false
 	}

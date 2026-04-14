@@ -205,5 +205,4 @@ type appliedEntry struct {
 	NodeID    string
 	Reference Reference // ReferenceOwn or ReferenceContribute
 	Key       string    // resource key (group/version/Kind/namespace/name)
-	HasStatus bool      // for contributes: whether status subresource was applied
 }

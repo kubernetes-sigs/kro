@@ -191,7 +191,6 @@ const (
 )
 
 // String returns the human-readable name of the NodeState.
-// Per 006-quality.md: "Each concept has exactly one name, used consistently."
 func (s NodeState) String() string {
 	switch s {
 	case nodeUnvisited:

@@ -81,7 +81,7 @@ func (e *evaluator) markReady(nodeID string, ready bool) {
 // duplicated across every post-dispatch path in reconcileNode.
 func (e *evaluator) evalReadiness(nodeID string, readyWhen []string) error {
 	if len(readyWhen) > 0 {
-		if err := e.checkReadiness(readyWhen, e.scope[nodeID], nodeID); err != nil {
+		if err := e.checkReadiness(readyWhen, nodeID); err != nil {
 			e.markReady(nodeID, false)
 			return err
 		}
@@ -94,7 +94,7 @@ func (e *evaluator) evalReadiness(nodeID string, readyWhen []string) error {
 // Returns nil if all conditions pass, ErrWaitingForReadiness if any are false
 // or data-pending. Evaluates against the full scope so readyWhen can reference
 // other nodes (e.g., readyWhen: ["${workers.ready()}"]).
-func (e *evaluator) checkReadiness(conditions []string, observed any, nodeID string) error {
+func (e *evaluator) checkReadiness(conditions []string, nodeID string) error {
 	if len(conditions) == 0 {
 		return nil
 	}
@@ -123,7 +123,7 @@ func (e *evaluator) checkReadiness(conditions []string, observed any, nodeID str
 // against the full scope (not a restricted single-node scope) is required for
 // these references to resolve. The DAG walk's topological order guarantees
 // that all dependency nodes are already in e.scope when this is called.
-func (e *evaluator) checkPropagateWhen(conditions []string, observed any, nodeID string) bool {
+func (e *evaluator) checkPropagateWhen(conditions []string, nodeID string) bool {
 	if len(conditions) == 0 {
 		return true
 	}

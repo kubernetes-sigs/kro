@@ -98,7 +98,6 @@ func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructu
 		return ReferenceUnresolved, fmt.Errorf("resolving reference for %s: %w", node.ID, err)
 	}
 
-	// Force annotation is an explicit ownership claim — always Own.
 	obj := &unstructured.Unstructured{Object: evalMap}
 	if isForceApply(obj) {
 		logger.V(1).Info("reference resolved: Own (Force annotation)", "node", node.ID)
@@ -109,15 +108,36 @@ func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructu
 		obj.SetNamespace(graph.GetNamespace())
 	}
 
+	ref, err := r.classifyReference(ctx, graph, obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
+	if err != nil {
+		return ReferenceUnresolved, fmt.Errorf("checking resource existence for reference detection %s: %w", node.ID, err)
+	}
+	logger.V(1).Info("reference resolved", "node", node.ID, "ref", ref)
+	return ref, nil
+}
+
+// classifyReference determines Own vs Contribute for a resource by checking
+// whether it exists and examining its identity labels. This is the shared
+// classification logic used by both resolveReference (single nodes) and
+// resolveForEachChildReference (forEach children).
+//
+// Decision tree:
+//   - Resource absent → Own (we'll create it)
+//   - Resource exists with this Graph's contribute label → Contribute
+//   - Resource exists with this Graph's own label → Own (we created it previously)
+//   - Resource exists without any of this Graph's labels → Contribute
+//
+// Returns a non-nil error only for transient failures (network, server error).
+// NotFound is not an error — it maps to Own.
+func (r *GraphReconciler) classifyReference(ctx context.Context, graph *unstructured.Unstructured, gvk schema.GroupVersionKind, namespace, name string) (Reference, error) {
 	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(obj.GroupVersionKind())
-	err = r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing)
+	existing.SetGroupVersionKind(gvk)
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, existing)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.V(1).Info("reference resolved: Own (resource absent)", "node", node.ID)
 			return ReferenceOwn, nil
 		}
-		return ReferenceUnresolved, fmt.Errorf("checking resource existence for reference detection %s: %w", node.ID, err)
+		return ReferenceOwn, err
 	}
 
 	// Resource exists. Check if this Graph created it (identity label match).
@@ -132,15 +152,12 @@ func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructu
 	for key, val := range existingLabels {
 		if isGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
 			if val == ReferenceContribute.String() {
-				logger.V(1).Info("reference resolved: Contribute (resource has our contribute label)", "node", node.ID)
 				return ReferenceContribute, nil
 			}
-			logger.V(1).Info("reference resolved: Own (resource has our identity label)", "node", node.ID)
 			return ReferenceOwn, nil
 		}
 	}
 
-	logger.V(1).Info("reference resolved: Contribute (resource exists, not ours)", "node", node.ID)
 	return ReferenceContribute, nil
 }
 
@@ -255,7 +272,7 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 	// compensating ones.
 	ready := true
 	if len(node.ReadyWhen) > 0 {
-		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
+		if err := eval.checkReadiness(node.ReadyWhen, node.ID); err != nil {
 			ready = false
 			// Set __ready on items, then return the error. Items stay in
 			// scope so downstream nodes can still reference the data.

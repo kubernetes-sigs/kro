@@ -585,11 +585,5 @@ func TestRevisionActivation(t *testing.T) {
 		"Active", "True"))
 	t.Log("Revision has Active=True")
 
-	// Revision should have Propagated=True
-	require.NoError(t, waitForRevisionCondition(ctx, k8sClient,
-		types.NamespacedName{Name: revName, Namespace: ns},
-		"Propagated", "True"))
-	t.Log("Revision has Propagated=True")
-
-	t.Log("Revision activation lifecycle proved: Propagated → Ready → Active")
+	t.Log("Revision activation lifecycle proved: Ready → Active")
 }

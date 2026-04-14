@@ -46,9 +46,8 @@ type RevisionConditionType string
 
 // Revision condition types.
 const (
-	RevisionConditionReady      RevisionConditionType = "Ready"
-	RevisionConditionPropagated RevisionConditionType = "Propagated"
-	RevisionConditionActive     RevisionConditionType = "Active"
+	RevisionConditionReady  RevisionConditionType = "Ready"
+	RevisionConditionActive RevisionConditionType = "Active"
 )
 
 // ---------------------------------------------------------------------------
@@ -465,11 +464,6 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 		return nil, nil, fmt.Errorf("creating revision %s: %w", revName, err)
 	}
 	logger.Info("created revision", "revision", revName, "generation", generation)
-
-	// Set initial conditions on the new revision
-	if err := setRevisionCondition(ctx, r.Client, revision, RevisionConditionPropagated, ConditionTrue, "Propagated", "Controller is reconciling from this revision"); err != nil {
-		logger.V(1).Info("failed to set initial Propagated condition", "revision", revName, "error", err)
-	}
 
 	// Collect superseded revisions for prune diffing
 	superseded = r.findSupersededRevisions(ctx, graphName, namespace, generation)

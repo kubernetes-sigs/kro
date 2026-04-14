@@ -210,7 +210,7 @@ func (w *walkState) tryDispatch(idx int) {
 			if (prevState == NodeReady || prevState == NodeNotReady) &&
 				len(node.PropagateWhen) > 0 && w.state.previousScope[node.ID] != nil {
 				w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
-					node.PropagateWhen, w.state.previousScope[node.ID], node.ID)
+					node.PropagateWhen, node.ID)
 			}
 		}
 		w.outputsReady[node.ID] = true
@@ -353,7 +353,7 @@ func (w *walkState) tryDispatch(idx int) {
 						if prevState == NodeReady || prevState == NodeNotReady {
 							if len(node.PropagateWhen) > 0 && prevScope != nil {
 								w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
-									node.PropagateWhen, prevScope, node.ID)
+									node.PropagateWhen, node.ID)
 							}
 						}
 					}
@@ -389,17 +389,17 @@ func (w *walkState) tryDispatch(idx int) {
 					w.watcher.retainWatches(node.ID)
 				}
 				nodeState := NodeReady
-				observed := w.eval.scope[node.ID]
-				if len(node.ReadyWhen) > 0 && observed != nil {
-					if err := w.eval.checkReadiness(node.ReadyWhen, observed, node.ID); err != nil {
+				scopeData := w.eval.scope[node.ID]
+				if len(node.ReadyWhen) > 0 && scopeData != nil {
+					if err := w.eval.checkReadiness(node.ReadyWhen, node.ID); err != nil {
 						nodeState = NodeNotReady
 					}
 				}
 				w.plan.States[node.ID] = nodeState
 				if (nodeState == NodeReady || nodeState == NodeNotReady) &&
-					len(node.PropagateWhen) > 0 && observed != nil {
+					len(node.PropagateWhen) > 0 && scopeData != nil {
 					w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
-						node.PropagateWhen, observed, node.ID)
+						node.PropagateWhen, node.ID)
 				}
 				w.state.previousPlanStates[node.ID] = nodeState
 				for _, depIdx := range w.dag.Dependents[node.ID] {
@@ -834,7 +834,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		if (res.state == NodeReady || res.state == NodeNotReady) &&
 			len(node.PropagateWhen) > 0 && eval.scope[node.ID] != nil {
 			plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
-				node.PropagateWhen, eval.scope[node.ID], node.ID)
+				node.PropagateWhen, node.ID)
 		}
 
 		// Step 8: Propagation check — hash the specific field paths

@@ -8,10 +8,8 @@ import (
 	"context"
 	"fmt"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -190,7 +188,15 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 			// Resolve Own vs Contribute per child. Each child targets a
 			// different resource, so the reference type is item-specific.
-			childRef := r.resolveForEachChildReference(ctx, graph, childObj)
+			childRef, refErr := r.resolveForEachChildReference(ctx, graph, childObj)
+			if refErr != nil {
+				childErrors = append(childErrors, fmt.Errorf("forEach %s item: resolving reference for %s: %w", node.ID, childObj.GetName(), refErr))
+				logger.V(1).Info("forEach child reference resolution failed", "node", node.ID, "item", id, "error", refErr)
+				if prevKeys, ok := prevItemKeys[id]; ok {
+					keys = append(keys, prevKeys...)
+				}
+				continue
+			}
 
 			lbls := childObj.GetLabels()
 			if lbls == nil {
@@ -267,7 +273,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			for _, applied := range scopeVal.([]any) {
 				saved := eval.scope[node.ID]
 				eval.scope[node.ID] = applied
-				err := eval.checkReadiness(node.ReadyWhen, applied, node.ID)
+				err := eval.checkReadiness(node.ReadyWhen, node.ID)
 				eval.scope[node.ID] = saved // restore before branching
 				if err != nil {
 					if m, ok := applied.(map[string]any); ok {
@@ -341,54 +347,16 @@ func forEachItemUnchanged(prev, current any) bool {
 }
 
 // resolveForEachChildReference determines whether a forEach child targets a
-// pre-existing resource (Contribute) or creates a new one (Own). This is
-// the per-child version of resolveReference in node.go — forEach children
-// can't be resolved at the parent level because each item targets a different
-// resource.
+// pre-existing resource (Contribute) or creates a new one (Own). Each forEach
+// child targets a different resource, so the reference type is item-specific.
 //
-// Force annotation → Own.
-// Resource absent → Own.
-// Resource exists with this Graph's "contribute" label → Contribute.
-// Resource exists with this Graph's "own" label → Own.
-// Resource exists without any kro label → Contribute.
-func (r *GraphReconciler) resolveForEachChildReference(ctx context.Context, graph *unstructured.Unstructured, child *unstructured.Unstructured) Reference {
-	logger := log.FromContext(ctx)
-
-	// Force annotation is an explicit ownership claim.
+// Force annotation → Own. Otherwise delegates to classifyReference.
+// Transient errors (network, server) are propagated — the caller should
+// treat this as a per-child error rather than silently claiming ownership.
+func (r *GraphReconciler) resolveForEachChildReference(ctx context.Context, graph *unstructured.Unstructured, child *unstructured.Unstructured) (Reference, error) {
 	if isForceApply(child) {
-		return ReferenceOwn
+		return ReferenceOwn, nil
 	}
 
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(child.GroupVersionKind())
-	err := r.Client.Get(ctx, client.ObjectKey{
-		Namespace: child.GetNamespace(),
-		Name:      child.GetName(),
-	}, existing)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return ReferenceOwn
-		}
-		// On error, default to Own (safe: won't accidentally delete a
-		// pre-existing resource because Own creates-then-manages).
-		logger.V(1).Info("forEach child reference resolution failed, defaulting to Own",
-			"name", child.GetName(), "error", err)
-		return ReferenceOwn
-	}
-
-	// Resource exists. Check identity labels to determine reference type.
-	existingLabels := existing.GetLabels()
-	for key, val := range existingLabels {
-		if isGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
-			if val == ReferenceContribute.String() {
-				return ReferenceContribute
-			}
-			return ReferenceOwn // Has our label with "own" value
-		}
-	}
-
-	// Resource exists without our label — we didn't create it → Contribute.
-	logger.V(1).Info("forEach child reference resolved: Contribute (resource exists, not ours)",
-		"name", child.GetName())
-	return ReferenceContribute
+	return r.classifyReference(ctx, graph, child.GroupVersionKind(), child.GetNamespace(), child.GetName())
 }

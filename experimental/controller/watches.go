@@ -79,7 +79,7 @@ const (
 )
 
 type watchEvent struct {
-	eventType WatchEventType
+	eventType WatchEventType // Observability only — routing is type-agnostic.
 	gvr       schema.GroupVersionResource
 	name      string
 	namespace string

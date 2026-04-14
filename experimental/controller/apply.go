@@ -188,7 +188,7 @@ func (r *GraphReconciler) runFinalization(
 		eval.scope[finNodeID] = normalizeTypes(existing.Object)
 
 		if len(finNode.ReadyWhen) > 0 {
-			if err := eval.checkReadiness(finNode.ReadyWhen, eval.scope[finNodeID], finNodeID); err != nil {
+			if err := eval.checkReadiness(finNode.ReadyWhen, finNodeID); err != nil {
 				// Step 2: readyWhen not satisfied — in progress.
 				logger.V(1).Info("finalizer not ready", "finalizer", finNodeID)
 				allReady = false
@@ -297,7 +297,7 @@ func (r *GraphReconciler) runForEachFinalization(
 			createdKeys = append(createdKeys, resourceKey(existing))
 			if len(finNode.ReadyWhen) > 0 {
 				innerEval.scope[finNode.ID] = normalizeTypes(existing.Object)
-				if err := innerEval.checkReadiness(finNode.ReadyWhen, innerEval.scope[finNode.ID], finNode.ID); err != nil {
+				if err := innerEval.checkReadiness(finNode.ReadyWhen, finNode.ID); err != nil {
 					logger.V(1).Info("forEach finalizer child not ready",
 						"finalizer", finNode.ID, "name", existing.GetName())
 					allReady = false

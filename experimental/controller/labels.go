@@ -46,7 +46,7 @@ func nodeLabelPrefix(nodeID, graphName, namespace string) string {
 }
 
 // identityLabelKey returns the identity label key for a node in a graph.
-// Format: <nodeID>.<graphName>.<namespace>.internal.kro.run/role
+// Format: <nodeID>.<graphName>.<namespace>.internal.kro.run/reference
 // All segments are lowercased to satisfy the RFC 1123 subdomain requirement
 // for Kubernetes label key prefixes.
 func identityLabelKey(nodeID, graphName, namespace string) string {
@@ -170,7 +170,7 @@ func forEachChildLabelPrefix(parentID, resName, resNamespace, kind, group, graph
 // forEachChildIdentityLabelKey returns the identity label key for a forEach child.
 // Per 004-graph-execution.md § Child Identity:
 //
-//	<parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/role
+//	<parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/reference
 //
 // This encodes the full resource key as DNS subdomain labels within the label key,
 // making each child uniquely identifiable in the applied set.

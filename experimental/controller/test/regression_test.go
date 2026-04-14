@@ -220,7 +220,7 @@ func TestMultiHopRevisionPrune(t *testing.T) {
 // removed from a Graph spec, the controller releases its field ownership
 // via skeleton apply instead of deleting the target resource.
 //
-// Regression: reconcileContribute() returned "" as the resource key, so
+// Regression: reconcileApply() for Contribute returned "" as the resource key, so
 // contributions never entered the applied set. skeletonApply() existed
 // but had zero callers. On spec change removing a Contribute template,
 // the contributed fields were never released.
@@ -801,7 +801,7 @@ func TestBlockedDependencyRecoveryReconverges(t *testing.T) {
 // TestContributeReadyWhenGatesGraphReadiness proves that readyWhen on a
 // Contribute node is evaluated and gates the Graph's Ready condition.
 //
-// Regression: reconcileContribute unconditionally called markReady(true),
+// Regression: the Contribute path unconditionally called markReady(true),
 // ignoring readyWhen. A user who set readyWhen on a Contribute node would
 // see the Graph report Ready before the target controller actuated the
 // contributed state.

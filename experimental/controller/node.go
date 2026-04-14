@@ -55,17 +55,8 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 		if err := r.reconcileWatch(ctx, graph, node, eval, watcher); err != nil {
 			return nil, err
 		}
-	case ReferenceContribute:
-		key, err := r.reconcileContribute(ctx, graph, node, eval, watcher, driftCorrection)
-		if err != nil {
-			if key != "" {
-				return []string{key}, err
-			}
-			return nil, err
-		}
-		return []string{key}, eval.evalReadiness(node.ID, node.ReadyWhen)
-	default: // ReferenceOwn
-		key, err := r.reconcileOwn(ctx, graph, node, eval, watcher, driftCorrection)
+	default: // ReferenceOwn, ReferenceContribute
+		key, err := r.reconcileApply(ctx, graph, node, ref, eval, watcher, driftCorrection)
 		if err != nil {
 			if key != "" {
 				return []string{key}, err
@@ -285,49 +276,35 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 	return nil
 }
 
-// reconcileOwn evaluates and applies an Own template.
+// reconcileApply evaluates and applies an Own or Contribute template.
+// The ref parameter controls SSA behavior (identity labels, pre-apply checks)
+// and applied set key format: Own keys use resourceKey (prune → delete),
+// Contribute keys use contributeKey (prune → skeleton apply to release fields).
+// See applySSA for the full ref-dependent behavior.
 // driftCorrection bypasses the apply-hash check in applySSA.
-func (r *GraphReconciler) reconcileOwn(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
+func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, ref Reference, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMap(node.Template)
 	if err != nil {
-		return "", fmt.Errorf("template %s: %w", node.ID, err)
+		return "", fmt.Errorf("%s %s: %w", ref, node.ID, err)
 	}
 
-	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, ReferenceOwn, driftCorrection)
+	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, ref, driftCorrection)
 	if err != nil {
 		return "", err
 	}
 
 	eval.scope[node.ID] = normalizeTypes(applied.Object)
-	key := resourceKey(applied)
-	logger.V(1).Info("applied resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
+	logger.V(1).Info("applied resource", "node", node.ID, "ref", ref,
+		"gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
-	return key, nil
-}
-
-// reconcileContribute evaluates and applies a Contribute template.
-// driftCorrection bypasses the apply-hash check in applySSA.
-func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
-	logger := log.FromContext(ctx)
-
-	evalMap, err := eval.toMap(node.Template)
-	if err != nil {
-		return "", fmt.Errorf("contribute %s: %w", node.ID, err)
+	if ref == ReferenceContribute {
+		// Track the contribution in the applied set with a "contribute:" prefix.
+		// This lets prune and teardown distinguish Contribute keys (skeleton apply
+		// to release fields) from Own keys (delete).
+		hasStatus := evalMap["status"] != nil
+		return contributeKey(applied, hasStatus), nil
 	}
-
-	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, ReferenceContribute, driftCorrection)
-	if err != nil {
-		return "", err
-	}
-	eval.scope[node.ID] = normalizeTypes(applied.Object)
-	logger.V(1).Info("contributed to resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
-
-	// Track the contribution in the applied set with a "contribute:" prefix.
-	// This lets prune and teardown distinguish Contribute keys (skeleton apply
-	// to release fields) from Own keys (delete).
-	hasStatus := evalMap["status"] != nil
-	key := contributeKey(applied, hasStatus)
-	return key, nil
+	return resourceKey(applied), nil
 }

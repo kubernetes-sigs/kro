@@ -1057,7 +1057,20 @@ func skeletonApply(ctx context.Context, c client.Client, gvk schema.GroupVersion
 	}
 
 	if hasStatus {
-		statusData, err := json.Marshal(skeleton)
+		// The status subresource endpoint only processes fields under .status.
+		// An identity-only skeleton (apiVersion/kind/metadata) is ignored by the
+		// status endpoint — no fields are claimed, so no ownership is released.
+		// Include "status": {} so SSA releases all previously-owned status fields.
+		statusSkeleton := map[string]any{
+			"apiVersion": apiVersion,
+			"kind":       gvk.Kind,
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": namespace,
+			},
+			"status": map[string]any{},
+		}
+		statusData, err := json.Marshal(statusSkeleton)
 		if err != nil {
 			return fmt.Errorf("marshaling status skeleton: %w", err)
 		}

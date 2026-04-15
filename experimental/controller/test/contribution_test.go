@@ -2,6 +2,7 @@ package graphcontroller_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // TestMultiGraphFieldCoexistence proves that different Graphs can contribute
@@ -560,13 +562,10 @@ func TestContributeReferenceDetectedByExistence(t *testing.T) {
 // TestContribute_RegressionStatusSubresourceTeardown proves that a Contribute
 // node writing status fields releases field ownership via skeleton apply during
 // Graph deletion. The target must survive (it's Contribute, not Own) and the
-// Graph's field manager must not retain contributed data fields.
+// Graph's field manager must not retain contributed status fields.
 //
 // Per 003-ownership.md § Status Subresource: "Releases only target the
 // subresources the template actually applied to."
-//
-// Bug: skeleton apply didn't detect status-only Contribute templates,
-// leaving status subresource fields permanently owned by a deleted Graph.
 func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -656,7 +655,7 @@ func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
 	managedFields := finalTarget.GetManagedFields()
 	graphManager := "experimental.kro.run/" + ns + "/contrib-status-teardown"
 
-	// Main resource: skeleton apply should reduce to identity-only fields.
+	// Main resource: skeleton apply should release identity labels/annotations.
 	for _, mf := range managedFields {
 		if mf.Manager == graphManager && mf.Subresource == "" {
 			if mf.FieldsV1 != nil {
@@ -667,30 +666,401 @@ func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
 		}
 	}
 
-	// BUG: Status subresource fields are NOT released by skeleton apply.
-	// The Graph's field manager retains f:message and f:ready on the status
-	// subresource after teardown. skeletonApply sends a skeleton with only
-	// identity fields (apiVersion/kind/metadata) to the status subresource
-	// endpoint, but SSA for the status subresource only processes fields
-	// under .status — identity fields are ignored. The skeleton needs to
-	// include "status: {}" to release ownership.
-	//
-	// Fix: in skeletonApply, when hasStatus is true, include "status": {}
-	// in the skeleton sent to the status subresource endpoint.
-	//
-	// Asserting the actual (wrong) behavior: when the fix lands, these
-	// assertions break, forcing the fixer to update them to correct behavior.
-	var hasStatusEntry bool
+	// Status subresource: skeleton apply should release status fields.
+	var graphOwnsStatusFields bool
 	for _, mf := range managedFields {
-		if mf.Manager == graphManager && mf.Subresource == "status" {
-			hasStatusEntry = true
-			if mf.FieldsV1 != nil {
-				fields := string(mf.FieldsV1.Raw)
-				assert.Contains(t, fields, "message",
-					"BUG: status.message should be released but isn't — skeleton apply doesn't clear status subresource fields")
+		if mf.Manager == graphManager && mf.Subresource == "status" && mf.FieldsV1 != nil {
+			fields := string(mf.FieldsV1.Raw)
+			if strings.Contains(fields, "message") {
+				graphOwnsStatusFields = true
 			}
 		}
 	}
+	assert.False(t, graphOwnsStatusFields,
+		"Graph's field manager should not own status.message after teardown")
+
+	// Status values should be removed (Graph was sole owner).
+	finalStatus, _, _ := unstructured.NestedMap(finalTarget.Object, "status")
+	assert.Nil(t, finalStatus["message"],
+		"contributed status.message should be removed after teardown")
+}
+
+// TestContributeMetadataAndStatus proves that a Contribute node writing both
+// metadata (annotations) and status fields to a resource with a real status
+// subresource exercises both apply paths: main resource apply for metadata,
+// status subresource apply for status. On Graph deletion, skeleton apply must
+// release field ownership on both subresources.
+//
+// This is the dual-subresource path: applySSA splits the template into a
+// main payload (everything except status) and a status payload, applies each
+// to the appropriate endpoint. The contribute key encodes hasStatus=true so
+// skeleton apply knows to release both.
+//
+// Per 003-ownership.md § Status Subresource: "Releases only target the
+// subresources the template actually applied to."
+func TestContributeMetadataAndStatus(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	saGVK := schema.GroupVersionKind{
+		Group: "test.kro.run", Version: "v1alpha1", Kind: "SimpleApp",
+	}
+
+	// Pre-create a SimpleApp (has a real status subresource).
+	target := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "test.kro.run/v1alpha1",
+			"kind":       "SimpleApp",
+			"metadata": map[string]any{
+				"name":      "dual-target",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"name": "my-app",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, target))
+
+	graphName := "contrib-dual-subresource"
+
+	// Graph contributes both metadata (annotations) and status to the target.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      graphName,
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "contrib",
+						"template": map[string]any{
+							"apiVersion": "test.kro.run/v1alpha1",
+							"kind":       "SimpleApp",
+							"metadata": map[string]any{
+								"name": "dual-target",
+								"annotations": map[string]any{
+									"kro.run/managed":  "true",
+									"kro.run/revision": "1",
+								},
+							},
+							"status": map[string]any{
+								"ready":   true,
+								"message": "contributed-status",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for the Graph to converge.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: graphName, Namespace: ns}))
+
+	// Verify metadata was applied (main resource endpoint).
+	check := &unstructured.Unstructured{}
+	check.SetGroupVersionKind(saGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "dual-target", Namespace: ns}, check))
+	ann := check.GetAnnotations()
+	assert.Equal(t, "true", ann["kro.run/managed"],
+		"metadata annotation should be applied via main resource endpoint")
+	assert.Equal(t, "1", ann["kro.run/revision"],
+		"metadata annotation should be applied via main resource endpoint")
+
+	// Verify status was applied (status subresource endpoint).
+	statusMap, _, _ := unstructured.NestedMap(check.Object, "status")
+	assert.Equal(t, "contributed-status", statusMap["message"],
+		"status.message should be applied via status subresource endpoint")
+	t.Log("Both metadata and status contributed successfully")
+
+	// Record the field manager name for later assertions.
+	graphManager := "experimental.kro.run/" + ns + "/" + graphName
+
+	// Verify the field manager has entries for BOTH subresources.
+	managedFields := check.GetManagedFields()
+	var hasMainEntry, hasStatusEntry bool
+	for _, mf := range managedFields {
+		if mf.Manager == graphManager {
+			if mf.Subresource == "" {
+				hasMainEntry = true
+			}
+			if mf.Subresource == "status" {
+				hasStatusEntry = true
+			}
+		}
+	}
+	assert.True(t, hasMainEntry,
+		"Graph's field manager should have a main resource entry (metadata)")
 	assert.True(t, hasStatusEntry,
-		"BUG: Graph's status subresource field manager entry should be gone after teardown, but it persists")
+		"Graph's field manager should have a status subresource entry")
+	t.Log("Field manager has entries for both main resource and status subresource")
+
+	// Delete the Graph — triggers skeleton apply on both subresources.
+	require.NoError(t, k8sClient.Delete(ctx, graph))
+
+	// Wait for Graph to be fully deleted.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: graphName, Namespace: ns}, g)
+			return err != nil, nil
+		}))
+	t.Log("Graph deleted — skeleton apply should have run on both subresources")
+
+	// The target MUST still exist (Contribute, not Own).
+	finalTarget := &unstructured.Unstructured{}
+	finalTarget.SetGroupVersionKind(saGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "dual-target", Namespace: ns}, finalTarget),
+		"Contribute target must survive Graph deletion")
+
+	// Assert contributed annotation VALUES are gone after teardown.
+	// Skeleton apply sends an identity-only skeleton to the main resource.
+	// SSA releases ownership of all previously-owned fields not in the skeleton.
+	// Since the Graph was the sole owner of these annotations, SSA removes them.
+	finalAnn := finalTarget.GetAnnotations()
+	assert.Empty(t, finalAnn["kro.run/managed"],
+		"contributed annotation should be removed after skeleton apply during teardown")
+	assert.Empty(t, finalAnn["kro.run/revision"],
+		"contributed annotation should be removed after skeleton apply during teardown")
+
+	// Assert contributed status VALUES are gone after teardown.
+	// Skeleton apply sends {status: {}} to the /status subresource, releasing
+	// ownership of all previously-owned status fields. Since the Graph was
+	// the sole owner, SSA removes them.
+	finalStatus, _, _ := unstructured.NestedMap(finalTarget.Object, "status")
+	assert.Nil(t, finalStatus["message"],
+		"contributed status.message should be removed after skeleton apply during teardown")
+
+	// Assert the Graph's field manager no longer owns contributed fields.
+	finalMF := finalTarget.GetManagedFields()
+	var graphOwnsMainFields, graphOwnsStatusFields bool
+	for _, mf := range finalMF {
+		if mf.Manager == graphManager {
+			if mf.Subresource == "" && mf.FieldsV1 != nil {
+				fields := string(mf.FieldsV1.Raw)
+				if strings.Contains(fields, "kro.run/managed") {
+					graphOwnsMainFields = true
+				}
+			}
+			if mf.Subresource == "status" && mf.FieldsV1 != nil {
+				fields := string(mf.FieldsV1.Raw)
+				if strings.Contains(fields, "message") {
+					graphOwnsStatusFields = true
+				}
+			}
+		}
+	}
+	assert.False(t, graphOwnsMainFields,
+		"Graph's field manager should not own contributed annotations after teardown")
+	assert.False(t, graphOwnsStatusFields,
+		"Graph's field manager should not own contributed status fields after teardown")
+
+	// Original spec must survive.
+	specName, _, _ := unstructured.NestedString(finalTarget.Object, "spec", "name")
+	assert.Equal(t, "my-app", specName,
+		"original spec.name must survive Contribute teardown")
+	t.Log("Dual-subresource Contribute: metadata and status released cleanly after teardown")
+}
+
+// TestContributeMapFieldOwnership proves that a Contribute node writing
+// specific keys to a map field (ConfigMap .data) takes field-level ownership
+// of only those keys, and skeleton apply releases that ownership on prune.
+//
+// SSA semantics for maps: each key is an independently owned field. When a
+// field manager applies a map with keys {a, b}, it owns those keys. When it
+// later applies without key b, ownership of b is released. When the SOLE
+// owner releases a field, SSA removes the field entirely — the value does
+// not persist as an unmanaged field.
+//
+// This test asserts:
+//  1. Contributed keys are applied (values present on resource)
+//  2. Original keys from another field manager are untouched
+//  3. After prune (skeleton apply), contributed key VALUES are deleted
+//     (sole owner released → SSA removes the field)
+//  4. Graph's field manager no longer owns the contributed keys
+//  5. External manager's field ownership is unaffected
+func TestContributeMapFieldOwnership(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create target ConfigMap with keys owned by "external-manager".
+	// Using SSA so the field manager ownership is explicit.
+	externalPayload := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":      "map-target",
+			"namespace": ns,
+		},
+		"data": map[string]any{
+			"original-key": "external-value",
+			"keep-me":      "untouched",
+		},
+	}
+	raw, err := json.Marshal(externalPayload)
+	require.NoError(t, err)
+	extCM := &unstructured.Unstructured{}
+	extCM.SetGroupVersionKind(cmGVK)
+	extCM.SetName("map-target")
+	extCM.SetNamespace(ns)
+	require.NoError(t, k8sClient.Patch(ctx, extCM, client.RawPatch(
+		types.ApplyPatchType, raw),
+		client.ForceOwnership,
+		client.FieldOwner("external-manager"),
+	))
+	t.Log("Pre-created ConfigMap with external-manager owning .data keys")
+
+	graphName := "contrib-map-fields"
+
+	// Graph contributes additional data keys to the ConfigMap.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      graphName,
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "contrib",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "map-target",
+								"annotations": map[string]any{
+									"kro.run/contributed": "true",
+								},
+							},
+							"data": map[string]any{
+								"contributed-key": "graph-value",
+								"another-key":     "more-data",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for the contribution to land.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "map-target", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(check.Object, "data")
+			return data["contributed-key"] == "graph-value" && data["another-key"] == "more-data", nil
+		}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: graphName, Namespace: ns}))
+
+	// Verify all keys coexist — original and contributed.
+	check := &unstructured.Unstructured{}
+	check.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "map-target", Namespace: ns}, check))
+	data, _, _ := unstructured.NestedStringMap(check.Object, "data")
+	assert.Equal(t, "external-value", data["original-key"], "external key must coexist")
+	assert.Equal(t, "untouched", data["keep-me"], "external key must coexist")
+	assert.Equal(t, "graph-value", data["contributed-key"], "contributed key must be present")
+	assert.Equal(t, "more-data", data["another-key"], "contributed key must be present")
+	t.Log("All keys coexist: 2 external + 2 contributed")
+
+	// Verify field manager ownership before prune.
+	graphManager := "experimental.kro.run/" + ns + "/" + graphName
+	managedFields := check.GetManagedFields()
+	var graphOwnsDataKeys bool
+	for _, mf := range managedFields {
+		if mf.Manager == graphManager && mf.Subresource == "" && mf.FieldsV1 != nil {
+			fields := string(mf.FieldsV1.Raw)
+			if strings.Contains(fields, "contributed-key") {
+				graphOwnsDataKeys = true
+			}
+		}
+	}
+	assert.True(t, graphOwnsDataKeys,
+		"Graph's field manager should own .data.contributed-key before prune")
+	t.Log("Graph field manager owns contributed data keys")
+
+	// Prune: remove the Contribute node from the Graph spec.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: graphName, Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{}, "spec", "nodes")
+		}))
+	t.Log("Removed Contribute node — prune triggered")
+
+	// Wait for the Graph to settle after prune.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: graphName, Namespace: ns}))
+
+	// Re-read the target to check field ownership after skeleton apply.
+	final := &unstructured.Unstructured{}
+	final.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "map-target", Namespace: ns}, final),
+		"Contribute target must survive prune")
+
+	// ASSERTION 1: External manager's keys must be intact.
+	finalData, _, _ := unstructured.NestedStringMap(final.Object, "data")
+	assert.Equal(t, "external-value", finalData["original-key"],
+		"external manager's key must survive Contribute prune")
+	assert.Equal(t, "untouched", finalData["keep-me"],
+		"external manager's key must survive Contribute prune")
+
+	// ASSERTION 2: Contributed key VALUES are deleted — when the sole owner
+	// releases a field via SSA, the API server removes it entirely. This is
+	// the correct Contribute prune behavior: contributed data disappears when
+	// the Graph stops contributing.
+	_, contributedExists := finalData["contributed-key"]
+	assert.False(t, contributedExists,
+		"contributed key should be removed entirely when sole owner releases via skeleton apply")
+	_, anotherExists := finalData["another-key"]
+	assert.False(t, anotherExists,
+		"contributed key should be removed entirely when sole owner releases via skeleton apply")
+
+	// ASSERTION 3: Graph's field manager should no longer own the data keys.
+	finalMF := final.GetManagedFields()
+	var graphStillOwnsDataKeys bool
+	for _, mf := range finalMF {
+		if mf.Manager == graphManager && mf.Subresource == "" && mf.FieldsV1 != nil {
+			fields := string(mf.FieldsV1.Raw)
+			if strings.Contains(fields, "contributed-key") {
+				graphStillOwnsDataKeys = true
+			}
+		}
+	}
+	assert.False(t, graphStillOwnsDataKeys,
+		"after skeleton apply, Graph's field manager should not own .data.contributed-key")
+
+	// ASSERTION 4: External manager's ownership is unaffected.
+	var externalStillOwnsKeys bool
+	for _, mf := range finalMF {
+		if mf.Manager == "external-manager" && mf.Subresource == "" && mf.FieldsV1 != nil {
+			fields := string(mf.FieldsV1.Raw)
+			if strings.Contains(fields, "original-key") {
+				externalStillOwnsKeys = true
+			}
+		}
+	}
+	assert.True(t, externalStillOwnsKeys,
+		"external manager's field ownership must be unaffected by skeleton apply")
+	t.Log("Map field ownership proved: contributed keys deleted (sole owner released), external keys untouched")
 }

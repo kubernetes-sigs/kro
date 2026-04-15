@@ -1201,10 +1201,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructured.Unstructured) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	if r.Watcher != nil {
-		r.Watcher.removeGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
-	}
-
 	// List revisions early — needed for key extraction and finalization.
 	// Cache eviction is deferred to after finalization (which calls
 	// compileRevision and would re-add entries if evicted too early).
@@ -1230,6 +1226,8 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// Per 003-ownership.md § Status Subresource: "Releases only target the
 	// subresources the template actually applied to."
 	contributeStatusMap := map[string]bool{} // resource key → hasStatus
+	// Also collect all static keys with correct Kind casing for cross-referencing.
+	staticKeys := map[string]bool{} // all static resource keys from revision specs
 	for _, rev := range revisions {
 		spec, err := extractRevisionSpec(rev)
 		if err != nil {
@@ -1238,6 +1236,9 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		for _, node := range spec.Nodes {
 			if node.Template == nil {
 				continue
+			}
+			if key := staticResourceKey(node.Template, graph.GetNamespace()); key != "" {
+				staticKeys[key] = true
 			}
 			if templateHasStatus(node.Template) {
 				if key := staticResourceKey(node.Template, graph.GetNamespace()); key != "" {
@@ -1248,9 +1249,25 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	}
 
 	// Derive applied set from watch cache if available.
+	// Must run BEFORE removeGraph — removeGraph releases watch ownership,
+	// which can stop informers if this Graph is the sole watcher of a GVR.
+	// deriveAppliedSet needs those informers to scan for identity labels on
+	// Contribute targets.
+	//
+	// deriveAppliedSet keys may have incorrect Kind casing (metadata informers
+	// don't always populate TypeMeta, falling back to singularize which doesn't
+	// preserve CamelCase). Build a normalizedKey→staticKey map to correct this.
+	normalizedToStatic := make(map[string]string, len(staticKeys))
+	for sk := range staticKeys {
+		normalizedToStatic[strings.ToLower(sk)] = sk
+	}
 	if r.Watcher != nil {
 		appliedSet := r.Watcher.watches.deriveAppliedSet(graph.GetName(), graph.GetNamespace())
 		for key, entry := range appliedSet {
+			// Correct the key's Kind casing by matching against static keys.
+			if corrected, ok := normalizedToStatic[strings.ToLower(key)]; ok {
+				key = corrected
+			}
 			if entry.Reference == ReferenceContribute {
 				// For contribute keys, encode hasStatus from revision spec scan.
 				cKey := contributeKeyPrefix + key
@@ -1262,6 +1279,11 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 				ownKeys[key] = true
 			}
 		}
+	}
+
+	// Release watch state now that contribute keys have been collected.
+	if r.Watcher != nil {
+		r.Watcher.removeGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
 	}
 
 	// Also extract static keys from revision specs for coverage.

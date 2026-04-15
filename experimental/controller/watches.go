@@ -225,7 +225,7 @@ func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]
 				gvk := schema.GroupVersionKind{
 					Group:   gvr.Group,
 					Version: gvr.Version,
-					Kind:    gvrKindFromInformer(gvr, accessor),
+					Kind:    gvrKindFromInformer(gvr, item),
 				}
 				ref, ok := ReferenceFromLabelValue(labelValue)
 				if !ok {
@@ -249,11 +249,11 @@ func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]
 	return result
 }
 
-// gvrKindFromInformer infers the Kind from a GVR and the object metadata.
+// gvrKindFromInformer infers the Kind from a GVR and a raw informer item.
 // Metadata informers store PartialObjectMetadata which has the Kind set.
-func gvrKindFromInformer(gvr schema.GroupVersionResource, accessor metav1.Object) string {
-	// PartialObjectMetadata carries TypeMeta. Try to read it.
-	if typed, ok := accessor.(*metav1.PartialObjectMetadata); ok && typed.Kind != "" {
+func gvrKindFromInformer(gvr schema.GroupVersionResource, item interface{}) string {
+	// PartialObjectMetadata carries TypeMeta. Try to read it directly.
+	if typed, ok := item.(*metav1.PartialObjectMetadata); ok && typed.Kind != "" {
 		return typed.Kind
 	}
 	// Fallback: best-effort Kind derivation when PartialObjectMetadata.Kind is

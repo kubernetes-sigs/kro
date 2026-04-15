@@ -433,7 +433,7 @@ func TestResourcePruning(t *testing.T) {
 // shape — behavioral consequence: the resource is NOT deleted when the
 // template is removed from the Graph spec. Own shape would delete it.
 //
-// Design 003-ownership § Template Shapes: "Own — Creates the resource if
+// Design 003-ownership § Reference Types: "Own — Creates the resource if
 // absent. Deletes on prune." vs "Contribute — Writes fields on a resource
 // the Graph does not create. Releases fields on prune, never deletes."
 //

@@ -184,7 +184,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				return nil, fmt.Errorf("forEach %s item: %w", node.ID, err)
 			}
 
-			// Stamp forEach child identity labels per 004-graph-execution.md § Child Identity.
+			// Stamp forEach child identity labels per 004-graph-reconciliation.md § Child Identity.
 			// Each child's label key encodes the full resource key:
 			//   <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/reference
 			childObj := &unstructured.Unstructured{Object: evalMap}
@@ -241,7 +241,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ReferenceOwn, driftCorrection)
 			}
 			if err != nil {
-				// Per 004-graph-execution.md § Parent State: track per-child errors
+				// Per 004-graph-reconciliation.md § Parent State: track per-child errors
 				// for proper state aggregation. Don't fail fast on the first error.
 				childErrors = append(childErrors, err)
 				logger.V(1).Info("forEach child error", "node", node.ID, "item", id, "error", err)
@@ -275,7 +275,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 		eval.scope[node.ID] = allApplied
 
-		// Per 004-graph-execution.md § Parent State: derive parent state from children.
+		// Per 004-graph-reconciliation.md § Parent State: derive parent state from children.
 		// Error states take precedence over Pending; deterministic errors (Error)
 		// take precedence over transient errors (SystemError, Conflict).
 		if len(childErrors) > 0 {
@@ -382,7 +382,7 @@ func (r *GraphReconciler) resolveForEachChildReference(ctx context.Context, grap
 }
 
 // highestPriorityChildError returns the highest-priority error from a list
-// of forEach child errors. Per 004-graph-execution.md § Parent State:
+// of forEach child errors. Per 004-graph-reconciliation.md § Parent State:
 // "Deterministic errors (Error) take precedence over transient errors
 // (SystemError, Conflict) — if any child's failure is deterministic,
 // retrying cannot resolve the parent."

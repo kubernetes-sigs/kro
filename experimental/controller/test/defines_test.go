@@ -12,7 +12,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Definition nodes — 001-graph.md § template, 004-graph-execution.md
+// Definition nodes — 001-graph.md § template, 004-graph-reconciliation.md
 // ---------------------------------------------------------------------------
 
 // TestDefinesBasic proves that a definition node (no apiVersion/kind) puts

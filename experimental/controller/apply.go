@@ -455,7 +455,7 @@ func templateHasStatus(tmpl map[string]any) bool {
 //   - Apply hash annotation: Own only (Contribute targets are owned by others).
 //
 // driftCorrection bypasses the content-addressed apply hash check.
-// Per 004-graph-execution.md § The Walk: "The drift timer bypasses the
+// Per 004-graph-reconciliation.md § Reconcile: "The drift timer bypasses the
 // template-hash check — apply unconditionally, because server-side
 // defaulters and mutating webhooks can change fields without changing
 // the desired state hash. SSA is idempotent; the apply corrects drift
@@ -468,7 +468,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		obj.SetNamespace(graph.GetNamespace())
 	}
 
-	// Stamp identity labels per 004-graph-execution.md § Storage model.
+	// Stamp identity labels per 004-graph-reconciliation.md § API Server Interaction.
 	generation := fmt.Sprintf("%d", graph.GetGeneration())
 	lbls := obj.GetLabels()
 	if lbls == nil {
@@ -808,7 +808,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(gvk)
 		if err := r.Client.Get(ctx, nn, obj); err != nil {
-			// Per 004-graph-execution.md § Finalization: "If the target resource
+			// Per 004-graph-reconciliation.md § Finalization: "If the target resource
 			// does not exist in the cluster (creation failed, already deleted
 			// externally), there is nothing to finalize. The controller skips
 			// finalization and proceeds with cleanup."
@@ -1052,7 +1052,7 @@ func pruneOrder(keys []string, dags []*DAG, defaultNS string) []string {
 // Delegates to pruneOrder for the actual ordering logic.
 //
 // Returns an error if the Graph spec cannot be parsed or the DAG cannot
-// be built. Per the design (004-graph-execution): "Teardown is blocked
+// be built. Per the design (004-graph-reconciliation): "Teardown is blocked
 // until ordering is available — never degrade to unordered deletion."
 func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys []string) ([]string, error) {
 	graphSpec, err := extractGraphSpec(graph.Object)

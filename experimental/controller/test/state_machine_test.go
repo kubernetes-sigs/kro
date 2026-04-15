@@ -760,7 +760,7 @@ func TestGraphWithZeroOwnsNodes(t *testing.T) {
 // diamond DAG where one parent is Excluded (includeWhen=false) and another
 // is Pending (Watch target absent), the child inherits Excluded — not Blocked.
 //
-// Per 004-graph-execution.md § Wind step 2: "Any dependency Excluded →
+// Per 004-graph-reconciliation.md § Propagation: "Any dependency Excluded →
 // Excluded, regardless of other dependencies' states. Precedence where
 // multiple apply: Excluded > Blocked > Pending."
 //
@@ -889,7 +889,7 @@ func TestDiamondStatePrecedence_RegressionExcludedOverBlocked(t *testing.T) {
 // The distinction matters for operator triage: Blocked means "upstream error,
 // someone needs to act." Pending means "just waiting for an external resource."
 //
-// Per 004-graph-execution.md § Wind step 2: "Any dependency Pending →
+// Per 004-graph-reconciliation.md § Propagation: "Any dependency Pending →
 // inherit Pending."
 //
 // Bug: Pending was conflated with Blocked in the propagation path.
@@ -984,7 +984,7 @@ func TestPendingPropagatesAsPending_RegressionNotBlocked(t *testing.T) {
 // during revision transition: the conflicted node is removed from spec, and
 // a new resource is created without conflict.
 //
-// Design 003-ownership § Prune during conflict:
+// Design 003-ownership § Prune:
 //
 //	"Clear from applied set, no delete (for Own)."
 //

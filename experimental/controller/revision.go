@@ -400,7 +400,7 @@ func deepCopyValue(v any) any {
 // generation. Returns the active revision to reconcile from, and all
 // superseded revisions for prune diffing.
 //
-// Per the design (004-graph-execution): the prune candidate set is the union
+// Per the design (004-graph-reconciliation): the prune candidate set is the union
 // of all superseded revisions' applied sets minus the active revision's
 // applied set. Returning all superseded revisions (not just the most recent)
 // prevents multi-hop transitions from orphaning resources.

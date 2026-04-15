@@ -15,7 +15,7 @@ import (
 )
 
 // Prune safety tests prove that the controller does not prune resources when
-// their absence is uncertain (design 004-graph-execution § Prune):
+// their absence is uncertain (design 004-graph-reconciliation § Prune):
 //
 //   "Not all absent resources should be pruned:
 //    Uncertain absence — a dependency is Pending, Conflict, or Error. The
@@ -412,8 +412,8 @@ func TestPruneManagedCheckOnSpecChange(t *testing.T) {
 // state (409 from competing SSA field manager), dependent resources that
 // were previously applied are not pruned.
 //
-// Design 004-graph-execution § Plan States: Conflict blocks dependents.
-// Design 004-graph-execution § Prune: "Uncertain absence — a dependency is
+// Design 004-graph-reconciliation § Node States: Conflict blocks dependents.
+// Design 004-graph-reconciliation § Prune: "Uncertain absence — a dependency is
 // Pending, Conflict, or Error."
 //
 // Setup:
@@ -500,7 +500,7 @@ func TestPruneSafetyConflictBlocksPrune(t *testing.T) {
 // This covers the case where the new revision has ZERO Own nodes — triggered
 // is empty, but the prune phase must still run to clean up superseded resources.
 //
-// Design 004-graph-execution § Prune:
+// Design 004-graph-reconciliation § Prune:
 //
 //	"After wind, diff the current key set against the applied set. Absent
 //	resources are prune candidates if their absence is definitive."
@@ -601,7 +601,7 @@ func TestPruneSweptOnSpecNodeRemoval(t *testing.T) {
 // metadata.namespace in the template are pruned correctly when removed from
 // the spec. The prune key must use the template's namespace, not the Graph's.
 //
-// Per 004-graph-execution.md § Applied Set: resource keys encode
+// Per 004-graph-reconciliation.md § Prune: resource keys encode
 // group/version/Kind/namespace/name.
 //
 // Bug: staticResourceKey always used the Graph's namespace, making

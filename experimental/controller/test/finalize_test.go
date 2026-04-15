@@ -280,7 +280,7 @@ func TestFinalizesRejectsCELNames(t *testing.T) {
 //	"The resource is created only when the target becomes a prune candidate
 //	and must reach readyWhen before the target's removal completes."
 //
-// Design 004-graph-execution § Finalization:
+// Design 004-graph-reconciliation § Finalization:
 //
 //	"(2) wait for readyWhen, (3) DELETE target."
 //
@@ -564,7 +564,7 @@ func TestFinalizesOnTeardown(t *testing.T) {
 // The controller must use Rev N's DAG to find the finalizes relationship
 // and run finalization before deleting the target.
 //
-// Design 002-revisions § Superseded Revisions:
+// Design 002-revisions § Lifecycle:
 //
 //	"Must be retained until their unique resources are pruned because they
 //	carry the ordering and finalization metadata for those resources."

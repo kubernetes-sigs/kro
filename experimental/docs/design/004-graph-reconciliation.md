@@ -83,8 +83,16 @@ Ready and NotReady are both "applied and in scope." readyWhen is a health signal
 dependents. Pending and Blocked both represent uncertain absence — previous applied keys are
 retained, not safe to prune. Excluded propagates as Excluded (definitive absence — safe to prune).
 
-Definition nodes can be Ready, NotReady (readyWhen unsatisfied), or Error (CEL evaluation failure).
-They cannot be Pending (no resource to wait for), Conflict (no SSA), or SystemError (no API calls).
+Definition nodes can be Ready, NotReady (readyWhen unsatisfied), Pending (upstream dependency
+unresolved — the CEL expression references scope data that is not yet available), or Error (CEL
+evaluation failure). They do not produce Pending from their own execution (no API calls), but inherit
+it from unresolved upstream dependencies. They cannot be Conflict (no SSA) or SystemError (no API
+calls).
+
+The Graph's Ready condition (see [001-graph](001-graph.md) § Conditions) rolls up node states into a
+single signal. When multiple failure states coexist, precedence is SystemError > Error > Conflict >
+Blocked > Pending > NotReady. SystemError surfaces first because it signals degraded infrastructure
+— deterministic errors may be artifacts of system instability, not real spec problems.
 
 ### Propagation
 

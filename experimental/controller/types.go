@@ -57,7 +57,7 @@ func (r Reference) String() string {
 	case ReferenceWatch:
 		return "watch"
 	case ReferenceWatchKind:
-		return "watch-kind"
+		return "watchKind"
 	case ReferenceContribute:
 		return "contribute"
 	case ReferenceDefinition:
@@ -191,7 +191,7 @@ type Node struct {
 	// ${deploy.status.availableReplicas}, DepPaths["deploy"] contains
 	// ["status", "availableReplicas"]. Used for field-path-scoped evaluation
 	// hashing — only hash the specific paths the node actually reads.
-	// Per 004-graph-execution.md § Change detection.
+	// Per 004-graph-reconciliation.md § Hash Mechanics.
 	// Populated by BuildDAG; nil before that.
 	DepPaths map[string][]FieldPath
 

@@ -1,6 +1,6 @@
 // fieldpath.go extracts referenced field paths from compiled CEL expressions.
 //
-// The design (004-graph-execution.md) commits to field-path-level hashing:
+// The design (004-graph-reconciliation.md) commits to field-path-level hashing:
 // "At graph compilation, the controller walks each compiled expression's AST to
 // extract reference chains — sequences of select operations rooted at a scope
 // variable." This file implements that extraction.

@@ -36,7 +36,7 @@ type evaluator struct {
 	// before dispatching a WatchKind worker (cached list + collection
 	// changes). The worker merges changes into the cached list and returns
 	// the updated list via watchKindUpdatedCache.
-	// Per 004-graph-reconciliation.md § Resolve: "When a single resource
+	// Per 004-graph-reconciliation.md § Propagation: "When a single resource
 	// changes, update the cached list incrementally rather than re-listing
 	// — O(1) per event, not O(matching)."
 	watchKindNodeID       string             // node ID for cache key (set by coordinator)
@@ -387,7 +387,7 @@ func copyScope(scope map[string]any) map[string]any {
 // available, but dependency detection for topological sort still works.
 //
 // The exprPaths map is computed from CEL ASTs during compilation in
-// compileGraphSpec. See 004-graph-execution.md § Change detection.
+// compileGraphSpec. See 004-graph-reconciliation.md § Hash Mechanics.
 func extractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][]FieldPath) (
 	dependencies map[string]bool,
 	depPaths map[string][]FieldPath,

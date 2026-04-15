@@ -342,7 +342,7 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 
 // TestForEachReadyWhenDoesNotGateDownstream proves that per-item readyWhen on
 // forEach collections is a health signal, not a gate for dependents
-// (design 001-graph § readyWhen, design 004-graph-execution § Wind).
+// (design 001-graph § readyWhen, design 004-graph-reconciliation § Propagation).
 //
 // Dependents proceed as soon as data is in scope regardless of readyWhen.
 // Graph status shows InProgress when items aren't ready, transitions to
@@ -591,7 +591,7 @@ func TestForEachReadyWhenPassesImmediately(t *testing.T) {
 // Inserting a new collection member must not disturb existing children —
 // their resourceVersions must be stable.
 //
-// Design 004-graph-execution § forEach execution:
+// Design 004-graph-reconciliation § Parent Expansion:
 //
 //	"Child identity is resource-key-based (stable under reordering)."
 //

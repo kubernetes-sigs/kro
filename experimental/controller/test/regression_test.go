@@ -1023,7 +1023,7 @@ func TestContributeIdentityLabels(t *testing.T) {
 // perpetually reset the drift timer for stable nodes, preventing drift
 // detection from ever firing.
 //
-// Per 004-graph-execution.md § The Walk: "An SSA apply resets the drift
+// Per 004-graph-reconciliation.md § Reconcile: "An SSA apply resets the drift
 // timer. A skipped write during normal evaluation (hash match from a watch
 // event or propagation trigger) does not — the timer still fires to catch
 // divergence that the hash cannot detect."

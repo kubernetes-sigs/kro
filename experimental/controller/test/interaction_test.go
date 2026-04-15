@@ -1659,7 +1659,7 @@ func TestForEachForceApply(t *testing.T) {
 // respects the propagateWhen gate — a gated node's drift timer fires but
 // evaluation is deferred until the gate opens.
 //
-// Design 004-graph-reconciliation § Resync + § Propagation step 2:
+// Design 004-graph-reconciliation § Trigger + § Propagation:
 //
 //	"Resync respects the propagateWhen gate." (doc change for T1.3)
 //	"Takes precedence even on spec changes where all nodes enter the frontier."

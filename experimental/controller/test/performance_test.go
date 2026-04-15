@@ -606,7 +606,7 @@ func TestDeletionSkipsConflictedResources(t *testing.T) {
 // TestDedicatedFieldManagerName verifies that each Graph uses a dedicated SSA
 // field manager in the format `experimental.kro.run/<namespace>/<name>`.
 //
-// Design 003-ownership § Dedicated field manager:
+// Design 003-ownership § kro's Model:
 //
 //	"Each Graph instance uses experimental.kro.run/<namespace>/<name>."
 //
@@ -672,7 +672,7 @@ func TestDedicatedFieldManagerName(t *testing.T) {
 
 // TestIdempotentReReconcileZeroWrites proves that re-reconciling a converged
 // Graph with no spec change produces zero API writes to ALL managed resources
-// (design 004-graph-execution § Wind step 3: change check hash match → skip).
+// (design 004-graph-reconciliation § Propagation: change check hash match → skip).
 //
 // This extends TestSteadyStateNoStatusWrite by checking every managed resource's
 // resourceVersion, not just the Graph object. The most common production
@@ -784,7 +784,7 @@ func TestIdempotentReReconcileZeroWrites(t *testing.T) {
 
 // TestPropagationStopsOnIrrelevantChange verifies the design's core performance
 // claim: "If [propagation-hash matches], propagation stops."
-// (004-graph-execution.md § The Walk, step 8)
+// (004-graph-reconciliation.md § Propagation, step 8)
 //
 // The test creates a 3-node chain: source (Watch) → middle (Own) → leaf (Own).
 // middle references source.data.version. leaf references middle.data.fromSource.

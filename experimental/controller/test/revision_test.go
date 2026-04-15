@@ -19,7 +19,7 @@ import (
 // manually deleted, the controller regenerates it from the current spec on the
 // next reconcile cycle, restoring the active revision.
 //
-// Design 002-revisions § Recovery:
+// Design 002-revisions § Lifecycle:
 //
 //	"If manually deleted, the active revision is regenerated from the current
 //	spec on the next reconcile. The applied set (from watch cache) is the
@@ -593,7 +593,7 @@ func TestRevisionActivation(t *testing.T) {
 // lands after the new revision starts propagating. The final state matches
 // the new revision with no intermediate churn.
 //
-// Design 004-graph-reconciliation § Propagation step 2:
+// Design 004-graph-reconciliation § Propagation:
 //
 //	"Takes precedence even on spec changes where all nodes enter the frontier."
 //

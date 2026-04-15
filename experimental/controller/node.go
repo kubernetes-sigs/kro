@@ -25,7 +25,7 @@ import (
 // references are resolved by the coordinator before dispatching to workers.
 //
 // driftCorrection is true when the node was triggered by the drift timer.
-// Per 004-graph-execution.md § The Walk: drift-triggered nodes bypass the
+// Per 004-graph-reconciliation.md § Reconcile: drift-triggered nodes bypass the
 // apply-hash check and apply unconditionally via SSA.
 //
 // After dispatch, reconcileNode evaluates readyWhen as a post-dispatch step
@@ -203,7 +203,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 
 // reconcileWatchKind reads a collection of resources matching a selector into scope.
 //
-// Per 004-graph-reconciliation.md § Resolve: "When a single resource changes,
+// Per 004-graph-reconciliation.md § Propagation: "When a single resource changes,
 // update the cached list incrementally rather than re-listing — O(1) per
 // event, not O(matching)." The evaluator carries the cached list and buffered
 // collection changes from the coordinator. On incremental path, only changed

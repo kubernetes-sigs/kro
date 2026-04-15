@@ -33,9 +33,8 @@ type apiErrorInfo struct {
 //
 // Non-API errors (CEL evaluation, template rendering) → NodeError:
 //   - Deterministic failures that retry cannot resolve.
-//   - Per 004-graph-execution.md: "Definition nodes can be Ready, NotReady
-//     (readyWhen unsatisfied), or Error (CEL evaluation failure). They cannot
-//     be... SystemError (no API calls)."
+//   - Per 004-graph-reconciliation.md § Node States: Definition nodes do not
+//     produce SystemError (no API calls). CEL evaluation failures are Error.
 //
 // 404 and 409 are handled separately by callers (ErrPending, ErrFieldConflict).
 func classifyAPIError(err error) apiErrorInfo {
@@ -85,7 +84,7 @@ func classifyAPIError(err error) apiErrorInfo {
 	// (CEL evaluation, template rendering, marshaling, etc.). These cannot
 	// be resolved by retry — they resolve via propagation (upstream input
 	// changes), revision transition (user fixes the spec), or drift timer.
-	// Per 004-graph-execution.md § Node Evaluation: Definition nodes produce
+	// Per 004-graph-reconciliation.md § Node States: Definition nodes produce
 	// Error on CEL failure, not SystemError.
 	return apiErrorInfo{state: NodeError, reason: err.Error()}
 }

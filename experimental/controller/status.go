@@ -66,14 +66,21 @@ func (s *reconcileState) deriveCompiledCondition() (status ConditionStatus, reas
 // deriveReadyCondition computes the Ready condition from the reconcile outcome.
 //
 // Ready is a rollup of node plan states. Each reason maps to the node state
-// blocking convergence:
+// blocking convergence. Precedence: SystemError > Error > Conflict > Blocked >
+// Pending > NotReady. SystemError surfaces first because it signals degraded
+// reconciliation infrastructure — deterministic errors (Error) and conflicts
+// may be artifacts of system instability, not real spec problems. Once the
+// system recovers, the durable errors will still be there. Surfacing Error
+// first would send operators to debug their spec while the real problem is
+// infrastructure.
 //
 //	Ready       → True    — all resources reconciled
 //	Pending     → Unknown — waiting for upstream data
 //	NotReady    → Unknown — applied but readyWhen conditions not met
+//	Blocked     → Unknown — dependency in error state, waiting for resolve
 //	NotCompiled → False   — spec invalid; rollup of Compiled=False
-//	Error       → False   — client request failed (4xx)
 //	SystemError → False   — server or infrastructure failure (5xx)
+//	Error       → False   — client request failed (4xx)
 //	Conflict    → False   — SSA field ownership contested
 func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason string, message string) {
 	if !s.compiled {
@@ -111,7 +118,7 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	}
 	msg := fmt.Sprintf("All %d resources reconciled", s.ReadyCount)
 	// Surface informational notes (e.g., FinalizerSkipped) that don't
-	// constitute errors but are operationally useful. Per 004-graph-execution.md
+	// constitute errors but are operationally useful. Per 004-graph-reconciliation.md
 	// § Finalization: "The Graph's status surfaces this: FinalizerSkipped
 	// with a message naming the resource."
 	if len(s.nodeErrors) > 0 {

@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-// Fault injection tests exercise error paths (design 006-quality § Testing).
+// Fault injection tests exercise error paths.
 //
 // These tests produce real error conditions against the envtest API server:
 // watched resources disappearing mid-reconcile, spec validation failures
@@ -154,7 +154,7 @@ func TestWatchedResourceDeletedMidReconcile(t *testing.T) {
 
 // TestOwnedResourceDeletedExternally proves that when a resource the Graph
 // owns is externally deleted, the controller recreates it on the next
-// reconcile (design 004-graph-execution § Wind: SSA apply creates if absent).
+// reconcile (design 004-graph-reconciliation § Propagation: SSA apply creates if absent).
 func TestOwnedResourceDeletedExternally(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -411,8 +411,8 @@ func TestConflictThenSpecChangeResolvesConflict(t *testing.T) {
 // that compiles but fails at runtime (division by zero) is classified as a
 // deterministic user error (Error) — not SystemError (transient/retriable).
 //
-// Per 004-graph-execution.md: "Definition nodes can be Ready, NotReady,
-// or Error. They cannot be SystemError (no API calls)."
+// Per 004-graph-reconciliation.md § Node States: Definition nodes do not
+// produce SystemError (no API calls). CEL evaluation failures are Error.
 //
 // Two bugs were found:
 //  1. resolveReference error path didn't store previousPlanStates — the
@@ -476,7 +476,7 @@ func TestErrorClassification_RegressionCELRuntime(t *testing.T) {
 // NOT advanced. The next reconcile retries both main + status apply.
 // Once the status apply succeeds, steady state resumes.
 //
-// Design 004-graph-reconciliation § Resolve step 5:
+// Design 004-graph-reconciliation § Propagation:
 //
 //	"When a template targets both the main resource and the status subresource,
 //	the controller splits the apply into two operations."

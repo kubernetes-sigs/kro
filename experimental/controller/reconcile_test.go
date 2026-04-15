@@ -88,7 +88,7 @@ func TestSummaryCountsBlockedState(t *testing.T) {
 // tryDispatch state propagation tests
 //
 // These replace the old SetState propagation tests. The design commitment
-// (004 § Wind step 2: Excluded > Blocked > Pending) is now enforced by
+// (004 § Propagation: Excluded > Blocked > Pending) is now enforced by
 // tryDispatch, not SetState. These tests exercise tryDispatch directly.
 // ---------------------------------------------------------------------------
 
@@ -127,7 +127,7 @@ func newTestWalkState(t *testing.T, dag *DAG) *walkState {
 // tryDispatch enforces the design's state precedence when a node has
 // multiple dependencies in different failure states.
 //
-// Per 004-graph-execution.md § Wind step 2:
+// Per 004-graph-reconciliation.md § Propagation:
 //   - "Any dependency Excluded → Excluded, regardless of other dependencies'
 //     states (definitive absence propagates; the node is structurally non-viable)."
 //   - "Any dependency in an error state → inherit Blocked."
@@ -602,7 +602,7 @@ func TestForEachVariableCollision(t *testing.T) {
 }
 
 // TestNodeStateString verifies that NodeState.String() returns the design's
-// canonical names. Per 006-quality.md: "Each concept has exactly one name."
+// canonical names. Each concept has exactly one name.
 func TestNodeStateString(t *testing.T) {
 	tests := []struct {
 		state NodeState
@@ -626,7 +626,7 @@ func TestNodeStateString(t *testing.T) {
 }
 
 // TestForEachChildIdentityLabelKey verifies the DNS subdomain format for
-// forEach child identity labels per 004-graph-execution.md § Child Identity.
+// forEach child identity labels per 004-graph-reconciliation.md § Child Identity.
 func TestForEachChildIdentityLabelKey(t *testing.T) {
 	key := forEachChildIdentityLabelKey(
 		"policies", "default-deny", "ns-a",
@@ -948,7 +948,7 @@ func TestWorkerClassification_ReadyWhenFailedIsNotReady(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Correctness reconciliation — forEach parent state error precedence
 //
-// Per 004-graph-execution.md § Parent State: "Deterministic errors (Error)
+// Per 004-graph-reconciliation.md § Parent State: "Deterministic errors (Error)
 // take precedence over transient errors (SystemError, Conflict) — if any
 // child's failure is deterministic, retrying cannot resolve the parent."
 // ---------------------------------------------------------------------------
@@ -1041,7 +1041,7 @@ func TestDeriveReadyCondition_NotReadyWithErrors(t *testing.T) {
 
 // TestStaticResourceKey_ExplicitNamespace proves that staticResourceKey reads
 // a literal metadata.namespace from the template instead of always using the
-// fallback. Per 004-graph-execution.md § Applied Set: resource keys encode
+// fallback. Per 004-graph-reconciliation.md § Prune: resource keys encode
 // group/version/Kind/namespace/name. If the template specifies a literal
 // namespace, the key must use it.
 //
@@ -1159,9 +1159,8 @@ func TestContributeStatusDetection(t *testing.T) {
 // which are NOT wrapped *StatusError (i.e., not from the API server) AND
 // are NOT network/infrastructure errors are classified correctly.
 //
-// Per 004-graph-execution.md: "Definition nodes can be Ready, NotReady
-// (readyWhen unsatisfied), or Error (CEL evaluation failure). They cannot
-// be... SystemError (no API calls)."
+// Per 004-graph-reconciliation.md § Node States: Definition nodes do not
+// produce SystemError (no API calls). CEL evaluation failures are Error.
 //
 // The coordinator re-classifies NodeError from the worker using
 // classifyAPIError. For non-API errors (CEL failures, template errors),
@@ -1213,7 +1212,7 @@ func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 // condition. Blocked means "upstream error — someone needs to act."
 // Pending means "just waiting." Blocked is more actionable.
 //
-// Per 004-graph-execution.md § Wind step 2: "Precedence where multiple
+// Per 004-graph-reconciliation.md § Propagation: "Precedence where multiple
 // apply: Excluded > Blocked > Pending."
 func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
 	state := &reconcileState{

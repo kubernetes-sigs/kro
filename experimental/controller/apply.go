@@ -117,7 +117,10 @@ func (r *GraphReconciler) runFinalization(
 	watcher *graphWatcher,
 ) (bool, []string, error) {
 	logger := log.FromContext(ctx)
-	var createdKeys []string
+	// keys tracks all finalizer resource keys — both newly created and
+	// already existing. The caller uses these for deferred cleanup after
+	// the target is successfully deleted.
+	var keys []string
 
 	// Put the target's data in scope so finalizer templates can reference it.
 	// The target is still alive (no deletionTimestamp).
@@ -132,16 +135,16 @@ func (r *GraphReconciler) runFinalization(
 	for _, finNodeID := range finalizerNodeIDs {
 		idx, ok := dag.Index[finNodeID]
 		if !ok {
-			return false, createdKeys, fmt.Errorf("finalizer node %q not found in DAG", finNodeID)
+			return false, keys, fmt.Errorf("finalizer node %q not found in DAG", finNodeID)
 		}
 		finNode := &dag.Nodes[idx]
 
 		// forEach + finalizes: expand the collection and create one resource per item.
 		if finNode.ForEach != nil {
 			ready, fKeys, err := r.runForEachFinalization(ctx, graph, finNode, dag, eval, watcher)
-			createdKeys = append(createdKeys, fKeys...)
+			keys = append(keys, fKeys...)
 			if err != nil {
-				return false, createdKeys, err
+				return false, keys, err
 			}
 			if !ready {
 				allReady = false
@@ -152,7 +155,7 @@ func (r *GraphReconciler) runFinalization(
 		// Single-resource finalizer (original path).
 		evalMap, err := eval.toMap(finNode.Template)
 		if err != nil {
-			return false, createdKeys, fmt.Errorf("evaluating finalizer template %s: %w", finNodeID, err)
+			return false, keys, fmt.Errorf("evaluating finalizer template %s: %w", finNodeID, err)
 		}
 
 		// Check if the finalizer resource already exists.
@@ -169,16 +172,16 @@ func (r *GraphReconciler) runFinalization(
 
 		if err != nil {
 			if !apierrors.IsNotFound(err) {
-				return false, createdKeys, fmt.Errorf("checking finalizer resource %s: %w", finNodeID, err)
+				return false, keys, fmt.Errorf("checking finalizer resource %s: %w", finNodeID, err)
 			}
 			// Step 1: Finalizer resource doesn't exist — create it.
 			logger.Info("creating finalizer resource", "finalizer", finNodeID,
 				"target", target.GetName())
 			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, ReferenceOwn, false)
 			if applyErr != nil {
-				return false, createdKeys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
+				return false, keys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
 			}
-			createdKeys = append(createdKeys, resourceKey(applied))
+			keys = append(keys, resourceKey(applied))
 			eval.scope[finNodeID] = applied.Object
 			allReady = false
 			continue
@@ -186,6 +189,7 @@ func (r *GraphReconciler) runFinalization(
 
 		// Finalizer resource exists — put it in scope and check readyWhen.
 		eval.scope[finNodeID] = normalizeTypes(existing.Object)
+		keys = append(keys, resourceKey(existing))
 
 		if len(finNode.ReadyWhen) > 0 {
 			if err := eval.checkReadiness(finNode.ReadyWhen, finNodeID); err != nil {
@@ -199,7 +203,7 @@ func (r *GraphReconciler) runFinalization(
 		logger.V(1).Info("finalizer ready", "finalizer", finNodeID)
 	}
 
-	return allReady, createdKeys, nil
+	return allReady, keys, nil
 }
 
 // runForEachFinalization handles the forEach + finalizes case: expand a
@@ -659,19 +663,29 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 // ---------------------------------------------------------------------------
 
 // pruneRemovedResources deletes or releases resources no longer in the applied
-// set. Returns (finalizerKeys, deferredKeys, err):
-//   - finalizerKeys: keys of finalizer resources created this cycle
+// set. Returns (deferredKeys, notes, err):
 //   - deferredKeys: keys of resources whose deletion was deferred this cycle
 //     (finalization in progress, blocked by third-party field managers, etc.).
 //     The caller must include these in deferredPruneKeys for the next
 //     reconcile so they remain visible as prune candidates, AND must not GC
 //     superseded revisions while any deferral is active — the superseded DAG's
 //     finalizer relationships are still needed to complete the sequence.
+//   - notes: informational messages for the Graph status (e.g., FinalizerSkipped).
 //   - err: hard error from an API call; sets pruneOK=false at the call site.
 func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, supersededDAGs map[string]*DAG, eval *evaluator, watcher *graphWatcher) ([]string, []string, error) {
 	logger := log.FromContext(ctx)
-	var finalizerKeys []string
 	var deferredKeys []string
+	var notes []string // informational messages for status (e.g., FinalizerSkipped)
+	// deferredDeletes collects finalizer resource keys whose targets were
+	// successfully deleted in this walk. These are processed after the walk
+	// completes — not inline — to avoid corrupting forEach finalization
+	// where children must survive the readiness check before cleanup.
+	//
+	// Invariant: a key appears here only when:
+	//   1. runFinalization returned ready=true
+	//   2. The target was successfully deleted (r.Client.Delete succeeded)
+	//   3. No state has changed since (synchronous execution)
+	var deferredDeletes []string
 
 	// Build current key set for fast lookup
 	currentSet := map[string]bool{}
@@ -802,6 +816,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 				if _, finalizerNodeIDs := findFinalizers(nodeID); len(finalizerNodeIDs) > 0 {
 					logger.Info("finalization skipped: target resource does not exist",
 						"key", key, "finalizers", finalizerNodeIDs)
+					notes = append(notes, fmt.Sprintf("FinalizerSkipped: %s (target absent)", key))
 				}
 			}
 			r.Resources.remove(key)
@@ -840,10 +855,11 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 		// Finalization: if this target has finalizer nodes (from any revision),
 		// run the finalization sequence before deleting.
+		var targetFinalizerKeys []string // keys from THIS target's finalization only
 		nodeID := keyToNodeID[key]
 		if finDAG, finalizerNodeIDs := findFinalizers(nodeID); finDAG != nil {
 			ready, fKeys, err := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, finDAG, eval, watcher)
-			finalizerKeys = append(finalizerKeys, fKeys...)
+			targetFinalizerKeys = fKeys
 			if err != nil {
 				logger.Error(err, "finalization failed", "key", key)
 				continue // block deletion — TeardownBlocked
@@ -859,15 +875,43 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 		if err := r.Client.Delete(ctx, obj); err != nil {
 			if client.IgnoreNotFound(err) != nil {
-				return finalizerKeys, deferredKeys, fmt.Errorf("pruning %s: %w", key, err)
+				return deferredKeys, notes, fmt.Errorf("pruning %s: %w", key, err)
 			}
 		} else {
 			logger.Info("pruned resource", "key", key)
 			r.Resources.remove(key)
+			// If this target had finalizer resources, they are now safe to
+			// clean up — the target is gone and finalization completed.
+			// Only include keys from THIS target's finalization, not from
+			// other targets that may still be in progress.
+			deferredDeletes = append(deferredDeletes, targetFinalizerKeys...)
 		}
 	}
 
-	return finalizerKeys, deferredKeys, nil
+	// Process deferred deletes: finalizer resources whose targets were
+	// successfully deleted above. Per 004-graph-reconciliation.md §
+	// Finalization: "The finalizer resources are in the applied set but
+	// not in the desired state — they are prune candidates."
+	for _, fk := range deferredDeletes {
+		fGVK, fNN := parseResourceKey(fk)
+		if fGVK.Kind == "" {
+			continue
+		}
+		finDel := &unstructured.Unstructured{}
+		finDel.SetGroupVersionKind(fGVK)
+		finDel.SetName(fNN.Name)
+		finDel.SetNamespace(fNN.Namespace)
+		if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
+			if client.IgnoreNotFound(delErr) != nil {
+				logger.Error(delErr, "deferred finalizer cleanup failed", "key", fk)
+			}
+		} else {
+			logger.Info("cleaned up finalizer resource", "key", fk)
+			r.Resources.remove(fk)
+		}
+	}
+
+	return deferredKeys, notes, nil
 }
 
 // findManagedResourceKeys discovers dynamically-named resources (forEach, CEL

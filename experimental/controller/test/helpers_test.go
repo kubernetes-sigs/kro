@@ -414,6 +414,21 @@ func graphReady(g *unstructured.Unstructured) bool {
 	return cond["status"] == "True"
 }
 
+// graphReadyMessage returns the Ready condition's message string, or "" if not found.
+func graphReadyMessage(g *unstructured.Unstructured) string {
+	status, _ := g.Object["status"].(map[string]any)
+	if status == nil {
+		return ""
+	}
+	conditions, _ := status["conditions"].([]any)
+	cond, found := findCondition(conditions, "Ready")
+	if !found {
+		return ""
+	}
+	msg, _ := cond["message"].(string)
+	return msg
+}
+
 // graphReadyReason returns the Ready condition's reason string, or "" if not found.
 func graphReadyReason(g *unstructured.Unstructured) string {
 	status, _ := g.Object["status"].(map[string]any)

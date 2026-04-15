@@ -98,6 +98,13 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		var currentOrder []string
 		for _, item := range items {
 			id := forEachItemIdentity(item)
+			// Per 004-graph-reconciliation.md § forEach: identity must be
+			// unique across items. Duplicate identities silently drop one
+			// item (map overwrite) — that's data loss, not dedup.
+			if _, exists := currentItems[id]; exists {
+				return nil, fmt.Errorf("forEach %s: duplicate item identity %q — "+
+					"two collection items resolve to the same identity", node.ID, id)
+			}
 			currentItems[id] = item
 			currentOrder = append(currentOrder, id)
 		}
@@ -128,7 +135,8 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 		// Diff: identify changed, unchanged, and removed items.
 		var allApplied []any
-		var childErrors []error // track per-child errors for state derivation
+		var childErrors []error                     // track per-child errors for state derivation
+		seenResourceKeys := make(map[string]string) // resource key → item identity
 		for _, id := range currentOrder {
 			item := currentItems[id]
 			prevItem, existed := prevItems[id]
@@ -184,6 +192,19 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				childObj.SetNamespace(graph.GetNamespace())
 			}
 			gvk := childObj.GroupVersionKind()
+
+			// Per 004-graph-reconciliation.md § forEach: "Resource keys must be
+			// unique across children of the same parent — validated at expansion
+			// time." Detect duplicate resource keys before any apply. Without
+			// this, the second item silently overwrites the first in the identity
+			// map and one child stops being managed.
+			childResKey := resourceCacheKey(childObj.GetAPIVersion(), gvk.Kind, childObj.GetNamespace(), childObj.GetName())
+			if prevItemID, exists := seenResourceKeys[childResKey]; exists {
+				return nil, fmt.Errorf("forEach %s: duplicate resource key %s from items %q and %q — "+
+					"each child must produce a unique resource (apiVersion/kind/namespace/name)", node.ID, childResKey, prevItemID, id)
+			}
+			seenResourceKeys[childResKey] = id
+
 			gv, _ := schema.ParseGroupVersion(childObj.GetAPIVersion())
 			generation := fmt.Sprintf("%d", graph.GetGeneration())
 

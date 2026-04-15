@@ -1119,7 +1119,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 		if len(allPreviousKeys) > 0 {
 			var deferred []string
-			_, deferred, err = r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
+			var pruneNotes []string
+			deferred, pruneNotes, err = r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
+			// Surface informational notes (e.g., FinalizerSkipped) in the
+			// Graph status. Per 004-graph-execution.md § Finalization:
+			// "FinalizerSkipped with a message naming the resource."
+			nodeErrors = append(nodeErrors, pruneNotes...)
 			if len(deferred) > 0 {
 				prunePending = true
 				// Store deferred keys for the next reconcile to retry.

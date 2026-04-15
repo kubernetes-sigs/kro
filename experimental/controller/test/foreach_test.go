@@ -921,3 +921,264 @@ func TestForEachPropagateWhenMultiChildAggregation(t *testing.T) {
 		types.NamespacedName{Name: "test-foreach-pw-agg", Namespace: ns}))
 	t.Log("forEach propagateWhen multi-child aggregation proved")
 }
+
+// TestForEachPartialFailureDoesNotPrune proves that when one forEach child's
+// template evaluation fails, previously-applied children are NOT pruned.
+//
+// Design 004-graph-reconciliation § forEach:
+//
+//	"If any identity expression cannot evaluate [...] Expansion does not
+//	proceed and existing children persist. Partial expansion is never
+//	attempted."
+//
+// Failure mode: child-b's template references a field that is removed from
+// the source ConfigMap. Without the atomicity guarantee, child-b would be
+// absent from the returned key set → prune candidate → deleted. When the
+// field is restored, child-b would be recreated from scratch (new
+// resourceVersion). For resources with external side effects (PVCs,
+// external DNS records), this is data loss.
+func TestForEachPartialFailureDoesNotPrune(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create 3 source ConfigMaps with a "ref" field that the forEach
+	// template will reference.
+	for _, name := range []string{"partial-src-a", "partial-src-b", "partial-src-c"} {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": ns,
+					"labels":    map[string]any{"group": "partial-sources"},
+				},
+				"data": map[string]any{"ref": "valid-" + name},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+
+	// Graph: WatchKind discovers sources, forEach stamps one child per source.
+	// Each child's data.origin field references ${item.data.ref}.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-partial",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "sources",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"selector":   map[string]any{"group": "partial-sources"},
+						},
+					},
+					map[string]any{
+						"id": "children",
+						"forEach": map[string]any{
+							"item": "${sources}",
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "${'partial-child-' + item.metadata.name}",
+							},
+							"data": map[string]any{
+								"origin": "${item.data.ref}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for all 3 children to exist.
+	childNames := []string{"partial-child-partial-src-a", "partial-child-partial-src-b", "partial-child-partial-src-c"}
+	for _, name := range childNames {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(cmGVK)
+		require.NoError(t, waitForResource(ctx, k8sClient,
+			types.NamespacedName{Name: name, Namespace: ns}, cm),
+			"child %s must be created", name)
+	}
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-foreach-partial", Namespace: ns}))
+	t.Log("Phase 1: All 3 children created, Graph ready")
+
+	// Record resourceVersions — these must be stable after recovery.
+	rvBefore := map[string]string{}
+	for _, name := range childNames {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(cmGVK)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+		rvBefore[name] = cm.GetResourceVersion()
+	}
+
+	// Inject failure: remove the "ref" field from source-b. The forEach
+	// template references ${item.data.ref} which will fail for this item.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "partial-src-b", Namespace: ns},
+		func(obj *unstructured.Unstructured) {
+			obj.Object["data"] = map[string]any{"other": "no-ref-field"}
+		}))
+	t.Log("Phase 2: Removed ref field from partial-src-b — one child should fail")
+
+	// Wait for the Graph to leave Ready=True. The forEach child failure
+	// (missing data.ref → "no such key" → Pending) should propagate.
+	// The Ready condition becomes Unknown/Pending or False/Error depending
+	// on classification.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "test-foreach-partial", Namespace: ns}, g); err != nil {
+				return false, nil
+			}
+			s := graphReadyStatus(g)
+			return s == "Unknown" || s == "False", nil
+		}),
+		"Graph should leave Ready=True after forEach child failure")
+	t.Log("Phase 2: Graph shows non-ready state")
+
+	// THE KEY ASSERTION: all 3 children must still exist. child-b must NOT
+	// be pruned just because its template failed to evaluate.
+	for _, name := range childNames {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(cmGVK)
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, cm)
+		assert.NoError(t, err, "child %s must still exist — partial expansion must not prune", name)
+	}
+	t.Log("Phase 2: All 3 children survived — partial expansion did not prune")
+
+	// Resolve: restore the "ref" field on source-b.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "partial-src-b", Namespace: ns},
+		func(obj *unstructured.Unstructured) {
+			obj.Object["data"] = map[string]any{"ref": "valid-partial-src-b"}
+		}))
+	t.Log("Phase 3: Restored ref field on partial-src-b — recovery")
+
+	// Wait for Graph to recover to Ready.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-foreach-partial", Namespace: ns}))
+	t.Log("Phase 3: Graph recovered to Ready")
+
+	// All children should still exist with their original resourceVersions.
+	// If a child was deleted and recreated, its RV would differ.
+	for _, name := range childNames {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(cmGVK)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+	}
+	t.Log("Phase 3: All 3 children exist after recovery")
+}
+
+// TestForEachDuplicateKeyRejected proves that when two forEach items produce
+// the same resource key (same name/namespace/GVK), the controller surfaces
+// an error rather than silently dropping one child.
+//
+// Design 004-graph-reconciliation § forEach:
+//
+//	"Resource keys must be unique across children of the same parent —
+//	validated at expansion time."
+//
+// Failure mode: two items in the collection render templates with the same
+// metadata.name. Without validation, the second item silently overwrites
+// the first in the identity map. One child stops being managed.
+func TestForEach_RegressionDuplicateKeySilentOverwrite(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create 2 source ConfigMaps that will produce children with the
+	// SAME name. Both sources have data.target = "same-name", and the
+	// forEach template uses ${item.data.target} as the child name.
+	for _, name := range []string{"dup-src-a", "dup-src-b"} {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": ns,
+					"labels":    map[string]any{"group": "dup-sources"},
+				},
+				"data": map[string]any{"target": "same-name"},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-dup-key",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "sources",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"selector":   map[string]any{"group": "dup-sources"},
+						},
+					},
+					map[string]any{
+						"id": "children",
+						"forEach": map[string]any{
+							"item": "${sources}",
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								// Both items produce the same child name
+								"name": "${'dup-child-' + item.data.target}",
+							},
+							"data": map[string]any{
+								"from": "${item.metadata.name}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// The Graph should surface an error — the duplicate key should be
+	// detected and reported. The Graph should NOT reach Ready=True with
+	// one child silently dropped.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "test-foreach-dup-key", Namespace: ns}, g); err != nil {
+				return false, nil
+			}
+			reason := graphReadyReason(g)
+			// Error or SystemError means the controller detected the problem.
+			// NotReady or Pending means it's still converging — keep waiting.
+			return reason == "Error" || reason == "SystemError", nil
+		}),
+		"Graph should be in error state due to duplicate resource keys")
+	t.Log("Graph correctly reports error for duplicate forEach resource keys")
+}

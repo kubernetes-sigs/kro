@@ -2,6 +2,7 @@ package graphcontroller_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -709,4 +710,253 @@ func TestSupersededRevisionFinalizesGovernsPrompt(t *testing.T) {
 			return err != nil, nil
 		}))
 	t.Log("Target deleted after gate opened — superseded revision's finalizes governed the prune")
+}
+
+// TestFinalizerResourceCleanedUpBeforeReady proves that finalizer resources
+// created during a prune walk are cleaned up before the Graph reaches
+// Ready=True. The design requires that Ready=True means the desired state is
+// fully realized AND all artifacts of the previous desired state are gone.
+//
+// Design 004-graph-reconciliation § Finalization:
+//
+//	"The prune walk continues. The finalizer resources are in the applied
+//	set but not in the desired state — they are prune candidates."
+//
+// Failure mode: Graph reaches Ready=True while the ephemeral finalizer
+// ConfigMap still exists. An operator observing Ready=True would incorrectly
+// believe the cluster has converged to the declared spec.
+func TestFinalizer_RegressionCleanupLingersBeyondReady(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Phase 1: Create a Graph with target, keep, and finalizer.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-fin-cleanup",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "cleanup-target"},
+							"data":       map[string]any{"state": "active"},
+						},
+					},
+					map[string]any{
+						"id": "keep",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "cleanup-keep"},
+							"data":       map[string]any{"role": "permanent"},
+						},
+					},
+					map[string]any{
+						"id":        "snapshot",
+						"finalizes": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "cleanup-snapshot"},
+							"data":       map[string]any{"captured": "true"},
+						},
+						// No readyWhen — auto-ready on create.
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for target to exist and Graph to be ready.
+	targetCM := &unstructured.Unstructured{}
+	targetCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "cleanup-target", Namespace: ns}, targetCM))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-fin-cleanup", Namespace: ns}))
+	t.Log("Phase 1: Target created, Graph ready")
+
+	// Verify finalizer resource does NOT exist during normal operation.
+	snapshotCM := &unstructured.Unstructured{}
+	snapshotCM.SetGroupVersionKind(cmGVK)
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: "cleanup-snapshot", Namespace: ns}, snapshotCM)
+	assert.Error(t, err, "finalizer resource should not exist during normal operation")
+
+	// Phase 2: Remove target from spec. This triggers finalization → prune.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-fin-cleanup", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "keep",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "cleanup-keep"},
+						"data":       map[string]any{"role": "permanent"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+	t.Log("Phase 2: Removed target and snapshot from spec")
+
+	// Wait for the target to be deleted first — finalization must complete
+	// before the target can be removed.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "cleanup-target", Namespace: ns}, check)
+			return err != nil, nil // gone = true
+		}))
+	t.Log("Phase 2: Target deleted after finalization")
+
+	// Wait for Graph to reach Ready=True.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-fin-cleanup", Namespace: ns}))
+	t.Log("Phase 2: Graph reached Ready=True")
+
+	// THE KEY ASSERTION: when the Graph is Ready=True, the finalizer
+	// resource must already be cleaned up. The deferred-delete after the
+	// prune walk ensures same-cycle cleanup. Per 004-graph-reconciliation.md
+	// § Finalization: "The finalizer resources are in the applied set but
+	// not in the desired state — they are prune candidates."
+	snapshotCheck := &unstructured.Unstructured{}
+	snapshotCheck.SetGroupVersionKind(cmGVK)
+	err = k8sClient.Get(ctx, types.NamespacedName{Name: "cleanup-snapshot", Namespace: ns}, snapshotCheck)
+	assert.Error(t, err, "finalizer resource must be gone when Graph is Ready=True")
+
+	keepCheck := &unstructured.Unstructured{}
+	keepCheck.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "cleanup-keep", Namespace: ns}, keepCheck))
+	t.Log("Phase 2: Ready=True with target and finalizer both gone, keep alive")
+}
+
+// TestFinalizerSkippedSurfacedInStatus proves that when a finalization target
+// doesn't exist (deleted externally), the Graph's Ready condition message
+// surfaces that finalization was skipped.
+//
+// Design 004-graph-reconciliation § Finalization:
+//
+//	"Target absent → Skip finalization → FinalizerSkipped status."
+//	"The Graph's status surfaces this: FinalizerSkipped with a message
+//	naming the resource."
+//
+// Failure mode: the controller logs the skip but doesn't propagate it to
+// the Graph's status conditions. Operators see Ready=True with no indication
+// that finalization was bypassed — they can't distinguish "finalization ran
+// and succeeded" from "finalization was skipped because the target was gone."
+func TestFinalizer_RegressionSkippedNotSurfaced(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-fin-skipped-status",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "skipped-target"},
+							"data":       map[string]any{"state": "active"},
+						},
+					},
+					map[string]any{
+						"id":        "snapshot",
+						"finalizes": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "skipped-snapshot"},
+							"data":       map[string]any{"captured": "true"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for target to exist and Graph to be ready.
+	targetCM := &unstructured.Unstructured{}
+	targetCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "skipped-target", Namespace: ns}, targetCM))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-fin-skipped-status", Namespace: ns}))
+	t.Log("Target created, Graph ready")
+
+	// Externally delete the target — bypassing the Graph controller.
+	require.NoError(t, k8sClient.Delete(ctx, targetCM))
+	t.Log("Externally deleted target before spec change")
+
+	// Wait for the target to be actually gone.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "skipped-target", Namespace: ns}, check)
+			return err != nil, nil
+		}))
+
+	// Update spec to remove the target node. This makes the target a prune
+	// candidate, but it's already gone → finalization should be skipped.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-fin-skipped-status", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{}, "spec", "nodes")
+		}))
+	t.Log("Updated spec: removed all nodes")
+
+	// Wait for the Graph to process the new spec (0 nodes). The Graph
+	// should converge to Ready=True with a message about 0 resources.
+	// First wait for the prune to complete and the status to update.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "test-fin-skipped-status", Namespace: ns}, g); err != nil {
+				return false, nil
+			}
+			msg := graphReadyMessage(g)
+			// Wait until the status reflects the new spec (0 resources),
+			// not the old spec (2 resources). The FinalizerSkipped note
+			// should appear in the message.
+			return graphReady(g) && !strings.Contains(msg, "All 2"), nil
+		}),
+		"Graph should converge to Ready with new spec (0 nodes)")
+
+	// THE KEY ASSERTION: the Ready condition message must mention
+	// "FinalizerSkipped" so operators know finalization was bypassed.
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "test-fin-skipped-status", Namespace: ns}, g))
+	msg := graphReadyMessage(g)
+	assert.Contains(t, msg, "FinalizerSkipped",
+		"Ready condition message must surface FinalizerSkipped when target was absent")
+	t.Logf("Ready message: %s", msg)
+	t.Log("FinalizerSkipped correctly surfaced in Graph status")
 }

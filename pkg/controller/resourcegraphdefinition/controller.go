@@ -55,6 +55,7 @@ type Config struct {
 	ProgressRequeueDelay    time.Duration
 	MaxConcurrentReconciles int
 	MaxGraphRevisions       int
+	UseFieldSelectors       bool
 	RGDConfig               graph.RGDConfig
 }
 

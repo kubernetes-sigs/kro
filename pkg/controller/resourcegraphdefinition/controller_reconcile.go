@@ -430,19 +430,28 @@ func newMicroControllerError(err error) error { return &microControllerError{err
 // and terminating sets, and identifies orphans that need adoption.
 //
 // GraphRevisions are grouped by RGD name (not UID) so a recreated RGD with the
-// same name can adopt the existing revisions. The list uses the direct API
-// reader with a CRD selectable field on spec.snapshot.name rather than a
-// cache-only field index. The caller uses the terminating flag to defer
-// decisions while GC is in flight.
+// same name can adopt the existing revisions. The list uses either field selectors
+// (spec.snapshot.name) or label selectors based on the UseFieldSelectors config.
+// The caller uses the terminating flag to defer decisions while GC is in flight.
 //
 // A live revision is considered orphaned when it lacks a controller ownerReference
 // pointing to the current RGD UID. This happens after an orphan-policy delete or
 // when a GR is created externally with a matching spec.snapshot.name.
 func (r *ResourceGraphDefinitionReconciler) listGraphRevisions(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (live []internalv1alpha1.GraphRevision, hasTerminating bool, orphans []int, err error) {
 	revisionList := &internalv1alpha1.GraphRevisionList{}
-	if err := r.apiReader.List(ctx, revisionList, client.MatchingFields{
-		"spec.snapshot.name": rgd.Name,
-	}); err != nil {
+	opts := []client.ListOption{
+		client.MatchingLabels{
+			metadata.ResourceGraphDefinitionNameLabel: rgd.Name,
+		},
+	}
+	if r.cfg.UseFieldSelectors {
+		opts = []client.ListOption{
+			client.MatchingFields{
+				"spec.snapshot.name": rgd.Name,
+			},
+		}
+	}
+	if err := r.apiReader.List(ctx, revisionList, opts...); err != nil {
 		return nil, false, nil, err
 	}
 

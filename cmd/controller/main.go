@@ -94,6 +94,7 @@ func main() {
 		leaderElectionRenewDeadline   time.Duration
 		leaderElectionRetryPeriod     time.Duration
 		featureGatesFlag              string
+		useFieldSelectors             bool
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8078", "The address the metric endpoint binds to.")
@@ -170,6 +171,8 @@ func main() {
 		"Duration the acting leader will retry refreshing leadership before giving up.")
 	flag.DurationVar(&leaderElectionRetryPeriod, "leader-election-retry-period", 2*time.Second,
 		"Duration between each leader election action.")
+	flag.BoolVar(&useFieldSelectors, "use-field-selectors", true,
+		"Use field selectors when true, otherwise fall back to label selectors. Set to false for Kubernetes <= 1.30 compatibility.")
 
 	opts := zap.Options{
 		Development: true,
@@ -270,6 +273,7 @@ func main() {
 			ProgressRequeueDelay:    rgdProgressRequeueDelay,
 			MaxConcurrentReconciles: resourceGraphDefinitionConcurrentReconciles,
 			MaxGraphRevisions:       rgdMaxGraphRevisions,
+			UseFieldSelectors:       useFieldSelectors,
 			RGDConfig: graph.RGDConfig{
 				MaxCollectionSize:          rgdMaxCollectionSize,
 				MaxCollectionDimensionSize: rgdMaxCollectionDimensionSize,

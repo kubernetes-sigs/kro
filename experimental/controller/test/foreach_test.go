@@ -1182,3 +1182,172 @@ func TestForEach_RegressionDuplicateKeySilentOverwrite(t *testing.T) {
 		"Graph should be in error state due to duplicate resource keys")
 	t.Log("Graph correctly reports error for duplicate forEach resource keys")
 }
+
+// TestForEachPropagateWhenPerItem proves that propagateWhen on a forEach node
+// is evaluated per-item: all items must satisfy the condition for the parent
+// to be propagate-ready.
+//
+// Design 004-graph-reconciliation.md § forEach > Parent State:
+//
+//	"The parent's propagateWhen is satisfied when all children's propagateWhen
+//	are satisfied."
+func TestForEachPropagateWhenPerItem(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "foreach-propagate-test",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "source",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "fe-prop-source"},
+							"data": map[string]any{
+								"item1": "ready",
+								"item2": "ready",
+							},
+						},
+					},
+					map[string]any{
+						"id": "items",
+						"forEach": map[string]any{
+							"entry": `${[{"name": "fe-prop-a", "status": "ready"}, {"name": "fe-prop-b", "status": "ready"}]}`,
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "${entry.name}"},
+							"data": map[string]any{
+								"status": "${entry.status}",
+							},
+						},
+						"propagateWhen": []any{
+							`${items.data.status == "ready"}`,
+						},
+					},
+					map[string]any{
+						"id": "consumer",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "fe-prop-consumer"},
+							"data": map[string]any{
+								"consumed": "true",
+								"count":    "${string(size(items))}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	graphKey := types.NamespacedName{Name: "foreach-propagate-test", Namespace: ns}
+
+	for _, name := range []string{"fe-prop-a", "fe-prop-b"} {
+		child := &unstructured.Unstructured{}
+		child.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+		require.NoError(t, waitForResource(ctx, k8sClient,
+			types.NamespacedName{Name: name, Namespace: ns}, child))
+		t.Logf("forEach child %s created", name)
+	}
+
+	// All items satisfy propagateWhen → consumer should be created.
+	consumer := &unstructured.Unstructured{}
+	consumer.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+	err := wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "fe-prop-consumer", Namespace: ns}, consumer); err != nil {
+				return false, nil
+			}
+			return true, nil
+		})
+	require.NoError(t, err,
+		"consumer should be created — all forEach items satisfy propagateWhen")
+	t.Log("Consumer created — per-item propagateWhen rollup works")
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+}
+
+// TestForEachPropagateWhenBlocksWhenChildFails verifies the complementary
+// case: if any forEach item fails its propagateWhen, the parent is not
+// propagate-ready and downstream nodes are blocked.
+func TestForEachPropagateWhenBlocksWhenChildFails(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "foreach-prop-block-test",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "items",
+						"forEach": map[string]any{
+							"entry": `${[{"name": "fe-blk-ok", "status": "ready"}, {"name": "fe-blk-wait", "status": "pending"}]}`,
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "${entry.name}"},
+							"data": map[string]any{
+								"status": "${entry.status}",
+							},
+						},
+						"propagateWhen": []any{
+							`${items.data.status == "ready"}`,
+						},
+					},
+					map[string]any{
+						"id": "consumer",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "fe-blk-consumer"},
+							"data": map[string]any{
+								"consumed": "true",
+								"count":    "${string(size(items))}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	for _, name := range []string{"fe-blk-ok", "fe-blk-wait"} {
+		child := &unstructured.Unstructured{}
+		child.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+		require.NoError(t, waitForResource(ctx, k8sClient,
+			types.NamespacedName{Name: name, Namespace: ns}, child))
+		t.Logf("forEach child %s created", name)
+	}
+
+	// One item fails propagateWhen → consumer should NOT be created.
+	err := waitForAbsence(ctx, k8sClient,
+		schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"},
+		types.NamespacedName{Name: "fe-blk-consumer", Namespace: ns},
+		5*time.Second)
+	require.NoError(t, err,
+		"consumer should NOT be created — one forEach child fails propagateWhen")
+	t.Log("Consumer correctly absent — per-item propagateWhen blocks propagation")
+}

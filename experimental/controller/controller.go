@@ -130,6 +130,9 @@ type nodeResult struct {
 	// WatchKind cache update — returned by WatchKind workers for the
 	// coordinator to merge back into the instance state.
 	watchKindCacheUpdate map[string][]any // node ID → updated cached list
+	// forEach propagateWhen aggregate — true if all items satisfy
+	// propagateWhen. nil if not applicable (non-forEach or no propagateWhen).
+	forEachAllItemsPropagateReady *bool
 }
 
 // walkState holds coordinator-local state for a single DAG walk.
@@ -222,8 +225,17 @@ func (w *walkState) tryDispatch(idx int) {
 		if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
 			if (prevState == NodeReady || prevState == NodeNotReady) &&
 				len(node.PropagateWhen) > 0 && w.state.previousScope[node.ID] != nil {
-				w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
-					node.PropagateWhen, node.ID)
+				if node.ForEach != nil {
+					// forEach: carry forward the previous PropagateReady.
+					// Per-item evaluation only happens in the worker;
+					// the coordinator scope has the array, not items.
+					if prev, exists := w.state.previousPropagateReady[node.ID]; exists {
+						w.plan.PropagateReady[node.ID] = prev
+					}
+				} else {
+					w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
+						node.PropagateWhen, node.ID)
+				}
 			}
 		}
 		w.outputsReady[node.ID] = true
@@ -365,8 +377,14 @@ func (w *walkState) tryDispatch(idx int) {
 						w.plan.States[node.ID] = prevState
 						if prevState == NodeReady || prevState == NodeNotReady {
 							if len(node.PropagateWhen) > 0 && prevScope != nil {
-								w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
-									node.PropagateWhen, node.ID)
+								if node.ForEach != nil {
+									if prev, exists := w.state.previousPropagateReady[node.ID]; exists {
+										w.plan.PropagateReady[node.ID] = prev
+									}
+								} else {
+									w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
+										node.PropagateWhen, node.ID)
+								}
 							}
 						}
 					}
@@ -411,8 +429,16 @@ func (w *walkState) tryDispatch(idx int) {
 				w.plan.States[node.ID] = nodeState
 				if (nodeState == NodeReady || nodeState == NodeNotReady) &&
 					len(node.PropagateWhen) > 0 && scopeData != nil {
-					w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
-						node.PropagateWhen, node.ID)
+					if node.ForEach != nil {
+						// forEach: self-state changed but we're in the coordinator,
+						// not the worker. Carry forward previous per-item result.
+						if prev, exists := w.state.previousPropagateReady[node.ID]; exists {
+							w.plan.PropagateReady[node.ID] = prev
+						}
+					} else {
+						w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
+							node.PropagateWhen, node.ID)
+					}
 				}
 				w.state.previousPlanStates[node.ID] = nodeState
 				for _, depIdx := range w.dag.Dependents[node.ID] {
@@ -520,17 +546,18 @@ func (w *walkState) tryDispatch(idx int) {
 			}
 		}
 		w.results <- nodeResult{
-			idx:                  idx,
-			keys:                 keys,
-			state:                state,
-			err:                  err,
-			scopeKey:             n.ID,
-			scopeValue:           we.scope[n.ID],
-			evalDuration:         evalDuration,
-			forEachUpdates:       we.forEachNewKeys,
-			forEachScopes:        we.forEachNewScope,
-			forEachItems:         we.forEachNewItems,
-			watchKindCacheUpdate: we.watchKindCacheUpdate(),
+			idx:                           idx,
+			keys:                          keys,
+			state:                         state,
+			err:                           err,
+			scopeKey:                      n.ID,
+			scopeValue:                    we.scope[n.ID],
+			evalDuration:                  evalDuration,
+			forEachUpdates:                we.forEachNewKeys,
+			forEachScopes:                 we.forEachNewScope,
+			forEachItems:                  we.forEachNewItems,
+			watchKindCacheUpdate:          we.watchKindCacheUpdate(),
+			forEachAllItemsPropagateReady: we.forEachAllItemsPropagateReady,
 		}
 	}(*node, workerEval, nodeRef, isDrift)
 	w.inflight++
@@ -617,14 +644,32 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// only be created if compilation succeeds — its existence proves validity.
 
 	activeRevision, supersededRevisions, err := r.ensureRevision(ctx, graph)
+	var compilationErr error // non-nil when current generation failed to compile
 	if err != nil {
-		// Compilation or materialization failure — no revision created.
-		// Report the error on the Graph and return. The returned error is
-		// logged once by controller-runtime; no logger.Error here.
-		if statusErr := r.updateStatus(ctx, graph, &reconcileState{compiled: false, compiledErr: err}); statusErr != nil {
-			logger.Error(statusErr, "updating status after revision error")
+		// Compilation or materialization failure — no revision created for
+		// the current generation. Per 004-graph-execution.md § Compilation:
+		// "Reconciliation continues on the previous revision if one exists."
+		// Fall back to the most recent existing revision so healthy resources
+		// keep converging. A typo in the spec should not halt management.
+		graphName := graph.GetName()
+		namespace := graph.GetNamespace()
+		revisions, listErr := listRevisions(ctx, r.Client, graphName, namespace)
+		if listErr != nil || len(revisions) == 0 {
+			// No previous revision to fall back to — truly stuck.
+			if statusErr := r.updateStatus(ctx, graph, &reconcileState{compiled: false, compiledErr: err}); statusErr != nil {
+				logger.Error(statusErr, "updating status after revision error")
+			}
+			return ctrl.Result{}, fmt.Errorf("ensuring revision: %w", err)
 		}
-		return ctrl.Result{}, fmt.Errorf("ensuring revision: %w", err)
+		// Use the most recent revision (listRevisions returns sorted by
+		// generation ascending, so the last element is the latest).
+		activeRevision = revisions[len(revisions)-1]
+		supersededRevisions = nil // No transition — same revision as before.
+		compilationErr = err
+		logger.Error(err, "compilation failed for current generation")
+		logger.Info("falling back to previous revision",
+			"revision", activeRevision.GetName(),
+			"generation", revisionGeneration(activeRevision))
 	}
 
 	// -----------------------------------------------------------------------
@@ -678,6 +723,49 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 							state.previousAppliedKeys = make(map[string]bool)
 						}
 						state.previousAppliedKeys[k] = true
+					}
+				}
+			}
+		}
+		// Per 004-graph-execution.md § Revision transition: "Nodes that
+		// differ are triggered." On revision transition, transfer previous
+		// state from the superseded revision's cache for unchanged nodes.
+		// The evaluation hash check at Step 4 will then skip unchanged
+		// nodes — they appear to have been reconciled before with
+		// identical inputs, so template evaluation and SSA apply are
+		// elided. Changed and new nodes start fresh (no previous state).
+		if isRevisionTransition {
+			changedNodes := diffRevisionNodes(revisionSpec, supersededRevisions)
+			if changedNodes != nil {
+				// Transfer state from the most recent superseded revision.
+				baseline := supersededRevisions[len(supersededRevisions)-1]
+				oldKey := baseline.GetNamespace() + "/" + baseline.GetName()
+				if oldState := r.Caches.get(oldKey); oldState != nil {
+					for _, node := range dag.Nodes {
+						if !changedNodes[node.ID] {
+							// Node spec unchanged — inherit previous state.
+							if v, ok := oldState.previousScope[node.ID]; ok {
+								state.previousScope[node.ID] = v
+							}
+							if v, ok := oldState.previousPlanStates[node.ID]; ok {
+								state.previousPlanStates[node.ID] = v
+							}
+							if v, ok := oldState.previousPropagateReady[node.ID]; ok {
+								state.previousPropagateReady[node.ID] = v
+							}
+							if v, ok := oldState.previousEvalHashes[node.ID]; ok {
+								state.previousEvalHashes[node.ID] = v
+							}
+							if v, ok := oldState.previousSelfHashes[node.ID]; ok {
+								state.previousSelfHashes[node.ID] = v
+							}
+							if v, ok := oldState.previousKeys[node.ID]; ok {
+								state.previousKeys[node.ID] = v
+							}
+							if v, ok := oldState.resolvedReferences[node.ID]; ok {
+								state.resolvedReferences[node.ID] = v
+							}
+						}
 					}
 				}
 			}
@@ -923,10 +1011,20 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 
 		// Evaluate propagateWhen (coordinator reads from now-merged scope).
+		// For forEach nodes, the worker evaluates propagateWhen per-item and
+		// returns the aggregate result. The per-item evaluation is authoritative
+		// because the coordinator's scope has the array (not individual items),
+		// so per-field expressions wouldn't work against the aggregate.
 		if (res.state == NodeReady || res.state == NodeNotReady) &&
 			len(node.PropagateWhen) > 0 && eval.scope[node.ID] != nil {
-			plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
-				node.PropagateWhen, node.ID)
+			if res.forEachAllItemsPropagateReady != nil {
+				// forEach node: use the worker's per-item aggregate result.
+				plan.PropagateReady[node.ID] = *res.forEachAllItemsPropagateReady
+			} else {
+				// Regular node: evaluate propagateWhen against the coordinator scope.
+				plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
+					node.PropagateWhen, node.ID)
+			}
 		}
 
 		// Step 8: Propagation check — hash the specific field paths
@@ -1005,6 +1103,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		state.previousScope[node.ID] = eval.scope[node.ID]
 		state.previousKeys[node.ID] = res.keys
 		state.previousPlanStates[node.ID] = res.state
+		state.previousPropagateReady[node.ID] = plan.PropagateReady[node.ID]
 
 		// Store evaluation hash for next reconcile's change check (step 3).
 		if evalHash, err := hashNodeInputs(node, eval.scope); err == nil && evalHash != "" {
@@ -1171,7 +1270,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Update status on Graph and revision
 	// -----------------------------------------------------------------------
 	rstate := &reconcileState{
-		compiled:    true,
+		compiled:    compilationErr == nil,
+		compiledErr: compilationErr,
 		nodeCount:   len(revisionSpec.Nodes),
 		PlanSummary: summary,
 		nodeErrors:  nodeErrors,

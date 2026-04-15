@@ -210,10 +210,11 @@ type instanceState struct {
 	compiled *compiledGraph
 
 	// State retained across reconciles for propagateWhen and forEach diffing.
-	previousScope      map[string]any       // node ID → last scope data
-	previousKeys       map[string][]string  // node ID → last applied keys
-	previousPlanStates map[string]NodeState // node ID → last plan state
-	forEachItems       map[string][]any     // "nodeID/varName" → cached collection items
+	previousScope          map[string]any       // node ID → last scope data
+	previousKeys           map[string][]string  // node ID → last applied keys
+	previousPlanStates     map[string]NodeState // node ID → last plan state
+	previousPropagateReady map[string]bool      // node ID → last propagateWhen result (for forEach skip path)
+	forEachItems           map[string][]any     // "nodeID/varName" → cached collection items
 
 	// Resolved references for Unresolved nodes. Set on first reconcile when the
 	// existence check determines Own vs Contribute. Persists across
@@ -270,19 +271,20 @@ type instanceState struct {
 // newInstanceState creates a fresh instanceState for a compiledGraph.
 func newInstanceState(compiled *compiledGraph) *instanceState {
 	return &instanceState{
-		compiled:           compiled,
-		previousScope:      map[string]any{},
-		previousKeys:       map[string][]string{},
-		previousPlanStates: map[string]NodeState{},
-		previousEvalHashes: map[string]string{},
-		previousSelfHashes: map[string]string{},
-		forEachItems:       map[string][]any{},
-		forEachItemScope:   map[string]map[string]any{},
-		forEachItemKeys:    map[string]map[string][]string{},
-		resolvedReferences: make(map[string]Reference, len(compiled.dag.References)),
-		driftTimers:        make(map[string]time.Time),
-		watchKindCache:     make(map[string][]any),
-		systemErrorBackoff: make(map[string]time.Duration),
+		compiled:               compiled,
+		previousScope:          map[string]any{},
+		previousKeys:           map[string][]string{},
+		previousPlanStates:     map[string]NodeState{},
+		previousPropagateReady: map[string]bool{},
+		previousEvalHashes:     map[string]string{},
+		previousSelfHashes:     map[string]string{},
+		forEachItems:           map[string][]any{},
+		forEachItemScope:       map[string]map[string]any{},
+		forEachItemKeys:        map[string]map[string][]string{},
+		resolvedReferences:     make(map[string]Reference, len(compiled.dag.References)),
+		driftTimers:            make(map[string]time.Time),
+		watchKindCache:         make(map[string][]any),
+		systemErrorBackoff:     make(map[string]time.Duration),
 	}
 }
 

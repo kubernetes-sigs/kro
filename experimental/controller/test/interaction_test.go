@@ -2,6 +2,7 @@ package graphcontroller_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1791,22 +1792,29 @@ func TestPropagateWhenRespectsResyncGate(t *testing.T) {
 	}
 	t.Log("Phase 3: Both gated and ungated externally mutated to DRIFTED")
 
-	// Phase 4: Wait for drift interval (2s) + margin to elapse, then touch
-	// the control CM to trigger reconciliation. The touch uses the controller's
-	// own watch mechanism to force a reconcile after the drift timer has
-	// expired, avoiding envtest RequeueAfter timing sensitivity. The ungated
-	// node correction proves resync fired; the gated node retention proves
-	// the propagateWhen gate held. Adding a benign field to the control CM
-	// doesn't affect the gate condition (ready == 'false' is unchanged).
-	time.Sleep(4 * time.Second) // drift-interval=2s + jitter + margin
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "resync-gate-control", Namespace: ns}, latest))
-	unstructured.SetNestedField(latest.Object, "trigger", "data", "reconcile-bump")
-	require.NoError(t, k8sClient.Update(ctx, latest))
-	t.Log("Phase 4: Touched control CM to trigger reconcile after drift timer expired")
-
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 30*time.Second, true,
+	// Phase 4: Wait for drift to correct the ungated node. The drift timer
+	// (2s interval, 0 jitter in tests) fires on the next reconcile after
+	// expiry. Under CI load, reconcile scheduling is delayed, so we
+	// periodically bump the control CM to force reconcile events until the
+	// drift correction proves itself. Each bump is a benign field addition
+	// that doesn't affect the gate condition (ready == 'false' is unchanged).
+	bumpCount := 0
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, false,
 		func(ctx context.Context) (bool, error) {
+			// Bump control CM to force a reconcile.
+			bump := &unstructured.Unstructured{}
+			bump.SetGroupVersionKind(gvk)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "resync-gate-control", Namespace: ns}, bump); err != nil {
+				return false, nil
+			}
+			bumpCount++
+			unstructured.SetNestedField(bump.Object, fmt.Sprintf("bump-%d", bumpCount), "data", "reconcile-bump")
+			if err := k8sClient.Update(ctx, bump); err != nil {
+				return false, nil // conflict retry
+			}
+
+			// Check if ungated has been drift-corrected.
 			check := &unstructured.Unstructured{}
 			check.SetGroupVersionKind(gvk)
 			if err := k8sClient.Get(ctx,

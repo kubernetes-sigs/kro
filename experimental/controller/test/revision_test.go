@@ -776,3 +776,210 @@ func TestRevisionTransitionAbandonsStaleEvaluation(t *testing.T) {
 	}
 	t.Log("ResourceVersions stable — no extra bumps from stale Rev N applies")
 }
+
+// TestCompilationFailureFallsBackToPreviousRevision proves that a compilation
+// failure (e.g., CEL type error) does not halt reconciliation of healthy
+// resources. The controller falls back to the most recent existing revision
+// and continues Phase 2.
+//
+// Design 004-graph-reconciliation.md § Compilation:
+//
+//	"Reconciliation continues on the previous revision if one exists."
+func TestCompilationFailureFallsBackToPreviousRevision(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "compile-fallback-test",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "cm",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "compile-fallback-cm"},
+							"data":       map[string]any{"key": "value"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	graphKey := types.NamespacedName{Name: "compile-fallback-test", Namespace: ns}
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+
+	cm := &unstructured.Unstructured{}
+	cm.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+	cmKey := types.NamespacedName{Name: "compile-fallback-cm", Namespace: ns}
+	require.NoError(t, waitForResource(ctx, k8sClient, cmKey, cm))
+	t.Log("Graph Active, ConfigMap created")
+
+	latestGraph := &unstructured.Unstructured{}
+	latestGraph.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, graphKey, latestGraph))
+	gen1 := latestGraph.GetGeneration()
+	rev1Name := fmt.Sprintf("compile-fallback-test-g%05d", gen1)
+	_, err := waitForRevision(ctx, k8sClient,
+		types.NamespacedName{Name: rev1Name, Namespace: ns})
+	require.NoError(t, err)
+	t.Logf("Working revision: %s (generation %d)", rev1Name, gen1)
+
+	// Break the spec with an invalid CEL expression.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, graphKey,
+		func(obj *unstructured.Unstructured) {
+			nodes := []any{
+				map[string]any{
+					"id": "cm",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "compile-fallback-cm"},
+						"data": map[string]any{
+							"key": "${true + 42}",
+						},
+					},
+				},
+			}
+			unstructured.SetNestedSlice(obj.Object, nodes, "spec", "nodes")
+		}))
+	t.Log("Broke the Graph spec with invalid CEL")
+
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient, graphKey, "False"),
+		"Graph should report Compiled=False after spec break")
+	t.Log("Graph reports Compiled=False")
+
+	// Delete the ConfigMap out of band.
+	require.NoError(t, k8sClient.Delete(ctx, cm))
+	t.Log("Deleted ConfigMap out of band")
+
+	// The ConfigMap should be recreated by the previous revision.
+	recreatedCM := &unstructured.Unstructured{}
+	recreatedCM.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+	err = wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			if err := k8sClient.Get(ctx, cmKey, recreatedCM); err != nil {
+				return false, nil
+			}
+			return true, nil
+		})
+	require.NoError(t, err,
+		"ConfigMap should be recreated — previous revision must still manage resources "+
+			"even after compilation failure")
+	t.Log("ConfigMap recreated — previous revision is still active")
+
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+	assert.Equal(t, "False", graphReadyStatus(g),
+		"Ready should be False because Compiled=False, but reconciliation continues")
+}
+
+// TestRevisionTransitionPreservesUnchangedNodes proves that on a revision
+// transition, nodes whose spec did not change retain their data. Changed
+// nodes receive the updated spec.
+//
+// Design 004-graph-reconciliation.md § Revision transition:
+//
+//	"Nodes that differ are triggered. Removed nodes become prune candidates."
+func TestRevisionTransitionPreservesUnchangedNodes(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "rev-selective-test",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "cma",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "rev-selective-cm-a"},
+							"data":       map[string]any{"version": "v1"},
+						},
+					},
+					map[string]any{
+						"id": "cmb",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "rev-selective-cm-b"},
+							"data":       map[string]any{"version": "v1"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	graphKey := types.NamespacedName{Name: "rev-selective-test", Namespace: ns}
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	t.Log("Graph Active with cm-a and cm-b at v1")
+
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, graphKey,
+		func(obj *unstructured.Unstructured) {
+			nodes := []any{
+				map[string]any{
+					"id": "cma",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "rev-selective-cm-a"},
+						"data":       map[string]any{"version": "v1"},
+					},
+				},
+				map[string]any{
+					"id": "cmb",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "rev-selective-cm-b"},
+						"data":       map[string]any{"version": "v2"},
+					},
+				},
+			}
+			unstructured.SetNestedSlice(obj.Object, nodes, "spec", "nodes")
+		}))
+	t.Log("Updated cm-b from v1 to v2, cm-a unchanged")
+
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			cmB := &unstructured.Unstructured{}
+			cmB.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "rev-selective-cm-b", Namespace: ns}, cmB); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(cmB.Object, "data")
+			return data["version"] == "v2", nil
+		}))
+	t.Log("cm-b updated to v2")
+
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+
+	cmAAfter := &unstructured.Unstructured{}
+	cmAAfter.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "rev-selective-cm-a", Namespace: ns}, cmAAfter))
+	data, _, _ := unstructured.NestedStringMap(cmAAfter.Object, "data")
+	assert.Equal(t, "v1", data["version"],
+		"cm-a's data should still be v1 — unchanged node preserved after revision transition")
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+}

@@ -44,6 +44,13 @@ type evaluator struct {
 	watchKindChanges      []CollectionChange // buffered changes since last reconcile
 	watchKindUpdatedCache []any              // output: updated list for coordinator to store
 	watchKindDriftOrFull  bool               // true = bypass cache, do full list (drift or first reconcile)
+
+	// forEach propagateWhen aggregate — set by reconcileForEach when the
+	// node has propagateWhen expressions. The worker evaluates propagateWhen
+	// per-item (like readyWhen) and sets this to true only if all items pass.
+	// nil means not evaluated (non-forEach node or no propagateWhen).
+	// The coordinator folds this into PropagateReady.
+	forEachAllItemsPropagateReady *bool
 }
 
 // newEvaluator creates an evaluator for a reconcile cycle.

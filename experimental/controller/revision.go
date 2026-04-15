@@ -497,7 +497,62 @@ func (r *GraphReconciler) findSupersededRevisions(ctx context.Context, graphName
 	return result
 }
 
-// compileRevision parses and compiles a revision's spec, using two cache layers:
+// diffRevisionNodes compares the node specs of two revisions and returns the
+// set of node IDs that changed (or are new). Unchanged nodes retain their
+// previous state and are not triggered on revision transition.
+//
+// Per 004-graph-execution.md § Revision transition: "Nodes that differ are
+// triggered." The comparison covers all fields that affect a node's behavior:
+// Template, IncludeWhen, ReadyWhen, PropagateWhen, ForEach, Finalizes.
+//
+// Returns nil if the old revision's spec cannot be parsed (fall back to
+// triggering all nodes).
+func diffRevisionNodes(active *GraphSpec, superseded []*unstructured.Unstructured) map[string]bool {
+	if len(superseded) == 0 {
+		return nil
+	}
+	// Use the most recent superseded revision as the baseline.
+	// listRevisions returns sorted by generation ascending, so the last
+	// superseded element is the one immediately before the active.
+	baseline := superseded[len(superseded)-1]
+	oldSpec, err := extractRevisionSpec(baseline)
+	if err != nil {
+		return nil // parse failure — fall back to trigger all
+	}
+
+	// Build a map of old node ID → snapshot hash.
+	oldHashes := make(map[string]string, len(oldSpec.Nodes))
+	for _, node := range oldSpec.Nodes {
+		snap := snapshotNode(node)
+		h, err := hashDesiredState(snap)
+		if err != nil {
+			return nil // hash failure — fall back to trigger all
+		}
+		oldHashes[node.ID] = h
+	}
+
+	// Compare each active node against the old snapshot.
+	changed := make(map[string]bool)
+	for _, node := range active.Nodes {
+		snap := snapshotNode(node)
+		h, err := hashDesiredState(snap)
+		if err != nil {
+			return nil // hash failure — fall back to trigger all
+		}
+		oldHash, existed := oldHashes[node.ID]
+		if !existed || h != oldHash {
+			// New node or changed node — must be triggered.
+			changed[node.ID] = true
+		}
+	}
+	return changed
+}
+
+// DiffRevisionNodesForTest exports diffRevisionNodes for the test package.
+func DiffRevisionNodesForTest(active *GraphSpec, superseded []*unstructured.Unstructured) map[string]bool {
+	return diffRevisionNodes(active, superseded)
+}
+
 //   - Instance state: keyed by namespace/revision-name (per-Graph mutable state)
 //   - Compiled graph: keyed by spec content hash (shared across identical specs)
 //

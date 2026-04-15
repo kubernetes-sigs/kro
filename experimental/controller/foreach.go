@@ -322,6 +322,36 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		}
 	}
 
+	// Check propagateWhen per-item: all items must pass for the parent's
+	// propagation to be satisfied. Per design: "The parent's propagateWhen
+	// is satisfied when all children's propagateWhen are satisfied."
+	//
+	// This is the forEach-specific automatic rollup. The coordinator evaluates
+	// propagateWhen against the aggregate scope — but for forEach nodes, the
+	// aggregate is an array, so per-field expressions like ${items.data.x}
+	// don't work against the array. Per-item evaluation resolves this:
+	// scope[nodeID] is temporarily set to each item, and the expression is
+	// checked per-item. All items must pass.
+	if len(node.PropagateWhen) > 0 {
+		scopeVal := eval.scope[node.ID]
+		if scopeVal != nil {
+			allPass := true
+			for _, applied := range scopeVal.([]any) {
+				saved := eval.scope[node.ID]
+				eval.scope[node.ID] = applied
+				ok := eval.checkPropagateWhen(node.PropagateWhen, node.ID)
+				eval.scope[node.ID] = saved
+				if !ok {
+					allPass = false
+					break // one failure is enough — parent won't propagate
+				}
+			}
+			eval.forEachAllItemsPropagateReady = &allPass
+			logger.V(1).Info("forEach propagateWhen per-item result",
+				"node", node.ID, "allItemsPropagateReady", allPass)
+		}
+	}
+
 	return keys, nil
 }
 

@@ -771,3 +771,171 @@ func TestForEachChildIdentityStableUnderReordering(t *testing.T) {
 	}
 	t.Log("All 3 children have stable resourceVersions — forEach identity is name-based, not index-based")
 }
+
+// TestForEachPropagateWhenMultiChildAggregation proves that a forEach parent's
+// propagateWhen is satisfied only when ALL children's propagateWhen pass.
+// Partial satisfaction (2/3 children ready) does not open the gate.
+//
+// Design 004-graph-reconciliation § forEach:
+//
+//	"The parent's propagateWhen is satisfied when all children's propagateWhen
+//	are satisfied."
+//
+// Failure mode: parent propagateWhen incorrectly satisfied when only some
+// children pass — downstream evaluates with incomplete data.
+func TestForEachPropagateWhenMultiChildAggregation(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create 3 source CMs, each with ready=false.
+	for _, name := range []string{"pw-src-a", "pw-src-b", "pw-src-c"} {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": ns,
+					"labels":    map[string]any{"group": "pw-foreach"},
+				},
+				"data": map[string]any{"ready": "false"},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-pw-agg",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// WatchKind: read all 3 sources.
+					map[string]any{
+						"id": "sources",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"selector":   map[string]any{"group": "pw-foreach"},
+						},
+					},
+					// forEach: stamp one worker per source, propagateWhen gated.
+					// readyWhen evaluates per-child: each child's __ready is set
+					// based on its own data.ready field. propagateWhen uses the
+					// aggregate .ready() function which checks ALL children.
+					map[string]any{
+						"id": "workers",
+						"forEach": map[string]any{
+							"src": "${sources}",
+						},
+						// readyWhen evaluates per-child, setting __ready on each.
+						// propagateWhen uses .ready() aggregation — forEach parent
+						// scope is an array, not a map, so per-element field access
+						// like ${workers.data.ready} doesn't work here.
+						"readyWhen":     []any{"${workers.data.ready == 'true'}"},
+						"propagateWhen": []any{"${workers.ready()}"},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "pw-worker-${src.metadata.name}"},
+							"data": map[string]any{
+								"ready":  "${src.data.ready}",
+								"source": "${src.metadata.name}",
+							},
+						},
+					},
+					// Downstream: depends on workers.
+					map[string]any{
+						"id": "downstream",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "pw-downstream"},
+							"data": map[string]any{
+								"count": "${string(size(workers))}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for worker CMs to be created (forEach stamps them).
+	for _, name := range []string{"pw-worker-pw-src-a", "pw-worker-pw-src-b", "pw-worker-pw-src-c"} {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(gvk)
+		require.NoError(t, waitForResource(ctx, k8sClient,
+			types.NamespacedName{Name: name, Namespace: ns}, cm),
+			"forEach child %s must be created", name)
+	}
+	t.Log("All 3 forEach children created with ready=false")
+
+	// Phase 1: All 3 children have ready=false → propagateWhen unsatisfied.
+	// Downstream should NOT exist (gated).
+	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "pw-downstream", Namespace: ns}, 3*time.Second))
+	t.Log("Phase 1: Downstream absent — all 3 children unsatisfied, gate closed")
+
+	// Phase 2: Make 2/3 sources ready. Gate should remain closed.
+	for _, name := range []string{"pw-src-a", "pw-src-b"} {
+		latest := &unstructured.Unstructured{}
+		latest.SetGroupVersionKind(gvk)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: name, Namespace: ns}, latest))
+		unstructured.SetNestedField(latest.Object, "true", "data", "ready")
+		require.NoError(t, k8sClient.Update(ctx, latest))
+	}
+	t.Log("Phase 2: Set pw-src-a and pw-src-b to ready=true (2/3)")
+
+	// Wait for the workers to pick up the change.
+	for _, name := range []string{"pw-worker-pw-src-a", "pw-worker-pw-src-b"} {
+		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+			func(ctx context.Context) (bool, error) {
+				cm := &unstructured.Unstructured{}
+				cm.SetGroupVersionKind(gvk)
+				if err := k8sClient.Get(ctx,
+					types.NamespacedName{Name: name, Namespace: ns}, cm); err != nil {
+					return false, nil
+				}
+				data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+				return data["ready"] == "true", nil
+			}),
+			"worker %s must update to ready=true", name)
+	}
+
+	// Downstream should still be absent (1/3 still unsatisfied).
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-pw-agg", Namespace: ns}))
+	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "pw-downstream", Namespace: ns}, 2*time.Second))
+	t.Log("Phase 2: Downstream still absent — 2/3 satisfied, gate still closed")
+
+	// Phase 3: Make the last source ready (3/3).
+	lastSrc := &unstructured.Unstructured{}
+	lastSrc.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "pw-src-c", Namespace: ns}, lastSrc))
+	unstructured.SetNestedField(lastSrc.Object, "true", "data", "ready")
+	require.NoError(t, k8sClient.Update(ctx, lastSrc))
+	t.Log("Phase 3: Set pw-src-c to ready=true (3/3)")
+
+	// Downstream should now be created (all children's propagateWhen satisfied).
+	downstreamCM := &unstructured.Unstructured{}
+	downstreamCM.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "pw-downstream", Namespace: ns}, downstreamCM),
+		"downstream must be created after all 3 children satisfy propagateWhen")
+	t.Log("Phase 3: Downstream created — all 3 children satisfied, gate opened")
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-foreach-pw-agg", Namespace: ns}))
+	t.Log("forEach propagateWhen multi-child aggregation proved")
+}

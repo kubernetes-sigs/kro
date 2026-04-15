@@ -1666,3 +1666,198 @@ func TestForEachForceApply(t *testing.T) {
 		types.NamespacedName{Name: "test-foreach-force", Namespace: ns}))
 	t.Log("forEach with Force apply took ownership of both targets — forEach + Force proved")
 }
+
+// TestPropagateWhenRespectsResyncGate proves that resync (drift timer)
+// respects the propagateWhen gate — a gated node's drift timer fires but
+// evaluation is deferred until the gate opens.
+//
+// Design 004-graph-reconciliation § Resync + § Propagation step 2:
+//
+//	"Resync respects the propagateWhen gate." (doc change for T1.3)
+//	"Takes precedence even on spec changes where all nodes enter the frontier."
+//
+// The test uses two nodes — one gated, one ungated — to prove resync fired
+// but the gate held. The ungated node serves as a control.
+//
+// Failure mode: resync applies the template to a gated resource, overwriting
+// drift that should persist until the gate opens.
+func TestPropagateWhenRespectsResyncGate(t *testing.T) {
+	// The binary starts with --drift-interval=2s.
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create control CM with gate open.
+	control := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "resync-gate-control",
+				"namespace": ns,
+			},
+			"data": map[string]any{
+				"ready": "true",
+				"value": "v1",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, control))
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-resync-gate",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// Watch the control CM.
+					map[string]any{
+						"id": "control",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "resync-gate-control"},
+						},
+					},
+					// Upstream: propagateWhen gated on control.data.ready.
+					map[string]any{
+						"id":            "upstream",
+						"propagateWhen": []any{"${control.data.ready == 'true'}"},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "resync-gate-upstream"},
+							"data": map[string]any{
+								"value": "${control.data.value}",
+							},
+						},
+					},
+					// Gated: depends on upstream (propagateWhen blocks).
+					map[string]any{
+						"id": "gated",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "resync-gate-gated"},
+							"data": map[string]any{
+								"ref":     "${upstream.data.value}",
+								"desired": "correct",
+							},
+						},
+					},
+					// Ungated: independent of upstream (control for resync proof).
+					map[string]any{
+						"id": "ungated",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "resync-gate-ungated"},
+							"data": map[string]any{
+								"desired": "correct",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Phase 1: Converge. All resources created, Graph Ready.
+	for _, name := range []string{"resync-gate-upstream", "resync-gate-gated", "resync-gate-ungated"} {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(gvk)
+		require.NoError(t, waitForResource(ctx, k8sClient,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+	}
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-resync-gate", Namespace: ns}))
+	t.Log("Phase 1: All resources created, Graph Ready")
+
+	// Phase 2: Close the gate.
+	latest := &unstructured.Unstructured{}
+	latest.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "resync-gate-control", Namespace: ns}, latest))
+	unstructured.SetNestedField(latest.Object, "false", "data", "ready")
+	require.NoError(t, k8sClient.Update(ctx, latest))
+	t.Log("Phase 2: Gate closed (ready=false)")
+
+	// Wait for upstream to process the change (propagateWhen now false).
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-resync-gate", Namespace: ns}))
+
+	// Phase 3: Externally mutate BOTH gated and ungated resources.
+	for _, name := range []string{"resync-gate-gated", "resync-gate-ungated"} {
+		mutate := &unstructured.Unstructured{}
+		mutate.SetGroupVersionKind(gvk)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: name, Namespace: ns}, mutate))
+		unstructured.SetNestedField(mutate.Object, "DRIFTED", "data", "desired")
+		require.NoError(t, k8sClient.Update(ctx, mutate))
+	}
+	t.Log("Phase 3: Both gated and ungated externally mutated to DRIFTED")
+
+	// Phase 4: Wait for drift interval (2s) + margin to elapse, then touch
+	// the control CM to trigger reconciliation. The touch uses the controller's
+	// own watch mechanism to force a reconcile after the drift timer has
+	// expired, avoiding envtest RequeueAfter timing sensitivity. The ungated
+	// node correction proves resync fired; the gated node retention proves
+	// the propagateWhen gate held. Adding a benign field to the control CM
+	// doesn't affect the gate condition (ready == 'false' is unchanged).
+	time.Sleep(4 * time.Second) // drift-interval=2s + jitter + margin
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "resync-gate-control", Namespace: ns}, latest))
+	unstructured.SetNestedField(latest.Object, "trigger", "data", "reconcile-bump")
+	require.NoError(t, k8sClient.Update(ctx, latest))
+	t.Log("Phase 4: Touched control CM to trigger reconcile after drift timer expired")
+
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(gvk)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "resync-gate-ungated", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(check.Object, "data")
+			return data["desired"] == "correct", nil
+		}))
+	t.Log("Phase 4: Ungated node corrected by resync — proves drift timer fired")
+
+	// THE KEY ASSERTION: gated node should still have DRIFTED value.
+	// Resync fired (proved by ungated correction) but propagateWhen blocked it.
+	gatedCM := &unstructured.Unstructured{}
+	gatedCM.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "resync-gate-gated", Namespace: ns}, gatedCM))
+	gatedData, _, _ := unstructured.NestedStringMap(gatedCM.Object, "data")
+	assert.Equal(t, "DRIFTED", gatedData["desired"],
+		"gated node should retain DRIFTED value — resync respects propagateWhen gate")
+	t.Log("Gated node retained DRIFTED — resync respects propagateWhen gate")
+
+	// Phase 5: Open gate → gated node should be corrected via propagation.
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "resync-gate-control", Namespace: ns}, latest))
+	unstructured.SetNestedField(latest.Object, "true", "data", "ready")
+	require.NoError(t, k8sClient.Update(ctx, latest))
+	t.Log("Phase 5: Gate opened (ready=true)")
+
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(gvk)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "resync-gate-gated", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(check.Object, "data")
+			return data["desired"] == "correct", nil
+		}))
+	t.Log("Gated node corrected after gate opened — propagateWhen + resync interaction proved")
+}

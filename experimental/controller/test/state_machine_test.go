@@ -978,3 +978,128 @@ func TestPendingPropagatesAsPending_RegressionNotBlocked(t *testing.T) {
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "pending-propagation", Namespace: ns}))
 }
+
+// TestConflictPruneRecoveryOnRevisionTransition proves that a resource in
+// Conflict state (409 from competing SSA field manager) is handled correctly
+// during revision transition: the conflicted node is removed from spec, and
+// a new resource is created without conflict.
+//
+// Design 003-ownership § Prune during conflict:
+//
+//	"Clear from applied set, no delete (for Own)."
+//
+// Design 004-graph-reconciliation § Prune:
+//
+//	"Conflict excluded from prune gate — 409 = resource exists = prunable."
+//
+// Failure mode: Conflict persists until resync instead of resolving
+// immediately on revision transition.
+func TestConflictPruneRecoveryOnRevisionTransition(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create contested resource owned by external manager.
+	applyConfigMapAs(t, ns, "conflict-rev-contested", "external-manager", map[string]string{
+		"key": "external-value",
+	})
+
+	// Rev N: contested node (will 409) + healthy node.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-conflict-rev-prune",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "contested",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "conflict-rev-contested"},
+							"data":       map[string]any{"key": "graph-wants-different"},
+						},
+					},
+					map[string]any{
+						"id": "healthy",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "conflict-rev-healthy"},
+							"data":       map[string]any{"state": "alive"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for Conflict state and healthy node creation.
+	healthyCM := &unstructured.Unstructured{}
+	healthyCM.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "conflict-rev-healthy", Namespace: ns}, healthyCM))
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient,
+		types.NamespacedName{Name: "test-conflict-rev-prune", Namespace: ns}, "Conflict"))
+	t.Log("Rev N: Conflict state — contested node 409, healthy node created")
+
+	// Rev N+1: Remove contested node, add a fresh node that doesn't conflict.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-conflict-rev-prune", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "healthy",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "conflict-rev-healthy"},
+						"data":       map[string]any{"state": "still-alive"},
+					},
+				},
+				map[string]any{
+					"id": "fresh",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "conflict-rev-fresh"},
+						"data":       map[string]any{"state": "new"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+	t.Log("Rev N+1: removed contested node, added fresh node")
+
+	// Fresh node should be created without conflict.
+	freshCM := &unstructured.Unstructured{}
+	freshCM.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "conflict-rev-fresh", Namespace: ns}, freshCM))
+	t.Log("Fresh node created")
+
+	// Graph should recover to Ready (contested node is gone from spec).
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-conflict-rev-prune", Namespace: ns}))
+	t.Log("Graph recovered to Ready on revision transition")
+
+	// Contested resource must still exist (belongs to external manager, not deleted by kro).
+	contestedCM := &unstructured.Unstructured{}
+	contestedCM.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "conflict-rev-contested", Namespace: ns}, contestedCM))
+	contestedData, _, _ := unstructured.NestedStringMap(contestedCM.Object, "data")
+	assert.Equal(t, "external-value", contestedData["key"],
+		"contested resource must survive — belongs to external manager")
+
+	// Healthy node should still exist with updated data.
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "conflict-rev-healthy", Namespace: ns}, healthyCM))
+	healthyData, _, _ := unstructured.NestedStringMap(healthyCM.Object, "data")
+	assert.Equal(t, "still-alive", healthyData["state"])
+	t.Log("Conflict prune recovery on revision transition proved")
+}

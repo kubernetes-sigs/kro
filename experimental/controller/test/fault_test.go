@@ -470,3 +470,191 @@ func TestErrorClassification_RegressionCELRuntime(t *testing.T) {
 	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient,
 		types.NamespacedName{Name: "cel-runtime-error", Namespace: ns}, "Error"))
 }
+
+// TestStatusSubresourceSplitApplyRevertOnFailure proves that when a
+// status subresource apply fails (validation error), the apply-hash is
+// NOT advanced. The next reconcile retries both main + status apply.
+// Once the status apply succeeds, steady state resumes.
+//
+// Design 004-graph-reconciliation § Resolve step 5:
+//
+//	"When a template targets both the main resource and the status subresource,
+//	the controller splits the apply into two operations."
+//
+// This test uses the StrictStatus CRD (status.phase is an enum). The Graph
+// writes an invalid enum value causing the status apply to fail while the
+// main apply succeeds.
+//
+// Failure mode: status fields silently lost — hash says "nothing to do"
+// but status was never written.
+func TestStatusSubresourceSplitApplyRevertOnFailure(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	strictGVK := schema.GroupVersionKind{
+		Group: "test.kro.run", Version: "v1alpha1", Kind: "StrictStatus",
+	}
+
+	// Pre-create a StrictStatus CR with valid status.
+	target := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "test.kro.run/v1alpha1",
+			"kind":       "StrictStatus",
+			"metadata": map[string]any{
+				"name":      "split-apply-target",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"name": "test",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, target))
+	t.Log("StrictStatus CR pre-created")
+
+	// Phase 1: Graph writes VALID status.phase="Running".
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-split-apply",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "target",
+						"template": map[string]any{
+							"apiVersion": "test.kro.run/v1alpha1",
+							"kind":       "StrictStatus",
+							"metadata": map[string]any{
+								"name": "split-apply-target",
+								"annotations": map[string]any{
+									"kro.run/version": "v1",
+								},
+							},
+							"status": map[string]any{
+								"phase":   "Running",
+								"message": "all-good",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for the status to be applied.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(strictGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "split-apply-target", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			statusMap, _, _ := unstructured.NestedMap(check.Object, "status")
+			return statusMap["phase"] == "Running", nil
+		}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-split-apply", Namespace: ns}))
+	t.Log("Phase 1: Valid status applied (phase=Running), Graph Ready")
+
+	// Phase 2: Update Graph to write INVALID status.phase="InvalidPhase".
+	// Main apply (annotations) succeeds, status apply gets 422.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-split-apply", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "target",
+					"template": map[string]any{
+						"apiVersion": "test.kro.run/v1alpha1",
+						"kind":       "StrictStatus",
+						"metadata": map[string]any{
+							"name": "split-apply-target",
+							"annotations": map[string]any{
+								"kro.run/version": "v2-invalid-status",
+							},
+						},
+						"status": map[string]any{
+							"phase":   "InvalidPhase",
+							"message": "this-should-fail",
+						},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+	t.Log("Phase 2: Updated Graph with invalid status.phase=InvalidPhase")
+
+	// Wait for the Graph to show an error state (status apply failed).
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "test-split-apply", Namespace: ns}, g); err != nil {
+				return false, nil
+			}
+			return !graphReady(g), nil
+		}))
+	t.Log("Graph entered non-Ready state (status apply failed)")
+
+	// THE KEY ASSERTION: status.phase must still be "Running" (the invalid
+	// value was rejected by CRD validation). If the apply-hash was
+	// incorrectly advanced, a subsequent reconcile would skip the apply
+	// and status would never be corrected.
+	checkTarget := &unstructured.Unstructured{}
+	checkTarget.SetGroupVersionKind(strictGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "split-apply-target", Namespace: ns}, checkTarget))
+	statusMap, _, _ := unstructured.NestedMap(checkTarget.Object, "status")
+	assert.Equal(t, "Running", statusMap["phase"],
+		"status.phase must remain Running — invalid status apply should have been rejected")
+	t.Log("Status.phase still Running — invalid value correctly rejected")
+
+	// Phase 3: Fix the Graph to write valid status.phase="Stopped".
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-split-apply", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "target",
+					"template": map[string]any{
+						"apiVersion": "test.kro.run/v1alpha1",
+						"kind":       "StrictStatus",
+						"metadata": map[string]any{
+							"name": "split-apply-target",
+							"annotations": map[string]any{
+								"kro.run/version": "v3-fixed",
+							},
+						},
+						"status": map[string]any{
+							"phase":   "Stopped",
+							"message": "recovered",
+						},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+	t.Log("Phase 3: Fixed Graph with valid status.phase=Stopped")
+
+	// Status should now update to Stopped.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(strictGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "split-apply-target", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			s, _, _ := unstructured.NestedMap(check.Object, "status")
+			return s["phase"] == "Stopped", nil
+		}))
+	t.Log("Status.phase updated to Stopped — split-apply revert and recovery proved")
+
+	// Graph should recover to Ready.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-split-apply", Namespace: ns}))
+	t.Log("Graph recovered to Ready — status subresource split-apply fault tolerance proved")
+}

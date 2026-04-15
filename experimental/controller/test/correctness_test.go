@@ -2541,3 +2541,105 @@ func TestDeclarationError_ForEachVariableCollision(t *testing.T) {
 		types.NamespacedName{Name: "foreach-collision", Namespace: ns}, g))
 	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
 }
+
+// TestAbsentToPresentFieldTriggersPropagation proves that when a watched
+// resource gains a field that was previously absent, the dependent node
+// re-evaluates because the input-hash changed (absent sentinel → present value).
+//
+// Design 004-graph-reconciliation § Input Hashing:
+//
+//	"Absent paths hash to a sentinel — absent to present is a change, not a skip."
+//
+// Failure mode: consumer stays on stale evaluation because the frontier
+// didn't dispatch on the hash change from absent sentinel to present value.
+func TestAbsentToPresentFieldTriggersPropagation(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create source WITHOUT the field the consumer needs.
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "absent-present-source",
+				"namespace": ns,
+			},
+			"data": map[string]any{
+				"existing": "yes",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-absent-present",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// Watch the source.
+					map[string]any{
+						"id": "source",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "absent-present-source"},
+						},
+					},
+					// Consumer references a field that doesn't exist yet.
+					map[string]any{
+						"id": "consumer",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "absent-present-consumer"},
+							"data": map[string]any{
+								"value": "${source.data.needed}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Consumer should NOT be created (field absent → data pending).
+	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "absent-present-consumer", Namespace: ns}, 2*time.Second))
+	t.Log("Consumer correctly absent — source.data.needed doesn't exist yet")
+
+	// Add the missing field to the source.
+	latest := &unstructured.Unstructured{}
+	latest.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "absent-present-source", Namespace: ns}, latest))
+	unstructured.SetNestedField(latest.Object, "found", "data", "needed")
+	require.NoError(t, k8sClient.Update(ctx, latest))
+	t.Log("Added source.data.needed=found")
+
+	// Consumer should now be created (input-hash changed: absent sentinel → "found").
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			cm := &unstructured.Unstructured{}
+			cm.SetGroupVersionKind(gvk)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "absent-present-consumer", Namespace: ns}, cm); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+			return data["value"] == "found", nil
+		}))
+	t.Log("Consumer created with value=found — absent→present field triggered propagation")
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-absent-present", Namespace: ns}))
+	t.Log("Graph Ready — absent to present field propagation proved")
+}

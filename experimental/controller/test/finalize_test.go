@@ -553,3 +553,160 @@ func TestFinalizesOnTeardown(t *testing.T) {
 	assert.Error(t, err, "snapshot should be cleaned up after teardown")
 	t.Log("Both target and snapshot cleaned up")
 }
+
+// TestSupersededRevisionFinalizesGovernsPrompt proves that when a revision
+// transition drops a finalizes declaration, the superseded revision's
+// finalization metadata still governs the prune sequence.
+//
+// Rev N: target + gatewatch + snapshot (finalizes target, readyWhen gated)
+// Rev N+1: target and snapshot removed, gatewatch kept
+// The controller must use Rev N's DAG to find the finalizes relationship
+// and run finalization before deleting the target.
+//
+// Design 002-revisions § Superseded Revisions:
+//
+//	"Must be retained until their unique resources are pruned because they
+//	carry the ordering and finalization metadata for those resources."
+//
+// Failure mode: data loss — resource deleted without running the finalization
+// sequence the user declared in the previous revision.
+func TestSupersededRevisionFinalizesGovernsPrompt(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create the gate control ConfigMap with ready=true so Graph converges.
+	gateControl := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "sup-fin-gate",
+				"namespace": ns,
+			},
+			"data": map[string]any{"ready": "true"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, gateControl))
+
+	// Rev N: target + gatewatch + snapshot (finalizes target, readyWhen gated)
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-sup-fin-governs",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "sup-fin-target"},
+							"data":       map[string]any{"state": "active"},
+						},
+					},
+					map[string]any{
+						"id": "gatewatch",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "sup-fin-gate"},
+						},
+					},
+					map[string]any{
+						"id":        "snapshot",
+						"finalizes": "target",
+						"readyWhen": []any{"${gatewatch.data.ready == 'true'}"},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "sup-fin-snapshot"},
+							"data":       map[string]any{"captured": "from-target"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for convergence.
+	targetCM := &unstructured.Unstructured{}
+	targetCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "sup-fin-target", Namespace: ns}, targetCM))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-sup-fin-governs", Namespace: ns}))
+	t.Log("Rev N converged — target exists, snapshot dormant")
+
+	// Close the gate before the transition so finalization is observable.
+	latestGate := &unstructured.Unstructured{}
+	latestGate.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "sup-fin-gate", Namespace: ns}, latestGate))
+	unstructured.SetNestedField(latestGate.Object, "false", "data", "ready")
+	require.NoError(t, k8sClient.Update(ctx, latestGate))
+	t.Log("Gate closed (ready=false) — finalization will block")
+
+	// Rev N+1: remove target and snapshot, keep gatewatch.
+	// The NEW revision has NO finalizes declaration. The controller must
+	// use the SUPERSEDED revision's DAG.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-sup-fin-governs", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "gatewatch",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "sup-fin-gate"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+	t.Log("Rev N+1 applied — target and snapshot removed from spec")
+
+	// Wait for the snapshot to be created (finalization started from superseded DAG).
+	snapshotCM := &unstructured.Unstructured{}
+	snapshotCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "sup-fin-snapshot", Namespace: ns}, snapshotCM))
+	t.Log("Snapshot CREATED — superseded revision's finalization is running")
+
+	// Target must still exist while gate is closed (readyWhen unsatisfied).
+	checkTarget := &unstructured.Unstructured{}
+	checkTarget.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "sup-fin-target", Namespace: ns}, checkTarget),
+		"target must survive while finalization gate is closed")
+
+	// Stable hold — multiple reconcile cycles.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-sup-fin-governs", Namespace: ns}))
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "sup-fin-target", Namespace: ns}, checkTarget),
+		"target must survive across multiple reconcile cycles while gate is closed")
+	t.Log("Target survived while gate closed — finalization is actively holding")
+
+	// Open the gate → finalization completes → target deleted.
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "sup-fin-gate", Namespace: ns}, latestGate))
+	unstructured.SetNestedField(latestGate.Object, "true", "data", "ready")
+	require.NoError(t, k8sClient.Update(ctx, latestGate))
+	t.Log("Gate opened (ready=true) — finalization should complete")
+
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 60*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "sup-fin-target", Namespace: ns}, check)
+			return err != nil, nil
+		}))
+	t.Log("Target deleted after gate opened — superseded revision's finalizes governed the prune")
+}

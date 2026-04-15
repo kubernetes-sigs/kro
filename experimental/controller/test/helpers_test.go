@@ -348,6 +348,58 @@ func buildSimpleAppCRD() *apiextensionsv1.CustomResourceDefinition {
 	}
 }
 
+// buildStrictStatusCRD returns a CRD with strict status validation.
+// Used by T1.4 to produce a status-only validation failure: the spec
+// accepts anything, but status.phase is constrained to an enum.
+func buildStrictStatusCRD() *apiextensionsv1.CustomResourceDefinition {
+	return &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "strictstatuses.test.kro.run"},
+		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+			Group: "test.kro.run",
+			Names: apiextensionsv1.CustomResourceDefinitionNames{
+				Plural:   "strictstatuses",
+				Singular: "strictstatus",
+				Kind:     "StrictStatus",
+				ListKind: "StrictStatusList",
+			},
+			Scope: apiextensionsv1.NamespaceScoped,
+			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{
+				Name:    "v1alpha1",
+				Served:  true,
+				Storage: true,
+				Schema: &apiextensionsv1.CustomResourceValidation{
+					OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]apiextensionsv1.JSONSchemaProps{
+							"spec": {
+								Type:                   "object",
+								XPreserveUnknownFields: ptr(true),
+							},
+							"status": {
+								Type: "object",
+								Properties: map[string]apiextensionsv1.JSONSchemaProps{
+									"phase": {
+										Type: "string",
+										Enum: []apiextensionsv1.JSON{
+											{Raw: []byte(`"Running"`)},
+											{Raw: []byte(`"Stopped"`)},
+											{Raw: []byte(`"Failed"`)},
+										},
+									},
+									"message": {Type: "string"},
+								},
+							},
+						},
+					},
+				},
+				Subresources: &apiextensionsv1.CustomResourceSubresources{
+					Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
+				},
+			}},
+		},
+	}
+}
+
 // graphReady returns true if the Graph's Ready condition is True.
 func graphReady(g *unstructured.Unstructured) bool {
 	status, _ := g.Object["status"].(map[string]any)

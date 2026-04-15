@@ -149,6 +149,7 @@ func TestMain(m *testing.M) {
 	}{
 		{"resourcegraphdefinitions.test.kro.run", buildRGDCRD},
 		{"simpleapps.test.kro.run", buildSimpleAppCRD},
+		{"strictstatuses.test.kro.run", buildStrictStatusCRD},
 	}
 	for _, crd := range testCRDs {
 		if err := k8sClient.Create(ctx, crd.builder()); err != nil {

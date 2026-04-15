@@ -587,3 +587,192 @@ func TestRevisionActivation(t *testing.T) {
 
 	t.Log("Revision activation lifecycle proved: Ready → Active")
 }
+
+// TestRevisionTransitionAbandonsStaleEvaluation proves that when a spec
+// change triggers a revision transition, no SSA apply from the old revision
+// lands after the new revision starts propagating. The final state matches
+// the new revision with no intermediate churn.
+//
+// Design 004-graph-reconciliation § Propagation step 2:
+//
+//	"Takes precedence even on spec changes where all nodes enter the frontier."
+//
+// Failure mode: spurious Conflict status or extra resourceVersion bumps
+// from stale applies.
+func TestRevisionTransitionAbandonsStaleEvaluation(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Rev N: chain config → middle → tail, all with version=v1.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-rev-transition",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "config",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "rev-trans-config"},
+							"data": map[string]any{
+								"version": "v1",
+								"color":   "red",
+							},
+						},
+					},
+					map[string]any{
+						"id": "middle",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "rev-trans-middle"},
+							"data": map[string]any{
+								"version": "${config.data.version}",
+								"color":   "${config.data.color}",
+							},
+						},
+					},
+					map[string]any{
+						"id": "tail",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "rev-trans-tail-v1"},
+							"data": map[string]any{
+								"version": "${middle.data.version}",
+								"color":   "${middle.data.color}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for convergence on Rev N.
+	for _, name := range []string{"rev-trans-config", "rev-trans-middle", "rev-trans-tail-v1"} {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(gvk)
+		require.NoError(t, waitForResource(ctx, k8sClient,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+	}
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-rev-transition", Namespace: ns}))
+	t.Log("Rev N converged: config/middle/tail-v1 with version=v1, color=red")
+
+	// Transition to Rev N+1: change version/color AND rename tail.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-rev-transition", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "config",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "rev-trans-config"},
+						"data": map[string]any{
+							"version": "v2",
+							"color":   "blue",
+						},
+					},
+				},
+				map[string]any{
+					"id": "middle",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "rev-trans-middle"},
+						"data": map[string]any{
+							"version": "${config.data.version}",
+							"color":   "${config.data.color}",
+						},
+					},
+				},
+				map[string]any{
+					"id": "tail",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "rev-trans-tail-v2"},
+						"data": map[string]any{
+							"version": "${middle.data.version}",
+							"color":   "${middle.data.color}",
+						},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+	t.Log("Rev N+1 submitted: version=v2, color=blue, tail renamed to v2")
+
+	// Wait for the new tail to exist with correct v2 data.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			cm := &unstructured.Unstructured{}
+			cm.SetGroupVersionKind(gvk)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "rev-trans-tail-v2", Namespace: ns}, cm); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+			return data["version"] == "v2" && data["color"] == "blue", nil
+		}))
+	t.Log("tail-v2 exists with version=v2, color=blue")
+
+	// Old tail must be pruned.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(gvk)
+			err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "rev-trans-tail-v1", Namespace: ns}, check)
+			return err != nil, nil
+		}))
+	t.Log("tail-v1 pruned")
+
+	// Middle should have v2 data (no v1 residue).
+	middleCM := &unstructured.Unstructured{}
+	middleCM.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "rev-trans-middle", Namespace: ns}, middleCM))
+	middleData, _, _ := unstructured.NestedStringMap(middleCM.Object, "data")
+	assert.Equal(t, "v2", middleData["version"])
+	assert.Equal(t, "blue", middleData["color"])
+
+	// After convergence, wait for settle and check resourceVersion stability.
+	// Extra RV bumps would indicate stale applies from Rev N.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-rev-transition", Namespace: ns}))
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-rev-transition", Namespace: ns}))
+
+	rvBefore := map[string]string{}
+	for _, name := range []string{"rev-trans-config", "rev-trans-middle", "rev-trans-tail-v2"} {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(gvk)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+		rvBefore[name] = cm.GetResourceVersion()
+	}
+
+	// Wait a bit and check stability.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-rev-transition", Namespace: ns}))
+	for _, name := range []string{"rev-trans-config", "rev-trans-middle", "rev-trans-tail-v2"} {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(gvk)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+		assert.Equal(t, rvBefore[name], cm.GetResourceVersion(),
+			"%s resourceVersion should be stable — no stale applies from Rev N", name)
+	}
+	t.Log("ResourceVersions stable — no extra bumps from stale Rev N applies")
+}

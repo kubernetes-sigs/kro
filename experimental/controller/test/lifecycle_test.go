@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // TestFullLifecycle proves the complete create → verify → update → verify →
@@ -833,4 +834,132 @@ func TestDriftCorrectedByTimer(t *testing.T) {
 		return d["desired"] == "new-value", nil
 	}))
 	t.Log("Spec change applied: desired=new-value — content-addressed apply proved")
+}
+
+// TestTeardownWithDeletedRevision proves that when the GraphRevision is
+// deleted (simulating ownerReference cascade racing the controller), the
+// controller regenerates the DAG from spec and completes teardown without
+// panicking.
+//
+// Design 002-revisions § Recovery:
+//
+//	"If manually deleted, the active revision is regenerated from the current
+//	spec on the next reconcile."
+//
+// Failure mode: nil-pointer panic on missing revision during reconcileDelete.
+func TestTeardownWithDeletedRevision(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-teardown-deleted-rev",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "alpha",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "td-rev-alpha"},
+							"data":       map[string]any{"order": "1"},
+						},
+					},
+					map[string]any{
+						"id": "beta",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "td-rev-beta"},
+							"data":       map[string]any{"ref": "${alpha.data.order}"},
+						},
+					},
+					map[string]any{
+						"id": "gamma",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "td-rev-gamma"},
+							"data":       map[string]any{"ref": "${beta.data.ref}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for all 3 ConfigMaps and Graph Ready.
+	for _, name := range []string{"td-rev-alpha", "td-rev-beta", "td-rev-gamma"} {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(cmGVK)
+		require.NoError(t, waitForResource(ctx, k8sClient,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+	}
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-teardown-deleted-rev", Namespace: ns}))
+	t.Log("Graph converged — 3 ConfigMaps exist")
+
+	// Find and delete the GraphRevision BEFORE deleting the Graph.
+	// This guarantees that when reconcileDelete runs, the revision is gone.
+	// The brief window where the Graph is live but the revision is missing
+	// produces a benign requeue/error log — that's not what we're testing.
+	// Our assertions start after the Graph enters deletion.
+	revisions, err := countRevisions(ctx, k8sClient, "test-teardown-deleted-rev", ns)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, revisions, 1, "should have at least 1 revision")
+
+	// List revisions and delete them all.
+	revList := &unstructured.UnstructuredList{}
+	revList.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   GraphRevisionGVK.Group,
+		Version: GraphRevisionGVK.Version,
+		Kind:    GraphRevisionGVK.Kind + "List",
+	})
+	require.NoError(t, k8sClient.List(ctx, revList, client.InNamespace(ns)))
+	for i := range revList.Items {
+		rev := &revList.Items[i]
+		labels := rev.GetLabels()
+		if labels["experimental.kro.run/graph-name"] == "test-teardown-deleted-rev" {
+			require.NoError(t, k8sClient.Delete(ctx, rev))
+			t.Logf("Deleted GraphRevision %s", rev.GetName())
+		}
+	}
+
+	// Now delete the Graph — controller must regenerate DAG from spec
+	// and complete teardown.
+	latestGraph := &unstructured.Unstructured{}
+	latestGraph.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "test-teardown-deleted-rev", Namespace: ns}, latestGraph))
+	require.NoError(t, k8sClient.Delete(ctx, latestGraph))
+	t.Log("Graph deleted — revision already gone, controller must regenerate DAG")
+
+	// Graph should be fully deleted (finalizer removed) — proves no panic.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(GraphGVK)
+			err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "test-teardown-deleted-rev", Namespace: ns}, check)
+			return err != nil, nil
+		}))
+	t.Log("Graph fully deleted — finalizer removed despite missing revision")
+
+	// All managed ConfigMaps should be gone.
+	for _, name := range []string{"td-rev-alpha", "td-rev-beta", "td-rev-gamma"} {
+		check := &unstructured.Unstructured{}
+		check.SetGroupVersionKind(cmGVK)
+		err := k8sClient.Get(ctx,
+			types.NamespacedName{Name: name, Namespace: ns}, check)
+		assert.Error(t, err, "%s should be deleted during teardown", name)
+	}
+	t.Log("All managed resources deleted — teardown with deleted revision proved")
 }

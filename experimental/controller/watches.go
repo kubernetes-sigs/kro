@@ -46,13 +46,14 @@ import (
 
 // WatchManager maintains one metadata-only informer per GVR, ref-counted by owners.
 type WatchManager struct {
-	mu      sync.RWMutex
-	watches map[schema.GroupVersionResource]*gvrWatch
-	owners  map[schema.GroupVersionResource]map[string]struct{}
-	client  metadata.Interface
-	resync  time.Duration
-	onEvent func(watchEvent)
-	log     logr.Logger
+	mu        sync.RWMutex
+	watches   map[schema.GroupVersionResource]*gvrWatch
+	owners    map[schema.GroupVersionResource]map[string]struct{}
+	client    metadata.Interface
+	resync    time.Duration
+	onEvent   func(watchEvent)
+	onNewType func(schema.GroupVersionResource) // called when a new type is first watched
+	log       logr.Logger
 
 	// parentCtx is the root context for all informer goroutines. Cancelling
 	// it stops every informer regardless of ref-count. shutdown() cancels it.
@@ -132,6 +133,12 @@ func (m *WatchManager) ensureWatch(gvr schema.GroupVersionResource, ownerID stri
 	go inf.RunWithContext(ctx)
 	m.log.V(1).Info("informer started", "gvr", gvr)
 	m.mu.Unlock()
+
+	// Notify that a new type is being watched. This triggers recompilation
+	// for Graphs that had this type unresolved — the schema may now be available.
+	if m.onNewType != nil {
+		m.onNewType(gvr)
+	}
 
 	// Wait for sync outside the lock
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), 30*time.Second)

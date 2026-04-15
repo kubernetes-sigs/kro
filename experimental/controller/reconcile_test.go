@@ -840,7 +840,7 @@ func TestEvalReadiness_ExpressionErrorWrapsReadyWhenFailed(t *testing.T) {
 			},
 		},
 	}
-	compiled, err := compileGraphSpec(spec)
+	compiled, err := compileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	eval := &evaluator{compiled: compiled, scope: map[string]any{
@@ -880,7 +880,7 @@ func TestEvalReadiness_NormalNotReadyIsUnchanged(t *testing.T) {
 			},
 		},
 	}
-	compiled, err := compileGraphSpec(spec)
+	compiled, err := compileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	eval := &evaluator{compiled: compiled, scope: map[string]any{
@@ -1352,7 +1352,7 @@ func TestCollectionChangeDedup(t *testing.T) {
 // TestWatchKindCacheLifecycle verifies the WatchKind cache in instanceState.
 func TestWatchKindCacheLifecycle(t *testing.T) {
 	spec := buildBenchSpec(3)
-	compiled, err := compileGraphSpec(spec)
+	compiled, err := compileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	state := newInstanceState(compiled)

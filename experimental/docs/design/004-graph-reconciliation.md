@@ -17,8 +17,11 @@ Compilation produces:
   references. Both forward (dependency → dependent) and reverse adjacency are produced — propagation
   walks the forward DAG, prune walks the reverse. Node types (Own, Watch, WatchKind, Contribute,
   Definition) are defined in [001-graph](001-graph.md) and [003-ownership](003-ownership.md).
-- **Compiled CEL programs** — each expression (template fields, readyWhen, propagateWhen,
-  includeWhen) is parsed and compiled once. Evaluated at reconcile time against the current scope.
+- **Compiled CEL programs** — each expression is compiled once against a typed environment. Nodes
+  with a known kind resolve OpenAPI schemas; definitions infer types from template structure. Nodes
+  whose kind is a CEL expression compile untyped — the kind is not known until runtime. Nodes whose
+  kind is literal but unresolvable — a CRD not yet installed, an aggregated API not yet registered —
+  also compile untyped. When the kind becomes watchable, the Graph recompiles and type errors halt.
 - **GraphRevision** — an immutable snapshot of the spec, persisted for future diffs (see
   [002-revisions](002-revisions.md)).
 

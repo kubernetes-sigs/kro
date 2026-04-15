@@ -436,7 +436,9 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	}
 
 	// Compile to verify validity before creating the revision.
-	_, err = compileGraphSpec(graphSpec)
+	// Phase 1-2: resolve types (I/O) before pure compilation.
+	typeInfo := resolveNodeTypes(graphSpec.Nodes, r.SchemaResolver)
+	_, err = compileGraphSpec(graphSpec, typeInfo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -520,7 +522,7 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 	compiled := r.Caches.getCompiled(specHash)
 	if compiled == nil {
 		// No shared compiled graph — compile from scratch.
-		compiled, err = compileGraphSpec(spec)
+		compiled, err = compileGraphSpec(spec, resolveNodeTypes(spec.Nodes, r.SchemaResolver))
 		if err != nil {
 			return nil, nil, err
 		}

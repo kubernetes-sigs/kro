@@ -34,6 +34,7 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/conversion"
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // ErrPending indicates that CEL evaluation failed because required data
@@ -131,13 +132,14 @@ func isPending(err error) bool {
 // and BuildDAG produces a read-only structure (verified: zero writes to DAG
 // fields during reconciliation).
 type compiledGraph struct {
-	specHash     string                            // content hash of the compilation inputs
-	env          *cel.Env                          // CEL environment (immutable after Extend)
-	programs     map[string]cel.Program            // expression string → compiled program
-	exprPaths    map[string]map[string][]FieldPath // expression string → (scope var → field paths)
-	declaredVars map[string]bool                   // variable names declared in the CEL env
-	spec         *GraphSpec                        // parsed spec (immutable)
-	dag          *DAG                              // dependency graph (immutable after BuildDAG)
+	specHash       string                            // content hash of the compilation inputs
+	env            *cel.Env                          // CEL environment (immutable after Extend)
+	programs       map[string]cel.Program            // expression string → compiled program
+	exprPaths      map[string]map[string][]FieldPath // expression string → (scope var → field paths)
+	declaredVars   map[string]bool                   // variable names declared in the CEL env
+	spec           *GraphSpec                        // parsed spec (immutable)
+	dag            *DAG                              // dependency graph (immutable after BuildDAG)
+	unresolvedGVKs []schema.GroupVersionKind         // GVKs that fell back to dyn (triggers recompilation on CRD install)
 }
 
 // eval evaluates a CEL expression against the given scope.
@@ -423,22 +425,93 @@ func (gc *graphCaches) CacheSizes() (compiledCount, instanceCount int) {
 	return len(gc.compiled), len(gc.instances)
 }
 
+// evictUnresolved removes compiled graphs that have unresolved GVKs and their
+// instance states. Returns the affected Graph keys so callers can enqueue them
+// for recompilation. Called when a CRD is installed — the previously-unresolvable
+// schema may now be available.
+func (gc *graphCaches) evictUnresolved() []graphKey {
+	gc.mu.Lock()
+	defer gc.mu.Unlock()
+
+	// Find compiled graphs with unresolved GVKs.
+	evictHashes := make(map[string]bool)
+	for hash, compiled := range gc.compiled {
+		if len(compiled.unresolvedGVKs) > 0 {
+			evictHashes[hash] = true
+			delete(gc.compiled, hash)
+		}
+	}
+	if len(evictHashes) == 0 {
+		return nil
+	}
+
+	// Evict instance states pointing to evicted compilations.
+	// Extract Graph keys from instance keys (format: "namespace/revision-name").
+	var affected []graphKey
+	for key, state := range gc.instances {
+		if state.compiled != nil && evictHashes[state.compiled.specHash] {
+			delete(gc.instances, key)
+			// Instance key is "namespace/revision-name". The Graph name
+			// is the revision name minus the "-gNNNNN" suffix.
+			if gk, ok := instanceKeyToGraphKey(key); ok {
+				affected = append(affected, gk)
+			}
+		}
+	}
+	return affected
+}
+
+// instanceKeyToGraphKey extracts a graphKey from an instance cache key.
+// Instance keys are "namespace/graphname-gNNNNN". Returns false if the
+// key doesn't match the expected format.
+func instanceKeyToGraphKey(instanceKey string) (graphKey, bool) {
+	// Split "namespace/revision-name"
+	slash := strings.Index(instanceKey, "/")
+	if slash < 0 {
+		return graphKey{}, false
+	}
+	ns := instanceKey[:slash]
+	revName := instanceKey[slash+1:]
+
+	// Revision name format: "graphname-gNNNNN" — find the last "-g" followed by digits.
+	lastDash := strings.LastIndex(revName, "-g")
+	if lastDash < 0 || lastDash+2 >= len(revName) {
+		return graphKey{}, false
+	}
+	// Verify the suffix after "-g" is all digits.
+	suffix := revName[lastDash+2:]
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return graphKey{}, false
+		}
+	}
+	return graphKey{Name: revName[:lastDash], Namespace: ns}, true
+}
+
 // ---------------------------------------------------------------------------
 // Compilation
 // ---------------------------------------------------------------------------
 
-// compileGraphSpec builds a CEL environment, eagerly compiles every expression,
-// and builds the dependency graph. Returns a compiledGraph ready for sharing
-// across multiple instances.
+// compileGraphSpec builds a typed CEL environment, eagerly compiles every
+// expression, and builds the dependency graph. Returns a compiledGraph ready
+// for sharing across multiple instances.
 //
-// All node IDs are declared upfront as DynType. Expressions that reference
-// nodes not yet in scope at eval time will produce CEL runtime errors
-// (e.g., "no such key") which isPending handles correctly.
-func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
-	allIDs := spec.AllIdentifiers()
+// The typeInfo parameter carries resolved types from resolveNodeTypes. When nil,
+// all nodes fall back to dyn.
+func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, error) {
+	if typeInfo == nil {
+		// No type information — all nodes declared as dyn (backwards compat).
+		typeInfo = resolveNodeTypes(spec.Nodes, nil)
+	}
+
+	// Phase 3: build the typed CEL environment.
+	// All typed declarations (resource schemas + definition types) go through
+	// a single DeclTypeProvider to avoid the double-provider problem.
+	typedDecls := buildTypedEnvOptions(typeInfo)
 
 	env, err := krocel.DefaultEnvironment(
-		krocel.WithResourceIDs(allIDs),
+		krocel.WithResourceIDs(typeInfo.untypedIDs),
+		krocel.WithCustomDeclarations(typedDecls),
 		krocel.WithCustomDeclarations(celPluralFunction()),
 		krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
 		krocel.WithCustomDeclarations(celReadyFunction()),
@@ -446,6 +519,9 @@ func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating CEL env: %w", err)
 	}
+
+	// Phase 4: compile expressions and build DAG.
+	allIDs := spec.AllIdentifiers()
 
 	// Build scope var set for field path extraction.
 	scopeVars := make(map[string]bool, len(allIDs))
@@ -491,13 +567,14 @@ func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 	}
 
 	return &compiledGraph{
-		specHash:     spec.Hash(),
-		env:          env,
-		programs:     programs,
-		exprPaths:    exprPaths,
-		declaredVars: declared,
-		spec:         spec,
-		dag:          dag,
+		specHash:       spec.Hash(),
+		env:            env,
+		programs:       programs,
+		exprPaths:      exprPaths,
+		declaredVars:   declared,
+		spec:           spec,
+		dag:            dag,
+		unresolvedGVKs: typeInfo.unresolvedGVKs,
 	}, nil
 }
 

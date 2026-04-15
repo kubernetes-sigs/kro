@@ -28,7 +28,7 @@ func TestCompiledGraphCacheLifecycle(t *testing.T) {
 	specHash := spec.Hash()
 
 	// --- Phase 1: Two instances with identical specs share one compiledGraph ---
-	compiled, err := compileGraphSpec(spec)
+	compiled, err := compileGraphSpec(spec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestCompiledGraphCacheLifecycle(t *testing.T) {
 
 	// --- Phase 2: Different spec produces a separate compiledGraph ---
 	differentSpec := buildBenchSpec(10)
-	differentCompiled, err := compileGraphSpec(differentSpec)
+	differentCompiled, err := compileGraphSpec(differentSpec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestCompiledGraphCacheLifecycle(t *testing.T) {
 // This catches bugs where newInstanceState accidentally shares maps.
 func TestInstanceStateIsolation(t *testing.T) {
 	spec := buildBenchSpec(5)
-	compiled, err := compileGraphSpec(spec)
+	compiled, err := compileGraphSpec(spec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func BenchmarkCompileGraph(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				_, err := compileGraphSpec(spec)
+				_, err := compileGraphSpec(spec, nil)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -187,7 +187,7 @@ func BenchmarkTemplateEvaluation(b *testing.B) {
 	for _, exprCount := range []int{1, 5, 10, 20} {
 		b.Run(fmt.Sprintf("exprs=%d", exprCount), func(b *testing.B) {
 			spec := buildBenchSpecWithExprs(exprCount)
-			compiled, err := compileGraphSpec(spec)
+			compiled, err := compileGraphSpec(spec, nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -475,7 +475,7 @@ func BenchmarkCompileRevisionSharing(b *testing.B) {
 						compiled := caches.getCompiled(specHash)
 						if compiled == nil {
 							var err error
-							compiled, err = compileGraphSpec(spec)
+							compiled, err = compileGraphSpec(spec, nil)
 							if err != nil {
 								b.Fatal(err)
 							}
@@ -614,7 +614,7 @@ func BenchmarkWalkSkip(b *testing.B) {
 	for _, nodeCount := range []int{10, 50, 100, 500} {
 		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
 			spec := buildBenchSpec(nodeCount)
-			compiled, err := compileGraphSpec(spec)
+			compiled, err := compileGraphSpec(spec, nil)
 			if err != nil {
 				b.Fatal(err)
 			}

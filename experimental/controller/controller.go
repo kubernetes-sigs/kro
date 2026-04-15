@@ -31,9 +31,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
+
+	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -101,12 +104,13 @@ func gvkToGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
 
 // GraphReconciler reconciles Graph objects.
 type GraphReconciler struct {
-	Client        client.Client
-	Watcher       *WatchCoordinator // nil = no dynamic watches (backward compat with existing tests)
-	Caches        *graphCaches      // per-revision compiled expression caches
-	Resources     *resourceCache    // per-resource full object cache
-	DriftInterval time.Duration     // per-node drift timer interval; 0 = use DefaultDriftInterval
-	DriftJitter   time.Duration     // max drift jitter; 0 = use MaxDriftJitter
+	Client         client.Client
+	SchemaResolver resolver.SchemaResolver // nil = all resource nodes fall back to dyn
+	Watcher        *WatchCoordinator       // nil = no dynamic watches (backward compat with existing tests)
+	Caches         *graphCaches            // per-revision compiled expression caches
+	Resources      *resourceCache          // per-resource full object cache
+	DriftInterval  time.Duration           // per-node drift timer interval; 0 = use DefaultDriftInterval
+	DriftJitter    time.Duration           // max drift jitter; 0 = use MaxDriftJitter
 }
 
 // nodeResult carries a worker's output back to the coordinator.
@@ -1785,12 +1789,46 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 	}, log.Log)
 	watchMgr.onEvent = coordinator.routeEvent
 
+	// Create schema resolver for compile-time type checking.
+	// Core types resolve from compiled-in definitions, CRDs resolve via
+	// cached discovery client.
+	schemaResolver, err := schemaresolver.NewCombinedResolver(restConfig, nil)
+	if err != nil {
+		// Schema resolution is an operational dependency — log the failure.
+		// All resource nodes will fall back to dyn (no field-level type checking).
+		log.Log.Error(err, "failed to create schema resolver; compile-time type checking disabled for resource nodes")
+		schemaResolver = nil
+	}
+
 	reconciler := &GraphReconciler{
-		Client:        mgr.GetClient(),
-		Watcher:       coordinator,
-		Caches:        newGraphCaches(),
-		Resources:     newResourceCache(),
-		DriftInterval: driftInterval,
+		Client:         mgr.GetClient(),
+		SchemaResolver: schemaResolver,
+		Watcher:        coordinator,
+		Caches:         newGraphCaches(),
+		Resources:      newResourceCache(),
+		DriftInterval:  driftInterval,
+	}
+
+	// When the watch infrastructure observes a new type (first informer for a
+	// GVR), check if any compiled graph had that type unresolved. If so, evict
+	// and recompile — the schema may now be available. Handles CRDs, aggregated
+	// APIs, and any other mechanism that makes a new type watchable.
+	watchMgr.onNewType = func(gvr schema.GroupVersionResource) {
+		affected := reconciler.Caches.evictUnresolved()
+		if len(affected) == 0 {
+			return
+		}
+		log.Log.Info("new type observed; recompiling affected graphs",
+			"gvr", gvr, "affectedGraphs", len(affected))
+		for _, gk := range affected {
+			obj := &unstructured.Unstructured{}
+			obj.SetName(gk.Name)
+			obj.SetNamespace(gk.Namespace)
+			select {
+			case watchChan <- event.GenericEvent{Object: obj}:
+			default:
+			}
+		}
 	}
 
 	// Pre-populate watch informers from existing GraphRevisions before the

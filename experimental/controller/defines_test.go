@@ -150,7 +150,7 @@ func TestDefinesChain(t *testing.T) {
 // evaluator ready for reconcileDefinition calls. Fails the test on compile error.
 func compileDefinesSpec(t *testing.T, spec *GraphSpec) *evaluator {
 	t.Helper()
-	compiled, err := compileGraphSpec(spec)
+	compiled, err := compileGraphSpec(spec, nil)
 	require.NoError(t, err)
 	return &evaluator{
 		compiled: compiled,
@@ -271,7 +271,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 				Template: map[string]any{"val": "${upstream.data.key}"},
 			},
 		}}
-		compiled, err := compileGraphSpec(spec)
+		compiled, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
 
 		eval := &evaluator{

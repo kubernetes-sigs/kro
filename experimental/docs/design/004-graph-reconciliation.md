@@ -4,13 +4,34 @@ How the controller reconciles a Graph. The DAG is the dependency structure betwe
 bring external state in. Performance is structural — work is proportional to change, not to DAG
 size. Changes propagate forward through the DAG and stop when they stop mattering.
 
+## Compilation
+
+When a Graph's `metadata.generation` advances, the controller compiles the spec. If compilation
+fails, no revision is created; `Compiled` is set to `False` on the Graph (see
+[001-graph](001-graph.md) for condition details). Reconciliation continues on the previous revision
+if one exists.
+
+Compilation produces:
+
+- **DAG** — nodes and edges. One node per resource declaration, edges inferred from CEL expression
+  references. Both forward (dependency → dependent) and reverse adjacency are produced — propagation
+  walks the forward DAG, prune walks the reverse. Node types (Own, Watch, WatchKind, Contribute,
+  Definition) are defined in [001-graph](001-graph.md) and [003-ownership](003-ownership.md).
+- **Compiled CEL programs** — each expression (template fields, readyWhen, propagateWhen,
+  includeWhen) is parsed and compiled once. Evaluated at reconcile time against the current scope.
+- **GraphRevision** — an immutable snapshot of the spec, persisted for future diffs (see
+  [002-revisions](002-revisions.md)).
+
+When a new revision is compiled, the controller diffs it against the previous. Nodes that differ are
+triggered. Removed nodes become prune candidates.
+
 ## Trigger
 
 A Graph reconciles on:
 
 - **Changes** — detected via watch. This includes resources referenced by nodes and the Graph
-  itself. When the Graph spec changes, all nodes are triggered — the DAG structure may have changed.
-- **Resync** — per-node, jittered; corrects configuration drift (see [Resync](#resync)). On startup,
+  itself.
+- **Resync** — per-node, jittered; corrects configuration drift. On startup,
   all resync timers are reset.
 
 Zero triggers → no work; the controller schedules the next reconcile at the earliest resync.
@@ -20,24 +41,18 @@ changes or resync. Transient errors (5xx) retry with exponential backoff [1s, re
 
 ## Reconcile
 
-Reconcile is two walks of the same algorithm —
-[Kahn's](https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm) topological sort over
-the DAG. Propagation walks forward: evaluates triggered nodes, publishes results to scope. Prune
-walks in reverse: removes resources absent from the desired set. Independent nodes in each walk's
-frontier process concurrently. Work concentrates at triggered nodes — the rest of the graph resolves
-in O(1) per node.
+Reconcile is two walks of
+[Kahn's](https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm) topological sort,
+extended with change detection. Each walk maintains a frontier — the set of nodes whose dependencies
+have all been processed. Independent nodes in the frontier process concurrently. Only triggered nodes
+and their affected downstream are visited; the rest retain their previous state. Propagation walks
+forward DAG: evaluates triggered nodes, publishes results to scope. Prune walks the reverse DAG:
+removes resources absent from the desired set.
 
-### DAG
-
-The Graph spec compiles into a DAG — one node per resource declaration, edges inferred from
-expression references. Node types (Own, Watch, WatchKind, Contribute, Definition) are defined in
-[001-graph](001-graph.md) and [003-ownership](003-ownership.md). There is always exactly one target
-DAG, produced from the latest revision (see [002-revisions](002-revisions.md)). When the spec
-changes, a new revision is compiled and all nodes enter the frontier. There is no concurrent
-convergence across revisions within a single Graph — in-progress evaluation of the previous revision
-is abandoned. Partially applied resources either match the new revision's templates (kept) or don't
-(pruned). The Graph boundary is where convergence independence is introduced: separate Graphs
-reconcile independently, each with their own scope, revision, and watches.
+Each Graph converges one revision at a time. When a new revision is compiled, in-progress evaluation
+of the previous revision is abandoned — partially applied resources either match the new revision's
+templates (kept) or don't (pruned). Multiple Graphs converge independently, each with their own
+scope, revision, and watches.
 
 ### Scope
 
@@ -70,19 +85,24 @@ They cannot be Pending (no resource to wait for), Conflict (no SSA), or SystemEr
 
 ### Propagation
 
-The forward walk extends Kahn's with change detection — a frontier of nodes eligible for processing,
-seeded by level-0 nodes (no in-graph dependencies) and any node with an external trigger (watch
-event or resync). Independent nodes in the frontier evaluate concurrently. Nodes that don't need
-evaluation **skip** — they retain their previous state and scope entry.
+The forward walk visits only triggered nodes and their affected downstream — untriggered nodes retain
+their previous state and scope entry.
+
+A node is **triggered** when:
+- its resourceVersion in the informer store differs from the value recorded at last evaluation.
+  Absence counts — a resource deleted since last evaluation (present → absent) or not yet evaluated
+  (no recorded value) both trigger. nil != anything.
+- its resync timer has expired
+- the node changed in the latest compilation
 
 A node enters the frontier when all its dependencies have been processed AND either:
 - a dependency's output changed (propagation trigger), or
-- the node has its own external trigger (watch event or resync)
+- the node is triggered
 
 After processing, a node's output-hash determines whether dependents receive a propagation trigger.
-Unchanged output → dependents without their own triggers don't enter the frontier. This narrows the
-walk to the affected subgraph. SSA is idempotent — no-diff applies don't bump resourceVersion, so
-externally triggered nodes that re-evaluate to the same state cause no churn.
+Unchanged output → untriggered dependents don't enter the frontier. This narrows the walk to the
+affected subgraph. SSA is idempotent — no-diff applies don't bump resourceVersion, so triggered
+nodes that re-evaluate to the same state cause no churn.
 
 At each frontier node:
 
@@ -96,14 +116,15 @@ At each frontier node:
 2. **Propagation allowed**
    - any dep's propagateWhen unsatisfied → skip. Previous evaluation and state retained. If never
      evaluated, the node remains Pending — its output is genuinely unavailable, not stale.
-   - Takes precedence even on spec changes where all nodes enter the frontier
+   - Takes precedence even on spec changes where changed nodes enter the frontier
 
 3. **Inputs changed**
+   - input-hash mismatch → continue
    - input-hash match + resourceVersion unchanged → skip
    - input-hash match + resourceVersion changed → GET live object, re-evaluate readyWhen, check
-     output-hash. Template not re-evaluated.
-   - Watch/WatchKind with external trigger → continue (output depends on cluster state)
-   - Watch/WatchKind without external trigger → skip
+     output-hash. Template not re-evaluated. For Watch/WatchKind, this is the primary evaluation
+     path — their output depends on cluster state, not template inputs, so input-hash stability
+     doesn't imply output stability.
    - Resync → continue
 
 4. **includeWhen**
@@ -116,8 +137,7 @@ At each frontier node:
    - WatchKind: list matching objects by label selector. List enters scope (supports `.filter()`,
      `.map()`, etc.). When a single resource changes, update the cached list incrementally rather
      than re-listing — O(1) per event, not O(matching).
-   - forEach parent: evaluate collection, determine children, dispatch changed children (see
-     [forEach](#foreach)).
+   - forEach parent: evaluate collection, determine children, dispatch changed children.
    - Definition: resolve all values in the template against the current scope. No API calls.
    - Own: evaluate template, hash desired state (apply-hash), compare against previous. Match → omit
      write. Resync bypasses — apply unconditionally. Differs → SSA apply. 409 → Conflict.
@@ -153,14 +173,13 @@ is positive evidence that the resource exists. Prune is the recovery path for co
 revision transitions — the old revision's resource is removed, the new creates it fresh without
 contested field ownership.
 
-Prune walks the DAG in reverse — Kahn's with reversed edges. The frontier is seeded by leaf nodes
-(no in-graph dependents); as each node is removed, its dependencies enter the frontier when all
-their dependents have been processed. Own → delete. Contribute → release fields via skeleton SSA
-apply (omit managed fields, relinquishing ownership; see [003-ownership](003-ownership.md)).
+Prune walks the reverse DAG — the same algorithm as propagation, edges pointing from dependent to
+dependency. The frontier is seeded by leaf nodes (no dependents in the forward DAG = no dependencies
+in the reverse DAG). Own → delete. Contribute → release fields via skeleton SSA apply (omit managed
+fields, relinquishing ownership; see [003-ownership](003-ownership.md)).
 Watch/WatchKind → no action. Independent nodes in the frontier can be removed concurrently. If the
 DAG is unavailable, prune is blocked — never degrade to unordered deletion. If another node declares
-`finalizes` targeting a prune candidate, finalization runs first (see
-[Finalization](#finalization)).
+`finalizes` targeting a prune candidate, finalization runs first.
 
 Reverse dependency ordering comes from the most recent revision that defined the resource.
 Superseded revisions must be retained until their unique resources are pruned — they carry the
@@ -325,6 +344,15 @@ unknown — prune is blocked and existing children persist until the next succes
 
 ## Optimizations
 
+### Compilation Caching
+
+Compilation output is content-addressed by a hash of the spec (FNV-64a of all compilation inputs).
+Multiple Graph instances with identical specs — common with nested Graphs stamped by forEach — share
+a single compiled output (DAG, CEL programs, reference paths). N identical child Graphs cost 1
+compilation + (N-1) hash lookups. Per-instance mutable state (scope, forEach state, resync timers) is
+isolated. When an instance is removed, the shared compilation is retained if other instances
+reference it and cleaned up when the last reference is removed.
+
 ### Hash Mechanics
 
 The input-hash and output-hash are ephemeral — recomputed on cold start. The apply-hash is persisted
@@ -333,9 +361,9 @@ without it cold start produces an N-write burst. Resync bypasses the apply-hash 
 unconditionally) but the output-hash still applies — if corrected output matches previous output,
 dependents are not added to the frontier.
 
-Input-hash and output-hash share the same path extraction. At graph compilation, the controller
-walks each expression's AST to extract reference chains — sequences of select operations rooted at a
-scope variable. `${deploy.status.availableReplicas}` yields `(deploy, status.availableReplicas)`.
+Input-hash and output-hash share the same reference paths. At compilation, the controller walks each
+expression's AST to extract reference chains — sequences of select operations rooted at a scope
+variable. `${deploy.status.availableReplicas}` yields `(deploy, status.availableReplicas)`.
 `${a.spec.x + b.data.y}` yields `(a, spec.x)` and `(b, data.y)`. When a chain contains a dynamic
 operation (function call, index, comprehension), the path terminates at the last static select and
 the value at that prefix is hashed in full:
@@ -343,39 +371,27 @@ the value at that prefix is hashed in full:
 `(deploy, status.conditions)`. Absent paths hash to a sentinel — absent to present is a change, not
 a skip.
 
-### Resync
+### API Server Interaction
+
+The controller uses metadata-only informers — spec and status are not fetched in the watch path.
+Full object reads happen only during Resolve, on demand. Each managed resource carries an identity
+label per Graph-node pair:
+
+    <node>.<graph>.<ns>.internal.kro.run/reference = own | contribute
+
+The label key encodes the node ID using DNS subdomain structure, enabling watch event routing and
+prune selection. Multiple Graphs targeting the same resource coexist without collision (2N labels for
+N Graphs). A generation label propagates `metadata.generation` for observability (see
+[002-revisions](002-revisions.md)).
 
 Each node has an in-memory resync timer with a jittered interval (default 30 minutes) — a
-consistency floor bounding how long any divergence can persist. Watches can miss divergence
-(disconnects, cache staleness); hash-matched skips don't detect server-side drift (external edits,
-admission webhooks). On expiry, the node is triggered and applies unconditionally.
-
-SSA is idempotent; apply corrects drift as a side effect and resets the timer. A skipped node does
-not reset its timer — frequent reconciles from other nodes' events don't perpetually push it
-forward. Jitter decorrelates timers across nodes. On restart, timers start fresh — bounded burst
-(10k nodes over 30 minutes ≈ 5.5 applies/sec). Resync timer state is in controller metrics, not on
-managed resources.
-
-### Storage Model
-
-Each managed resource carries two labels per Graph-node pair. The identity is encoded in the label
-prefix using DNS subdomain structure. The controller uses metadata-only informers — spec and status
-are not fetched. Full object reads happen only during Resolve. When an evaluated node needs data
-from a skipped dependency, the full object is read from the API server on demand. If absent (deleted
-externally, not yet created), the node is Pending.
-
-| Label key                                         | Value                       | Purpose                              |
-| ------------------------------------------------- | --------------------------- | ------------------------------------ |
-| `<node>.<graph>.<ns>.internal.kro.run/reference`  | `own` or `contribute`       | Identity, selection, prune reference |
-| `<node>.<graph>.<ns>.internal.kro.run/generation` | `graph.metadata.generation` | Observational                        |
-
-Each Graph gets its own label keys — multiple Graphs targeting the same resource coexist without
-collision. Label count scales linearly with managing Graphs (2N labels for N Graphs). The identity
-label enables selection (see [Prune](#prune)) and routes watch events to the correct
-node via the node ID encoded in the label key.
+consistency floor bounding how long any divergence can persist. On expiry, the node applies
+unconditionally. Between resyncs, the hash layers eliminate all no-op writes. SSA corrects drift as a
+side effect. A skipped node does not reset its timer. Jitter decorrelates across nodes. On restart,
+timers start fresh — bounded burst (10k nodes over 30 minutes ≈ 5.5 applies/sec).
 
 The controller's operational inputs are the informer store and the DAG. Revision status is a
-write-only observation surface — not an operational input.
+write-only observation surface.
 
 ## Why Not
 

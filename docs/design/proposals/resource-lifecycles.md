@@ -15,20 +15,26 @@ The proposal is to let adoption be handled by the current behaviour.
 The current behaviour applies over other resources as long as they
 are not being managed by a Kro instance.
 
-To avoid deleting resources we will add a new CRD field.
-```
+To avoid deleting resources we will add a new `lifecycle` field that accepts a CEL expression:
+
+```yaml
 apiVersion: kro.run/v1alpha1
-  kind: ResourceGraphDefinition
-  spec:
-    resources:
-      - id: database
-        lifecycle:
-          deletePolicy: Retain
+kind: ResourceGraphDefinition
+spec:
+  resources:
+    - id: database
+      lifecycle: "${policy().withRetain()}"
 ```
 
-The `deletePolicy` field accepts two values:
-- `Delete` (default): Remove the resource from the cluster
-- `Retain`: Remove Kro labels indicating it is Kro-managed instead of deleting it
+The `policy()` function provides methods to configure lifecycle behavior:
+- `policy().withRetain()` - Retain resource when instance is deleted
+- `policy().withDelete()` - Delete resource (default)
+
+The CEL expression evaluates to a map. Static maps are also supported but not recommended to avoid future breakages:
+```yaml
+lifecycle:
+  deletePolicy: retain  # or "delete"
+```
 
 For migration or refactoring use cases, you would add the delete policy field,
 then delete or update the RGD to orphan the resources, and finally adopt them
@@ -65,8 +71,8 @@ For the purpose of orphaning, we consider both deleting an RGD or instance and
 pruning (where a resource is deleted because the instance or RGD definition no longer requires it) 
 to apply the same mechanism. 
 
-When orphaning, we will check if the lifecycle.deletePolicy field is set to Retain and remove Kro-applied labels
-instead of deleting the object.
+When orphaning, we will evaluate the lifecycle expression and check if deletePolicy is set to retain, 
+then remove Kro-applied labels instead of deleting the object.
 
 We will leave the Kro field manager for simplicity. Parsing and patching out the managed field
 is extra complexity. Leaving the field manager also gives clarity about what Kro contributed to
@@ -77,12 +83,11 @@ CEL expressions that reference the schema will be allowed. This will allow creat
 non-prod vs production RGDs that may have different requirements on retaining resources.
 We will avoid allowing dependencies to other resources for simplicity initially.
 
-Example with CEL expression:
+Example with conditional CEL expression:
 ```yaml
 resources:
   - id: database
-    lifecycle:
-      deletePolicy: '${schema.spec.environment == "production" ? "Retain" : "Delete"}'
+    lifecycle: '${schema.spec.environment == "production" ? policy().withRetain() : policy()}'
     template:
       apiVersion: v1
       kind: PersistentVolumeClaim
@@ -99,21 +104,20 @@ You may have more complicated migrations. You may have an application that was a
 per namespace and want to refactor it to be a single instance utilizing collections. 
 
 Example migration steps
-```
-  # Step 1: Add retain to old RGD
-  apiVersion: kro.run/v1alpha1
-    kind: ResourceGraphDefinition
-    spec:
-      resources:
-        - id: database
-          lifecycle:
-            deletePolicy: Retain # Set deletePolicy to Retain
+```yaml
+# Step 1: Add retain to old RGD
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+spec:
+  resources:
+    - id: database
+      lifecycle: "${policy().withRetain()}"
 
-  # Step 2: Delete old RGD (resources get orphaned)
-  kubectl delete rgd monolith
+# Step 2: Delete old RGD (resources get orphaned)
+kubectl delete rgd monolith
 
-  # Step 3: Create new RGDs that reference the same resources
-  # Kro will adopt them since they're no longer managed
+# Step 3: Create new RGDs that reference the same resources
+# Kro will adopt them since they're no longer managed
 ```
 
 ## Other solutions considered
@@ -155,6 +159,12 @@ The reason to use a CRD field instead of an annotation is type safety. It would 
 typo the annotation then delete their production database. We could partially type check the annotation
 but nothing could stop a user from accidentally specifying something like `rko.run`. 
 
+### Static CRD fields vs CEL library
+
+We could have defined lifecycle as a static CRD schema field instead of a CEL expression evaluated by the `policy()` library.
+
+Using CEL allows adding new policy behaviors by extending the library without requiring CRD schema migrations.
+
 ### Top level
 
 A potential enhancement would be to orphan all resources in an RGD. We could add a top level policy field then allow overriding
@@ -165,7 +175,7 @@ per RGD will be solved more generally (users already want to default a list of l
 
 #### What is in scope for this proposal?
 
-The scope of this proposal is minimal; all this document proposes is adding the lifecycle.deletePolicy field.
+The scope of this proposal is minimal; all this document proposes is adding the lifecycle field with policy() CEL function support.
 
 #### What is not in scope?
 
@@ -201,6 +211,6 @@ Testing will follow existing patterns using chainsaw for e2e tests. No special i
 Unit tests will be added to cover changed code.
 
 End-to-end tests will validate
-- orphaning resources with deletePolicy: Retain
+- orphaning resources with policy().withRetain()
 - validating we can adopt a resource that has been orphaned
-- pruning behavior respects deletePolicy field
+- pruning behavior respects lifecycle policies

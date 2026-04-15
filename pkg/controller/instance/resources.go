@@ -17,6 +17,8 @@ package instance
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -359,6 +361,10 @@ func (c *Controller) processRegularNode(
 		node.SetObserved([]*unstructured.Unstructured{current})
 	}
 
+	// Add allowlisted labels & annotations from the instance first, so that
+	// kro's own decorator labels always take precedence on key conflicts.
+	c.applyMetadataPropagation(rcx, desired)
+
 	// Apply decorator labels to desired object
 	c.applyDecoratorLabels(rcx, desired, id, nil)
 
@@ -411,6 +417,60 @@ func (c *Controller) applyDecoratorLabels(
 	}
 
 	obj.SetLabels(labels)
+}
+
+// applyMetadataPropagation propagates labels and annotations from the RGI to a
+// child resource, filtered by the patterns defined in spec.metadataPropagation.
+func (c *Controller) applyMetadataPropagation(
+	rcx *ReconcileContext,
+	obj *unstructured.Unstructured,
+) {
+	if rcx.Config.MetadataPropagation == nil {
+		return
+	}
+
+	// Instance labels/annotations take precedence over existing resource values
+	propagateMatching(rcx.Instance.GetLabels(), rcx.Config.MetadataPropagation.Labels, obj.GetLabels, obj.SetLabels)
+	propagateMatching(rcx.Instance.GetAnnotations(), rcx.Config.MetadataPropagation.Annotations, obj.GetAnnotations, obj.SetAnnotations)
+}
+
+// propagateMatching copies entries from instanceMetadata into the object metadata map
+// (via getObjMetadata/setObjMetadata) for keys that match at least one pattern in allowlist.
+func propagateMatching(instanceMetadata map[string]string, allowlist []string, getObjMetadata func() map[string]string, setObjMetadata func(map[string]string)) {
+	if len(allowlist) == 0 {
+		return
+	}
+	matched := make(map[string]string)
+	for k, v := range instanceMetadata {
+		if matchesPattern(k, allowlist) {
+			matched[k] = v
+		}
+	}
+	if len(matched) == 0 {
+		return
+	}
+	existing := getObjMetadata()
+	if existing == nil {
+		existing = make(map[string]string)
+	}
+	maps.Copy(existing, matched)
+	setObjMetadata(existing)
+}
+
+// matchesPattern returns true if key matches at least one pattern in the list.
+// Patterns ending in * are treated as prefix matches (e.g. "myorg.com/*"
+// matches any key starting with "myorg.com/"). All other patterns are exact matches.
+func matchesPattern(key string, patterns []string) bool {
+	for _, p := range patterns {
+		if strings.HasSuffix(p, "*") {
+			if strings.HasPrefix(key, p[:len(p)-1]) {
+				return true
+			}
+		} else if key == p {
+			return true
+		}
+	}
+	return false
 }
 
 // patchInstanceWithApplySetMetadata applies applyset metadata to the parent instance.

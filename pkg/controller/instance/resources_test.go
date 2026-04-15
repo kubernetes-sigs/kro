@@ -1135,3 +1135,277 @@ func newExternalCollectionNodeForResources(t *testing.T, readyWhen []*krocel.Exp
 		ReadyWhen: readyWhen,
 	}
 }
+
+func TestPropagateMatching(t *testing.T) {
+	tests := []struct {
+		name             string
+		instanceMetadata map[string]string
+		allowlist        []string
+		objMetadata      map[string]string
+		want             map[string]string
+	}{
+		{
+			name:             "empty allowlist leaves obj metadata unchanged",
+			instanceMetadata: map[string]string{"team": "platform"},
+			allowlist:        []string{},
+			objMetadata:      map[string]string{"keep": "me"},
+			want:             map[string]string{"keep": "me"},
+		},
+		{
+			name:             "nil instanceMetadata leaves obj metadata unchanged",
+			instanceMetadata: nil,
+			allowlist:        []string{"team"},
+			objMetadata:      map[string]string{"keep": "me"},
+			want:             map[string]string{"keep": "me"},
+		},
+		{
+			name:             "matched key is merged into obj metadata",
+			instanceMetadata: map[string]string{"team": "platform", "other": "value"},
+			allowlist:        []string{"team"},
+			objMetadata:      map[string]string{"keep": "me"},
+			want:             map[string]string{"keep": "me", "team": "platform"},
+		},
+		{
+			name:             "unmatched instanceMetadata keys are not propagated",
+			instanceMetadata: map[string]string{"team": "platform", "secret": "value"},
+			allowlist:        []string{"team"},
+			objMetadata:      nil,
+			want:             map[string]string{"team": "platform"},
+		},
+		{
+			name:             "nil obj metadata map is created on first match",
+			instanceMetadata: map[string]string{"team": "platform"},
+			allowlist:        []string{"team"},
+			objMetadata:      nil,
+			want:             map[string]string{"team": "platform"},
+		},
+		{
+			name:             "instanceMetadata value overwrites obj metadata value on key collision",
+			instanceMetadata: map[string]string{"team": "new-value"},
+			allowlist:        []string{"team"},
+			objMetadata:      map[string]string{"team": "old-value"},
+			want:             map[string]string{"team": "new-value"},
+		},
+		{
+			name:             "no match in instanceMetadata leaves obj metadata unchanged",
+			instanceMetadata: map[string]string{"other": "value"},
+			allowlist:        []string{"team"},
+			objMetadata:      map[string]string{"keep": "me"},
+			want:             map[string]string{"keep": "me"},
+		},
+		{
+			name:             "wildcard allowlist propagates all keys with matching prefix",
+			instanceMetadata: map[string]string{"myorg.com/cost-center": "eng", "myorg.com/owner": "alice", "other": "skip"},
+			allowlist:        []string{"myorg.com/*"},
+			objMetadata:      nil,
+			want:             map[string]string{"myorg.com/cost-center": "eng", "myorg.com/owner": "alice"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.objMetadata
+			propagateMatching(tt.instanceMetadata, tt.allowlist,
+				func() map[string]string { return result },
+				func(m map[string]string) { result = m },
+			)
+			assert.Equal(t, tt.want, result)
+		})
+	}
+}
+
+func TestApplyMetadataPropagation(t *testing.T) {
+	tests := []struct {
+		name                string
+		instanceLabels      map[string]string
+		instanceAnnotations map[string]string
+		propagation         *v1alpha1.MetadataPropagation
+		existingLabels      map[string]string
+		existingAnnotations map[string]string
+		wantLabels          map[string]string
+		wantAnnotations     map[string]string
+	}{
+		{
+			name:            "nil propagation config is a no-op",
+			instanceLabels:  map[string]string{"team": "platform"},
+			propagation:     nil,
+			wantLabels:      nil,
+			wantAnnotations: nil,
+		},
+		{
+			name:            "empty propagation config is a no-op",
+			instanceLabels:  map[string]string{"team": "platform"},
+			propagation:     &v1alpha1.MetadataPropagation{},
+			wantLabels:      nil,
+			wantAnnotations: nil,
+		},
+		{
+			name:            "matched instance labels are propagated",
+			instanceLabels:  map[string]string{"team": "platform", "secret": "hidden"},
+			propagation:     &v1alpha1.MetadataPropagation{Labels: []string{"team"}},
+			wantLabels:      map[string]string{"team": "platform"},
+			wantAnnotations: nil,
+		},
+		{
+			name:                "matched instance annotations are propagated",
+			instanceAnnotations: map[string]string{"environment": "prod", "other": "skip"},
+			propagation:         &v1alpha1.MetadataPropagation{Annotations: []string{"environment"}},
+			wantLabels:          nil,
+			wantAnnotations:     map[string]string{"environment": "prod"},
+		},
+		{
+			name:            "existing child labels for non-matched keys are preserved",
+			instanceLabels:  map[string]string{"team": "platform"},
+			propagation:     &v1alpha1.MetadataPropagation{Labels: []string{"team"}},
+			existingLabels:  map[string]string{"existing": "value"},
+			wantLabels:      map[string]string{"existing": "value", "team": "platform"},
+			wantAnnotations: nil,
+		},
+		{
+			name:            "wildcard propagates all keys under prefix",
+			instanceLabels:  map[string]string{"myorg.com/cost-center": "eng", "myorg.com/owner": "alice", "other": "skip"},
+			propagation:     &v1alpha1.MetadataPropagation{Labels: []string{"myorg.com/*"}},
+			wantLabels:      map[string]string{"myorg.com/cost-center": "eng", "myorg.com/owner": "alice"},
+			wantAnnotations: nil,
+		},
+		{
+			name:            "instance label not present on instance is silently ignored",
+			instanceLabels:  map[string]string{"other": "value"},
+			propagation:     &v1alpha1.MetadataPropagation{Labels: []string{"team"}},
+			wantLabels:      nil,
+			wantAnnotations: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := newInstanceObject("demo", "default")
+			if tt.instanceLabels != nil {
+				instance.SetLabels(tt.instanceLabels)
+			}
+			if tt.instanceAnnotations != nil {
+				instance.SetAnnotations(tt.instanceAnnotations)
+			}
+
+			controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph())
+			rcx.Config.MetadataPropagation = tt.propagation
+
+			obj := newConfigMapObject("child", "default")
+			if tt.existingLabels != nil {
+				obj.SetLabels(tt.existingLabels)
+			}
+			if tt.existingAnnotations != nil {
+				obj.SetAnnotations(tt.existingAnnotations)
+			}
+
+			controller.applyMetadataPropagation(rcx, obj)
+
+			assert.Equal(t, tt.wantLabels, obj.GetLabels())
+			assert.Equal(t, tt.wantAnnotations, obj.GetAnnotations())
+		})
+	}
+}
+
+func TestDecoratorLabelsOverwritePropagatedLabels(t *testing.T) {
+	// If a propagation pattern matches a kro-owned label key, the decorator
+	// labels must still win because applyDecoratorLabels runs after
+	// applyMetadataPropagation.
+	instance := newInstanceObject("demo", "default")
+	instance.SetLabels(map[string]string{
+		metadata.OwnedLabel: "injected-by-user", // kro will set this to "true"
+		"team":              "platform",
+	})
+
+	node := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "cm",
+			Type:       graph.NodeTypeResource,
+			GVR:        controllerTestCMGVR,
+			Namespaced: true,
+		},
+		Template: newConfigMapObject("demo", ""),
+	}
+
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(node))
+	rcx.Config.MetadataPropagation = &v1alpha1.MetadataPropagation{
+		Labels: []string{metadata.OwnedLabel, "team"},
+	}
+
+	resources, err := controller.processNode(rcx, rcx.Runtime.Nodes()[0])
+	require.NoError(t, err)
+	require.Len(t, resources, 1)
+
+	labels := resources[0].Object.GetLabels()
+	// kro's decorator value must win over the user-injected value
+	assert.Equal(t, "true", labels[metadata.OwnedLabel])
+	// regular user labels are still propagated normally
+	assert.Equal(t, "platform", labels["team"])
+}
+
+func TestMatchesPattern(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      string
+		patterns []string
+		want     bool
+	}{
+		{
+			name:     "exact match",
+			key:      "team",
+			patterns: []string{"team"},
+			want:     true,
+		},
+		{
+			name:     "exact no match",
+			key:      "team",
+			patterns: []string{"other"},
+			want:     false,
+		},
+		{
+			name:     "empty patterns",
+			key:      "team",
+			patterns: []string{},
+			want:     false,
+		},
+		{
+			name:     "multiple patterns, first matches",
+			key:      "team",
+			patterns: []string{"team", "other"},
+			want:     true,
+		},
+		{
+			name:     "multiple patterns, last matches",
+			key:      "team",
+			patterns: []string{"other", "team"},
+			want:     true,
+		},
+		{
+			name:     "wildcard matches key with matching prefix",
+			key:      "myorg.com/cost-center",
+			patterns: []string{"myorg.com/*"},
+			want:     true,
+		},
+		{
+			name:     "wildcard does not match key with different prefix",
+			key:      "myorg.com/cost-center",
+			patterns: []string{"other.com/*"},
+			want:     false,
+		},
+		{
+			name:     "wildcard does not match exact key without prefix",
+			key:      "team",
+			patterns: []string{"myorg.com/*"},
+			want:     false,
+		},
+		{
+			name:     "bare wildcard matches everything",
+			key:      "any-key",
+			patterns: []string{"*"},
+			want:     true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, matchesPattern(tt.key, tt.patterns))
+		})
+	}
+}

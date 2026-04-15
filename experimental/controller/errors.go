@@ -64,6 +64,16 @@ func classifyAPIError(err error) apiErrorInfo {
 		apierrors.IsTooManyRequests(err) {
 		return apiErrorInfo{state: NodeSystemError, reason: "ServerError"}
 	}
+	// Evaluation errors — deterministic failures from CEL, template rendering,
+	// or marshaling. The ErrEvaluation sentinel is wrapped at the source
+	// (toMap, evalString, reconcileDefinition) so the classifier can
+	// distinguish "unexpected EOF in a JSON field" from "unexpected EOF on
+	// the network." Without this check, the network pattern matcher below
+	// would misclassify evaluation errors whose messages happen to contain
+	// network-like substrings.
+	if errors.Is(err, ErrEvaluation) {
+		return apiErrorInfo{state: NodeError, reason: err.Error()}
+	}
 	// Network/infrastructure errors → NodeSystemError.
 	// Raw Go network errors (*net.OpError, DNS failures, TLS handshake errors,
 	// connection refused) are definitionally transient — the API server may

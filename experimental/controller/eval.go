@@ -148,18 +148,20 @@ func (e *evaluator) checkPropagateWhen(conditions []string, nodeID string) bool 
 }
 
 // toMap evaluates a template and asserts the result is a map.
-// Normalizes data-pending errors to ErrPending.
+// Normalizes data-pending errors to ErrPending. Non-pending evaluation
+// failures are wrapped with ErrEvaluation so classifyAPIError can
+// distinguish them from network errors with similar message text.
 func (e *evaluator) toMap(tmpl map[string]any) (map[string]any, error) {
 	evaluated, err := e.template(tmpl)
 	if err != nil {
 		if isPending(err) {
 			return nil, ErrPending
 		}
-		return nil, fmt.Errorf("evaluating: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrEvaluation, err)
 	}
 	result, ok := evaluated.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("evaluated to %T, want map", evaluated)
+		return nil, fmt.Errorf("%w: evaluated to %T, want map", ErrEvaluation, evaluated)
 	}
 	return result, nil
 }

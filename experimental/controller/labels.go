@@ -85,18 +85,45 @@ func graphLabelSuffix(graphName, namespace string) string {
 	return "." + strings.ToLower(graphName) + "." + strings.ToLower(namespace) + identityLabelSuffix
 }
 
-// parseIdentityLabel extracts the node ID, graph name, and namespace from an
-// identity label key. Returns ok=false if the key doesn't match the format.
-func parseIdentityLabel(key string) (nodeID, graphName, namespace string, ok bool) {
+// parseNodeIDFromLabel extracts the leading node ID segment from an identity
+// label key. For non-forEach nodes (nodeID.graphName.namespace.internal.kro.run/reference),
+// the node ID is the first dot-separated segment. For forEach children
+// (parentID.name.namespace.kind.group.graphName.graphNamespace.internal.kro.run/reference),
+// the first segment is the parent ID — which is the correct routing target.
+//
+// This function intentionally does NOT return graphName or namespace because
+// the variable-length prefix makes those fields ambiguous for forEach children.
+// Callers needing graph identity should use isGraphIdentityLabel or
+// graphLabelSuffix matching instead.
+func parseNodeIDFromLabel(key string) (nodeID string, ok bool) {
 	if !strings.HasSuffix(key, identityLabelSuffix) {
-		return "", "", "", false
+		return "", false
 	}
 	prefix := strings.TrimSuffix(key, identityLabelSuffix)
-	parts := strings.SplitN(prefix, ".", 3)
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return "", "", "", false
+	// The node ID (or parent ID for forEach) is the first dot-separated segment.
+	dot := strings.IndexByte(prefix, '.')
+	if dot <= 0 {
+		return "", false // no dot or empty first segment
 	}
-	return parts[0], parts[1], parts[2], true
+	return prefix[:dot], true
+}
+
+// graphNameFromLabel extracts the graph name from an identity label key
+// by parsing from the right side of the prefix (the graph identity suffix).
+// The suffix structure is always .<graphName>.<namespace>.internal.kro.run/*,
+// regardless of whether the label is for a regular node or a forEach child.
+func graphNameFromLabel(key string) string {
+	if !strings.HasSuffix(key, identityLabelSuffix) {
+		return ""
+	}
+	prefix := strings.TrimSuffix(key, identityLabelSuffix)
+	// The last two segments are graphName and namespace (right to left).
+	// Split and count from the end.
+	parts := strings.Split(prefix, ".")
+	if len(parts) < 3 {
+		return "" // need at least nodeID.graphName.namespace
+	}
+	return parts[len(parts)-2] // second-to-last is graphName
 }
 
 // isGraphIdentityLabel checks if a label key is an identity label for the
@@ -131,9 +158,8 @@ func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 		// This is an identity label. Check if it belongs to a different graph.
 		if !strings.HasSuffix(key, mySuffix) {
 			// Different graph. Extract graph name for the error message.
-			_, gName, _, ok := parseIdentityLabel(key)
-			if ok && (val == ReferenceOwn.String() || val == ReferenceContribute.String()) {
-				return gName, true
+			if val == ReferenceOwn.String() || val == ReferenceContribute.String() {
+				return graphNameFromLabel(key), true
 			}
 		}
 	}

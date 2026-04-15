@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/gobuffalo/flect"
+	"github.com/prometheus/client_golang/prometheus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -110,12 +111,13 @@ type GraphReconciler struct {
 
 // nodeResult carries a worker's output back to the coordinator.
 type nodeResult struct {
-	idx        int
-	keys       []string
-	state      NodeState
-	err        error
-	scopeKey   string // node ID to set in scope
-	scopeValue any    // value to set (the full K8s object or collection)
+	idx          int
+	keys         []string
+	state        NodeState
+	err          error
+	scopeKey     string        // node ID to set in scope
+	scopeValue   any           // value to set (the full K8s object or collection)
+	evalDuration time.Duration // wall-clock time of reconcileNode (measured inside the worker)
 	// forEach state updates — returned by forEach workers for the
 	// coordinator to merge back into the instance state.
 	forEachUpdates map[string]map[string][]string // nodeID → itemID → keys
@@ -471,7 +473,9 @@ func (w *walkState) tryDispatch(idx int) {
 	w.dispatched[idx] = true
 	isDrift := w.driftTriggered[node.ID]
 	go func(n Node, we *evaluator, ref Reference, driftCorrection bool) {
+		evalStart := time.Now()
 		keys, err := w.r.reconcileNode(w.ctx, w.graph, n, ref, we, w.watcher, driftCorrection)
+		evalDuration := time.Since(evalStart)
 		state := NodeReady
 		if err != nil {
 			switch {
@@ -498,6 +502,7 @@ func (w *walkState) tryDispatch(idx int) {
 			err:            err,
 			scopeKey:       n.ID,
 			scopeValue:     we.scope[n.ID],
+			evalDuration:   evalDuration,
 			forEachUpdates: we.forEachNewKeys,
 			forEachScopes:  we.forEachNewScope,
 			forEachItems:   we.forEachNewItems,
@@ -524,6 +529,7 @@ func (r *GraphReconciler) driftJitter() time.Duration {
 }
 
 func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, reconcileErr error) {
+	reconcileStart := time.Now()
 	logger := log.FromContext(ctx)
 	// requeueFloor is an explicit requeue interval independent of drift timers.
 	// Set when a transient condition needs re-checking beyond what watch events
@@ -536,6 +542,16 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	if err := r.Client.Get(ctx, req.NamespacedName, graph); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	// Observe reconcile duration on return. Placed after the Graph fetch
+	// so the label values are available; the timer started before the fetch
+	// to include its latency.
+	defer func() {
+		ReconcileDurationSeconds.With(prometheus.Labels{
+			"graph_name":      graph.GetName(),
+			"graph_namespace": graph.GetNamespace(),
+		}).Observe(time.Since(reconcileStart).Seconds())
+	}()
 
 	// Handle deletion
 	if !graph.GetDeletionTimestamp().IsZero() {
@@ -772,6 +788,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		walk.inflight--
 
 		node := &dag.Nodes[res.idx]
+
+		// Observe per-node evaluation duration (measured inside the worker).
+		if res.evalDuration > 0 {
+			NodeEvalDurationSeconds.With(graphMetricLabels(
+				graph.GetName(), graph.GetNamespace(), node.ID,
+			)).Observe(res.evalDuration.Seconds())
+		}
 
 		// Error handling: block dependents, continue independent branches.
 		// Classify the API error to determine the plan state — NodeError

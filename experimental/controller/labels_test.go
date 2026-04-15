@@ -16,22 +16,24 @@ func TestGenerationLabelKey(t *testing.T) {
 	assert.Equal(t, "deploy.my-app.default.internal.kro.run/generation", key)
 }
 
-func TestParseIdentityLabel(t *testing.T) {
+func TestParseNodeIDFromLabel(t *testing.T) {
 	tests := []struct {
-		name      string
-		key       string
-		wantNode  string
-		wantGraph string
-		wantNS    string
-		wantOK    bool
+		name     string
+		key      string
+		wantNode string
+		wantOK   bool
 	}{
 		{
-			name:      "valid identity label",
-			key:       "deploy.my-app.default.internal.kro.run/reference",
-			wantNode:  "deploy",
-			wantGraph: "my-app",
-			wantNS:    "default",
-			wantOK:    true,
+			name:     "regular node identity label",
+			key:      "deploy.my-app.default.internal.kro.run/reference",
+			wantNode: "deploy",
+			wantOK:   true,
+		},
+		{
+			name:     "forEach child identity label",
+			key:      "policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/reference",
+			wantNode: "policies",
+			wantOK:   true,
 		},
 		{
 			name:   "not an identity label",
@@ -44,12 +46,7 @@ func TestParseIdentityLabel(t *testing.T) {
 			wantOK: false,
 		},
 		{
-			name:   "missing segments",
-			key:    "my-app.default.internal.kro.run/reference",
-			wantOK: false,
-		},
-		{
-			name:   "empty node ID",
+			name:   "empty node ID (leading dot)",
 			key:    ".my-app.default.internal.kro.run/reference",
 			wantOK: false,
 		},
@@ -57,13 +54,47 @@ func TestParseIdentityLabel(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			nodeID, graphName, namespace, ok := parseIdentityLabel(tc.key)
+			nodeID, ok := parseNodeIDFromLabel(tc.key)
 			assert.Equal(t, tc.wantOK, ok)
 			if ok {
 				assert.Equal(t, tc.wantNode, nodeID)
-				assert.Equal(t, tc.wantGraph, graphName)
-				assert.Equal(t, tc.wantNS, namespace)
 			}
+		})
+	}
+}
+
+func TestGraphNameFromLabel(t *testing.T) {
+	tests := []struct {
+		name      string
+		key       string
+		wantGraph string
+	}{
+		{
+			name:      "regular node identity label",
+			key:       "deploy.my-app.default.internal.kro.run/reference",
+			wantGraph: "my-app",
+		},
+		{
+			name:      "forEach child identity label",
+			key:       "policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/reference",
+			wantGraph: "mygraph",
+		},
+		{
+			name:      "forEach child without group",
+			key:       "configs.my-cm.default.configmap.mygraph.default.internal.kro.run/reference",
+			wantGraph: "mygraph",
+		},
+		{
+			name:      "not an identity label",
+			key:       "app.kubernetes.io/name",
+			wantGraph: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := graphNameFromLabel(tc.key)
+			assert.Equal(t, tc.wantGraph, got)
 		})
 	}
 }

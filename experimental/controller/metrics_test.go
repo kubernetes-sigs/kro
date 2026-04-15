@@ -236,3 +236,52 @@ func TestGraphMetricLabelsHelper(t *testing.T) {
 	assert.Equal(t, "my-node", labels["node_id"])
 	assert.Len(t, labels, 3, "should have exactly 3 labels")
 }
+
+// TestReconcileDurationHistogramRegistered verifies that the reconcile
+// duration histogram is registered and observable.
+func TestReconcileDurationHistogramRegistered(t *testing.T) {
+	t.Cleanup(func() {
+		ReconcileDurationSeconds.Reset()
+	})
+
+	reg := prometheus.NewRegistry()
+	RegisterMetrics(reg)
+
+	ReconcileDurationSeconds.With(prometheus.Labels{
+		"graph_name":      "test-graph",
+		"graph_namespace": "test-ns",
+	}).Observe(0.5)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	names := map[string]bool{}
+	for _, f := range families {
+		names[f.GetName()] = true
+	}
+	assert.True(t, names["graph_reconcile_duration_seconds"],
+		"expected graph_reconcile_duration_seconds in gathered families")
+}
+
+// TestNodeEvalDurationHistogramRegistered verifies that the per-node
+// evaluation duration histogram is registered and observable.
+func TestNodeEvalDurationHistogramRegistered(t *testing.T) {
+	t.Cleanup(func() {
+		NodeEvalDurationSeconds.Reset()
+	})
+
+	reg := prometheus.NewRegistry()
+	RegisterMetrics(reg)
+
+	NodeEvalDurationSeconds.With(graphMetricLabels("g", "ns", "deploy")).Observe(0.1)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	names := map[string]bool{}
+	for _, f := range families {
+		names[f.GetName()] = true
+	}
+	assert.True(t, names["graph_node_eval_duration_seconds"],
+		"expected graph_node_eval_duration_seconds in gathered families")
+}

@@ -41,6 +41,16 @@ import (
 // This is a retryable condition — the controller should requeue and try again.
 var ErrPending = errors.New("data pending")
 
+// ErrEvaluation indicates that the error originates from a non-API operation:
+// CEL evaluation, template rendering, JSON marshaling, or other deterministic
+// local computation. Errors wrapped with this sentinel are classified as
+// NodeError by classifyAPIError, even if their message text happens to contain
+// network-like patterns (e.g., "unexpected EOF" from malformed JSON). Without
+// this, the string-based network error pattern matcher would misclassify them
+// as NodeSystemError, triggering 5-second retry for errors that can only
+// resolve via propagation or spec change.
+var ErrEvaluation = errors.New("evaluation error")
+
 // ErrWaitingForReadiness indicates that a resource exists but hasn't satisfied
 // its readyWhen conditions yet. Downstream resources should wait.
 var ErrWaitingForReadiness = errors.New("waiting for readiness")

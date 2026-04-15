@@ -217,7 +217,7 @@ func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]
 					continue
 				}
 				// Extract node ID from the label key.
-				nodeID, _, _, ok := parseIdentityLabel(labelKey)
+				nodeID, ok := parseNodeIDFromLabel(labelKey)
 				if !ok {
 					continue
 				}

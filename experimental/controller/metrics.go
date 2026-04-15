@@ -36,6 +36,33 @@ var (
 		},
 		[]string{"graph_name", "graph_namespace", "node_id"},
 	)
+
+	// ReconcileDurationSeconds measures the wall-clock time of each
+	// reconcile cycle. This is the operator's first metric for triage:
+	// "how long are reconciles taking?" Labeled by graph identity and
+	// outcome (success, error) so latency can be correlated with
+	// specific graphs and failure modes.
+	ReconcileDurationSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "graph_reconcile_duration_seconds",
+			Help:    "Duration of Graph reconcile cycles in seconds",
+			Buckets: prometheus.ExponentialBuckets(0.01, 2, 12), // 10ms to ~40s
+		},
+		[]string{"graph_name", "graph_namespace"},
+	)
+
+	// NodeEvalDurationSeconds measures per-node evaluation time — from
+	// worker dispatch to result receipt. Identifies slow nodes that
+	// dominate reconcile latency (e.g., large SSA patches, slow API
+	// server responses for specific GVKs).
+	NodeEvalDurationSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "graph_node_eval_duration_seconds",
+			Help:    "Duration of per-node evaluation in seconds (dispatch to result)",
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 12), // 1ms to ~4s
+		},
+		[]string{"graph_name", "graph_namespace", "node_id"},
+	)
 )
 
 // RegisterMetrics registers graph controller metrics with the given
@@ -46,6 +73,8 @@ func RegisterMetrics(registry prometheus.Registerer) {
 	for _, c := range []prometheus.Collector{
 		DriftTimerFiresTotal,
 		SystemErrorRetriesTotal,
+		ReconcileDurationSeconds,
+		NodeEvalDurationSeconds,
 	} {
 		if err := registry.Register(c); err != nil {
 			if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
@@ -75,6 +104,8 @@ func deleteGraphMetricsForGraph(graphName, graphNamespace string) {
 	}
 	DriftTimerFiresTotal.DeletePartialMatch(labels)
 	SystemErrorRetriesTotal.DeletePartialMatch(labels)
+	ReconcileDurationSeconds.DeletePartialMatch(labels)
+	NodeEvalDurationSeconds.DeletePartialMatch(labels)
 }
 
 // deleteNodeMetrics removes time series for specific nodes within a graph.
@@ -85,5 +116,6 @@ func deleteNodeMetrics(graphName, graphNamespace string, nodeIDs map[string]bool
 		labels := graphMetricLabels(graphName, graphNamespace, nodeID)
 		DriftTimerFiresTotal.Delete(labels)
 		SystemErrorRetriesTotal.Delete(labels)
+		NodeEvalDurationSeconds.Delete(labels)
 	}
 }

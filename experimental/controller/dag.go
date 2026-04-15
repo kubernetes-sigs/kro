@@ -56,11 +56,25 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 	}
 
 	// Build finalizer map: target node ID → list of finalizer node IDs.
-	// Validate that finalizer targets exist in the DAG.
+	// Validate that finalizer targets exist in the DAG and manage resources.
 	for _, node := range dag.Nodes {
 		if node.Finalizes != "" {
-			if _, exists := dag.Index[node.Finalizes]; !exists {
+			targetIdx, exists := dag.Index[node.Finalizes]
+			if !exists {
 				return nil, fmt.Errorf("node %q declares finalizes %q, but no node with that ID exists", node.ID, node.Finalizes)
+			}
+			// Finalization only applies to resource-managing nodes (Own,
+			// Contribute, Unresolved). Definition, Watch, and WatchKind
+			// nodes never produce managed resources and never become prune
+			// candidates — finalizing them is nonsensical.
+			targetRef := dag.References[dag.Nodes[targetIdx].ID]
+			switch targetRef {
+			case ReferenceDefinition:
+				return nil, fmt.Errorf("node %q cannot finalize %q: Definition nodes do not manage resources", node.ID, node.Finalizes)
+			case ReferenceWatch:
+				return nil, fmt.Errorf("node %q cannot finalize %q: Watch nodes are read-only", node.ID, node.Finalizes)
+			case ReferenceWatchKind:
+				return nil, fmt.Errorf("node %q cannot finalize %q: WatchKind nodes are read-only", node.ID, node.Finalizes)
 			}
 			dag.Finalizers[node.Finalizes] = append(dag.Finalizers[node.Finalizes], node.ID)
 		}

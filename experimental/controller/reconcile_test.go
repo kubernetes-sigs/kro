@@ -527,6 +527,60 @@ func TestFinalizesTargetMustExist(t *testing.T) {
 	assert.Contains(t, err.Error(), "no node with that ID exists")
 }
 
+// TestFinalizesTargetMustBeResource verifies that a finalizes declaration
+// targeting a Definition or Watch node is rejected at DAG build time.
+// Definitions and Watches don't create managed resources and never become
+// prune candidates — finalizing them is nonsensical.
+func TestFinalizesTargetMustBeResource(t *testing.T) {
+	tests := []struct {
+		name   string
+		target Node
+	}{
+		{
+			name: "Definition target rejected",
+			target: Node{
+				ID:       "naming",
+				Template: map[string]any{"prefix": "app"},
+			},
+		},
+		{
+			name: "Watch target rejected",
+			target: Node{
+				ID: "config",
+				Template: map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]any{"name": "config"},
+				},
+			},
+		},
+		{
+			name: "WatchKind target rejected",
+			target: Node{
+				ID: "namespaces",
+				Template: map[string]any{
+					"apiVersion": "v1",
+					"kind":       "Namespace",
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			nodes := []Node{
+				tc.target,
+				{ID: "snapshot", Finalizes: tc.target.ID, Template: map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "snap"},
+				}},
+			}
+			_, err := BuildDAG(nodes, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "cannot finalize")
+		})
+	}
+}
+
 // TestForEachVariableCollision verifies that forEach iterator variable names
 // that shadow node IDs are rejected at parse time.
 func TestForEachVariableCollision(t *testing.T) {
@@ -1122,6 +1176,31 @@ func TestClassifyAPIError_CELErrorIsNotSystemError(t *testing.T) {
 	// be NodeError (deterministic non-API failure).
 	assert.Equal(t, NodeError, info.state,
 		"CEL evaluation errors are deterministic non-API failures, not transient system errors")
+}
+
+// TestClassifyAPIError_EvalErrorWithNetworkPattern proves that non-API errors
+// (CEL evaluation, template rendering) are classified as NodeError even when
+// their message contains network-like patterns. Before the fix, an error
+// message containing "unexpected EOF" from a JSON marshal failure would
+// false-positive as a network error → NodeSystemError → 5s retry loop.
+//
+// The fix: errors originating from non-API operations are wrapped with
+// ErrEvaluation at the source (toMap, evalString). classifyAPIError checks
+// for this sentinel before falling through to network pattern matching.
+func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
+	// An evaluation error whose message contains a network error pattern.
+	// Without the sentinel, this would be classified as NodeSystemError.
+	evalErr := fmt.Errorf("evaluating template: %w: unexpected EOF in field value",
+		ErrEvaluation)
+	info := classifyAPIError(evalErr)
+	assert.Equal(t, NodeError, info.state,
+		"evaluation errors must be NodeError even when message contains network patterns")
+
+	// A real network error should still be NodeSystemError.
+	netErr := fmt.Errorf("unexpected EOF during API call")
+	info = classifyAPIError(netErr)
+	assert.Equal(t, NodeSystemError, info.state,
+		"real network errors without ErrEvaluation sentinel should remain NodeSystemError")
 }
 
 // ---------------------------------------------------------------------------

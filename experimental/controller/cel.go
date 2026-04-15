@@ -248,6 +248,21 @@ type instanceState struct {
 	// On restart, all timers start fresh with random jitter.
 	// Per 004-graph-execution.md § The Walk.
 	driftTimers map[string]time.Time
+
+	// watchKindCache holds the cached full-object list per WatchKind node.
+	// Per 004-graph-reconciliation.md § Resolve: "When a single resource
+	// changes, update the cached list incrementally rather than re-listing
+	// — O(1) per event, not O(matching)." On watch events, only the changed
+	// items are GET'd and merged. On drift timer, the cache is replaced via
+	// full List.
+	watchKindCache map[string][]any // node ID → cached collection items
+
+	// systemErrorBackoff tracks the current exponential backoff duration per
+	// node in SystemError state. Per 004-graph-reconciliation.md § Trigger:
+	// "Transient errors (5xx) retry with exponential backoff [1s,
+	// resyncInterval]." Doubles on each consecutive SystemError, resets on
+	// any non-SystemError state.
+	systemErrorBackoff map[string]time.Duration
 }
 
 // newInstanceState creates a fresh instanceState for a compiledGraph.
@@ -264,6 +279,8 @@ func newInstanceState(compiled *compiledGraph) *instanceState {
 		forEachItemKeys:    map[string]map[string][]string{},
 		resolvedReferences: make(map[string]Reference, len(compiled.dag.References)),
 		driftTimers:        make(map[string]time.Time),
+		watchKindCache:     make(map[string][]any),
+		systemErrorBackoff: make(map[string]time.Duration),
 	}
 }
 

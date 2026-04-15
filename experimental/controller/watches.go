@@ -397,17 +397,37 @@ type WatchCoordinator struct {
 	// Uses a separate mutex for clean atomic drain without blocking event routing.
 	triggerMu       sync.Mutex
 	pendingTriggers map[graphKey]map[string]bool // graph → set of triggering node IDs
+
+	// collectionChanges buffers changed resource keys for WatchKind nodes.
+	// When a collection-matched watch event fires, the specific resource
+	// (namespace/name + event type) is recorded alongside the node ID trigger.
+	// This enables reconcileWatchKind to GET only changed items instead of
+	// re-listing the entire collection — O(changed) per reconcile, not
+	// O(matching). Per 004-graph-reconciliation.md § Resolve: "When a single
+	// resource changes, update the cached list incrementally rather than
+	// re-listing — O(1) per event, not O(matching)."
+	// Protected by triggerMu (same lock as pendingTriggers — deposited and
+	// drained together).
+	collectionChanges map[graphKey]map[string][]CollectionChange // graph → nodeID → changes
+}
+
+// CollectionChange records a specific resource change within a WatchKind collection.
+type CollectionChange struct {
+	Namespace string
+	Name      string
+	EventType WatchEventType
 }
 
 func newWatchCoordinator(watches *WatchManager, enqueue func(graphKey), log logr.Logger) *WatchCoordinator {
 	return &WatchCoordinator{
-		watches:         watches,
-		enqueue:         enqueue,
-		log:             log.WithName("watch-coordinator"),
-		graphs:          make(map[graphKey]*graphState),
-		scalarIndex:     make(map[schema.GroupVersionResource]map[types.NamespacedName][]scalarEntry),
-		collectionIndex: make(map[schema.GroupVersionResource][]collectionEntry),
-		pendingTriggers: make(map[graphKey]map[string]bool),
+		watches:           watches,
+		enqueue:           enqueue,
+		log:               log.WithName("watch-coordinator"),
+		graphs:            make(map[graphKey]*graphState),
+		scalarIndex:       make(map[schema.GroupVersionResource]map[types.NamespacedName][]scalarEntry),
+		collectionIndex:   make(map[schema.GroupVersionResource][]collectionEntry),
+		pendingTriggers:   make(map[graphKey]map[string]bool),
+		collectionChanges: make(map[graphKey]map[string][]CollectionChange),
 	}
 }
 
@@ -495,6 +515,18 @@ func (gw *graphWatcher) drainTriggers() map[string]bool {
 	triggers := gw.coord.pendingTriggers[gw.graph]
 	delete(gw.coord.pendingTriggers, gw.graph)
 	return triggers
+}
+
+// drainCollectionChanges atomically drains and returns the buffered
+// collection changes for this Graph's WatchKind nodes. Returns nil if
+// no collection changes were buffered. Used by reconcileWatchKind to
+// GET only changed items instead of re-listing the entire collection.
+func (gw *graphWatcher) drainCollectionChanges() map[string][]CollectionChange {
+	gw.coord.triggerMu.Lock()
+	defer gw.coord.triggerMu.Unlock()
+	changes := gw.coord.collectionChanges[gw.graph]
+	delete(gw.coord.collectionChanges, gw.graph)
+	return changes
 }
 
 // done finalizes the watch set for this reconcile cycle.
@@ -644,6 +676,9 @@ func (c *WatchCoordinator) routeEvent(event watchEvent) {
 	c.mu.RLock()
 	// matched maps graph → set of triggering node IDs
 	matched := make(map[graphKey]map[string]bool)
+	// collectionMatched tracks which matches came from collection (WatchKind)
+	// entries, so the changed resource key can be buffered for incremental cache.
+	collectionMatched := make(map[graphKey]map[string]bool)
 
 	// Scalar matches: O(1) per GVR+name
 	if byName, ok := c.scalarIndex[event.gvr]; ok {
@@ -668,11 +703,19 @@ func (c *WatchCoordinator) routeEvent(event watchEvent) {
 				matched[entry.graph] = map[string]bool{}
 			}
 			matched[entry.graph][entry.nodeID] = true
+			if collectionMatched[entry.graph] == nil {
+				collectionMatched[entry.graph] = map[string]bool{}
+			}
+			collectionMatched[entry.graph][entry.nodeID] = true
 		} else if len(event.oldLabels) > 0 && entry.selector.Matches(labels.Set(event.oldLabels)) {
 			if matched[entry.graph] == nil {
 				matched[entry.graph] = map[string]bool{}
 			}
 			matched[entry.graph][entry.nodeID] = true
+			if collectionMatched[entry.graph] == nil {
+				collectionMatched[entry.graph] = map[string]bool{}
+			}
+			collectionMatched[entry.graph][entry.nodeID] = true
 		}
 	}
 	c.mu.RUnlock()
@@ -687,6 +730,24 @@ func (c *WatchCoordinator) routeEvent(event watchEvent) {
 			}
 			for nodeID := range nodeIDs {
 				c.pendingTriggers[graph][nodeID] = true
+			}
+		}
+		// Buffer collection changes for WatchKind incremental cache.
+		// The changed resource key is recorded per node so reconcileWatchKind
+		// can GET only the changed items instead of re-listing.
+		for graph, nodeIDs := range collectionMatched {
+			if c.collectionChanges[graph] == nil {
+				c.collectionChanges[graph] = map[string][]CollectionChange{}
+			}
+			for nodeID := range nodeIDs {
+				c.collectionChanges[graph][nodeID] = append(
+					c.collectionChanges[graph][nodeID],
+					CollectionChange{
+						Namespace: event.namespace,
+						Name:      event.name,
+						EventType: event.eventType,
+					},
+				)
 			}
 		}
 		c.triggerMu.Unlock()

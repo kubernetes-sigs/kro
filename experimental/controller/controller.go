@@ -123,6 +123,9 @@ type nodeResult struct {
 	forEachUpdates map[string]map[string][]string // nodeID → itemID → keys
 	forEachScopes  map[string]map[string]any      // nodeID → itemID → scope
 	forEachItems   map[string][]any               // cache key → collection items
+	// WatchKind cache update — returned by WatchKind workers for the
+	// coordinator to merge back into the instance state.
+	watchKindCacheUpdate map[string][]any // node ID → updated cached list
 }
 
 // walkState holds coordinator-local state for a single DAG walk.
@@ -142,6 +145,10 @@ type walkState struct {
 	triggered            map[string]bool
 	driftTriggered       map[string]bool
 	propagationTriggered map[string]bool
+
+	// WatchKind incremental cache — drained once at walk start.
+	// Per 004-graph-reconciliation.md § Resolve.
+	collectionChanges map[string][]CollectionChange // nodeID → changes
 
 	// Walk-local tracking
 	dispatched   map[int]bool
@@ -435,6 +442,19 @@ func (w *walkState) tryDispatch(idx int) {
 	// Build snapshot evaluator for the worker.
 	workerEval := w.eval.snapshotFor(node, w.state)
 
+	// WatchKind incremental cache: pass cached list and collection changes
+	// to the worker so reconcileWatchKind can GET only changed items.
+	if node.Reference() == ReferenceWatchKind {
+		workerEval.watchKindNodeID = node.ID
+		if cached, ok := w.state.watchKindCache[node.ID]; ok && !w.driftTriggered[node.ID] {
+			workerEval.watchKindCachedList = cached
+			workerEval.watchKindChanges = w.collectionChanges[node.ID]
+		} else {
+			// First reconcile or drift: force full list.
+			workerEval.watchKindDriftOrFull = true
+		}
+	}
+
 	// Resolve Unresolved references in the coordinator.
 	nodeRef = w.state.resolvedReferences[node.ID]
 	if nodeRef == ReferenceUnresolved && node.ForEach == nil {
@@ -496,16 +516,17 @@ func (w *walkState) tryDispatch(idx int) {
 			}
 		}
 		w.results <- nodeResult{
-			idx:            idx,
-			keys:           keys,
-			state:          state,
-			err:            err,
-			scopeKey:       n.ID,
-			scopeValue:     we.scope[n.ID],
-			evalDuration:   evalDuration,
-			forEachUpdates: we.forEachNewKeys,
-			forEachScopes:  we.forEachNewScope,
-			forEachItems:   we.forEachNewItems,
+			idx:                  idx,
+			keys:                 keys,
+			state:                state,
+			err:                  err,
+			scopeKey:             n.ID,
+			scopeValue:           we.scope[n.ID],
+			evalDuration:         evalDuration,
+			forEachUpdates:       we.forEachNewKeys,
+			forEachScopes:        we.forEachNewScope,
+			forEachItems:         we.forEachNewItems,
+			watchKindCacheUpdate: we.watchKindCacheUpdate(),
 		}
 	}(*node, workerEval, nodeRef, isDrift)
 	w.inflight++
@@ -631,6 +652,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// because the question is "does live state match desired state?" not
 	// "did inputs change?" — different questions with different cache semantics.
 	driftTriggered := make(map[string]bool, len(dag.Nodes))
+	var collectionChanges map[string][]CollectionChange // WatchKind incremental cache
 	isRevisionTransition := len(supersededRevisions) > 0
 	isFirstReconcile := len(state.previousPlanStates) == 0
 	if isFirstReconcile || isRevisionTransition {
@@ -684,6 +706,10 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		for nodeID := range watchTriggers {
 			triggered[nodeID] = true
 		}
+		// WatchKind collection changes: buffered resource keys for
+		// incremental cache updates. Drained alongside triggers so the
+		// coordinator knows which specific items changed.
+		collectionChanges = watcher.drainCollectionChanges()
 		// Drift timer triggers: nodes whose consistency timer expired.
 		// Per 004-graph-execution.md § The Walk: "Each node has an
 		// in-memory drift timer with a jittered interval (default 30
@@ -772,6 +798,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		triggered:            triggered,
 		driftTriggered:       driftTriggered,
 		propagationTriggered: propagationTriggered,
+		collectionChanges:    collectionChanges,
 		dispatched:           make(map[int]bool, len(dag.Nodes)),
 		outputsReady:         make(map[string]bool, len(dag.Nodes)),
 		results:              make(chan nodeResult, len(dag.Nodes)),
@@ -865,6 +892,11 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.forEachItemKeys[nodeID] = itemKeys
 		}
 
+		// Merge WatchKind cache updates into the shared instance state.
+		for nodeID, cached := range res.watchKindCacheUpdate {
+			state.watchKindCache[nodeID] = cached
+		}
+
 		// Update plan state.
 		plan.SetState(dag, node.ID, res.state)
 
@@ -918,7 +950,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					}
 				}
 				if err == nil && propagateHash != "" {
-					// Per 004-graph-execution.md § Wind step 8: the
+					// Per 004-graph-reconciliation.md § Propagation: the
 					// propagation hash includes propagateWhen state.
 					// When a gate transitions (false→true or true→false),
 					// the hash changes and dependents are triggered —
@@ -929,6 +961,30 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 						} else {
 							propagateHash += ":propagate=false"
 						}
+					}
+					// Include readiness state in the propagation hash so
+					// downstream nodes that reference .ready() are
+					// triggered when readiness changes, even if output
+					// field paths are unchanged. Without this, a node
+					// going from NotReady → Ready (same output data)
+					// wouldn't trigger downstream re-evaluation of
+					// .ready()-dependent expressions until the drift
+					// timer fires.
+					//
+					// This is unconditional — every node's readiness
+					// state is included, even if no downstream references
+					// .ready(). The cost is re-evaluation (CEL compute),
+					// not re-application (the apply-hash gates writes).
+					// Scoping to only nodes with .ready()-dependent
+					// downstreams would avoid the wasted compute but
+					// introduces false-negative risk if .ready()
+					// detection is incomplete (e.g., comprehension
+					// variables). Correct-by-construction over
+					// correct-by-analysis-completeness.
+					if res.state == NodeReady {
+						propagateHash += ":ready=true"
+					} else {
+						propagateHash += ":ready=false"
 					}
 					prevHash := state.previousSelfHashes[node.ID]
 					if prevHash == "" || propagateHash != prevHash {
@@ -1154,10 +1210,31 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			if walk.dispatched[i] {
 				state.resetDriftTimer(node.ID, r.driftInterval(), r.driftJitter())
 			}
+			// Reset exponential backoff on any non-SystemError state.
+			// Per muse: "Reset on any non-SystemError evaluation, not just
+			// success. If a node transitions from SystemError to Error,
+			// the backoff should reset because the failure mode changed."
+			delete(state.systemErrorBackoff, node.ID)
 		case NodePending:
 			state.resetDriftTimer(node.ID, 1*time.Second, 0)
+			delete(state.systemErrorBackoff, node.ID)
 		case NodeSystemError:
-			state.resetDriftTimer(node.ID, systemErrorRequeueInterval, 0)
+			// Per 004-graph-reconciliation.md § Trigger: "Transient errors
+			// (5xx) retry with exponential backoff [1s, resyncInterval]."
+			// Double the backoff duration on each consecutive SystemError,
+			// capped at the drift interval. Initial backoff is 1s.
+			backoff := state.systemErrorBackoff[node.ID]
+			if backoff == 0 {
+				backoff = 1 * time.Second
+			} else {
+				backoff *= 2
+			}
+			cap := r.driftInterval()
+			if backoff > cap {
+				backoff = cap
+			}
+			state.systemErrorBackoff[node.ID] = backoff
+			state.resetDriftTimer(node.ID, backoff, 0)
 		case NodeError:
 			// Safety net: NodeError resolves primarily via propagation
 			// (upstream data changes) or revision transition (user fixes
@@ -1165,6 +1242,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			// without it, a node with a deterministic error on stable
 			// upstream data would never be re-evaluated.
 			state.resetDriftTimer(node.ID, r.driftInterval(), r.driftJitter())
+			delete(state.systemErrorBackoff, node.ID)
 		}
 	}
 

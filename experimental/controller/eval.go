@@ -31,6 +31,19 @@ type evaluator struct {
 	forEachNewItems  map[string][]any               // cache key → updated collection items (output)
 	forEachNewScope  map[string]map[string]any      // nodeID → itemID → updated scope data (output)
 	forEachNewKeys   map[string]map[string][]string // nodeID → itemID → updated keys (output)
+
+	// WatchKind incremental cache state — populated by the coordinator
+	// before dispatching a WatchKind worker (cached list + collection
+	// changes). The worker merges changes into the cached list and returns
+	// the updated list via watchKindUpdatedCache.
+	// Per 004-graph-reconciliation.md § Resolve: "When a single resource
+	// changes, update the cached list incrementally rather than re-listing
+	// — O(1) per event, not O(matching)."
+	watchKindNodeID       string             // node ID for cache key (set by coordinator)
+	watchKindCachedList   []any              // previous cached list (nil = no cache, full list needed)
+	watchKindChanges      []CollectionChange // buffered changes since last reconcile
+	watchKindUpdatedCache []any              // output: updated list for coordinator to store
+	watchKindDriftOrFull  bool               // true = bypass cache, do full list (drift or first reconcile)
 }
 
 // newEvaluator creates an evaluator for a reconcile cycle.
@@ -45,6 +58,17 @@ func newEvaluator(state *instanceState) *evaluator {
 // Used for forEach inner scopes and worker snapshots.
 func (e *evaluator) withScope(scope map[string]any) *evaluator {
 	return &evaluator{compiled: e.compiled, scope: scope}
+}
+
+// watchKindCacheUpdate returns a map of WatchKind cache updates if the
+// evaluator's watchKindUpdatedCache is set. Returns nil if no cache
+// update was produced (the worker was not a WatchKind node, or the
+// reconcileWatchKind call failed before producing a cache update).
+func (e *evaluator) watchKindCacheUpdate() map[string][]any {
+	if e.watchKindUpdatedCache == nil || e.watchKindNodeID == "" {
+		return nil
+	}
+	return map[string][]any{e.watchKindNodeID: e.watchKindUpdatedCache}
 }
 
 // evalBoolCondition evaluates a CEL expression and coerces the result to bool.

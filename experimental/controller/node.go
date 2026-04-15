@@ -202,6 +202,13 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 }
 
 // reconcileWatchKind reads a collection of resources matching a selector into scope.
+//
+// Per 004-graph-reconciliation.md § Resolve: "When a single resource changes,
+// update the cached list incrementally rather than re-listing — O(1) per
+// event, not O(matching)." The evaluator carries the cached list and buffered
+// collection changes from the coordinator. On incremental path, only changed
+// items are GET'd and merged. On drift or first reconcile, a full List is
+// performed and the cache is replaced.
 func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
 
@@ -244,24 +251,120 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 		watcher.watchKind(node.ID, gvkToGVR(gvk), graph.GetNamespace(), labelSelector)
 	}
 
-	listGVK := gvk
-	listGVK.Kind = gvk.Kind + "List"
+	var items []any
 
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(listGVK)
-	if err := r.Client.List(ctx, list, &client.ListOptions{
-		LabelSelector: labelSelector,
-		Namespace:     graph.GetNamespace(),
-	}); err != nil {
-		return fmt.Errorf("listing %s with selector %s: %w", gvk, labelSelector, err)
+	// Incremental path: cached list exists and collection changes are available.
+	// GET only the changed items and merge into the cached list.
+	if eval.watchKindCachedList != nil && !eval.watchKindDriftOrFull {
+		items = make([]any, len(eval.watchKindCachedList))
+		copy(items, eval.watchKindCachedList)
+
+		if len(eval.watchKindChanges) > 0 {
+			// Deduplicate changes by namespace/name — only the latest event
+			// for each resource matters. Multiple events between reconciles
+			// collapse into one GET.
+			type changeKey struct{ namespace, name string }
+			dedupedChanges := make(map[changeKey]CollectionChange)
+			for _, change := range eval.watchKindChanges {
+				dedupedChanges[changeKey{change.Namespace, change.Name}] = change
+			}
+
+			for ck, change := range dedupedChanges {
+				if change.EventType == WatchEventDelete {
+					// Remove deleted item from cached list.
+					filtered := items[:0]
+					for _, item := range items {
+						if m, ok := item.(map[string]any); ok {
+							md, _ := m["metadata"].(map[string]any)
+							itemName, _ := md["name"].(string)
+							itemNS, _ := md["namespace"].(string)
+							if itemName == ck.name && itemNS == ck.namespace {
+								continue // remove
+							}
+						}
+						filtered = append(filtered, item)
+					}
+					items = filtered
+					continue
+				}
+
+				// Add or Update: GET the full object and merge.
+				obj := &unstructured.Unstructured{}
+				obj.SetGroupVersionKind(gvk)
+				if err := r.Client.Get(ctx, types.NamespacedName{
+					Name:      ck.name,
+					Namespace: ck.namespace,
+				}, obj); err != nil {
+					if apierrors.IsNotFound(err) {
+						// Resource was deleted between event and reconcile — remove from cache.
+						filtered := items[:0]
+						for _, item := range items {
+							if m, ok := item.(map[string]any); ok {
+								md, _ := m["metadata"].(map[string]any)
+								itemName, _ := md["name"].(string)
+								itemNS, _ := md["namespace"].(string)
+								if itemName == ck.name && itemNS == ck.namespace {
+									continue
+								}
+							}
+							filtered = append(filtered, item)
+						}
+						items = filtered
+						continue
+					}
+					return fmt.Errorf("watchKind %s: getting changed resource %s/%s: %w", node.ID, ck.namespace, ck.name, err)
+				}
+
+				normalized := normalizeTypes(obj.Object)
+
+				// Check if item already exists in the list (update) or is new (add).
+				found := false
+				for i, item := range items {
+					if m, ok := item.(map[string]any); ok {
+						md, _ := m["metadata"].(map[string]any)
+						itemName, _ := md["name"].(string)
+						itemNS, _ := md["namespace"].(string)
+						if itemName == ck.name && itemNS == ck.namespace {
+							items[i] = normalized
+							found = true
+							break
+						}
+					}
+				}
+				if !found {
+					items = append(items, normalized)
+				}
+			}
+		}
+
+		logger.V(1).Info("resolved watchKind (incremental)", "node", node.ID, "gvk", gvk,
+			"cachedCount", len(eval.watchKindCachedList), "changes", len(eval.watchKindChanges),
+			"resultCount", len(items))
+	} else {
+		// Full list path: first reconcile, drift timer, or no cache.
+		listGVK := gvk
+		listGVK.Kind = gvk.Kind + "List"
+
+		list := &unstructured.UnstructuredList{}
+		list.SetGroupVersionKind(listGVK)
+		if err := r.Client.List(ctx, list, &client.ListOptions{
+			LabelSelector: labelSelector,
+			Namespace:     graph.GetNamespace(),
+		}); err != nil {
+			return fmt.Errorf("listing %s with selector %s: %w", gvk, labelSelector, err)
+		}
+
+		items = make([]any, len(list.Items))
+		for i, item := range list.Items {
+			items[i] = normalizeTypes(item.Object)
+		}
+		logger.V(1).Info("resolved watchKind (full list)", "node", node.ID, "gvk", gvk, "count", len(items))
 	}
 
-	items := make([]any, len(list.Items))
-	for i, item := range list.Items {
-		items[i] = normalizeTypes(item.Object)
-	}
+	// Store the updated cache for the coordinator to persist.
+	eval.watchKindUpdatedCache = items
+
 	eval.scope[node.ID] = items
-	logger.V(1).Info("resolved watchKind", "node", node.ID, "gvk", gvk, "count", len(items))
 
 	// Per 001-graph.md: "A WatchKind's .ready() returns true when the
 	// node's readyWhen conditions pass (evaluated once against the whole array,

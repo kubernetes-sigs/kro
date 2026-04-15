@@ -57,7 +57,7 @@ preserves the CEL return type. An embedded expression (`prefix-${expr}-suffix`) 
 ### Nodes
 
 `spec.nodes` is a list of node entries. Each entry has an `id` and a `template`. Declaration order
-is not significant — execution order is determined by the dependency graph.
+is not significant — evaluation order is determined by the dependency graph.
 
 #### id
 

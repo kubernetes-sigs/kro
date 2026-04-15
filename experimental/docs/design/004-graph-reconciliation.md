@@ -385,8 +385,8 @@ N Graphs). A generation label propagates `metadata.generation` for observability
 [002-revisions](002-revisions.md)).
 
 Each node has an in-memory resync timer with a jittered interval (default 30 minutes) — a
-consistency floor bounding how long any divergence can persist. On expiry, the node applies
-unconditionally. Between resyncs, the hash layers eliminate all no-op writes. SSA corrects drift as a
+consistency floor bounding how long any divergence can persist. On expiry, the node bypasses hash checks —
+propagateWhen still gates. Between resyncs, the hash layers eliminate all no-op writes. SSA corrects drift as a
 side effect. A skipped node does not reset its timer. Jitter decorrelates across nodes. On restart,
 timers start fresh — bounded burst (10k nodes over 30 minutes ≈ 5.5 applies/sec).
 

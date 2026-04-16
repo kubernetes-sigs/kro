@@ -1,6 +1,6 @@
 # Singleton — declare a resource that should exist exactly once.
 #
-# A Kind whose per-instance Graph watches all peer Singletons and
+# A Kind whose per-instance Graph watches all Singletons and
 # self-determines if it is the winner. Only the winner creates the
 # target resource (via includeWhen gate).
 #
@@ -9,21 +9,21 @@
 #
 # Failover: when the winning Singleton is deleted, its per-instance
 # Graph is torn down (target resource deleted). The remaining
-# per-instance Graphs' peers WatchKind fires, includeWhen re-evaluates,
-# and the new winner creates the resource.
+# per-instance Graphs re-evaluate, and the new winner creates the
+# resource.
 #
 # Complexity: each per-instance Graph watches all Singletons (O(N²)
 # reconciliations per change). Acceptable — Singleton cardinality is
 # small (typically 2-5 competing declarations per target resource).
 #
 # Per-instance Graph nodes:
-#   - schema:     the Singleton instance (auto-injected by Kind controller)
-#   - peers:      WatchKind on all Singletons
-#   - identities: flatten each peer to {name, priority, identity}
-#   - identity:   this Singleton's target identity
-#   - candidates: peers targeting the same resource
-#   - winner:     highest priority candidate (stable sort, take first)
-#   - target:     the actual resource, only created if this Singleton won
+#   - schema:      the Singleton instance (auto-injected by Kind controller)
+#   - singletons:  WatchKind on all Singletons
+#   - identities:  flatten each singleton to {name, priority, identity}
+#   - identity:    this Singleton's target identity
+#   - peers:       singletons targeting the same resource
+#   - winner:      highest priority peer (stable sort, take first)
+#   - target:      the actual resource, only created if this Singleton won
 # ─────────────────────────────────────────────────────────────────────
 apiVersion: experimental.kro.run/v1alpha1
 kind: Kind
@@ -39,23 +39,23 @@ spec:
       priority: integer | default=0
       template: object
   nodes:
-    - id: peers
+    - id: singletons
       template:
         apiVersion: experimental.kro.run/v1alpha1
         kind: Singleton
         selector: {}
 
-    # Flatten each peer into {name, priority, identity}.
+    # Flatten each singleton into {name, priority, identity}.
     # The identity formula appears exactly once.
     - id: identities
       forEach:
-        - peer: ${peers}
+        - s: ${singletons}
       template:
-        name: ${peer.metadata.name}
-        priority: ${peer.spec.priority}
+        name: ${s.metadata.name}
+        priority: ${s.spec.priority}
         identity: >-
-          ${peer.spec.template.apiVersion + "/" + peer.spec.template.kind + "/"
-            + peer.spec.template.metadata.namespace + "/" + peer.spec.template.metadata.name}
+          ${s.spec.template.apiVersion + "/" + s.spec.template.kind + "/"
+            + s.spec.template.metadata.namespace + "/" + s.spec.template.metadata.name}
 
     # This Singleton's target identity — same formula as identities.
     - id: identity
@@ -64,19 +64,19 @@ spec:
           ${schema.spec.template.apiVersion + "/" + schema.spec.template.kind + "/"
             + schema.spec.template.metadata.namespace + "/" + schema.spec.template.metadata.name}
 
-    # Candidates targeting the same resource as me.
-    - id: candidates
+    # Peers — singletons targeting the same resource.
+    - id: peers
       forEach:
-        - c: ${identities.filter(i, i.identity == identity.value)}
+        - peer: ${identities.filter(i, i.identity == identity.value)}
       template:
-        name: ${c.name}
-        priority: ${c.priority}
+        name: ${peer.name}
+        priority: ${peer.priority}
 
     # The winner — sort by name (tiebreaker), then by priority descending.
     # Stable sort preserves name order within same priority. Take first.
     - id: winner
       template:
-        name: ${candidates.sortBy(c, c.name).sortBy(c, -c.priority)[0].name}
+        name: ${peers.sortBy(p, p.name).sortBy(p, -p.priority)[0].name}
 
     - id: target
       includeWhen:

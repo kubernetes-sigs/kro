@@ -544,13 +544,13 @@ func TestStdlibSingletonResolution(t *testing.T) {
 	}
 
 	// Helper: build the full definition chain and evaluate whether
-	// a given Singleton is the winner among peers.
-	isWinner := func(schema map[string]any, peers []any) bool {
+	// a given Singleton is the winner among all singletons.
+	isWinner := func(schema map[string]any, singletons []any) bool {
 		t.Helper()
 
 		// Build identities list (simulates the forEach definition).
-		identities := make([]any, len(peers))
-		for i, p := range peers {
+		identities := make([]any, len(singletons))
+		for i, p := range singletons {
 			pm := p.(map[string]any)
 			identities[i] = map[string]any{
 				"name":     pm["metadata"].(map[string]any)["name"],
@@ -561,11 +561,11 @@ func TestStdlibSingletonResolution(t *testing.T) {
 
 		identity := resourceIdentity(schema)
 
-		// Build candidates list (simulates the forEach definition).
-		var candidates []any
+		// Build peers list (simulates the forEach definition).
+		var peers []any
 		for _, id := range identities {
 			if id.(map[string]any)["identity"] == identity {
-				candidates = append(candidates, map[string]any{
+				peers = append(peers, map[string]any{
 					"name":     id.(map[string]any)["name"],
 					"priority": id.(map[string]any)["priority"],
 				})
@@ -573,7 +573,7 @@ func TestStdlibSingletonResolution(t *testing.T) {
 		}
 
 		// Evaluate winner.name.
-		scope := map[string]any{"candidates": candidates}
+		scope := map[string]any{"peers": peers}
 		winnerName, err := compiled.eval(expr(nodesByID["winner"].Template["name"].(string)), scope)
 		require.NoError(t, err)
 

@@ -55,45 +55,65 @@ spec:
               schema:
                 openAPIV3Schema: >-
                   ${simpleSchema.toOpenAPI({
-                    "types": {
-                      "validation": {"expression": "string", "message": "string"},
-                      "printerColumn": {"name": "string", "type": "string", "jsonPath": "string"},
-                      "schemaDefinition": {
+                    "spec": {
+                      "schema": {
                         "kind": "string | required=true",
                         "apiVersion": "string | required=true",
-                        "group": "string | default=experimental.kro.run",
+                        "group": "string | default=kro.run",
                         "spec": "object",
                         "types": "object",
                         "status": "object",
-                        "validation": "[]validation",
-                        "additionalPrinterColumns": "[]printerColumn"
+                        "scope": "string | default=Namespaced enum=Namespaced,Cluster",
+                        "additionalPrinterColumns": "[]printerColumn",
+                        "metadata": {
+                          "labels": "map[string]string",
+                          "annotations": "map[string]string"
+                        }
                       },
-                      "resource": {
-                        "id": "string",
-                        "template": "object",
-                        "readyWhen": "[]string",
-                        "includeWhen": "[]string",
-                        "forEach": "map[string]string",
-                        "propagateWhen": "[]string"
-                      },
-                      "condition": {
-                        "type": "string", "status": "string", "reason": "string",
-                        "message": "string", "lastTransitionTime": "string",
-                        "observedGeneration": "integer"
-                      },
-                      "resourceStatus": {"id": "string", "dependencies": "[]resourceDependency"},
-                      "resourceDependency": {"id": "string"}
-                    },
-                    "spec": {
-                      "schema": "schemaDefinition",
-                      "resources": "[]resource",
-                      "defaultServiceAccounts": "map[string]string"
+                      "resources": "[]resource"
                     },
                     "status": {
                       "state": "string | enum=Active,Inactive",
                       "topologicalOrder": "[]string",
                       "conditions": "[]condition",
-                      "resources": "[]resourceStatus"
+                      "resources": "[]statusResource",
+                      "lastIssuedRevision": "integer"
+                    },
+                    "types": {
+                      "printerColumn": {
+                        "name": "string",
+                        "type": "string",
+                        "format": "string",
+                        "description": "string",
+                        "priority": "integer",
+                        "jsonPath": "string"
+                      },
+                      "resource": {
+                        "id": "string | required=true",
+                        "template": "object",
+                        "externalRef": {
+                          "apiVersion": "string",
+                          "kind": "string",
+                          "metadata": {
+                            "name": "string",
+                            "namespace": "string",
+                            "selector": "object"
+                          }
+                        },
+                        "readyWhen": "[]string",
+                        "includeWhen": "[]string",
+                        "forEach": "[]map[string]string"
+                      },
+                      "condition": {
+                        "type": "string",
+                        "status": "string",
+                        "reason": "string",
+                        "message": "string",
+                        "lastTransitionTime": "string",
+                        "observedGeneration": "integer"
+                      },
+                      "statusResource": {"id": "string", "dependencies": "[]dependency"},
+                      "dependency": {"id": "string"}
                     }
                   }, [])}
 
@@ -133,12 +153,14 @@ spec:
                 kind: CustomResourceDefinition
                 metadata:
                   name: $${plural(rgd.spec.schema.kind).lowerAscii()}.$${rgd.spec.schema.group}
+                  labels: '$${has(rgd.spec.schema.metadata) && has(rgd.spec.schema.metadata.labels) ? rgd.spec.schema.metadata.labels : {}}'
+                  annotations: '$${has(rgd.spec.schema.metadata) && has(rgd.spec.schema.metadata.annotations) ? rgd.spec.schema.metadata.annotations : {}}'
                 spec:
                   group: $${rgd.spec.schema.group}
                   names:
                     kind: $${rgd.spec.schema.kind}
                     plural: $${plural(rgd.spec.schema.kind).lowerAscii()}
-                  scope: Namespaced
+                  scope: $${rgd.spec.schema.scope}
                   versions:
                     - name: $${rgd.spec.schema.apiVersion}
                       served: true

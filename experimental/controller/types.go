@@ -367,12 +367,39 @@ func parseNodeList(raw any) ([]Node, error) {
 			node.Finalizes = fin
 		}
 		if fe, ok := m["forEach"].(map[string]any); ok {
+			// Flat map format (Graph templates): forEach: {region: "${...}"}
+			parsed, err := parseForEachMap(fe)
+			if err != nil {
+				return nil, fmt.Errorf("node[%d] %q: %w", i, id, err)
+			}
+			node.ForEach = parsed
+		} else if feArr, ok := m["forEach"].([]any); ok {
+			// Array format (upstream kro API): forEach: [{region: "${...}"}, {tier: "${...}"}]
+			// Each element is a map of variable bindings. Flatten to map[string]string.
 			node.ForEach = make(map[string]string)
-			for k, v := range fe {
-				if vs, ok := v.(string); ok {
+			for j, dim := range feArr {
+				dimMap, ok := dim.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("node[%d] %q: forEach[%d] must be a map, got %T", i, id, j, dim)
+				}
+				for k, v := range dimMap {
+					if _, exists := node.ForEach[k]; exists {
+						return nil, fmt.Errorf("node[%d] %q: forEach has duplicate variable %q", i, id, k)
+					}
+					vs, ok := v.(string)
+					if !ok {
+						return nil, fmt.Errorf("node[%d] %q: forEach[%d] variable %q value must be a string, got %T", i, id, j, k, v)
+					}
 					node.ForEach[k] = vs
 				}
 			}
+		} else if _, hasForEach := m["forEach"]; hasForEach && m["forEach"] != nil {
+			return nil, fmt.Errorf("node[%d] %q: forEach must be a map or array, got %T", i, id, m["forEach"])
+		}
+		if node.ForEach != nil && len(node.ForEach) == 0 {
+			return nil, fmt.Errorf("node[%d] %q: forEach must have at least one dimension", i, id)
+		}
+		if node.ForEach != nil {
 			// Validate: forEach iterator variable names must not collide
 			// with any node ID. A collision would shadow the node in scope.
 			for varName := range node.ForEach {
@@ -417,4 +444,18 @@ func parseNodeList(raw any) ([]Node, error) {
 		nodes = append(nodes, node)
 	}
 	return nodes, nil
+}
+
+// parseForEachMap parses a flat forEach map (map[string]any → map[string]string).
+// Returns an error if any value is not a string — silent drops are data loss.
+func parseForEachMap(m map[string]any) (map[string]string, error) {
+	result := make(map[string]string, len(m))
+	for k, v := range m {
+		vs, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("forEach variable %q value must be a string, got %T", k, v)
+		}
+		result[k] = vs
+	}
+	return result, nil
 }

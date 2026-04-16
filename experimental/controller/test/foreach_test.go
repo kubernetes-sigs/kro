@@ -1351,3 +1351,187 @@ func TestForEachPropagateWhenBlocksWhenChildFails(t *testing.T) {
 		"consumer should NOT be created — one forEach child fails propagateWhen")
 	t.Log("Consumer correctly absent — per-item propagateWhen blocks propagation")
 }
+
+// TestForEachArrayFormat proves that forEach accepts the upstream kro API's
+// array-of-maps format ([]ForEachDimension) and stamps resources identically
+// to the flat map format. TestForEachBasic already covers the flat map format;
+// this test uses the array format for the same logical operation.
+func TestForEachArrayFormat(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-array",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "base",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "base"},
+							"data":       map[string]any{"prefix": "arr"},
+						},
+					},
+					// Array format: forEach: [{value: "${['x', 'y']}"}]
+					map[string]any{
+						"id":      "items",
+						"forEach": []any{map[string]any{"value": "${['x', 'y']}"}},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "${base.data.prefix}-${value}"},
+							"data":       map[string]any{"item": "${value}"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	for _, value := range []string{"x", "y"} {
+		name := "arr-" + value
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+		require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: name, Namespace: ns}, cm))
+		data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+		assert.Equal(t, value, data["item"])
+		t.Logf("forEach array format stamped %s correctly", name)
+	}
+}
+
+// TestForEachArrayFormatDuplicateVariable proves that a Graph with duplicate
+// forEach variable names across array dimensions is rejected at compile time
+// with Compiled=False, DeclarationError.
+func TestForEachArrayFormatDuplicateVariable(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-dup-var",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "items",
+						"forEach": []any{
+							map[string]any{"x": "${['a']}"},
+							map[string]any{"x": "${['b']}"},
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "dup-${x}"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	graphKey := types.NamespacedName{Name: "test-foreach-dup-var", Namespace: ns}
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient, graphKey, "False"))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
+	t.Log("Duplicate forEach variable across array dimensions correctly rejected")
+}
+
+// TestForEachEmptyDimensions proves that a Graph with an empty forEach
+// (zero dimensions) is rejected at compile time with DeclarationError.
+func TestForEachEmptyDimensions(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-empty",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id":      "items",
+						"forEach": map[string]any{},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "empty"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	graphKey := types.NamespacedName{Name: "test-foreach-empty", Namespace: ns}
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient, graphKey, "False"))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
+	t.Log("Empty forEach (zero dimensions) correctly rejected")
+}
+
+// TestForEachInvalidType proves that a Graph with a forEach value that is
+// neither a map nor an array (e.g. a string) is rejected at compile time
+// with Compiled=False, DeclarationError.
+func TestForEachInvalidType(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-bad-type",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id":      "items",
+						"forEach": "not-a-map-or-array",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "bad"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	graphKey := types.NamespacedName{Name: "test-foreach-bad-type", Namespace: ns}
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient, graphKey, "False"))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
+	t.Log("Invalid forEach type (string) correctly rejected")
+}

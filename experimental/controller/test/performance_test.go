@@ -895,6 +895,13 @@ func TestPropagationStopsOnIrrelevantChange(t *testing.T) {
 	leafRV := leaf.GetResourceVersion()
 	t.Logf("Before: middle RV=%s, leaf RV=%s", middleRV, leafRV)
 
+	// 4b. Capture the baseline apply count for middle BEFORE the irrelevant
+	// update. Convergence may legitimately apply middle more than once
+	// (e.g., previousSelfHashes starts empty), so we only assert that no
+	// NEW applies happen after the irrelevant field change.
+	middleApplyCountBefore := countApplyLines(t, "prop-middle")
+	t.Logf("Middle apply count before irrelevant update: %d", middleApplyCountBefore)
+
 	// 5. Update the watch target — change ONLY the irrelevant field.
 	// middle references source.data.version, NOT source.data.irrelevant.
 	latestSource := &unstructured.Unstructured{}
@@ -926,13 +933,25 @@ func TestPropagationStopsOnIrrelevantChange(t *testing.T) {
 	assert.Equal(t, leafRV, leafAfter.GetResourceVersion(),
 		"leaf resourceVersion should be unchanged — propagation stopped at source")
 
-	// 8. Stronger assertion: verify middle was never entered (no apply) by
-	// scanning the controller log for apply events after the source update.
-	// The controller logs "applied resource" for every SSA apply. If propagation
-	// stopped, there should be ZERO apply events for prop-middle after the update.
+	// 8. Stronger assertion: verify middle was not re-applied by scanning
+	// the controller log for apply events. Compare against the baseline
+	// captured before the irrelevant update.
+	middleApplyCountAfter := countApplyLines(t, "prop-middle")
+	t.Logf("Middle apply count after irrelevant update: %d", middleApplyCountAfter)
+	assert.Equal(t, middleApplyCountBefore, middleApplyCountAfter,
+		"middle should not have been re-applied after the irrelevant field change — "+
+			"additional applies indicate propagation did not stop")
+
+	t.Log("Propagation stopped — irrelevant field change did not re-apply downstream resources")
+}
+
+// countApplyLines counts "applied resource" log entries for a given resource
+// name in the controller log. Used by propagation-stop tests to verify that
+// downstream nodes were not re-applied.
+func countApplyLines(t *testing.T, resourceName string) int {
+	t.Helper()
 	wd, err := os.Getwd()
 	require.NoError(t, err)
-	// Walk up to find the module root (where go.mod lives).
 	moduleRoot := wd
 	for {
 		if _, err := os.Stat(filepath.Join(moduleRoot, "go.mod")); err == nil {
@@ -943,20 +962,11 @@ func TestPropagationStopsOnIrrelevantChange(t *testing.T) {
 	logPath := filepath.Join(moduleRoot, "build", "controller.log")
 	logData, err := os.ReadFile(logPath)
 	require.NoError(t, err, "reading controller log")
-	// Find all "applied resource" lines for prop-middle, extract timestamps.
-	logLines := strings.Split(string(logData), "\n")
-	var middleApplyCount int
-	for _, line := range logLines {
-		if strings.Contains(line, "applied resource") && strings.Contains(line, "prop-middle") {
-			middleApplyCount++
+	var count int
+	for _, line := range strings.Split(string(logData), "\n") {
+		if strings.Contains(line, "applied resource") && strings.Contains(line, resourceName) {
+			count++
 		}
 	}
-	t.Logf("Middle apply count in controller log: %d", middleApplyCount)
-	// There should be exactly 1 apply (the initial creation). If propagation-stop
-	// broke, there would be 2+ (re-apply after source update).
-	assert.Equal(t, 1, middleApplyCount,
-		"middle should have been applied exactly once (initial creation) — "+
-			"additional applies indicate propagation did not stop")
-
-	t.Log("Propagation stopped — irrelevant field change did not re-apply downstream resources")
+	return count
 }

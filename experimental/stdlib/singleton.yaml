@@ -48,12 +48,12 @@ spec:
             # constructing the node list via a spec.nodes CEL expression.
             - id: targets
               forEach:
-                key: >-
-                  ${singletons.map(s,
-                    s.spec.template.apiVersion + "/" + s.spec.template.kind + "/"
-                    + (has(s.spec.template.metadata.namespace) ? s.spec.template.metadata.namespace : "")
-                    + "/" + s.spec.template.metadata.name
-                  ).distinct()}
+                - key: >-
+                    ${singletons.map(s,
+                      s.spec.template.apiVersion + "/" + s.spec.template.kind + "/"
+                      + (has(s.spec.template.metadata.namespace) ? s.spec.template.metadata.namespace : "")
+                      + "/" + s.spec.template.metadata.name
+                    ).distinct()}
               template:
                 apiVersion: experimental.kro.run/v1alpha1
                 kind: Graph

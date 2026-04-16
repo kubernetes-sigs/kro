@@ -14,6 +14,22 @@ spec:
   group: kro.run
   version: v1alpha1
   schema:
+    types:
+      ExternalRefMetadata:
+        name: string
+        namespace: string
+        selector: object
+      ExternalRef:
+        apiVersion: string
+        kind: string
+        metadata: ExternalRefMetadata
+      Resource:
+        id: string | required=true
+        template: object
+        externalRef: ExternalRef
+        readyWhen: "[]string"
+        includeWhen: "[]string"
+        forEach: "[]map[string]string"
     spec:
       schema:
         kind: string
@@ -22,7 +38,7 @@ spec:
         scope: string | default=Namespaced
         spec: object
         status: object
-      resources: "[]object"
+      resources: "[]Resource"
   nodes:
     - id: crd
       template:
@@ -58,7 +74,7 @@ spec:
 
     - id: instances
       forEach:
-        instance: ${watchInstances}
+        - instance: ${watchInstances}
       template:
         apiVersion: experimental.kro.run/v1alpha1
         kind: Graph

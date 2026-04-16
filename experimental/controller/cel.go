@@ -363,12 +363,21 @@ type graphCaches struct {
 	mu        sync.RWMutex
 	compiled  map[string]*compiledGraph // spec hash → shared compiled graph
 	instances map[string]*instanceState // namespace/revision-name → per-instance state
+
+	// evicted holds instance states that were evicted by evictUnresolved().
+	// When a type schema becomes available and triggers recompilation, the
+	// node structure is unchanged — only type resolution improved. The
+	// evicted state is used by compileRevision to migrate hashes and
+	// references into the new instanceState, avoiding unnecessary re-evaluation
+	// and re-application of unchanged nodes.
+	evicted map[string]*instanceState
 }
 
 func newGraphCaches() *graphCaches {
 	return &graphCaches{
 		compiled:  make(map[string]*compiledGraph),
 		instances: make(map[string]*instanceState),
+		evicted:   make(map[string]*instanceState),
 	}
 }
 
@@ -413,6 +422,18 @@ func (gc *graphCaches) remove(key string) {
 	}
 }
 
+// popEvicted returns and removes a stashed instanceState that was evicted by
+// evictUnresolved for the given instance key. Returns nil if no evicted state
+// exists. Used by compileRevision to migrate per-node state into the
+// replacement instanceState after a type-resolution-triggered recompilation.
+func (gc *graphCaches) popEvicted(key string) *instanceState {
+	gc.mu.Lock()
+	defer gc.mu.Unlock()
+	old := gc.evicted[key]
+	delete(gc.evicted, key)
+	return old
+}
+
 // getCompiled returns a shared compiledGraph by spec hash, or nil if not cached.
 func (gc *graphCaches) getCompiled(specHash string) *compiledGraph {
 	gc.mu.RLock()
@@ -448,10 +469,13 @@ func (gc *graphCaches) evictUnresolved() []graphKey {
 	}
 
 	// Evict instance states pointing to evicted compilations.
+	// Stash them for state migration when the replacement instanceState is
+	// created by compileRevision.
 	// Extract Graph keys from instance keys (format: "namespace/revision-name").
 	var affected []graphKey
 	for key, state := range gc.instances {
 		if state.compiled != nil && evictHashes[state.compiled.specHash] {
+			gc.evicted[key] = state
 			delete(gc.instances, key)
 			// Instance key is "namespace/revision-name". The Graph name
 			// is the revision name minus the "-gNNNNN" suffix.

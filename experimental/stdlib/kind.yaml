@@ -34,7 +34,7 @@ spec:
               storage: true
               schema:
                 openAPIV3Schema: >-
-                  ${simpleSchema.toOpenAPI({"spec": {"kind": "string", "group": "string", "version": "string", "scope": "string | default=Namespaced", "schema": {"spec": "object", "status": "object", "types": "object"}, "nodes": "[]object"}}, [])}
+                  ${simpleSchema.toOpenAPI({"types": {"Node": {"id": "string", "template": "object", "forEach": "[]map[string]string", "finalizes": "string", "includeWhen": "[]string", "readyWhen": "[]string", "propagateWhen": "[]string"}}, "spec": {"kind": "string", "group": "string", "version": "string", "scope": "string | default=Namespaced", "schema": {"spec": "object", "status": "object", "types": "object"}, "nodes": "[]Node"}}, [])}
               subresources:
                 status: {}
 
@@ -48,7 +48,7 @@ spec:
 
     - id: controllers
       forEach:
-        k: ${watchKinds}
+        - k: ${watchKinds}
       template:
         apiVersion: experimental.kro.run/v1alpha1
         kind: Graph
@@ -96,7 +96,7 @@ spec:
 
             - id: instances
               forEach:
-                instance: $${watchInstances}
+                - instance: $${watchInstances}
               template:
                 apiVersion: experimental.kro.run/v1alpha1
                 kind: Graph

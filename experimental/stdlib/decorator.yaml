@@ -16,12 +16,21 @@ spec:
   group: experimental.kro.run
   version: v1alpha1
   schema:
+    types:
+      Node:
+        id: string | required=true
+        template: object
+        forEach: "[]map[string]string"
+        finalizes: string
+        includeWhen: "[]string"
+        readyWhen: "[]string"
+        propagateWhen: "[]string"
     spec:
       watch:
         apiVersion: string
         kind: string
-        selector: object
-      nodes: "[]object"
+        selector: map[string]string
+      nodes: "[]Node"
   nodes:
     - id: controllerGraph
       template:
@@ -51,7 +60,7 @@ spec:
             # Watch node ("item") plus the user's nodes.
             - id: instances
               forEach:
-                item: $${items}
+                - item: $${items}
               template:
                 apiVersion: experimental.kro.run/v1alpha1
                 kind: Graph

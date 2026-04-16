@@ -585,6 +585,48 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 
 	// Create per-instance mutable state pointing to the shared compiled graph.
 	state := newInstanceState(compiled)
+
+	// Migrate state from evicted entries. When evictUnresolved removes an
+	// instanceState (because a new type schema was discovered), it stashes
+	// the old state. The node structure is unchanged — only type resolution
+	// improved — so all per-node hashes, scopes, and references are valid.
+	// This prevents unnecessary re-evaluation and SSA applies after a
+	// recompilation triggered by type discovery.
+	//
+	// Safety invariant: schema resolution does not affect template evaluation.
+	// CEL expressions produce identical output for identical inputs regardless
+	// of whether the target GVK schema is resolved. If recompilation ever
+	// changes template output semantics (not just validation), this migration
+	// must be gated on a compilation fingerprint that detects the change.
+	if old := r.Caches.popEvicted(instanceKey); old != nil {
+		for _, node := range state.compiled.spec.Nodes {
+			nodeID := node.ID
+			if v, ok := old.previousScope[nodeID]; ok {
+				state.previousScope[nodeID] = v
+			}
+			if v, ok := old.previousPlanStates[nodeID]; ok {
+				state.previousPlanStates[nodeID] = v
+			}
+			if v, ok := old.previousPropagateReady[nodeID]; ok {
+				state.previousPropagateReady[nodeID] = v
+			}
+			if v, ok := old.previousEvalHashes[nodeID]; ok {
+				state.previousEvalHashes[nodeID] = v
+			}
+			if v, ok := old.previousSelfHashes[nodeID]; ok {
+				state.previousSelfHashes[nodeID] = v
+			}
+			if v, ok := old.previousKeys[nodeID]; ok {
+				state.previousKeys[nodeID] = v
+			}
+			if v, ok := old.resolvedReferences[nodeID]; ok {
+				state.resolvedReferences[nodeID] = v
+			}
+		}
+		state.previousAppliedKeys = old.previousAppliedKeys
+		state.driftTimers = old.driftTimers
+	}
+
 	r.Caches.set(instanceKey, state)
 	return spec, state, nil
 }

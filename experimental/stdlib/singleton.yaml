@@ -49,7 +49,7 @@ spec:
             - id: targets
               forEach:
                 - key: >-
-                    ${singletons.map(s,
+                    $${singletons.map(s,
                       s.spec.template.apiVersion + "/" + s.spec.template.kind + "/"
                       + (has(s.spec.template.metadata.namespace) ? s.spec.template.metadata.namespace : "")
                       + "/" + s.spec.template.metadata.name
@@ -58,10 +58,10 @@ spec:
                 apiVersion: experimental.kro.run/v1alpha1
                 kind: Graph
                 metadata:
-                  name: singleton-${hash.fnv64a(key)}
+                  name: singleton-$${key.replace("/", "-").lowerAscii()}
                 spec:
                   nodes: >-
-                    ${cel.bind(peers,
+                    $${cel.bind(peers,
                       singletons.filter(s,
                         s.spec.template.apiVersion + "/" + s.spec.template.kind + "/"
                         + (has(s.spec.template.metadata.namespace) ? s.spec.template.metadata.namespace : "")

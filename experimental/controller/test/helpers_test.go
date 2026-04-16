@@ -54,8 +54,12 @@ func buildGraphRevisionCRD() *apiextensionsv1.CustomResourceDefinition {
 	return loadEmbeddedCRD("experimental.kro.run_graphrevisions.yaml")
 }
 
-func waitForCRD(ctx context.Context, c client.Client, name string) error {
-	return wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+func waitForCRD(ctx context.Context, c client.Client, name string, timeout ...time.Duration) error {
+	t := 30 * time.Second
+	if len(timeout) > 0 {
+		t = timeout[0]
+	}
+	return wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, t, true, func(ctx context.Context) (bool, error) {
 		crd := &apiextensionsv1.CustomResourceDefinition{}
 		if err := c.Get(ctx, types.NamespacedName{Name: name}, crd); err != nil {
 			return false, nil

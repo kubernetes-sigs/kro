@@ -127,6 +127,70 @@ func parseDocsByKind(t *testing.T, filename, targetKind string) []map[string]any
 	return parseDocsByKindFrom(t, stdlibExamplesDir(), filename, targetKind)
 }
 
+// unescapeOneLevel strips one '$' from '$${}' patterns, simulating what
+// evalString does when evaluating a template containing deferred expressions.
+func unescapeOneLevel(s string) string {
+	return strings.ReplaceAll(s, "$${", "${")
+}
+
+func unescapeNodeSlice(nodes []Node) []Node {
+	out := make([]Node, len(nodes))
+	for i, n := range nodes {
+		out[i] = Node{
+			ID:          n.ID,
+			Template:    unescapeMap(n.Template),
+			IncludeWhen: unescapeStrings(n.IncludeWhen),
+			ReadyWhen:   unescapeStrings(n.ReadyWhen),
+		}
+		if n.ForEach != nil {
+			out[i].ForEach = make(map[string]string, len(n.ForEach))
+			for k, v := range n.ForEach {
+				out[i].ForEach[k] = unescapeOneLevel(v)
+			}
+		}
+	}
+	return out
+}
+
+func unescapeStrings(ss []string) []string {
+	if ss == nil {
+		return nil
+	}
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = unescapeOneLevel(s)
+	}
+	return out
+}
+
+func unescapeMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = unescapeValue(v)
+	}
+	return out
+}
+
+func unescapeValue(v any) any {
+	switch val := v.(type) {
+	case string:
+		return unescapeOneLevel(val)
+	case map[string]any:
+		return unescapeMap(val)
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = unescapeValue(item)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 // evalForEachExpr evaluates the forEach collection expression for a node
 // and returns the resulting list. Scope must contain the upstream
 // dependencies (e.g., "singletons" for the resolution Graph).
@@ -468,6 +532,10 @@ func TestStdlibKindEscapeLevels(t *testing.T) {
 func TestStdlibSingletonResolution(t *testing.T) {
 	// Parse the Singleton Kind's nodes. The first node's template is
 	// the resolution Graph. Extract and compile that Graph.
+	//
+	// The resolution Graph is embedded inside the Kind template, so its
+	// expressions use $${} escaping to survive L1 compilation. We strip
+	// one escape level before compiling, simulating what L1 evaluation does.
 	docs := parseDocsByKindFrom(t, stdlibImplDir(), "singleton.yaml", "Kind")
 	require.NotEmpty(t, docs)
 	spec, _ := docs[0]["spec"].(map[string]any)
@@ -482,6 +550,9 @@ func TestStdlibSingletonResolution(t *testing.T) {
 	resolutionRawNodes, _ := resolutionSpec["nodes"]
 	resolutionNodes, err := parseNodeList(resolutionRawNodes)
 	require.NoError(t, err)
+
+	// Strip one escape level ($${} → ${}) before compiling standalone.
+	resolutionNodes = unescapeNodeSlice(resolutionNodes)
 
 	graph := &GraphSpec{Nodes: resolutionNodes}
 	compiled, err := compileGraphSpec(graph, nil)

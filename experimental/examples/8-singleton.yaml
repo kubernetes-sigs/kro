@@ -1,0 +1,47 @@
+# Singleton — declare a resource that should exist exactly once.
+#
+# Implemented as a Kind (see stdlib/singleton.yaml). The Kind creates
+# a shared resolution Graph that implements priority resolution across
+# all Singletons.
+#
+# When multiple Singletons target the same resource (same GVK +
+# namespace + name), the one with the highest priority wins. Ties
+# are broken by name (lexicographic, lowest wins).
+#
+# ───────────────────────────────────────────────────────────────────
+# Two Singletons declare the same ConfigMap.
+# Team A (priority 100) vs Team B (priority 200). Team B wins.
+# ───────────────────────────────────────────────────────────────────
+---
+apiVersion: experimental.kro.run/v1alpha1
+kind: Singleton
+metadata:
+  name: team-a-dashboard
+spec:
+  priority: 100
+  template:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: webapp-dashboard
+      namespace: monitoring
+    data:
+      dashboard.json: '{ "title": "Team A Dashboard" }'
+---
+apiVersion: experimental.kro.run/v1alpha1
+kind: Singleton
+metadata:
+  name: team-b-dashboard
+spec:
+  priority: 200
+  template:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: webapp-dashboard
+      namespace: monitoring
+    data:
+      dashboard.json: '{ "title": "Team B Dashboard" }'
+#
+# Result:
+#   ConfigMap/monitoring/webapp-dashboard -> Team B's version (priority 200)

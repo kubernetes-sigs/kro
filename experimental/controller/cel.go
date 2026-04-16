@@ -513,6 +513,7 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 
 	env, err := krocel.DefaultEnvironment(
 		krocel.WithResourceIDs(typeInfo.untypedIDs),
+		krocel.WithListVariables(typeInfo.listIDs),
 		krocel.WithCustomDeclarations(typedDecls),
 		krocel.WithCustomDeclarations(celPluralFunction()),
 		krocel.WithCustomDeclarations(celSimpleSchemaFunction()),

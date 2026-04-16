@@ -25,9 +25,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
+	"github.com/kubernetes-sigs/kro/experimental/stdlib"
 )
 
 func main() {
@@ -94,6 +96,17 @@ func main() {
 	if err != nil {
 		log.Error(err, "setting up controller")
 		os.Exit(1)
+	}
+
+	// Apply stdlib after the controller starts. The Runnable runs after
+	// caches sync. Resources with unknown CRDs fail and are retried.
+	if bootstrapFlag {
+		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			return stdlib.Apply(ctx, ctrl.Log.WithName("stdlib"), cfg)
+		})); err != nil {
+			log.Error(err, "registering stdlib")
+			os.Exit(1)
+		}
 	}
 
 	if pprofBindAddress != "" {

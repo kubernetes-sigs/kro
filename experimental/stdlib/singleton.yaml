@@ -1,0 +1,80 @@
+# Singleton — a Kind that defines the Singleton type.
+#
+# Each Singleton instance's per-instance Graph creates the same
+# resolution Graph via SSA merge. The shared resolution Graph watches
+# resolution Graph watches all Singletons, groups them by target resource
+# identity, and creates a sub-Graph per unique target containing only the
+# winning template.
+#
+# Priority resolution: highest spec.priority wins. Ties broken by
+# lexicographically lowest metadata.name. Output cardinality = number
+# of unique target resources, not number of Singleton instances.
+---
+apiVersion: experimental.kro.run/v1alpha1
+kind: Kind
+metadata:
+  name: singleton
+  namespace: kro-system
+spec:
+  kind: Singleton
+  group: experimental.kro.run
+  version: v1alpha1
+  schema:
+    spec:
+      priority: integer | default=0
+      template: object
+  nodes:
+    # Each Singleton instance creates this resolution Graph.
+    # SSA merges all instances — one Graph, shared ownership.
+    - id: resolution
+      template:
+        apiVersion: experimental.kro.run/v1alpha1
+        kind: Graph
+        metadata:
+          name: singleton-resolution
+          namespace: kro-system
+        spec:
+          nodes:
+            - id: singletons
+              template:
+                apiVersion: experimental.kro.run/v1alpha1
+                kind: Singleton
+                selector: {}
+
+            # forEach over distinct target keys. Each iteration creates
+            # a sub-Graph containing only the winning template as a
+            # single resource node. This avoids the string-template
+            # limitation (Node.Template must be map[string]any) by
+            # constructing the node list via a spec.nodes CEL expression.
+            - id: targets
+              forEach:
+                key: >-
+                  ${singletons.map(s,
+                    s.spec.template.apiVersion + "/" + s.spec.template.kind + "/"
+                    + (has(s.spec.template.metadata.namespace) ? s.spec.template.metadata.namespace : "")
+                    + "/" + s.spec.template.metadata.name
+                  ).distinct()}
+              template:
+                apiVersion: experimental.kro.run/v1alpha1
+                kind: Graph
+                metadata:
+                  name: singleton-${hash.fnv64a(key)}
+                spec:
+                  nodes: >-
+                    ${cel.bind(peers,
+                      singletons.filter(s,
+                        s.spec.template.apiVersion + "/" + s.spec.template.kind + "/"
+                        + (has(s.spec.template.metadata.namespace) ? s.spec.template.metadata.namespace : "")
+                        + "/" + s.spec.template.metadata.name == key
+                      ),
+                      [{"id": "resource", "template":
+                        peers.filter(c,
+                          !peers.exists(other,
+                            other.metadata.name != c.metadata.name
+                            && (other.spec.priority > c.spec.priority
+                                || (other.spec.priority == c.spec.priority
+                                    && other.metadata.name < c.metadata.name))
+                          )
+                        )[0].spec.template
+                      }]
+                    )}

@@ -19,10 +19,8 @@ import (
 	"github.com/kubernetes-sigs/kro/experimental/deploy"
 )
 
-// bootstrap applies the embedded CRD manifests via server-side apply and waits
-// for them to become established. This makes the binary self-provisioning — a
-// single `go run ./experimental/cmd/ --bootstrap` sets up everything the
-// controller needs to run.
+// bootstrap applies Graph and GraphRevision CRDs. All other CRDs are
+// created by the stdlib through the Graph controller's reconciliation.
 func bootstrap(ctx context.Context, cfg *rest.Config) error {
 	log := ctrl.Log.WithName("bootstrap")
 
@@ -46,7 +44,6 @@ func bootstrap(ctx context.Context, cfg *rest.Config) error {
 			return fmt.Errorf("reading %s: %w", entry.Name(), err)
 		}
 
-		// Decode just to extract the name for logging and wait.
 		crd := &apiextensionsv1.CustomResourceDefinition{}
 		if err := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), len(data)).Decode(crd); err != nil {
 			return fmt.Errorf("decoding %s: %w", entry.Name(), err)
@@ -62,9 +59,8 @@ func bootstrap(ctx context.Context, cfg *rest.Config) error {
 		crdNames = append(crdNames, crd.Name)
 	}
 
-	// Wait for all CRDs to be established.
 	for _, name := range crdNames {
-		log.Info("waiting for CRD to be established", "name", name)
+		log.Info("waiting for CRD", "name", name)
 		if err := waitForEstablished(ctx, cs, name); err != nil {
 			return err
 		}
@@ -75,7 +71,7 @@ func bootstrap(ctx context.Context, cfg *rest.Config) error {
 }
 
 func waitForEstablished(ctx context.Context, cs apiextensionsclient.Interface, name string) error {
-	err := wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		crd, err := cs.ApiextensionsV1().CustomResourceDefinitions().Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return false, nil
@@ -87,10 +83,6 @@ func waitForEstablished(ctx context.Context, cs apiextensionsclient.Interface, n
 		}
 		return false, nil
 	})
-	if err != nil {
-		return fmt.Errorf("timed out waiting for CRD %s to become Established", name)
-	}
-	return nil
 }
 
 func ptr[T any](v T) *T { return &v }

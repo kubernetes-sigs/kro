@@ -1,0 +1,54 @@
+# Kind — define a new Kubernetes Kind and implement it.
+#
+# The bootstrap root (see stdlib/kind.yaml). The Kind controller
+# creates a CRD per Kind, watches instances, and creates per-instance
+# Graphs with a `schema` Watch node plus the user's nodes.
+#
+# `schema` is the per-instance scope variable — the resource itself.
+---
+apiVersion: experimental.kro.run/v1alpha1
+kind: Kind
+metadata:
+  name: webapp
+spec:
+  kind: WebApp
+  group: experimental.kro.run
+  version: v1alpha1
+  schema:
+    spec:
+      image: string | default=nginx
+      replicas: integer | default=1
+      port: integer | default=80
+    status:
+      deploymentReady: ${deployment.status.availableReplicas == deployment.spec.replicas}
+  nodes:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.metadata.name}
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app: ${schema.metadata.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.metadata.name}
+            spec:
+              containers:
+                - name: app
+                  image: ${schema.spec.image}
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.metadata.name}-svc
+        spec:
+          selector:
+            app: ${schema.metadata.name}
+          ports:
+            - port: ${schema.spec.port}

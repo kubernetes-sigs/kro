@@ -1,0 +1,136 @@
+# Kind Controller
+#
+# The bootstrap root. A Graph that implements the Kind type. Creates the
+# Kind CRD, watches all Kinds, creates a CRD per Kind, watches instances
+# of each Kind, and creates per-instance Graphs.
+#
+# Convention: inside a Kind's per-instance Graph, `schema` is the scope
+# variable (the resource itself). User nodes reference ${schema.spec.foo}.
+---
+apiVersion: experimental.kro.run/v1alpha1
+kind: Graph
+metadata:
+  name: kind
+  namespace: kro-system
+spec:
+  nodes:
+    - id: kindCrd
+      template:
+        apiVersion: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        metadata:
+          name: kinds.experimental.kro.run
+        spec:
+          group: experimental.kro.run
+          names:
+            plural: kinds
+            singular: kind
+            kind: Kind
+            listKind: KindList
+          scope: Namespaced
+          versions:
+            - name: v1alpha1
+              served: true
+              storage: true
+              schema:
+                openAPIV3Schema: >-
+                  ${simpleSchema.toOpenAPI({"spec": {"kind": "string", "group": "string", "version": "string", "scope": "string | default=Namespaced", "schema": {"spec": "object", "status": "object", "types": "object"}, "nodes": "[]object"}}, [])}
+              subresources:
+                status: {}
+
+    - id: watchKinds
+      includeWhen:
+        - ${has(kindCrd.status) && has(kindCrd.status.conditions) && kindCrd.status.conditions != null && kindCrd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
+      template:
+        apiVersion: experimental.kro.run/v1alpha1
+        kind: Kind
+        selector: {}
+
+    - id: controllers
+      forEach:
+        k: ${watchKinds}
+      template:
+        apiVersion: experimental.kro.run/v1alpha1
+        kind: Graph
+        metadata:
+          name: kind-${k.metadata.namespace}-${k.metadata.name}
+        spec:
+          nodes:
+            - id: k
+              template:
+                apiVersion: experimental.kro.run/v1alpha1
+                kind: Kind
+                metadata:
+                  name: ${k.metadata.name}
+                  namespace: ${k.metadata.namespace}
+
+            - id: crd
+              template:
+                apiVersion: apiextensions.k8s.io/v1
+                kind: CustomResourceDefinition
+                metadata:
+                  name: $${plural(k.spec.kind).lowerAscii()}.$${k.spec.group}
+                spec:
+                  group: $${k.spec.group}
+                  names:
+                    kind: $${k.spec.kind}
+                    plural: $${plural(k.spec.kind).lowerAscii()}
+                  scope: $${k.spec.scope}
+                  versions:
+                    - name: $${k.spec.version}
+                      served: true
+                      storage: true
+                      subresources:
+                        status: {}
+                      schema:
+                        openAPIV3Schema: $${simpleSchema.toOpenAPI(k.spec.schema, k.spec.nodes)}
+
+            - id: watchInstances
+              includeWhen:
+                - $${has(crd.status) && has(crd.status.conditions) && crd.status.conditions != null && crd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
+              template:
+                apiVersion: $${k.spec.group}/$${k.spec.version}
+                kind: $${k.spec.kind}
+                metadata:
+                  selector: {}
+
+            - id: instances
+              forEach:
+                instance: $${watchInstances}
+              template:
+                apiVersion: experimental.kro.run/v1alpha1
+                kind: Graph
+                metadata:
+                  name: $${instance.metadata.namespace}-$${instance.metadata.name}-$${k.spec.kind.lowerAscii()}
+                spec:
+                  nodes: >-
+                    $${
+                      [{"id": "schema", "template": {
+                        "apiVersion": k.spec.group + "/" + k.spec.version,
+                        "kind": k.spec.kind,
+                        "metadata": {
+                          "name": instance.metadata.name,
+                          "namespace": instance.metadata.namespace
+                        }
+                      }}]
+                      + k.spec.nodes
+                      + [{"id": "status", "template": {
+                        "apiVersion": k.spec.group + "/" + k.spec.version,
+                        "kind": k.spec.kind,
+                        "metadata": {
+                          "name": instance.metadata.name,
+                          "namespace": instance.metadata.namespace
+                        },
+                        "status": has(k.spec.schema.status) ? k.spec.schema.status : {}
+                      }}]
+                    }
+
+            - id: kindStatus
+              template:
+                apiVersion: experimental.kro.run/v1alpha1
+                kind: Kind
+                metadata:
+                  name: $${k.metadata.name}
+                  namespace: $${k.metadata.namespace}
+                status:
+                  ready: $${has(crd.status) && has(crd.status.conditions) && crd.status.conditions != null && crd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}

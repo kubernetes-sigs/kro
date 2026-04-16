@@ -27,6 +27,18 @@ import (
 )
 
 // typeSource holds all resolved type information for building the CEL environment.
+
+// isWatchKindTemplate returns true when a template has a `selector` field,
+// indicating it watches a collection. This is stricter than DetectReference's
+// WatchKind classification (which uses "no metadata.name") because unnamed
+// Own resources also lack metadata.name but are not collections. The selector
+// field is the user-facing signal for "watch all instances of this kind" and
+// is present on all WatchKind templates in practice.
+func isWatchKindTemplate(tmpl map[string]any) bool {
+	_, hasSelector := tmpl["selector"]
+	return hasSelector
+}
+
 // Populated during compilation phases 1 (schema resolution) and 2 (definition inference).
 type typeSource struct {
 	// resourceSchemas maps node ID → OpenAPI schema for nodes with resolved GVKs.
@@ -37,6 +49,9 @@ type typeSource struct {
 	forEachDefinitions map[string]bool
 	// untypedIDs are node/variable identifiers declared as dyn.
 	untypedIDs []string
+	// listIDs are WatchKind node identifiers declared as list(dyn).
+	// Comprehension macros (.map(), .filter(), .exists()) require list typing.
+	listIDs []string
 	// unresolvedGVKs are GVKs that had literal apiVersion/kind but whose schema
 	// could not be resolved (CRD not yet installed). Used by the CRD watch to
 	// detect when recompilation is needed.
@@ -77,15 +92,26 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 				s, err := schemaResolver.ResolveSchema(*gvk)
 				if err == nil && s != nil {
 					ts.resourceSchemas[node.ID] = s
+					if isWatchKindTemplate(node.Template) {
+						ts.listIDs = append(ts.listIDs, node.ID)
+					}
 					continue
 				}
 				// Resolution failed — track as unresolved, fall through to dyn.
 				ts.unresolvedGVKs = append(ts.unresolvedGVKs, *gvk)
 			}
-			ts.untypedIDs = append(ts.untypedIDs, node.ID)
+			if isWatchKindTemplate(node.Template) {
+				ts.listIDs = append(ts.listIDs, node.ID)
+			} else {
+				ts.untypedIDs = append(ts.untypedIDs, node.ID)
+			}
 
 		default:
-			ts.untypedIDs = append(ts.untypedIDs, node.ID)
+			if isWatchKindTemplate(node.Template) {
+				ts.listIDs = append(ts.listIDs, node.ID)
+			} else {
+				ts.untypedIDs = append(ts.untypedIDs, node.ID)
+			}
 		}
 
 		// forEach iterator variables are always dyn.

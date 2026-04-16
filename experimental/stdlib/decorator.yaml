@@ -1,0 +1,72 @@
+# Decorator — a Kind that defines the Decorator type.
+#
+# Watches instances of an existing Kind and creates a sub-Graph per
+# instance. Each sub-Graph gets an auto-prepended "item" Watch node
+# plus the user's nodes. User nodes reference ${item.spec.foo}.
+#
+# For watching a single resource, use a plain Graph.
+---
+apiVersion: experimental.kro.run/v1alpha1
+kind: Kind
+metadata:
+  name: decorator
+  namespace: kro-system
+spec:
+  kind: Decorator
+  group: experimental.kro.run
+  version: v1alpha1
+  schema:
+    spec:
+      watch:
+        apiVersion: string
+        kind: string
+        selector: object
+      nodes: "[]object"
+  nodes:
+    - id: controllerGraph
+      template:
+        apiVersion: experimental.kro.run/v1alpha1
+        kind: Graph
+        metadata:
+          name: decorator-${schema.metadata.namespace}-${schema.metadata.name}
+        spec:
+          nodes:
+            # Watch the Decorator to access its spec at L1.
+            - id: decorator
+              template:
+                apiVersion: experimental.kro.run/v1alpha1
+                kind: Decorator
+                metadata:
+                  name: ${schema.metadata.name}
+                  namespace: ${schema.metadata.namespace}
+
+            # Watch the kind specified by the Decorator.
+            - id: items
+              template:
+                apiVersion: $${decorator.spec.watch.apiVersion}
+                kind: $${decorator.spec.watch.kind}
+                selector: {}
+
+            # For each item, create a sub-Graph with an auto-prepended
+            # Watch node ("item") plus the user's nodes.
+            - id: instances
+              forEach:
+                item: $${items}
+              template:
+                apiVersion: experimental.kro.run/v1alpha1
+                kind: Graph
+                metadata:
+                  name: $${decorator.metadata.namespace + "-" + decorator.metadata.name + "-" + item.metadata.namespace + "-" + item.metadata.name}
+                spec:
+                  nodes: >-
+                    $${
+                      [{"id": "item", "template": {
+                        "apiVersion": decorator.spec.watch.apiVersion,
+                        "kind": decorator.spec.watch.kind,
+                        "metadata": {
+                          "name": item.metadata.name,
+                          "namespace": has(item.metadata.namespace) ? item.metadata.namespace : ""
+                        }
+                      }}]
+                      + decorator.spec.nodes
+                    }

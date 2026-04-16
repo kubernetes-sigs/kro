@@ -1,0 +1,34 @@
+# Decorator — watch instances of a kind and attach resources per-instance.
+#
+# Implemented as a Kind (see stdlib/decorator.yaml). The Decorator
+# controller watches the specified kind and creates a sub-Graph per
+# item. Each sub-Graph has an auto-prepended "item" Watch node.
+# WatchKind only — for a single resource, use a plain Graph.
+#
+# `item` is the per-instance scope variable — the watched resource.
+#
+# ───────────────────────────────────────────────────────────────────
+# "For every Namespace, create a NetworkPolicy."
+# ───────────────────────────────────────────────────────────────────
+---
+apiVersion: experimental.kro.run/v1alpha1
+kind: Decorator
+metadata:
+  name: namespace-policies
+spec:
+  watch:
+    apiVersion: v1
+    kind: Namespace
+    selector: {}
+  nodes:
+    - id: policy
+      template:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: default-deny
+          namespace: ${item.metadata.name}
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress

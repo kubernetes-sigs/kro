@@ -190,8 +190,9 @@ func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 // setIdentityLabels stamps identity and generation labels onto a resource's
 // metadata labels map. Called during apply for Own and Contribute references.
 // Panics if ref does not have a label value — this is an invariant violation,
-// as all call sites pass ReferenceOwn or ReferenceContribute directly.
-func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, generation string, ref Reference) map[string]string {
+// as all call sites pass ResolvedReferenceOwn or ResolvedReferenceContribute
+// directly.
+func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, generation string, ref ResolvedReference) map[string]string {
 	lv, ok := ref.LabelValue()
 	if !ok {
 		panic(fmt.Sprintf("setIdentityLabels called with non-writable reference %s", ref))
@@ -239,8 +240,9 @@ func forEachChildGenerationLabelKey(parentID, resName, resNamespace, kind, group
 
 // setForEachChildIdentityLabels stamps forEach child identity and generation labels.
 // Panics if ref does not have a label value — this is an invariant violation,
-// as all call sites pass ReferenceOwn or ReferenceContribute directly.
-func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation string, ref Reference) map[string]string {
+// as all call sites pass ResolvedReferenceOwn or ResolvedReferenceContribute
+// directly.
+func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation string, ref ResolvedReference) map[string]string {
 	lv, ok := ref.LabelValue()
 	if !ok {
 		panic(fmt.Sprintf("setForEachChildIdentityLabels called with non-writable reference %s", ref))
@@ -257,6 +259,6 @@ func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, 
 // watch cache by scanning identity labels.
 type appliedEntry struct {
 	NodeID    string
-	Reference Reference // ReferenceOwn or ReferenceContribute
-	Key       string    // resource key (group/version/Kind/namespace/name)
+	Reference ResolvedReference // ResolvedReferenceOwn or ResolvedReferenceContribute
+	Key       string            // resource key (group/version/Kind/namespace/name)
 }

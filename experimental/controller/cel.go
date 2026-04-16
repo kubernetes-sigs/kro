@@ -246,11 +246,16 @@ type instanceState struct {
 	previousPropagateReady map[string]bool      // node ID → last propagateWhen result (for forEach skip path)
 	forEachItems           map[string][]any     // "nodeID/varName" → cached collection items
 
-	// Resolved references for Unresolved nodes. Set on first reconcile when the
-	// existence check determines Own vs Contribute. Persists across
-	// reconciles within the same revision. Reset on new revision (new
-	// instanceState).
-	resolvedReferences map[string]Reference
+	// resolvedReferences maps node ID to its resolved classification.
+	// Entries are present only after resolution succeeds; absence means
+	// the node is unresolved or has been reset (Excluded re-inclusion,
+	// Conflict recovery). Never contains an Unresolved sentinel — the
+	// type forbids it. Callers must use a 2-return map lookup; a
+	// present entry is always a valid ResolvedReference.
+	//
+	// Lifetime: per instanceState, which is per-revision. Reset paths
+	// delete the entry rather than writing a sentinel value.
+	resolvedReferences map[string]ResolvedReference
 
 	// Evaluation hashing state — retained across reconciles for change detection.
 	// See 004-graph-reconciliation.md § Propagation.
@@ -330,7 +335,7 @@ func newInstanceState(compiled *compiledGraph) *instanceState {
 		forEachItems:           map[string][]any{},
 		forEachItemScope:       map[string]map[string]any{},
 		forEachItemKeys:        map[string]map[string][]string{},
-		resolvedReferences:     make(map[string]Reference, len(compiled.dag.References)),
+		resolvedReferences:     make(map[string]ResolvedReference, len(compiled.dag.References)),
 		driftTimers:            make(map[string]time.Time),
 		watchKindCache:         make(map[string][]any),
 		watchKindDirty:         make(map[string]bool),
@@ -384,13 +389,19 @@ func (s *instanceState) nextDriftExpiry() time.Time {
 }
 
 // initResolvedReferences seeds the resolved references map from the DAG's
-// compile-time references. Called once at the start of each reconcile to
-// ensure all nodes have an entry. Unresolved entries will be resolved during
-// the walk.
+// compile-time references. Called once at the start of each reconcile.
+// Compile-time-classified references (Own, Watch, WatchKind, Definition)
+// are lifted to ResolvedReference and stored immediately — they do not need
+// the first-reconcile existence check. ReferenceUnresolved entries are not
+// populated; their absence signals the resolution chokepoint that they
+// still need classification.
 func (s *instanceState) initResolvedReferences() {
 	for id, ref := range s.compiled.dag.References {
+		if ref == ReferenceUnresolved {
+			continue
+		}
 		if _, ok := s.resolvedReferences[id]; !ok {
-			s.resolvedReferences[id] = ref
+			s.resolvedReferences[id] = mustResolve(ref)
 		}
 	}
 }

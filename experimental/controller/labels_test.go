@@ -145,7 +145,7 @@ func TestHasOtherGraphIdentityLabel(t *testing.T) {
 }
 
 func TestSetIdentityLabels(t *testing.T) {
-	labels := setIdentityLabels(nil, "deploy", "my-app", "default", "3", ReferenceOwn)
+	labels := setIdentityLabels(nil, "deploy", "my-app", "default", "3", ResolvedReferenceOwn)
 	assert.Equal(t, "own", labels["deploy.my-app.default.internal.kro.run/reference"])
 	assert.Equal(t, "3", labels["deploy.my-app.default.internal.kro.run/generation"])
 }

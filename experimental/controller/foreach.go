@@ -252,10 +252,10 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			evalMap = childObj.Object
 
 			var applied *unstructured.Unstructured
-			if childRef == ReferenceContribute {
-				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ReferenceContribute, driftCorrection)
+			if childRef == ResolvedReferenceContribute {
+				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ResolvedReferenceContribute, driftCorrection)
 			} else {
-				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ReferenceOwn, driftCorrection)
+				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ResolvedReferenceOwn, driftCorrection)
 			}
 			if err != nil {
 				// Per 004-graph-reconciliation.md § Parent State: track per-child errors
@@ -270,7 +270,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			}
 			allApplied = append(allApplied, applied.Object)
 			var itemKeys []string
-			if childRef == ReferenceContribute {
+			if childRef == ResolvedReferenceContribute {
 				hasStatus := evalMap["status"] != nil
 				itemKeys = []string{contributeKey(applied, hasStatus)}
 			} else {
@@ -427,12 +427,16 @@ func forEachItemUnchanged(prev, current any) bool {
 // Force annotation → Own. Otherwise delegates to classifyReference.
 // Transient errors (network, server) are propagated — the caller should
 // treat this as a per-child error rather than silently claiming ownership.
-func (r *GraphReconciler) resolveForEachChildReference(ctx context.Context, graph *unstructured.Unstructured, child *unstructured.Unstructured) (Reference, error) {
+func (r *GraphReconciler) resolveForEachChildReference(ctx context.Context, graph *unstructured.Unstructured, child *unstructured.Unstructured) (ResolvedReference, error) {
 	if isForceApply(child) {
-		return ReferenceOwn, nil
+		return ResolvedReferenceOwn, nil
 	}
 
-	return r.classifyReference(ctx, graph, child.GroupVersionKind(), child.GetNamespace(), child.GetName())
+	ref, err := r.classifyReference(ctx, graph, child.GroupVersionKind(), child.GetNamespace(), child.GetName())
+	if err != nil {
+		return 0, err
+	}
+	return mustResolve(ref), nil
 }
 
 // highestPriorityChildError returns the highest-priority error from a list

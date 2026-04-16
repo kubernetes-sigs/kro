@@ -205,7 +205,7 @@ func TestDefinesReconcile(t *testing.T) {
 		}}
 		eval := compileDefinesSpec(t, spec)
 
-		_, err := r.reconcileNode(ctx, nil, spec.Nodes[0], ReferenceDefinition, eval, nil, false)
+		_, err := r.reconcileNode(ctx, nil, spec.Nodes[0], ResolvedReferenceDefinition, eval, nil, false)
 		require.NoError(t, err)
 
 		result, ok := eval.scope["cfg"].(map[string]any)
@@ -223,7 +223,7 @@ func TestDefinesReconcile(t *testing.T) {
 		}}
 		eval := compileDefinesSpec(t, spec)
 
-		_, err := r.reconcileNode(ctx, nil, spec.Nodes[0], ReferenceDefinition, eval, nil, false)
+		_, err := r.reconcileNode(ctx, nil, spec.Nodes[0], ResolvedReferenceDefinition, eval, nil, false)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, ErrWaitingForReadiness))
 

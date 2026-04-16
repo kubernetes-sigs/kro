@@ -482,9 +482,11 @@ func (w *walkState) tryDispatch(idx int) {
 		// Transitioning from Excluded to included: re-resolve the reference.
 		// The previous classification may be stale (e.g., a resource that
 		// existed when we first resolved may have been deleted by the
-		// previous owner's teardown).
+		// previous owner's teardown). Deleting the map entry signals the
+		// resolution chokepoint that the node needs classification again —
+		// absent = needs resolution, present = already a ResolvedReference.
 		if prev, ok := w.state.previousPlanStates[node.ID]; ok && prev == NodeExcluded {
-			w.state.resolvedReferences[node.ID] = ReferenceUnresolved
+			delete(w.state.resolvedReferences, node.ID)
 		}
 	}
 
@@ -514,9 +516,15 @@ func (w *walkState) tryDispatch(idx int) {
 		}
 	}
 
-	// Resolve Unresolved references in the coordinator.
-	nodeRef = w.state.resolvedReferences[node.ID]
-	if nodeRef == ReferenceUnresolved && node.ForEach == nil {
+	// Resolve Unresolved references in the coordinator. The map entry's
+	// presence or absence is authoritative — absent means the node has
+	// not been resolved yet (either first reconcile or a post-Excluded/
+	// Conflict reset), present means the ResolvedReference is ready to
+	// dispatch. Compile-time-classified references (Own/Watch/WatchKind/
+	// Definition) were populated by initResolvedReferences; only
+	// Unresolved nodes reach this block with an absent entry.
+	resolvedRef, haveResolved := w.state.resolvedReferences[node.ID]
+	if !haveResolved && node.ForEach == nil {
 		resolved, err := w.r.resolveReference(w.ctx, w.graph, *node, workerEval)
 		if err != nil {
 			nodeState := NodePending
@@ -544,14 +552,14 @@ func (w *walkState) tryDispatch(idx int) {
 			w.notifyDependents(node.ID)
 			return
 		}
-		nodeRef = resolved
-		w.state.resolvedReferences[node.ID] = resolved
+		resolvedRef = resolved
+		w.state.resolvedReferences[node.ID] = resolvedRef
 	}
 
 	// Dispatch to worker goroutine.
 	w.dispatched[idx] = true
 	isDrift := w.driftTriggered[node.ID]
-	go func(n Node, we *evaluator, ref Reference, driftCorrection bool) {
+	go func(n Node, we *evaluator, ref ResolvedReference, driftCorrection bool) {
 		evalStart := time.Now()
 		keys, err := w.r.reconcileNode(w.ctx, w.graph, n, ref, we, w.watcher, driftCorrection)
 		evalDuration := time.Since(evalStart)
@@ -601,7 +609,7 @@ func (w *walkState) tryDispatch(idx int) {
 			forEachAllItemsPropagateReady: we.forEachAllItemsPropagateReady,
 			nodeReadyUpdate:               nodeReadyUpdate,
 		}
-	}(*node, workerEval, nodeRef, isDrift)
+	}(*node, workerEval, resolvedRef, isDrift)
 	w.inflight++
 }
 
@@ -1006,9 +1014,11 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		if res.state == NodePending {
 			plan.SetState(dag, node.ID, NodePending)
 			// Reset Contribute reference when a conflicted target disappears.
-			if state.resolvedReferences[node.ID] == ReferenceContribute &&
+			// Deleting the map entry signals the resolution chokepoint that
+			// the node needs classification again on the next reconcile.
+			if state.resolvedReferences[node.ID] == ResolvedReferenceContribute &&
 				state.previousPlanStates[node.ID] == NodeConflict {
-				state.resolvedReferences[node.ID] = ReferenceUnresolved
+				delete(state.resolvedReferences, node.ID)
 				delete(state.previousEvalHashes, node.ID)
 			}
 			state.previousPlanStates[node.ID] = NodePending
@@ -1526,7 +1536,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if corrected, ok := normalizedToStatic[strings.ToLower(key)]; ok {
 				key = corrected
 			}
-			if entry.Reference == ReferenceContribute {
+			if entry.Reference == ResolvedReferenceContribute {
 				// For contribute keys, encode hasStatus from revision spec scan.
 				cKey := contributeKeyPrefix + key
 				if contributeStatusMap[key] {

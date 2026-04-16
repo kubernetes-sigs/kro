@@ -69,30 +69,136 @@ func (r Reference) String() string {
 	}
 }
 
-// LabelValue returns the identity label value for references that write to a
-// resource. Returns ("", false) for read-only and unresolved references, which
-// are never stamped with an identity label.
-func (r Reference) LabelValue() (string, bool) {
+// LabelValue is not defined on Reference — label stamping is a
+// post-resolution concern and lives on ResolvedReference. A caller who
+// reaches for a label value from a Reference has not yet run resolution
+// and should do so first.
+
+// ReferenceFromLabelValue parses an identity label value back to a
+// ResolvedReference. Returns (0, false) if the value is not a recognized
+// label value. Labels only carry resolved classifications (Own or
+// Contribute) by construction, so the return type excludes Unresolved.
+func ReferenceFromLabelValue(s string) (ResolvedReference, bool) {
+	switch s {
+	case "own":
+		return ResolvedReferenceOwn, true
+	case "contribute":
+		return ResolvedReferenceContribute, true
+	default:
+		return 0, false
+	}
+}
+
+// ResolvedReference is the post-resolution classification of a node. It
+// carries the same information as Reference but excludes ReferenceUnresolved
+// — the sentinel that represents "first-reconcile existence check has not
+// yet run." Post-resolution code (reconcileNode, reconcileApply, applySSA,
+// label stamping, the resolvedReferences map) takes ResolvedReference so
+// the type system refuses to accept an unresolved value.
+//
+// The two types are nominally distinct: the compiler blocks implicit
+// conversion. Lifting a Reference into a ResolvedReference goes through
+// mustResolve, the single chokepoint where the Unresolved case is handled.
+// Lowering a ResolvedReference to a Reference is always safe — a resolved
+// value is a valid Reference — and goes through the Reference() method.
+//
+// When the explicit-keyword schema lands (template/patch/watch/watchKind/
+// def), ReferenceUnresolved goes away and Reference and ResolvedReference
+// collapse back into a single type. Until then, this split encodes the
+// phase boundary in the type system.
+type ResolvedReference int
+
+const (
+	// ResolvedReferenceOwn — the Graph creates the resource.
+	ResolvedReferenceOwn ResolvedReference = iota
+	// ResolvedReferenceWatch — read-only GET of a single resource.
+	ResolvedReferenceWatch
+	// ResolvedReferenceWatchKind — read-only List of resources of a kind.
+	ResolvedReferenceWatchKind
+	// ResolvedReferenceContribute — writes fields on a resource created by
+	// another actor.
+	ResolvedReferenceContribute
+	// ResolvedReferenceDefinition — values in scope, no Kubernetes resource.
+	ResolvedReferenceDefinition
+)
+
+// String returns the human-readable name for logging and display.
+func (r ResolvedReference) String() string {
 	switch r {
-	case ReferenceOwn:
+	case ResolvedReferenceOwn:
+		return "own"
+	case ResolvedReferenceWatch:
+		return "watch"
+	case ResolvedReferenceWatchKind:
+		return "watchKind"
+	case ResolvedReferenceContribute:
+		return "contribute"
+	case ResolvedReferenceDefinition:
+		return "definition"
+	default:
+		return fmt.Sprintf("ResolvedReference(%d)", int(r))
+	}
+}
+
+// LabelValue returns the identity label value. Returns ("", false) for
+// read-only classifications (Watch, WatchKind) and Definition, which are
+// never stamped with an identity label.
+func (r ResolvedReference) LabelValue() (string, bool) {
+	switch r {
+	case ResolvedReferenceOwn:
 		return "own", true
-	case ReferenceContribute:
+	case ResolvedReferenceContribute:
 		return "contribute", true
 	default:
 		return "", false
 	}
 }
 
-// ReferenceFromLabelValue parses an identity label value back to a Reference.
-// Returns (0, false) if the value is not a recognized label value.
-func ReferenceFromLabelValue(s string) (Reference, bool) {
-	switch s {
-	case "own":
-		return ReferenceOwn, true
-	case "contribute":
-		return ReferenceContribute, true
+// Reference lowers a ResolvedReference to its Reference counterpart. Always
+// safe — a resolved classification is a valid Reference value. The inverse
+// direction goes through mustResolve.
+func (r ResolvedReference) Reference() Reference {
+	switch r {
+	case ResolvedReferenceOwn:
+		return ReferenceOwn
+	case ResolvedReferenceWatch:
+		return ReferenceWatch
+	case ResolvedReferenceWatchKind:
+		return ReferenceWatchKind
+	case ResolvedReferenceContribute:
+		return ReferenceContribute
+	case ResolvedReferenceDefinition:
+		return ReferenceDefinition
 	default:
-		return 0, false
+		// Unreachable for valid ResolvedReference values — the type's
+		// constants cover all cases. A new ResolvedReference value added
+		// without updating this switch would fall through here.
+		panic(fmt.Sprintf("unknown ResolvedReference %d", int(r)))
+	}
+}
+
+// mustResolve lifts a Reference into a ResolvedReference. Panics on
+// ReferenceUnresolved — the invariant at the single call site (the
+// resolution chokepoint in the reconciler) is that resolution has already
+// completed and produced a resolved value. Panic is correct here: if
+// resolution failed, the caller should have returned an error and never
+// reached this function.
+func mustResolve(r Reference) ResolvedReference {
+	switch r {
+	case ReferenceOwn:
+		return ResolvedReferenceOwn
+	case ReferenceWatch:
+		return ResolvedReferenceWatch
+	case ReferenceWatchKind:
+		return ResolvedReferenceWatchKind
+	case ReferenceContribute:
+		return ResolvedReferenceContribute
+	case ReferenceDefinition:
+		return ResolvedReferenceDefinition
+	case ReferenceUnresolved:
+		panic("mustResolve called with ReferenceUnresolved; caller must verify resolution succeeded before calling")
+	default:
+		panic(fmt.Sprintf("mustResolve: unknown Reference %d", int(r)))
 	}
 }
 

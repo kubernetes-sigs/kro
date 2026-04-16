@@ -186,7 +186,7 @@ func (r *GraphReconciler) runFinalization(
 			// Step 1: Finalizer resource doesn't exist — create it.
 			logger.Info("creating finalizer resource", "finalizer", finNodeID,
 				"target", target.GetName())
-			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, ReferenceOwn, false)
+			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, ResolvedReferenceOwn, false)
 			if applyErr != nil {
 				return false, keys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
 			}
@@ -277,7 +277,7 @@ func (r *GraphReconciler) runForEachFinalization(
 				childObj.GetName(), childObj.GetNamespace(),
 				gvk.Kind, gv.Group,
 				graph.GetName(), graph.GetNamespace(),
-				generation, ReferenceOwn,
+				generation, ResolvedReferenceOwn,
 			)
 			childObj.SetLabels(lbls)
 			evalMap = childObj.Object
@@ -297,7 +297,7 @@ func (r *GraphReconciler) runForEachFinalization(
 				// Child doesn't exist — create it.
 				logger.Info("creating forEach finalizer child",
 					"finalizer", finNode.ID, "name", childObj.GetName())
-				applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, ReferenceOwn, false)
+				applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, ResolvedReferenceOwn, false)
 				if applyErr != nil {
 					return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
 				}
@@ -504,7 +504,7 @@ func templateHasStatus(tmpl map[string]any) bool {
 // defaulters and mutating webhooks can change fields without changing
 // the desired state hash. SSA is idempotent; the apply corrects drift
 // as a side effect."
-func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, ref Reference, driftCorrection bool) (*unstructured.Unstructured, error) {
+func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, ref ResolvedReference, driftCorrection bool) (*unstructured.Unstructured, error) {
 	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
@@ -518,17 +518,17 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	if lbls == nil {
 		lbls = map[string]string{}
 	}
-	if ref == ReferenceOwn {
+	if ref == ResolvedReferenceOwn {
 		// Own: skip stamping if identity labels are already present (e.g., forEach
 		// children stamp their own child-scoped labels before calling applySSA).
 		if !hasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
-			lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceOwn)
+			lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ResolvedReferenceOwn)
 			obj.SetLabels(lbls)
 		}
 	} else {
 		// Contribute: always stamp identity labels so resources are discoverable via
 		// deriveAppliedSet() after controller restart.
-		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ReferenceContribute)
+		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ResolvedReferenceContribute)
 		obj.SetLabels(lbls)
 	}
 
@@ -562,7 +562,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 				if !apierrors.IsNotFound(err) {
 					return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
 				}
-				if ref == ReferenceOwn {
+				if ref == ResolvedReferenceOwn {
 					// Own: externally deleted. Clear cache + ErrPending.
 					r.Resources.remove(cacheKey)
 					return nil, fmt.Errorf("resource %s externally deleted: %w", obj.GetName(), ErrPending)
@@ -580,7 +580,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	} // !driftCorrection
 
 	// Own: set the apply hash annotation for future comparisons.
-	if ref == ReferenceOwn {
+	if ref == ResolvedReferenceOwn {
 		annotations := obj.GetAnnotations()
 		if annotations == nil {
 			annotations = map[string]string{}
@@ -592,7 +592,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	forceApply := isForceApply(obj)
 
 	// Pre-apply check differs by reference type.
-	if ref == ReferenceOwn {
+	if ref == ResolvedReferenceOwn {
 		// kro label check: if the existing resource has a different Graph's identity
 		// label, require Force to proceed. Prevents accidental cross-Graph ownership.
 		existing := &unstructured.Unstructured{}

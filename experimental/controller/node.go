@@ -38,24 +38,24 @@ import (
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, ref Reference, eval *evaluator, watcher *graphWatcher, driftCorrection bool) ([]string, error) {
+func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, ref ResolvedReference, eval *evaluator, watcher *graphWatcher, driftCorrection bool) ([]string, error) {
 	if node.ForEach != nil {
 		return r.reconcileForEach(ctx, graph, node, eval, watcher, driftCorrection)
 	}
 
 	switch ref {
-	case ReferenceDefinition:
+	case ResolvedReferenceDefinition:
 		if err := r.reconcileDefinition(ctx, node, eval); err != nil {
 			return nil, err
 		}
-	case ReferenceWatchKind:
+	case ResolvedReferenceWatchKind:
 		err := r.reconcileWatchKind(ctx, graph, node, eval, watcher)
 		return nil, err // WatchKind handles its own readiness
-	case ReferenceWatch:
+	case ResolvedReferenceWatch:
 		if err := r.reconcileWatch(ctx, graph, node, eval, watcher); err != nil {
 			return nil, err
 		}
-	default: // ReferenceOwn, ReferenceContribute
+	default: // ResolvedReferenceOwn, ResolvedReferenceContribute
 		key, err := r.reconcileApply(ctx, graph, node, ref, eval, watcher, driftCorrection)
 		if err != nil {
 			if key != "" {
@@ -88,20 +88,23 @@ func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node Node, ev
 // the kro label. If the resource has this Graph's label, it's Own (we created
 // it on a previous revision). If it has no kro label or another Graph's label,
 // it's Contribute. Force annotation always resolves to Own.
-func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator) (Reference, error) {
+//
+// On error, the returned ResolvedReference is zero-valued and must not be
+// used — standard Go convention for paired (value, error) returns. On
+// success, the value is authoritatively Own or Contribute.
+func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator) (ResolvedReference, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMapNode(node)
 	if err != nil {
 		// Template can't evaluate yet — expressions unresolvable.
-		// Return Unresolved so it's retried next reconcile.
-		return ReferenceUnresolved, fmt.Errorf("resolving reference for %s: %w", node.ID, err)
+		return 0, fmt.Errorf("resolving reference for %s: %w", node.ID, err)
 	}
 
 	obj := &unstructured.Unstructured{Object: evalMap}
 	if isForceApply(obj) {
 		logger.V(1).Info("reference resolved: Own (Force annotation)", "node", node.ID)
-		return ReferenceOwn, nil
+		return ResolvedReferenceOwn, nil
 	}
 
 	if obj.GetNamespace() == "" {
@@ -110,10 +113,10 @@ func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructu
 
 	ref, err := r.classifyReference(ctx, graph, obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
 	if err != nil {
-		return ReferenceUnresolved, fmt.Errorf("checking resource existence for reference detection %s: %w", node.ID, err)
+		return 0, fmt.Errorf("checking resource existence for reference detection %s: %w", node.ID, err)
 	}
 	logger.V(1).Info("reference resolved", "node", node.ID, "ref", ref)
-	return ref, nil
+	return mustResolve(ref), nil
 }
 
 // classifyReference determines Own vs Contribute for a resource by checking
@@ -429,7 +432,7 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 // Contribute keys use contributeKey (prune → release apply to release fields).
 // See applySSA for the full ref-dependent behavior.
 // driftCorrection bypasses the apply-hash check in applySSA.
-func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, ref Reference, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
+func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, ref ResolvedReference, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMapNode(node)
@@ -446,7 +449,7 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 	logger.V(1).Info("applied resource", "node", node.ID, "ref", ref,
 		"gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
-	if ref == ReferenceContribute {
+	if ref == ResolvedReferenceContribute {
 		// Track the contribution in the applied set with a "contribute:" prefix.
 		// This lets prune and teardown distinguish Contribute keys (release apply
 		// to release fields) from Own keys (delete).

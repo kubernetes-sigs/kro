@@ -30,6 +30,21 @@ func (Object) Schema(_ Resolver) (*extv1.JSONSchemaProps, error) {
 	}, nil
 }
 
+// Any represents a value of any JSON type (string, number, boolean, object,
+// array, or null) with unknown fields preserved. Unlike Object, it does not
+// constrain the value to type "object", so scalars and arrays also pass
+// CRD validation. Useful for fields that accept both literal maps and
+// CEL expressions that evaluate to maps at runtime.
+type Any struct{}
+
+func (Any) Deps() []string { return nil }
+
+func (Any) Schema(_ Resolver) (*extv1.JSONSchemaProps, error) {
+	return &extv1.JSONSchemaProps{
+		XPreserveUnknownFields: new(true),
+	}, nil
+}
+
 // Struct represents an object with named fields.
 type Struct struct {
 	Fields map[string]Type

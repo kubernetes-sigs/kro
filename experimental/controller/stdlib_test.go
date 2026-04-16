@@ -2,7 +2,6 @@ package graphcontroller
 
 import (
 	"bytes"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -221,51 +220,6 @@ func evalTemplateExpr(t *testing.T, compiled *compiledGraph, nodeID string, scop
 	result, err := eval.template(node.Template)
 	require.NoError(t, err)
 	return result
-}
-
-// makeSingleton creates a Singleton CR with single-template API.
-// resource is "apiVersion/Kind/namespace/name".
-func makeSingleton(name string, priority int64, resource string) map[string]any {
-	return makeSingletonWithData(name, priority, resource, nil)
-}
-
-// makeSingletonWithData creates a Singleton CR with extra data in the template
-// for distinguishing winners in resolution tests.
-func makeSingletonWithData(name string, priority int64, resource string, data map[string]any) map[string]any {
-	parts := strings.SplitN(resource, "/", 4)
-	template := map[string]any{
-		"apiVersion": parts[0],
-		"kind":       parts[1],
-		"metadata":   map[string]any{"namespace": parts[2], "name": parts[3]},
-	}
-	if data != nil {
-		template["data"] = data
-	}
-	return map[string]any{
-		"metadata": map[string]any{"name": name},
-		"spec": map[string]any{
-			"priority": priority,
-			"template": template,
-		},
-	}
-}
-
-// makeSingletonClusterScoped creates a Singleton CR with a cluster-scoped resource
-// (no namespace field in template metadata). resource is "apiVersion/Kind/name".
-func makeSingletonClusterScoped(name string, priority int64, resource string) map[string]any {
-	parts := strings.SplitN(resource, "/", 3)
-	template := map[string]any{
-		"apiVersion": parts[0],
-		"kind":       parts[1],
-		"metadata":   map[string]any{"name": parts[2]},
-	}
-	return map[string]any{
-		"metadata": map[string]any{"name": name},
-		"spec": map[string]any{
-			"priority": priority,
-			"template": template,
-		},
-	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -521,225 +475,148 @@ func TestStdlibKindEscapeLevels(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Singleton resolution (stdlib/singleton.yaml)
 //
-// The Singleton Kind creates a shared resolution Graph that watches all
-// Singletons, groups them by target resource identity using .distinct(),
-// and picks the winner per target.
+// The Singleton is implemented as Kind + Decorator. The Decorator watches
+// all Singletons and creates a sub-Graph per item. Each sub-Graph has a
+// peers WatchKind and an includeWhen gate that self-determines the winner.
 //
-// Tests evaluate the actual forEach and template CEL expressions from the
-// resolution Graph with mock Singleton data.
+// The includeWhen expression is tested directly by compiling it from the
+// YAML and evaluating against mock peer data.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 func TestStdlibSingletonResolution(t *testing.T) {
-	// Parse the Singleton Kind's nodes. The first node's template is
-	// the resolution Graph. Extract and compile that Graph.
-	//
-	// The resolution Graph is embedded inside the Kind template, so its
-	// expressions use $${} escaping to survive L1 compilation. We strip
-	// one escape level before compiling, simulating what L1 evaluation does.
+	// Parse the Kind from singleton.yaml and extract spec.nodes.
 	docs := parseDocsByKindFrom(t, stdlibImplDir(), "singleton.yaml", "Kind")
 	require.NotEmpty(t, docs)
 	spec, _ := docs[0]["spec"].(map[string]any)
 	rawNodes, _ := spec["nodes"]
 	nodes, err := parseNodeList(rawNodes)
 	require.NoError(t, err)
-	require.NotEmpty(t, nodes)
 
-	// The first node's template is the resolution Graph.
-	resolutionGraph := nodes[0].Template
-	resolutionSpec, _ := resolutionGraph["spec"].(map[string]any)
-	resolutionRawNodes, _ := resolutionSpec["nodes"]
-	resolutionNodes, err := parseNodeList(resolutionRawNodes)
-	require.NoError(t, err)
+	// Build a mini graph: schema Watch + all parsed Kind nodes.
+	miniNodes := []Node{
+		{ID: "schema", Template: map[string]any{"apiVersion": "experimental.kro.run/v1alpha1", "kind": "Singleton", "metadata": map[string]any{"name": "test"}}},
+	}
+	miniNodes = append(miniNodes, nodes...)
+	miniSpec := &GraphSpec{Nodes: miniNodes}
+	compiled, err := compileGraphSpec(miniSpec, nil)
+	require.NoError(t, err, "singleton per-instance graph should compile")
 
-	// Strip one escape level ($${} → ${}) before compiling standalone.
-	resolutionNodes = unescapeNodeSlice(resolutionNodes)
+	// Collect CEL expressions from definition nodes for manual evaluation.
+	nodesByID := make(map[string]*Node)
+	for i := range nodes {
+		nodesByID[nodes[i].ID] = &nodes[i]
+	}
 
-	graph := &GraphSpec{Nodes: resolutionNodes}
-	compiled, err := compileGraphSpec(graph, nil)
-	require.NoError(t, err, "resolution Graph should compile")
-
-	// The "targets" node has forEach over distinct keys and creates
-	// sub-Graphs. Verify structure.
-	targetsNode := compiled.dag.Nodes[compiled.dag.Index["targets"]]
-	assert.NotNil(t, targetsNode.ForEach, "targets node should have forEach")
-	assert.Empty(t, targetsNode.IncludeWhen, "targets node should not have includeWhen")
-
-	// Helper: evaluate forEach target keys.
-	evalTargets := func(singletons []any) []string {
+	// Helper: extract CEL expression from a ${...} string.
+	expr := func(s string) string {
 		t.Helper()
-		scope := map[string]any{"singletons": singletons}
-		raw := evalForEachExpr(t, compiled, "targets", scope)
-		targets := make([]string, len(raw))
-		for i, v := range raw {
-			targets[i] = v.(string)
+		_, e, _, _ := findExpr(s, 0)
+		require.NotEmpty(t, e, "expected ${...} expression in %q", s)
+		return e
+	}
+
+	// Helper: build a mock Singleton.
+	singleton := func(name string, priority int64, apiVersion, kind, ns, resName string) map[string]any {
+		tmpl := map[string]any{
+			"apiVersion": apiVersion,
+			"kind":       kind,
+			"metadata":   map[string]any{"name": resName},
 		}
-		return targets
+		if ns != "" {
+			tmpl["metadata"].(map[string]any)["namespace"] = ns
+		}
+		return map[string]any{
+			"metadata": map[string]any{"name": name},
+			"spec": map[string]any{
+				"priority": priority,
+				"template": tmpl,
+			},
+		}
 	}
 
-	// Helper: evaluate the sub-Graph's spec.nodes CEL expression to extract
-	// the winning template. The targets node's template is a Graph with
-	// spec.nodes as a CEL expression. We evaluate that expression to get
-	// the node list, then extract the "resource" node's template.
-	evalWinner := func(singletons []any, key string) map[string]any {
+	// Helper: compute identity string for a Singleton (matches the CEL formula).
+	resourceIdentity := func(s map[string]any) string {
 		t.Helper()
-		scope := map[string]any{"singletons": singletons, "key": key}
-		// Evaluate the targets node's template to get the sub-Graph.
-		result := evalTemplateExpr(t, compiled, "targets", scope)
-		subGraph, ok := result.(map[string]any)
-		require.True(t, ok, "sub-Graph template should produce a map, got %T", result)
-
-		// Extract spec.nodes from the evaluated sub-Graph template.
-		subSpec, _ := subGraph["spec"].(map[string]any)
-		require.NotNil(t, subSpec, "sub-Graph should have spec")
-		subNodes, ok := subSpec["nodes"].([]any)
-		require.True(t, ok, "spec.nodes should be a list, got %T", subSpec["nodes"])
-		require.NotEmpty(t, subNodes, "spec.nodes should not be empty")
-
-		// The first (and only) node is the "resource" node with the winning template.
-		resourceNode, ok := subNodes[0].(map[string]any)
-		require.True(t, ok, "resource node should be a map")
-		template, ok := resourceNode["template"].(map[string]any)
-		require.True(t, ok, "resource template should be a map, got %T", resourceNode["template"])
-		return template
+		tmpl := s["spec"].(map[string]any)["template"].(map[string]any)
+		meta := tmpl["metadata"].(map[string]any)
+		ns, _ := meta["namespace"].(string)
+		return tmpl["apiVersion"].(string) + "/" + tmpl["kind"].(string) + "/" + ns + "/" + meta["name"].(string)
 	}
+
+	// Helper: build the full definition chain and evaluate whether
+	// a given Singleton is the winner among peers.
+	isWinner := func(schema map[string]any, peers []any) bool {
+		t.Helper()
+
+		// Build identities list (simulates the forEach definition).
+		identities := make([]any, len(peers))
+		for i, p := range peers {
+			pm := p.(map[string]any)
+			identities[i] = map[string]any{
+				"name":     pm["metadata"].(map[string]any)["name"],
+				"priority": pm["spec"].(map[string]any)["priority"],
+				"identity": resourceIdentity(pm),
+			}
+		}
+
+		identity := resourceIdentity(schema)
+
+		// Build candidates list (simulates the forEach definition).
+		var candidates []any
+		for _, id := range identities {
+			if id.(map[string]any)["identity"] == identity {
+				candidates = append(candidates, map[string]any{
+					"name":     id.(map[string]any)["name"],
+					"priority": id.(map[string]any)["priority"],
+				})
+			}
+		}
+
+		// Evaluate winner.name.
+		scope := map[string]any{"candidates": candidates}
+		winnerName, err := compiled.eval(expr(nodesByID["winner"].Template["name"].(string)), scope)
+		require.NoError(t, err)
+
+		// Evaluate includeWhen.
+		scope["winner"] = map[string]any{"name": winnerName}
+		scope["schema"] = schema
+		result, err := compiled.eval(expr(nodesByID["target"].IncludeWhen[0]), scope)
+		require.NoError(t, err)
+		return result.(bool)
+	}
+
+	teamA := singleton("team-a", 10, "v1", "ConfigMap", "default", "contested")
+	teamB := singleton("team-b", 100, "v1", "ConfigMap", "default", "contested")
+	teamC := singleton("team-c", 100, "v1", "ConfigMap", "default", "contested")
+	different := singleton("other", 50, "v1", "Secret", "default", "other-res")
 
 	t.Run("single Singleton always wins", func(t *testing.T) {
-		s := makeSingleton("only-one", 100, "v1/ConfigMap/default/foo")
-		targets := evalTargets([]any{s})
-		assert.Len(t, targets, 1, "one singleton → one target")
-
-		winner := evalWinner([]any{s}, targets[0])
-		assert.Equal(t, "ConfigMap", winner["kind"])
-		meta, _ := winner["metadata"].(map[string]any)
-		assert.Equal(t, "foo", meta["name"])
+		assert.True(t, isWinner(teamA, []any{teamA}))
 	})
 
 	t.Run("higher priority wins", func(t *testing.T) {
-		a := makeSingletonWithData("team-a", 100, "v1/ConfigMap/monitoring/dashboard",
-			map[string]any{"owner": "team-a"})
-		b := makeSingletonWithData("team-b", 200, "v1/ConfigMap/monitoring/dashboard",
-			map[string]any{"owner": "team-b"})
-		items := []any{a, b}
-
-		targets := evalTargets(items)
-		assert.Len(t, targets, 1, "same resource → one target")
-
-		winner := evalWinner(items, targets[0])
-		data, _ := winner["data"].(map[string]any)
-		assert.Equal(t, "team-b", data["owner"],
-			"team-b (priority 200) should win over team-a (priority 100)")
-	})
-
-	t.Run("lower priority loses", func(t *testing.T) {
-		a := makeSingletonWithData("alpha", 500, "v1/ConfigMap/default/shared",
-			map[string]any{"owner": "alpha"})
-		b := makeSingletonWithData("beta", 50, "v1/ConfigMap/default/shared",
-			map[string]any{"owner": "beta"})
-		items := []any{a, b}
-
-		targets := evalTargets(items)
-		assert.Len(t, targets, 1)
-		winner := evalWinner(items, targets[0])
-		data, _ := winner["data"].(map[string]any)
-		assert.Equal(t, "alpha", data["owner"],
-			"alpha (priority 500) should win over beta (priority 50)")
+		peers := []any{teamA, teamB}
+		assert.False(t, isWinner(teamA, peers), "team-a (10) should lose to team-b (100)")
+		assert.True(t, isWinner(teamB, peers), "team-b (100) should win")
 	})
 
 	t.Run("same priority tie broken by name", func(t *testing.T) {
-		a := makeSingletonWithData("alpha", 100, "v1/ConfigMap/default/shared",
-			map[string]any{"owner": "alpha"})
-		b := makeSingletonWithData("beta", 100, "v1/ConfigMap/default/shared",
-			map[string]any{"owner": "beta"})
-		items := []any{a, b}
+		peers := []any{teamB, teamC}
+		assert.True(t, isWinner(teamB, peers), "team-b should win (lexicographically lower)")
+		assert.False(t, isWinner(teamC, peers), "team-c should lose")
+	})
 
-		targets := evalTargets(items)
-		assert.Len(t, targets, 1)
-		winner := evalWinner(items, targets[0])
-		data, _ := winner["data"].(map[string]any)
-		assert.Equal(t, "alpha", data["owner"],
-			"alpha wins tie (lexicographically lower name)")
+	t.Run("different target not conflicting", func(t *testing.T) {
+		peers := []any{teamA, different}
+		assert.True(t, isWinner(teamA, peers), "team-a should win for its target")
+		assert.True(t, isWinner(different, peers), "different target should also win")
 	})
 
 	t.Run("three-way conflict highest wins", func(t *testing.T) {
-		a := makeSingletonWithData("team-a", 100, "v1/ConfigMap/default/config",
-			map[string]any{"owner": "team-a"})
-		b := makeSingletonWithData("team-b", 200, "v1/ConfigMap/default/config",
-			map[string]any{"owner": "team-b"})
-		c := makeSingletonWithData("team-c", 300, "v1/ConfigMap/default/config",
-			map[string]any{"owner": "team-c"})
-		items := []any{a, b, c}
-
-		targets := evalTargets(items)
-		assert.Len(t, targets, 1, "same resource → one target")
-		winner := evalWinner(items, targets[0])
-		data, _ := winner["data"].(map[string]any)
-		assert.Equal(t, "team-c", data["owner"],
-			"team-c (priority 300) should win three-way conflict")
-	})
-
-	t.Run("different GVK same name not conflicting", func(t *testing.T) {
-		a := makeSingleton("sa", 100, "v1/ServiceAccount/default/monitor")
-		b := makeSingleton("cm", 100, "v1/ConfigMap/default/monitor")
-		items := []any{a, b}
-
-		targets := evalTargets(items)
-		assert.Len(t, targets, 2, "different GVKs → two targets")
-	})
-
-	t.Run("different namespace not conflicting", func(t *testing.T) {
-		a := makeSingleton("prod", 100, "v1/ConfigMap/production/config")
-		b := makeSingleton("staging", 100, "v1/ConfigMap/staging/config")
-		items := []any{a, b}
-
-		targets := evalTargets(items)
-		assert.Len(t, targets, 2, "same name in different namespaces → two targets")
-	})
-
-	t.Run("many Singletons one resource", func(t *testing.T) {
-		items := make([]any, 10)
-		for i := range items {
-			items[i] = makeSingleton(
-				fmt.Sprintf("s%02d", i),
-				int64(i*10),
-				"v1/ConfigMap/default/contested",
-			)
-		}
-
-		targets := evalTargets(items)
-		assert.Len(t, targets, 1, "all target the same resource → one target")
-
-		winner := evalWinner(items, targets[0])
-		assert.Equal(t, "ConfigMap", winner["kind"])
-	})
-
-	t.Run("negative priority", func(t *testing.T) {
-		a := makeSingleton("fallback", -100, "v1/ConfigMap/default/config")
-		b := makeSingleton("override", -1, "v1/ConfigMap/default/config")
-		items := []any{a, b}
-
-		targets := evalTargets(items)
-		assert.Len(t, targets, 1)
-		_ = evalWinner(items, targets[0])
-	})
-
-	t.Run("zero priority", func(t *testing.T) {
-		a := makeSingleton("alpha", 0, "v1/ConfigMap/default/config")
-		b := makeSingleton("beta", 0, "v1/ConfigMap/default/config")
-		items := []any{a, b}
-
-		targets := evalTargets(items)
-		assert.Len(t, targets, 1)
-		_ = evalWinner(items, targets[0])
-	})
-
-	t.Run("cluster-scoped resource no namespace", func(t *testing.T) {
-		a := makeSingletonClusterScoped("role-a", 100, "rbac.authorization.k8s.io/v1/ClusterRole/admin")
-		b := makeSingletonClusterScoped("role-b", 200, "rbac.authorization.k8s.io/v1/ClusterRole/admin")
-		items := []any{a, b}
-
-		targets := evalTargets(items)
-		assert.Len(t, targets, 1, "same cluster-scoped resource → one target")
-		_ = evalWinner(items, targets[0])
+		peers := []any{teamA, teamB, teamC}
+		assert.False(t, isWinner(teamA, peers))
+		assert.True(t, isWinner(teamB, peers), "team-b (100, lowest name) should win")
+		assert.False(t, isWinner(teamC, peers))
 	})
 }
 
@@ -915,7 +792,7 @@ func TestStdlibEmbeddedResourcesParse(t *testing.T) {
 			data, err := fs.ReadFile(stdlib.Resources, entry.Name())
 			require.NoError(t, err)
 
-			var foundKind string
+			var kinds []string
 			for _, doc := range splitYAMLDocs(data) {
 				doc = bytes.TrimSpace(doc)
 				if len(doc) == 0 {
@@ -926,13 +803,13 @@ func TestStdlibEmbeddedResourcesParse(t *testing.T) {
 					continue
 				}
 				kind, _ := obj["kind"].(string)
-				foundKind = kind
+				kinds = append(kinds, kind)
 				meta, _ := obj["metadata"].(map[string]any)
 				name, _ := meta["name"].(string)
 				t.Logf("  %s (kind: %s)", name, kind)
 			}
 			if expected, ok := expectedKinds[entry.Name()]; ok {
-				assert.Equal(t, expected, foundKind, "%s should be kind %s", entry.Name(), expected)
+				assert.Contains(t, kinds, expected, "%s should contain kind %s", entry.Name(), expected)
 			}
 		})
 	}

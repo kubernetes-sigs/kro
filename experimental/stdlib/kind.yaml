@@ -34,7 +34,7 @@ spec:
               storage: true
               schema:
                 openAPIV3Schema: >-
-                  ${simpleSchema.toOpenAPI({"types": {"Node": {"id": "string", "template": "object", "forEach": "[]map[string]string", "finalizes": "string", "includeWhen": "[]string", "readyWhen": "[]string", "propagateWhen": "[]string"}}, "spec": {"kind": "string", "group": "string", "version": "string", "scope": "string | default=Namespaced", "schema": {"spec": "object", "status": "object", "types": "object"}, "nodes": "[]Node"}}, [])}
+                  ${simpleSchema.toOpenAPI({"types": {"Node": {"id": "string", "template": "any", "forEach": "[]map[string]string", "finalizes": "string", "includeWhen": "[]string", "readyWhen": "[]string", "propagateWhen": "[]string"}}, "spec": {"kind": "string", "group": "string", "version": "string", "scope": "string | default=Namespaced", "schema": {"spec": "object", "status": "object", "types": "object"}, "nodes": "[]Node"}}, [])}
               subresources:
                 status: {}
 

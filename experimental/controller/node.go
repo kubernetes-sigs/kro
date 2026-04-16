@@ -74,7 +74,7 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 // (literals and/or CEL expressions) and enters the result into scope as
 // map[string]any. No Kubernetes API calls are made.
 func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node Node, eval *evaluator) error {
-	result, err := eval.toMap(node.Template)
+	result, err := eval.toMapNode(node)
 	if err != nil {
 		return fmt.Errorf("definition %s: %w", node.ID, err)
 	}
@@ -91,7 +91,7 @@ func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node Node, ev
 func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator) (Reference, error) {
 	logger := log.FromContext(ctx)
 
-	evalMap, err := eval.toMap(node.Template)
+	evalMap, err := eval.toMapNode(node)
 	if err != nil {
 		// Template can't evaluate yet — expressions unresolvable.
 		// Return Unresolved so it's retried next reconcile.
@@ -165,7 +165,7 @@ func (r *GraphReconciler) classifyReference(ctx context.Context, graph *unstruct
 func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
 
-	tmpl, err := eval.toMap(node.Template)
+	tmpl, err := eval.toMapNode(node)
 	if err != nil {
 		return fmt.Errorf("watch %s: %w", node.ID, err)
 	}
@@ -212,7 +212,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
 
-	tmpl, err := eval.toMap(node.Template)
+	tmpl, err := eval.toMapNode(node)
 	if err != nil {
 		return fmt.Errorf("watchKind %s: %w", node.ID, err)
 	}
@@ -405,7 +405,7 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, ref Reference, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
-	evalMap, err := eval.toMap(node.Template)
+	evalMap, err := eval.toMapNode(node)
 	if err != nil {
 		return "", fmt.Errorf("%s %s: %w", ref, node.ID, err)
 	}

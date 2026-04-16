@@ -93,6 +93,9 @@ func parseTypeWithDepth(s string, depth int) (types.Type, error) {
 	if s == "object" {
 		return types.Object{}, nil
 	}
+	if s == "any" {
+		return types.Any{}, nil
+	}
 	if elem, ok := strings.CutPrefix(s, "[]"); ok {
 		if elem == "" {
 			return nil, fmt.Errorf("empty slice element type")

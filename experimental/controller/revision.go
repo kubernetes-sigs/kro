@@ -118,6 +118,8 @@ func snapshotNode(node Node) map[string]any {
 
 	if node.Template != nil {
 		entry["template"] = deepCopyMap(node.Template)
+	} else if node.TemplateExpr != "" {
+		entry["template"] = node.TemplateExpr
 	}
 	if node.ForEach != nil {
 		fe := make(map[string]any, len(node.ForEach))

@@ -1,15 +1,30 @@
-# Singleton — a Kind that defines the Singleton type.
+# Singleton — declare a resource that should exist exactly once.
 #
-# Each Singleton instance's per-instance Graph creates the same
-# resolution Graph via SSA merge. The shared resolution Graph watches
-# resolution Graph watches all Singletons, groups them by target resource
-# identity, and creates a sub-Graph per unique target containing only the
-# winning template.
+# A Kind whose per-instance Graph watches all peer Singletons and
+# self-determines if it is the winner. Only the winner creates the
+# target resource (via includeWhen gate).
 #
 # Priority resolution: highest spec.priority wins. Ties broken by
-# lexicographically lowest metadata.name. Output cardinality = number
-# of unique target resources, not number of Singleton instances.
----
+# lexicographically lowest metadata.name.
+#
+# Failover: when the winning Singleton is deleted, its per-instance
+# Graph is torn down (target resource deleted). The remaining
+# per-instance Graphs' peers WatchKind fires, includeWhen re-evaluates,
+# and the new winner creates the resource.
+#
+# Complexity: each per-instance Graph watches all Singletons (O(N²)
+# reconciliations per change). Acceptable — Singleton cardinality is
+# small (typically 2-5 competing declarations per target resource).
+#
+# Per-instance Graph nodes:
+#   - schema:     the Singleton instance (auto-injected by Kind controller)
+#   - peers:      WatchKind on all Singletons
+#   - identities: flatten each peer to {name, priority, identity}
+#   - identity:   this Singleton's target identity
+#   - candidates: peers targeting the same resource
+#   - winner:     highest priority candidate (stable sort, take first)
+#   - target:     the actual resource, only created if this Singleton won
+# ─────────────────────────────────────────────────────────────────────
 apiVersion: experimental.kro.run/v1alpha1
 kind: Kind
 metadata:
@@ -24,57 +39,46 @@ spec:
       priority: integer | default=0
       template: object
   nodes:
-    # Each Singleton instance creates this resolution Graph.
-    # SSA merges all instances — one Graph, shared ownership.
-    - id: resolution
+    - id: peers
       template:
         apiVersion: experimental.kro.run/v1alpha1
-        kind: Graph
-        metadata:
-          name: singleton-resolution
-          namespace: kro-system
-        spec:
-          nodes:
-            - id: singletons
-              template:
-                apiVersion: experimental.kro.run/v1alpha1
-                kind: Singleton
-                selector: {}
+        kind: Singleton
+        selector: {}
 
-            # forEach over distinct target keys. Each iteration creates
-            # a sub-Graph containing only the winning template as a
-            # single resource node. This avoids the string-template
-            # limitation (Node.Template must be map[string]any) by
-            # constructing the node list via a spec.nodes CEL expression.
-            - id: targets
-              forEach:
-                - key: >-
-                    $${singletons.map(s,
-                      s.spec.template.apiVersion + "/" + s.spec.template.kind + "/"
-                      + (has(s.spec.template.metadata.namespace) ? s.spec.template.metadata.namespace : "")
-                      + "/" + s.spec.template.metadata.name
-                    ).distinct()}
-              template:
-                apiVersion: experimental.kro.run/v1alpha1
-                kind: Graph
-                metadata:
-                  name: singleton-$${key.replace("/", "-").lowerAscii()}
-                spec:
-                  nodes: >-
-                    $${cel.bind(peers,
-                      singletons.filter(s,
-                        s.spec.template.apiVersion + "/" + s.spec.template.kind + "/"
-                        + (has(s.spec.template.metadata.namespace) ? s.spec.template.metadata.namespace : "")
-                        + "/" + s.spec.template.metadata.name == key
-                      ),
-                      [{"id": "resource", "template":
-                        peers.filter(c,
-                          !peers.exists(other,
-                            other.metadata.name != c.metadata.name
-                            && (other.spec.priority > c.spec.priority
-                                || (other.spec.priority == c.spec.priority
-                                    && other.metadata.name < c.metadata.name))
-                          )
-                        )[0].spec.template
-                      }]
-                    )}
+    # Flatten each peer into {name, priority, identity}.
+    # The identity formula appears exactly once.
+    - id: identities
+      forEach:
+        - peer: ${peers}
+      template:
+        name: ${peer.metadata.name}
+        priority: ${peer.spec.priority}
+        identity: >-
+          ${peer.spec.template.apiVersion + "/" + peer.spec.template.kind + "/"
+            + peer.spec.template.metadata.namespace + "/" + peer.spec.template.metadata.name}
+
+    # This Singleton's target identity — same formula as identities.
+    - id: identity
+      template:
+        value: >-
+          ${schema.spec.template.apiVersion + "/" + schema.spec.template.kind + "/"
+            + schema.spec.template.metadata.namespace + "/" + schema.spec.template.metadata.name}
+
+    # Candidates targeting the same resource as me.
+    - id: candidates
+      forEach:
+        - c: ${identities.filter(i, i.identity == identity.value)}
+      template:
+        name: ${c.name}
+        priority: ${c.priority}
+
+    # The winner — sort by name (tiebreaker), then by priority descending.
+    # Stable sort preserves name order within same priority. Take first.
+    - id: winner
+      template:
+        name: ${candidates.sortBy(c, c.name).sortBy(c, -c.priority)[0].name}
+
+    - id: target
+      includeWhen:
+        - ${winner.name == schema.metadata.name}
+      template: "${schema.spec.template}"

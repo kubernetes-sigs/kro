@@ -467,6 +467,13 @@ func (w *walkState) tryDispatch(idx int) {
 			w.notifyDependents(node.ID)
 			return
 		}
+		// Transitioning from Excluded to included: re-resolve the reference.
+		// The previous classification may be stale (e.g., a resource that
+		// existed when we first resolved may have been deleted by the
+		// previous owner's teardown).
+		if prev, ok := w.state.previousPlanStates[node.ID]; ok && prev == NodeExcluded {
+			w.state.resolvedReferences[node.ID] = ReferenceUnresolved
+		}
 	}
 
 	// Build snapshot evaluator for the worker.

@@ -644,6 +644,8 @@ func (s *GraphSpec) Hash() string {
 		if node.Template != nil {
 			data, _ := json.Marshal(node.Template)
 			hashField(data)
+		} else if node.TemplateExpr != "" {
+			hashField([]byte(node.TemplateExpr))
 		} else {
 			hashField(nil)
 		}

@@ -197,6 +197,28 @@ func (e *evaluator) toMap(tmpl map[string]any) (map[string]any, error) {
 	return result, nil
 }
 
+// toMapNode evaluates a node's template — either a static Template map or
+// a TemplateExpr CEL expression that produces the entire map at runtime.
+func (e *evaluator) toMapNode(node Node) (map[string]any, error) {
+	if node.TemplateExpr != "" {
+		// TemplateExpr is a standalone ${...} expression. Use evalString
+		// which handles ${...} extraction and type coercion.
+		raw, err := e.evalString(node.TemplateExpr)
+		if err != nil {
+			if isPending(err) {
+				return nil, ErrPending
+			}
+			return nil, fmt.Errorf("%w: templateExpr %q: %w", ErrEvaluation, node.TemplateExpr, err)
+		}
+		result, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%w: templateExpr evaluated to %T, want map", ErrEvaluation, raw)
+		}
+		return result, nil
+	}
+	return e.toMap(node.Template)
+}
+
 // template walks a value tree and evaluates/strips ${...} expressions.
 func (e *evaluator) template(value any) (any, error) {
 	switch v := value.(type) {
@@ -457,6 +479,9 @@ func extractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 	// Process template + includeWhen + forEach expressions → depPaths
 	var templateStrs []string
 	collectStrings(node.Template, &templateStrs)
+	if node.TemplateExpr != "" {
+		templateStrs = append(templateStrs, node.TemplateExpr)
+	}
 	for _, s := range node.IncludeWhen {
 		templateStrs = append(templateStrs, s)
 	}

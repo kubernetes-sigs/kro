@@ -157,7 +157,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				// No previous scope — fall through to evaluate.
 			}
 
-			if node.Template == nil {
+			if !node.HasTemplate() {
 				continue
 			}
 			innerScope := copyScope(eval.scope)
@@ -167,7 +167,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			// Definition forEach: evaluate the template per item, collect
 			// values into []any. No resource is created or tracked.
 			if DetectReference(node.Template) == ReferenceDefinition {
-				evalMap, err := innerEval.toMap(node.Template)
+				evalMap, err := innerEval.toMapNode(node)
 				if err != nil {
 					childErrors = append(childErrors, fmt.Errorf("forEach defines %s item: %w", node.ID, err))
 					logger.V(1).Info("forEach definition item error", "node", node.ID, "item", id, "error", err)
@@ -179,7 +179,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				continue
 			}
 
-			evalMap, err := innerEval.toMap(node.Template)
+			evalMap, err := innerEval.toMapNode(node)
 			if err != nil {
 				return nil, fmt.Errorf("forEach %s item: %w", node.ID, err)
 			}

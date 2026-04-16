@@ -153,7 +153,7 @@ func (r *GraphReconciler) runFinalization(
 		}
 
 		// Single-resource finalizer (original path).
-		evalMap, err := eval.toMap(finNode.Template)
+		evalMap, err := eval.toMapNode(*finNode)
 		if err != nil {
 			return false, keys, fmt.Errorf("evaluating finalizer template %s: %w", finNodeID, err)
 		}
@@ -244,7 +244,7 @@ func (r *GraphReconciler) runForEachFinalization(
 			innerScope[varName] = item
 			innerEval := eval.withScope(innerScope)
 
-			evalMap, err := innerEval.toMap(finNode.Template)
+			evalMap, err := innerEval.toMapNode(*finNode)
 			if err != nil {
 				return false, createdKeys, fmt.Errorf("forEach finalizer %s item: %w", finNode.ID, err)
 			}

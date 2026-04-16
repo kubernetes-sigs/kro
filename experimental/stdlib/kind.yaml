@@ -92,6 +92,10 @@ spec:
                 apiVersion: $${k.spec.group}/$${k.spec.version}
                 kind: $${k.spec.kind}
                 metadata:
+                  # Empty namespace = watch across all namespaces. Required for
+                  # cluster-scoped Kinds (RGD) and namespace-scoped Kinds whose
+                  # instances may exist in any namespace.
+                  namespace: ""
                   selector: {}
 
             - id: instances
@@ -101,7 +105,10 @@ spec:
                 apiVersion: experimental.kro.run/v1alpha1
                 kind: Graph
                 metadata:
-                  name: $${instance.metadata.namespace}-$${instance.metadata.name}-$${k.spec.kind.lowerAscii()}
+                  name: >-
+                    $${(has(instance.metadata.namespace) && instance.metadata.namespace != ""
+                    ? instance.metadata.namespace + "-" : "")
+                    + instance.metadata.name + "-" + k.spec.kind.lowerAscii()}
                 spec:
                   nodes: >-
                     $${
@@ -110,19 +117,19 @@ spec:
                         "kind": k.spec.kind,
                         "metadata": {
                           "name": instance.metadata.name,
-                          "namespace": instance.metadata.namespace
+                          "namespace": has(instance.metadata.namespace) ? instance.metadata.namespace : ""
                         }
                       }}]
                       + k.spec.nodes
-                      + [{"id": "status", "template": {
+                      + (has(k.spec.schema.status) ? [{"id": "status", "template": {
                         "apiVersion": k.spec.group + "/" + k.spec.version,
                         "kind": k.spec.kind,
                         "metadata": {
                           "name": instance.metadata.name,
-                          "namespace": instance.metadata.namespace
+                          "namespace": has(instance.metadata.namespace) ? instance.metadata.namespace : ""
                         },
-                        "status": has(k.spec.schema.status) ? k.spec.schema.status : {}
-                      }}]
+                        "status": k.spec.schema.status
+                      }}] : [])
                     }
 
             - id: kindStatus

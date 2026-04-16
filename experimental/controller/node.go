@@ -247,8 +247,21 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 		labelSelector = labels.Everything()
 	}
 
+	// Resolve namespace for WatchKind. Default is the Graph's own namespace
+	// for test isolation and scoping. If the template explicitly sets
+	// metadata.namespace, use that value — empty string means all namespaces,
+	// needed for cluster-scoped resources or cross-namespace watching.
+	watchNamespace := graph.GetNamespace()
+	if md, ok := tmpl["metadata"].(map[string]any); ok {
+		if ns, ok := md["namespace"]; ok {
+			if nsStr, ok := ns.(string); ok {
+				watchNamespace = nsStr
+			}
+		}
+	}
+
 	if watcher != nil {
-		watcher.watchKind(node.ID, gvkToGVR(gvk), graph.GetNamespace(), labelSelector)
+		watcher.watchKind(node.ID, gvkToGVR(gvk), watchNamespace, labelSelector)
 	}
 
 	var items []any
@@ -349,7 +362,7 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 		list.SetGroupVersionKind(listGVK)
 		if err := r.Client.List(ctx, list, &client.ListOptions{
 			LabelSelector: labelSelector,
-			Namespace:     graph.GetNamespace(),
+			Namespace:     watchNamespace,
 		}); err != nil {
 			return fmt.Errorf("listing %s with selector %s: %w", gvk, labelSelector, err)
 		}

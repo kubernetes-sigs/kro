@@ -13,6 +13,7 @@ spec:
   kind: ResourceGraphDefinition
   group: kro.run
   version: v1alpha1
+  scope: Cluster
   schema:
     types:
       ExternalRefMetadata:
@@ -34,7 +35,7 @@ spec:
       schema:
         kind: string
         apiVersion: string
-        group: string
+        group: string | default=kro.run
         scope: string | default=Namespaced
         spec: object
         status: object
@@ -53,7 +54,7 @@ spec:
           names:
             kind: ${schema.spec.schema.kind}
             plural: ${plural(schema.spec.schema.kind).lowerAscii()}
-          scope: '${has(schema.spec.schema.scope) ? schema.spec.schema.scope : "Namespaced"}'
+          scope: ${schema.spec.schema.scope}
           versions:
             - name: ${schema.spec.schema.apiVersion}
               served: true
@@ -81,6 +82,24 @@ spec:
         metadata:
           name: ${instance.metadata.namespace}-${instance.metadata.name}-${schema.spec.schema.kind.lowerAscii()}
         spec:
+          # Per-instance Graph nodes: schema watch + user resources + status.
+          #
+          # Single status node computes state from observed resource readiness.
+          # No propagateWhen gate — the node always fires, and the CEL ternary
+          # produces the correct value: ACTIVE when all resources are ready,
+          # IN_PROGRESS otherwise. Apply-hash changes only on state transitions,
+          # so steady-state reconciles are no-ops.
+          #
+          # The readiness check is built dynamically: for each resource in the
+          # RGD spec, generate "${<id>.ready()}" and join with " && ". Empty
+          # resource lists produce "true" (vacuously ready).
+          #
+          # propagateWhen injection:
+          #   The upstream controller gates on readyWhen; the Graph controller uses
+          #   propagateWhen for the same purpose. The .map() injects propagateWhen
+          #   into every resource — resources with readyWhen get that expression,
+          #   resources without get ["true"] (always-ready, but still classified as
+          #   managed rather than watch-only).
           nodes: >-
             ${
               [{"id": "schema", "template": {
@@ -91,7 +110,7 @@ spec:
                   "namespace": instance.metadata.namespace
                 }
               }}]
-              + schema.spec.resources
+              + schema.spec.resources.map(r, r.merge({"propagateWhen": has(r.readyWhen) ? r.readyWhen : ["true"]}))
               + [{"id": "status", "template": {
                 "apiVersion": schema.spec.schema.group + "/" + schema.spec.schema.apiVersion,
                 "kind": schema.spec.schema.kind,
@@ -99,6 +118,18 @@ spec:
                   "name": instance.metadata.name,
                   "namespace": instance.metadata.namespace
                 },
-                "status": has(schema.spec.schema.status) ? schema.spec.schema.status : {}
+                "status": {"state": "${" + (schema.spec.resources.size() == 0 ? "true" : schema.spec.resources.map(r, r.id + ".ready()").join(" && ")) + " ? 'ACTIVE' : 'IN_PROGRESS'}"}.merge(has(schema.spec.schema.status) ? schema.spec.schema.status : {})
               }}]
             }
+
+    - id: rgdStatus
+      propagateWhen:
+        - ${crd.ready()}
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: ResourceGraphDefinition
+        metadata:
+          name: ${schema.metadata.name}
+        status:
+          state: Active
+          topologicalOrder: '${schema.spec.resources.map(r, r.id)}'

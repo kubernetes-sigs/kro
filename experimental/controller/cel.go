@@ -814,7 +814,10 @@ func celSimpleSchemaFunction() []cel.EnvOption {
 				"kind":       map[string]any{"type": "string"},
 				"metadata":   map[string]any{"type": "object"},
 				"spec":       result,
-				"status":     map[string]any{"type": "object"},
+				"status": map[string]any{
+					"type":                                 "object",
+					"x-kubernetes-preserve-unknown-fields": true,
+				},
 			},
 		}
 

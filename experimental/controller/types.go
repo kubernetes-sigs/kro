@@ -217,8 +217,22 @@ type Node struct {
 }
 
 // Reference returns the Reference type of this node's template.
+// Identity-only templates (apiVersion+kind+metadata only) are normally
+// classified as Watch. However, if the node has management signals
+// (readyWhen, propagateWhen, includeWhen), it's clearly intended to be
+// managed, not observed — upgrade to Unresolved so the reconciler
+// resolves it against the cluster state.
+//
+// Tradeoff: this forecloses "watch a resource I don't own but gate on its
+// readiness." If that use case arises, the discriminator needs refinement
+// (e.g., an explicit watch-only annotation). For now, management signals
+// on an identity-only template imply ownership intent.
 func (n *Node) Reference() Reference {
-	return DetectReference(n.Template)
+	ref := DetectReference(n.Template)
+	if ref == ReferenceWatch && (len(n.ReadyWhen) > 0 || len(n.PropagateWhen) > 0 || len(n.IncludeWhen) > 0) {
+		return ReferenceUnresolved
+	}
+	return ref
 }
 
 // HasTemplate returns true if the node has a template (static or expression).

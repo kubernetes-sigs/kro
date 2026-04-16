@@ -26,7 +26,7 @@ import (
 //	without conflict."
 //
 // This is the core ownership model: each Graph uses a dedicated field manager
-// (experimental.kro.run/<ns>/<name>), so SSA field ownership is scoped per
+// (<name>.<ns>.internal.kro.run), so SSA field ownership is scoped per
 // Graph. Two Graphs writing disjoint field sets on the same resource must not
 // produce a 409 conflict, and each Graph's fields must persist independently.
 func TestMultiGraphFieldCoexistence(t *testing.T) {
@@ -653,7 +653,7 @@ func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
 
 	// Verify the Graph's field manager state after skeleton apply.
 	managedFields := finalTarget.GetManagedFields()
-	graphManager := "experimental.kro.run/" + ns + "/contrib-status-teardown"
+	graphManager := "contrib-status-teardown." + ns + ".internal.kro.run"
 
 	// Main resource: skeleton apply should release identity labels/annotations.
 	for _, mf := range managedFields {
@@ -781,7 +781,7 @@ func TestContributeMetadataAndStatus(t *testing.T) {
 	t.Log("Both metadata and status contributed successfully")
 
 	// Record the field manager name for later assertions.
-	graphManager := "experimental.kro.run/" + ns + "/" + graphName
+	graphManager := graphName + "." + ns + ".internal.kro.run"
 
 	// Verify the field manager has entries for BOTH subresources.
 	managedFields := check.GetManagedFields()
@@ -985,7 +985,7 @@ func TestContributeMapFieldOwnership(t *testing.T) {
 	t.Log("All keys coexist: 2 external + 2 contributed")
 
 	// Verify field manager ownership before prune.
-	graphManager := "experimental.kro.run/" + ns + "/" + graphName
+	graphManager := graphName + "." + ns + ".internal.kro.run"
 	managedFields := check.GetManagedFields()
 	var graphOwnsDataKeys bool
 	for _, mf := range managedFields {

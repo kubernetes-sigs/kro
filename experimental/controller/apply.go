@@ -43,9 +43,9 @@ func isForceApply(obj *unstructured.Unstructured) bool {
 }
 
 // graphFieldOwner returns the SSA field manager identity for a Graph.
-// Per the design (003-ownership): experimental.kro.run/<namespace>/<name>
+// Per the design (003-ownership): <name>.<namespace>.internal.kro.run
 func graphFieldOwner(graph *unstructured.Unstructured) client.FieldOwner {
-	return client.FieldOwner("experimental.kro.run/" + graph.GetNamespace() + "/" + graph.GetName())
+	return client.FieldOwner(graph.GetName() + "." + graph.GetNamespace() + ".internal.kro.run")
 }
 
 // thirdPartyFieldManagers returns field manager names on the resource that are

@@ -604,11 +604,12 @@ func TestDeletionSkipsConflictedResources(t *testing.T) {
 }
 
 // TestDedicatedFieldManagerName verifies that each Graph uses a dedicated SSA
-// field manager in the format `experimental.kro.run/<namespace>/<name>`.
+// field manager in the format `<name>.<namespace>.internal.kro.run`.
 //
-// Design 003-ownership § kro's Model:
+// Design 003-ownership § Field Manager:
 //
-//	"Each Graph instance uses experimental.kro.run/<namespace>/<name>."
+//	"Each Graph instance gets a dedicated SSA field manager:
+//	<name>.<namespace>.internal.kro.run"
 //
 // The field manager name is the key that makes per-Graph field ownership
 // scoped and independent. If the format is wrong, multi-graph coexistence
@@ -618,7 +619,7 @@ func TestDedicatedFieldManagerName(t *testing.T) {
 	ns := createNamespace(t)
 
 	graphName := "test-field-manager"
-	expectedManager := "experimental.kro.run/" + ns + "/" + graphName
+	expectedManager := graphName + "." + ns + ".internal.kro.run"
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
@@ -666,7 +667,7 @@ func TestDedicatedFieldManagerName(t *testing.T) {
 	}
 
 	assert.Equal(t, expectedManager, foundManager,
-		"managed resource must have a field manager in format experimental.kro.run/<ns>/<name>")
+		"managed resource must have a field manager in format <name>.<ns>.internal.kro.run")
 	t.Logf("Field manager verified: %s", foundManager)
 }
 

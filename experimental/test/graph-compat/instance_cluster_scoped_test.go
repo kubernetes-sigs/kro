@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/instance_cluster_scoped_test.go

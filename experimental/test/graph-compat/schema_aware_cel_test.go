@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/schema_aware_cel_test.go

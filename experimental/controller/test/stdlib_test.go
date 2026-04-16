@@ -145,19 +145,22 @@ func TestStdlibKind(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 func TestStdlibDecorator(t *testing.T) {
-	// Intentionally serial: this Decorator's items WatchKind uses an empty
-	// selector, so it picks up every ConfigMap in kro-system — including
-	// those created by TestStdlibKind when running concurrently. Parallel
-	// execution is safe but stamps extra "-decorated" ConfigMaps that
-	// inflate runtime and muddy the test's intent. Keep serial until the
-	// stdlib Decorator template honors spec.watch.selector.
+	// Intentionally serial: this Decorator's items WatchKind uses an
+	// empty selector and no namespace, so it picks up every ConfigMap
+	// cluster-wide — including those created by TestStdlibKind when
+	// running concurrently. Parallel execution is safe but stamps extra
+	// "-decorated" ConfigMaps that inflate runtime and muddy the test's
+	// intent. Keep serial until the stdlib Decorator template honors
+	// spec.watch.selector.
 	require.NoError(t, waitForCRD(ctx, k8sClient, "decorators.experimental.kro.run", stdlibCRDTimeout))
 
 	// Phase 1: Create a Decorator that watches ConfigMaps and creates
 	// a companion ConfigMap per item with derived data.
 	//
-	// The Decorator's controller Graph lives in kro-system, and WatchKind
-	// scopes to the Graph's namespace. So watched items must be in kro-system.
+	// The Decorator lives in kro-system. Its WatchKind omits
+	// metadata.namespace, so it watches ConfigMaps across all namespaces
+	// (k8s list/watch semantics). The test places the source ConfigMap
+	// in kro-system for convenience — any namespace would work.
 	t.Log("creating Decorator: configmap-annotator")
 	decorator := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "experimental.kro.run/v1alpha1",
@@ -194,7 +197,8 @@ func TestStdlibDecorator(t *testing.T) {
 	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), decorator) })
 
 	// Phase 2: Create a ConfigMap in kro-system with the matching label.
-	// WatchKind scopes to the Graph's namespace, so watched ConfigMaps must be in kro-system.
+	// The Decorator's WatchKind is cluster-wide; kro-system is just where
+	// this test places the source.
 	t.Log("creating watched ConfigMap in kro-system")
 	source := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1",

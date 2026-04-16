@@ -198,11 +198,19 @@ Three resources are embedded in `experimental/stdlib/` and applied in order:
 
 ## Constraints
 
-**Namespace scoping.** WatchKind in a Graph watches resources in the Graph's own namespace only. A
-Kind in `kro-system` produces controller Graphs in `kro-system`, which watch instances in
-`kro-system`. User-created instances must be in the same namespace as the Kind's controller Graph.
-CRDs are cluster-scoped, so the type is available in all namespaces, but only instances in the
-controller's namespace are reconciled.
+**Namespace scoping.** Two rules, one per primitive.
+
+*WatchKind* follows k8s list/watch semantics: absent `metadata.namespace` on a WatchKind template
+means all namespaces, matching `ListOptions`, informer caches, and every client library. An explicit
+namespace narrows the watch to one namespace. The Graph's own namespace is never used as a default —
+a WatchKind's scope is its targets, not where the Graph lives. The stdlib Kind and RGD controller
+Graphs live in `kro-system` but watch instances across all namespaces; users can create Kind and RGD
+instances anywhere. CRDs are cluster-scoped, so the type is available everywhere.
+
+*Resources* (non-Watch) default to the Graph's own namespace when `metadata.namespace` is absent,
+matching upstream kro's behavior. Per-instance Graphs live in the instance's namespace (or
+`kro-system` for cluster-scoped instances), so resources inside a per-instance Graph default to the
+instance's namespace.
 
 **Drift reconciliation during bootstrap.** When the Kind controller creates a CRD, the CRD
 transitions to Established asynchronously. The owned-resource watch does not reliably trigger a

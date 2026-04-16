@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/terminating_managed_resource_test.go

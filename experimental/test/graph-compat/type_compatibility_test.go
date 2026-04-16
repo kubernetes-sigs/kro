@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/type_compatibility_test.go

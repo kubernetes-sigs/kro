@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/externalref_watch_test.go

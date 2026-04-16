@@ -247,11 +247,13 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 		labelSelector = labels.Everything()
 	}
 
-	// Resolve namespace for WatchKind. Default is the Graph's own namespace
-	// for test isolation and scoping. If the template explicitly sets
-	// metadata.namespace, use that value — empty string means all namespaces,
-	// needed for cluster-scoped resources or cross-namespace watching.
-	watchNamespace := graph.GetNamespace()
+	// WatchKind namespace follows k8s list/watch semantics: absent
+	// metadata.namespace means all namespaces, matching ListOptions,
+	// informer caches, and every client library. An explicit namespace
+	// narrows the watch to one namespace. The Graph's own namespace is
+	// never used as a default — a WatchKind's scope is its targets, not
+	// where the Graph object lives.
+	watchNamespace := ""
 	if md, ok := tmpl["metadata"].(map[string]any); ok {
 		if ns, ok := md["namespace"]; ok {
 			if nsStr, ok := ns.(string); ok {

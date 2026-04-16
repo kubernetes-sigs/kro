@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/readiness_test.go

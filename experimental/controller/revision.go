@@ -88,7 +88,7 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 				"name":      revisionName(graphName, generation),
 				"namespace": graphNamespace,
 				"labels": map[string]any{
-					LabelRevisionGraphName: graphName,
+					LabelRevisionGraphName: labelSafeGraphName(graphName),
 					LabelGraphGeneration:   generationStr,
 				},
 				"ownerReferences": []any{
@@ -218,7 +218,7 @@ func getRevision(ctx context.Context, c client.Client, name, namespace string) (
 // listRevisions returns all GraphRevisions for a given Graph, ordered by
 // generation (ascending). Uses the graph-name label for selection.
 func listRevisions(ctx context.Context, c client.Client, graphName, namespace string) ([]*unstructured.Unstructured, error) {
-	req, err := labels.NewRequirement(LabelRevisionGraphName, selection.Equals, []string{graphName})
+	req, err := labels.NewRequirement(LabelRevisionGraphName, selection.Equals, []string{labelSafeGraphName(graphName)})
 	if err != nil {
 		return nil, fmt.Errorf("building label selector: %w", err)
 	}

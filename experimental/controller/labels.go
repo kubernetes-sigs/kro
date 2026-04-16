@@ -15,7 +15,9 @@
 package graphcontroller
 
 import (
+	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -24,6 +26,25 @@ import (
 // maxLabelPrefixLength is the Kubernetes limit for the prefix part of a
 // label key (the DNS subdomain before the /). Per RFC 1123: max 253.
 const maxLabelPrefixLength = 253
+
+// maxLabelValueLength is the Kubernetes limit for label values (63 bytes).
+const maxLabelValueLength = 63
+
+// labelSafeGraphName returns a graph name suitable for use as a label
+// value. If the name is ≤63 bytes it's returned unchanged. Otherwise it's
+// truncated and suffixed with an fnv32a hex hash — the same hash family
+// pkg/controller/resourcegraphdefinition uses for GraphRevision names —
+// to preserve a human-readable prefix while guaranteeing uniqueness.
+func labelSafeGraphName(name string) string {
+	if len(name) <= maxLabelValueLength {
+		return name
+	}
+	h := fnv.New32a()
+	h.Write([]byte(name))
+	hash := hex.EncodeToString(h.Sum(nil)) // 8 hex chars
+	// Reserve 9 chars for "-" + 8-char hash.
+	return name[:maxLabelValueLength-9] + "-" + hash
+}
 
 const (
 	// identityLabelSuffix is the fixed suffix for all identity labels.

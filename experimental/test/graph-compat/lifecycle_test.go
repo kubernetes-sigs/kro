@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/lifecycle_test.go

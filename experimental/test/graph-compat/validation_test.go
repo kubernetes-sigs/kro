@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/validation_test.go

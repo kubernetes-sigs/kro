@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/crd_test.go

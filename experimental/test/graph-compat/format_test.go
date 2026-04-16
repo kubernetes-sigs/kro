@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/format_test.go

@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/metadata_fields_test.go

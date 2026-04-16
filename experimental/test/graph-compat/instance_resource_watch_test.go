@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/instance_resource_watch_test.go

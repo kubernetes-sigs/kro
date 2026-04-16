@@ -62,7 +62,7 @@ type Environment struct {
 // Start builds the binary, starts envtest, starts the subprocess, and waits
 // for health. Returns the REST config for creating clients.
 func (e *Environment) Start() (*rest.Config, error) {
-	moduleRoot := findModuleRoot()
+	moduleRoot := FindModuleRoot()
 
 	// Build binary.
 	binaryPath, err := buildBinary(moduleRoot)
@@ -151,7 +151,7 @@ func (e *Environment) cleanup() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-func findModuleRoot() string {
+func FindModuleRoot() string {
 	wd, err := os.Getwd()
 	if err != nil {
 		panic("os.Getwd: " + err.Error())

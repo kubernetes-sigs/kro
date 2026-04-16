@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/instance_conflict_test.go

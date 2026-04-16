@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/collection_watch_test.go

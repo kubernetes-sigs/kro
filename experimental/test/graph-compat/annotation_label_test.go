@@ -1,0 +1,1 @@
+../../../test/integration/suites/core/annotation_label_test.go

@@ -92,7 +92,11 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 						"template": map[string]any{
 							"apiVersion": "test.kro.run/v1alpha1",
 							"kind":       "ResourceGraphDefinition",
-							"selector":   map[string]any{},
+							// WatchKind namespace follows k8s list/watch semantics:
+							// absent = all namespaces. Tests pin to their own
+							// namespace to keep parallel runs isolated.
+							"metadata": map[string]any{"namespace": namespace},
+							"selector": map[string]any{},
 						},
 					},
 					map[string]any{
@@ -140,6 +144,7 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 									{"id": "instances", "template": {
 										"apiVersion": "${rgd.spec.schema.group}/${rgd.spec.schema.apiVersion}",
 										"kind": "${rgd.spec.schema.kind}",
+										"metadata": {"namespace": rgd.metadata.namespace},
 										"selector": {}
 									}},
 									{"id": "instanceGraphs", "forEach": {"instance": "${instances}"},

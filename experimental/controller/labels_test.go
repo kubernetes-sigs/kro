@@ -1,6 +1,7 @@
 package graphcontroller
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -234,4 +235,36 @@ func TestIdentityLabelKeyProducesValidSubdomain(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLabelSafeGraphName verifies that graph names exceeding the
+// Kubernetes 63-byte label-value limit are deterministically truncated
+// and suffixed with a hash so distinct names produce distinct labels.
+func TestLabelSafeGraphName(t *testing.T) {
+	tests := []struct {
+		name      string
+		graphName string
+	}{
+		{name: "short name passes through", graphName: "my-graph"},
+		{name: "exactly 63 bytes passes through", graphName: strings.Repeat("a", 63)},
+		{name: "over 63 bytes is truncated", graphName: strings.Repeat("a", 100)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := labelSafeGraphName(tc.graphName)
+			assert.LessOrEqual(t, len(got), maxLabelValueLength,
+				"result must fit in a Kubernetes label value")
+			if len(tc.graphName) <= maxLabelValueLength {
+				assert.Equal(t, tc.graphName, got, "short names pass through unchanged")
+			}
+		})
+	}
+
+	// Different long names must not collide after truncation.
+	a := labelSafeGraphName("test-instance-resource-reconcile-reactive-resourcegraphdefinition")
+	b := labelSafeGraphName("test-instance-resource-reconcile-alternate-resourcegraphdefinition")
+	assert.NotEqual(t, a, b, "distinct long names must produce distinct labels")
+
+	// Determinism: same input produces same output.
+	assert.Equal(t, a, labelSafeGraphName("test-instance-resource-reconcile-reactive-resourcegraphdefinition"))
 }

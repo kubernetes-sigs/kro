@@ -1280,7 +1280,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					if node.Finalizes != "" {
 						continue // finalizer node — dormant, never in applied set
 					}
-					if key := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); key != "" {
+					if key := staticResourceKey(node.Identity(), graph.GetNamespace(), r.Scope); key != "" {
 						allPreviousKeys[key] = true
 					}
 				}
@@ -1492,14 +1492,14 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			continue
 		}
 		for _, node := range spec.Nodes {
-			if node.Template == nil {
+			if node.Identity() == nil {
 				continue
 			}
-			if key := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); key != "" {
+			if key := staticResourceKey(node.Identity(), graph.GetNamespace(), r.Scope); key != "" {
 				staticKeys[key] = true
 			}
-			if templateHasStatus(node.Template) {
-				if key := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); key != "" {
+			if templateHasStatus(node.Payload()) {
+				if key := staticResourceKey(node.Identity(), graph.GetNamespace(), r.Scope); key != "" {
 					contributeStatusMap[key] = true
 				}
 			}
@@ -1551,19 +1551,19 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			continue
 		}
 		for _, node := range spec.Nodes {
-			if node.Template == nil {
+			if node.Identity() == nil {
 				continue
 			}
-			// Skip Watch, WatchKind (read-only), and Definition (no resource).
+			// Skip Watch, WatchKind (read-only).
 			ref := node.Reference()
-			if ref == ReferenceWatch || ref == ReferenceWatchKind || ref == ReferenceDefinition {
+			if ref == ReferenceWatch || ref == ReferenceWatchKind {
 				continue
 			}
 			// Skip finalizer nodes — dormant during normal operation.
 			if node.Finalizes != "" {
 				continue
 			}
-			if key := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); key != "" {
+			if key := staticResourceKey(node.Identity(), graph.GetNamespace(), r.Scope); key != "" {
 				ownKeys[key] = true
 			}
 		}
@@ -1638,8 +1638,8 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	finalizerNodeKeys := map[string]bool{} // keys of finalizer nodes — skip from regular deletion
 	if teardownDAG != nil {
 		for _, node := range teardownDAG.Nodes {
-			if node.Template != nil {
-				if rk := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); rk != "" {
+			if node.Identity() != nil {
+				if rk := staticResourceKey(node.Identity(), graph.GetNamespace(), r.Scope); rk != "" {
 					keyToNodeID[rk] = node.ID
 					if node.Finalizes != "" {
 						finalizerNodeKeys[rk] = true
@@ -1728,8 +1728,8 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 					for _, finNodeID := range finalizerNodeIDs {
 						if finIdx, ok2 := teardownDAG.Index[finNodeID]; ok2 {
 							finNode := &teardownDAG.Nodes[finIdx]
-							if finNode.Template != nil && finNode.ForEach == nil {
-								if fk := staticResourceKey(finNode.Template, graph.GetNamespace(), r.Scope); fk != "" {
+							if finNode.Identity() != nil && finNode.ForEach == nil {
+								if fk := staticResourceKey(finNode.Identity(), graph.GetNamespace(), r.Scope); fk != "" {
 									fGVK, fNN := parseResourceKey(fk)
 									finDel := &unstructured.Unstructured{}
 									finDel.SetGroupVersionKind(fGVK)
@@ -1889,12 +1889,12 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchMan
 			if node.Finalizes != "" {
 				continue // finalizer node — dormant during normal operation
 			}
-			tmpl := node.Template
-			if tmpl == nil {
+			id := node.Identity()
+			if id == nil {
 				continue
 			}
-			apiVersion, _ := tmpl["apiVersion"].(string)
-			kind, _ := tmpl["kind"].(string)
+			apiVersion, _ := id["apiVersion"].(string)
+			kind, _ := id["kind"].(string)
 			if apiVersion == "" || kind == "" {
 				continue
 			}

@@ -124,8 +124,17 @@ func (r *GraphReconciler) runFinalization(
 
 	// Put the target's data in scope so finalizer templates can reference it.
 	// The target is still alive (no deletionTimestamp).
+	//
+	// TODO(suspected-bug): resolvedResourceKey's doc says it operates on
+	// templates where CEL expressions have already been resolved, but this
+	// call passes node.Identity() (formerly node.Template) — the unresolved
+	// template. Identity() preserves the pre-existing behavior of this
+	// call, but the behavior itself may be wrong: nodes whose metadata.name
+	// contains ${...} would fail to match the target even when they should.
+	// Investigate whether the doc is wrong (this is the intended call) or
+	// the call is wrong (should evaluate before computing the key).
 	for _, node := range dag.Nodes {
-		if resourceKey(target) == resolvedResourceKey(node.Template, graph.GetNamespace()) {
+		if resourceKey(target) == resolvedResourceKey(node.Identity(), graph.GetNamespace()) {
 			eval.scope[node.ID] = normalizeTypes(target.Object)
 			break
 		}
@@ -465,6 +474,11 @@ func parseContributeKey(key string) (resKey string, hasStatus bool) {
 // templateHasStatus returns true if a template map contains a non-nil
 // status field. Used during teardown to determine whether release apply
 // must also release the status subresource.
+//
+// TODO: when the explicit keyword schema lands, Contribute nodes declare
+// status delegation via the `patch` keyword's shape — this shape-sniffing
+// becomes unnecessary because the parser already knows whether a patch
+// body includes status.
 func templateHasStatus(tmpl map[string]any) bool {
 	s, ok := tmpl["status"]
 	return ok && s != nil
@@ -738,8 +752,8 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	nodeIDToKey := map[string]string{}
 	for _, d := range allDAGs {
 		for _, node := range d.Nodes {
-			if node.Template != nil {
-				if rk := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); rk != "" {
+			if node.Identity() != nil {
+				if rk := staticResourceKey(node.Identity(), graph.GetNamespace(), r.Scope); rk != "" {
 					keyToNodeID[rk] = node.ID
 					nodeIDToKey[node.ID] = rk
 				}
@@ -964,15 +978,16 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 			continue
 		}
 		for _, node := range spec.Nodes {
-			if node.Template == nil {
+			if node.Identity() == nil {
 				continue
 			}
 			ref := node.Reference()
 			if ref == ReferenceWatch || ref == ReferenceWatchKind {
 				continue // read-only references don't create resources
 			}
-			apiVersion, _ := node.Template["apiVersion"].(string)
-			kind, _ := node.Template["kind"].(string)
+			id := node.Identity()
+			apiVersion, _ := id["apiVersion"].(string)
+			kind, _ := id["kind"].(string)
 			if apiVersion == "" || kind == "" {
 				continue
 			}
@@ -1029,10 +1044,10 @@ func pruneOrder(keys []string, dags []*DAG, defaultNS string, scope GVKScopeReso
 		}
 
 		for i, node := range d.Nodes {
-			if node.Template == nil {
+			if node.Identity() == nil {
 				continue
 			}
-			rk := staticResourceKey(node.Template, defaultNS, scope)
+			rk := staticResourceKey(node.Identity(), defaultNS, scope)
 			if rk == "" {
 				continue
 			}

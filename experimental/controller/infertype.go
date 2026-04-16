@@ -29,11 +29,15 @@ import (
 // typeSource holds all resolved type information for building the CEL environment.
 
 // isWatchKindTemplate returns true when a template has a `selector` field,
-// indicating it watches a collection. This is stricter than DetectReference's
+// indicating it watches a collection. This is stricter than detectReference's
 // WatchKind classification (which uses "no metadata.name") because unnamed
 // Own resources also lack metadata.name but are not collections. The selector
 // field is the user-facing signal for "watch all instances of this kind" and
 // is present on all WatchKind templates in practice.
+//
+// TODO: remove when the explicit keyword schema lands. At that point
+// Reference() == ReferenceWatchKind is authoritative — no selector sniffing
+// needed — and callers of this function migrate to node.Reference().
 func isWatchKindTemplate(tmpl map[string]any) bool {
 	_, hasSelector := tmpl["selector"]
 	return hasSelector
@@ -79,7 +83,7 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 		case ref == ReferenceDefinition:
 			// Phase 2: infer type from template structure.
 			typeName := krocel.TypeNamePrefix + node.ID
-			dt := inferObjectType(typeName, node.Template)
+			dt := inferObjectType(typeName, node.Payload())
 			ts.definitionTypes[node.ID] = dt
 			if node.ForEach != nil {
 				ts.forEachDefinitions[node.ID] = true
@@ -87,7 +91,7 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 
 		case schemaResolver != nil && ref != ReferenceDefinition:
 			// Phase 1: resolve schema for resource nodes with literal GVK.
-			gvk := extractLiteralGVK(node.Template)
+			gvk := extractLiteralGVK(node.Identity())
 			if gvk != nil {
 				s, err := schemaResolver.ResolveSchema(*gvk)
 				if err == nil && s != nil {

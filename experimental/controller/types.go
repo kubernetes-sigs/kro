@@ -252,10 +252,64 @@ func deriveReference(n *Node) Reference {
 	return ref
 }
 
-// HasTemplate returns true if the node has a template (static or expression).
-func (n *Node) HasTemplate() bool {
+// HasBody returns true if the node has an evaluable body — either a
+// static map or a CEL expression that yields a map at runtime.
+//
+// "Body" is the keyword-neutral term for "whatever the node's template/
+// patch/def keyword supplied." When the explicit-keyword schema lands,
+// this covers any of template/patch/def (but not watch/watchKind, which
+// have identity only).
+//
+// Current semantics: returns true whenever n.Template or n.TemplateExpr
+// is populated — which includes Watch and WatchKind nodes (their
+// Template holds identity fields). Post-split this flips: Watch and
+// WatchKind return false (no body-producing keyword declared). The
+// single caller (foreach.go's per-item body check) only runs for
+// forEach nodes, which must have a body to expand — so the semantic
+// flip does not change observable behavior. Audited 2026-04-16.
+func (n *Node) HasBody() bool {
 	return n.Template != nil || n.TemplateExpr != ""
 }
+
+// Identity returns the static identity view of this node's target — the
+// map containing apiVersion, kind, and metadata (name/namespace) used
+// to build the applied-set key, resolve GVK, and look up the target
+// resource. Returns nil for Definition nodes, which have no Kubernetes
+// identity, and for nodes whose body comes from TemplateExpr (the map
+// isn't available until evaluation).
+//
+// Today this returns n.Template (which carries identity fields for all
+// reference types that have them). When the explicit-keyword schema
+// lands, this returns the identity-view of whichever keyword was
+// declared — template for Own, patch for Contribute, watch for Watch,
+// watchKind for WatchKind. Call sites don't move.
+func (n *Node) Identity() map[string]any {
+	if n.Reference() == ReferenceDefinition {
+		return nil
+	}
+	return n.Template
+}
+
+// Payload returns the evaluable body of this node — the map fed to CEL
+// evaluation, expression walking, and structural inspection. Returns
+// nil when the body is supplied as a CEL expression (TemplateExpr)
+// rather than a static map — callers that need both paths should
+// handle TemplateExpr separately (see eval.toMapNode).
+//
+// Today this returns n.Template. When the explicit-keyword schema
+// lands, this returns the body of whichever body-producing keyword
+// was declared (template, patch, or def). Watch and WatchKind have
+// identity only and get their map through Identity().
+func (n *Node) Payload() map[string]any {
+	return n.Template
+}
+
+// Note: there is no IdentityKey method because computing the applied-set
+// key requires a GVKScopeResolver (to handle cluster-scoped resources
+// correctly per 003-ownership.md § Priority Resolution). The scope
+// resolver is a reconciler-level dependency that doesn't belong on the
+// Node abstraction. Callers use staticResourceKey(node.Identity(),
+// defaultNS, scope) directly.
 
 // GraphSpec holds the parsed spec of a Graph object.
 type GraphSpec struct {
@@ -315,7 +369,7 @@ func (s *GraphSpec) AllExpressions() []string {
 	// Collect expressions from each node
 	for _, node := range s.Nodes { // Template expressions
 		var templateStrings []string
-		collectStrings(node.Template, &templateStrings)
+		collectStrings(node.Payload(), &templateStrings)
 		if node.TemplateExpr != "" {
 			templateStrings = append(templateStrings, node.TemplateExpr)
 		}
@@ -455,6 +509,12 @@ func parseNodeList(raw any) ([]Node, error) {
 		// Static-name finalizers are looked up by key during prune; forEach
 		// finalizers use label-based discovery for cleanup.
 		// NOTE: This check must run after forEach is parsed above.
+		// TODO: this currently does not reject `finalizes` on Definition
+		// nodes — the metadata lookup below silently no-ops because
+		// Definitions have no metadata key. Pre-existing gap; fix when the
+		// explicit keyword schema lands (at which point Definition vs
+		// Own/Contribute is declared, not inferred, and the check can gate
+		// on reference type cleanly).
 		if node.Finalizes != "" && node.ForEach == nil && node.Template != nil {
 			if md, ok := node.Template["metadata"].(map[string]any); ok {
 				if name, ok := md["name"].(string); ok && strings.Contains(name, "${") {

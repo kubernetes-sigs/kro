@@ -733,8 +733,8 @@ func (s *GraphSpec) Hash() string {
 		hashField([]byte(node.ID))
 
 		// Template (deterministic via json.Marshal sorted map keys)
-		if node.Template != nil {
-			data, _ := json.Marshal(node.Template)
+		if payload := node.Payload(); payload != nil {
+			data, _ := json.Marshal(payload)
 			hashField(data)
 		} else if node.TemplateExpr != "" {
 			hashField([]byte(node.TemplateExpr))

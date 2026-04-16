@@ -253,7 +253,7 @@ func (e *evaluator) toMapNode(node Node) (map[string]any, error) {
 		}
 		return result, nil
 	}
-	return e.toMap(node.Template)
+	return e.toMap(node.Payload())
 }
 
 // template walks a value tree and evaluates/strips ${...} expressions.
@@ -515,7 +515,7 @@ func extractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 
 	// Process template + includeWhen + forEach expressions → depPaths
 	var templateStrs []string
-	collectStrings(node.Template, &templateStrs)
+	collectStrings(node.Payload(), &templateStrs)
 	if node.TemplateExpr != "" {
 		templateStrs = append(templateStrs, node.TemplateExpr)
 	}

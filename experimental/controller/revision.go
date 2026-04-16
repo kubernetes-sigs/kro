@@ -116,8 +116,8 @@ func snapshotNode(node Node) map[string]any {
 		"id": node.ID,
 	}
 
-	if node.Template != nil {
-		entry["template"] = deepCopyMap(node.Template)
+	if payload := node.Payload(); payload != nil {
+		entry["template"] = deepCopyMap(payload)
 	} else if node.TemplateExpr != "" {
 		entry["template"] = node.TemplateExpr
 	}

@@ -174,7 +174,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				// No previous scope — fall through to evaluate.
 			}
 
-			if !node.HasTemplate() {
+			if !node.HasBody() {
 				continue
 			}
 			innerScope := copyScope(eval.scope)

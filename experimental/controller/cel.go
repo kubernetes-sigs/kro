@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/google/cel-go/cel"
+	celast "github.com/google/cel-go/common/ast"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 
@@ -140,6 +141,14 @@ type compiledGraph struct {
 	spec           *GraphSpec                        // parsed spec (immutable)
 	dag            *DAG                              // dependency graph (immutable after BuildDAG)
 	unresolvedGVKs []schema.GroupVersionKind         // GVKs that fell back to dyn (triggers recompilation on CRD install)
+	// watchKindIDs captures the set of WatchKind node IDs in this spec.
+	// Used by the dynamic-compile fallback to apply the same
+	// `<wk_id>.ready()` AST rewrite that the eager-compile path does —
+	// expressions that reach the dynamic path (cross-revision
+	// finalization, forEach-finalizer synthesis, ad-hoc test evals)
+	// must honor the same rewrite, otherwise empty-WatchKind `.ready()`
+	// reverts to vacuously-true on that path.
+	watchKindIDs map[string]bool
 }
 
 // eval evaluates a CEL expression against the given scope.
@@ -171,7 +180,28 @@ func (c *compiledGraph) eval(expr string, scope map[string]any) (any, error) {
 			}
 			compileEnv = dynEnv
 		}
-		ast, issues := compileEnv.Compile(expr)
+		// Parse + AST-rewrite `<wk_id>.ready()` before type-check so the
+		// dynamic path matches the eager-compile path. Without this,
+		// expressions compiled here (cross-revision finalization,
+		// forEach-finalizer synthesized expressions, and test-harness
+		// eval calls that reference unregistered expressions) would
+		// keep the original `.ready()` behavior — vacuously-true on
+		// empty WatchKind collections.
+		parsed, issues := compileEnv.Parse(expr)
+		if issues != nil && issues.Err() != nil {
+			return nil, fmt.Errorf("expression %q not in cache, dynamic parse failed: %w", expr, issues.Err())
+		}
+		if len(c.watchKindIDs) > 0 {
+			nativeAst := parsed.NativeRep()
+			nextIDVal := celast.MaxID(nativeAst)
+			nextID := func() int64 {
+				id := nextIDVal
+				nextIDVal++
+				return id
+			}
+			rewriteWatchKindReady(nativeAst.Expr(), c.watchKindIDs, celast.NewExprFactory(), nextID)
+		}
+		ast, issues := compileEnv.Check(parsed)
 		if issues != nil && issues.Err() != nil {
 			return nil, fmt.Errorf("expression %q not in cache, dynamic compile failed: %w", expr, issues.Err())
 		}
@@ -260,6 +290,25 @@ type instanceState struct {
 	// full List.
 	watchKindCache map[string][]any // node ID → cached collection items
 
+	// watchKindDirty tracks WatchKind nodes whose previous incremental
+	// reconcile failed mid-merge. When the incremental path returns an
+	// error (e.g., a transient 5xx on one of the GETs), drained
+	// CollectionChanges are lost — the next reconcile would take the
+	// incremental path with stale cache. Setting this flag forces a full
+	// re-List on the next reconcile so the cache recovers from the
+	// authoritative API server state. Cleared when the next successful
+	// evaluation writes watchKindUpdatedCache.
+	watchKindDirty map[string]bool
+
+	// nodeReady persists per-WatchKind readyWhen verdicts across
+	// reconciles. The AST rewrite of `<wk_id>.ready()` looks up this
+	// map via the reserved scope variable; a WatchKind that isn't
+	// re-evaluated on a given reconcile must still expose its last
+	// verdict, otherwise downstream `.ready()` errors with
+	// "no such key" and the consumer incorrectly transitions out of
+	// Ready. Per 001-graph.md § readyWhen.
+	nodeReady map[string]bool
+
 	// systemErrorBackoff tracks the current exponential backoff duration per
 	// node in SystemError state. Per 004-graph-reconciliation.md § Trigger:
 	// "Transient errors (5xx) retry with exponential backoff [1s,
@@ -284,6 +333,8 @@ func newInstanceState(compiled *compiledGraph) *instanceState {
 		resolvedReferences:     make(map[string]Reference, len(compiled.dag.References)),
 		driftTimers:            make(map[string]time.Time),
 		watchKindCache:         make(map[string][]any),
+		watchKindDirty:         make(map[string]bool),
+		nodeReady:              make(map[string]bool),
 		systemErrorBackoff:     make(map[string]time.Duration),
 	}
 }
@@ -530,6 +581,13 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 		krocel.WithCustomDeclarations(celPluralFunction()),
 		krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
 		krocel.WithCustomDeclarations(celReadyFunction()),
+		// __kroNodeReady carries per-WatchKind readyWhen verdicts, looked up
+		// by the AST rewrite of `<wk_id>.ready()` (see readyrewrite.go).
+		// Per 001-graph.md § readyWhen: "A WatchKind's `.ready()` returns
+		// true when the node's readyWhen conditions pass."
+		krocel.WithCustomDeclarations([]cel.EnvOption{
+			cel.Variable(reservedNodeReadyVar, cel.MapType(cel.StringType, cel.BoolType)),
+		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("creating CEL env: %w", err)
@@ -544,14 +602,42 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 		scopeVars[id] = true
 	}
 
+	// WatchKind node IDs: AST rewrite targets. Only these IDs have their
+	// `.ready()` calls redirected to the readiness sidecar map.
+	watchKindIDs := make(map[string]bool, len(typeInfo.listIDs))
+	for _, id := range typeInfo.listIDs {
+		watchKindIDs[id] = true
+	}
+	rewriteFactory := celast.NewExprFactory()
+
 	expressions := spec.AllExpressions()
 	programs := make(map[string]cel.Program, len(expressions))
 	exprPaths := make(map[string]map[string][]FieldPath, len(expressions))
 
 	for _, expr := range expressions {
-		ast, issues := env.Compile(expr)
+		// Parse first so we can rewrite `<wk_id>.ready()` into a scope
+		// lookup BEFORE type checking. Parsing alone doesn't type-check,
+		// so the pre-rewrite expression is accepted even though the
+		// post-rewrite form is what actually compiles.
+		parsed, issues := env.Parse(expr)
 		if issues != nil && issues.Err() != nil {
-			return nil, fmt.Errorf("compiling expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
+			return nil, fmt.Errorf("parsing expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
+		}
+		// Fresh IDs for any rewritten sub-expressions. CEL IDs are
+		// per-AST, monotonic. Seeding at MaxID avoids collisions with
+		// existing IDs; collisions produce "incompatible type already
+		// exists" errors at type-check.
+		nativeAst := parsed.NativeRep()
+		nextIDVal := celast.MaxID(nativeAst)
+		nextID := func() int64 {
+			id := nextIDVal
+			nextIDVal++
+			return id
+		}
+		rewriteWatchKindReady(nativeAst.Expr(), watchKindIDs, rewriteFactory, nextID)
+		ast, issues := env.Check(parsed)
+		if issues != nil && issues.Err() != nil {
+			return nil, fmt.Errorf("checking expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
 		}
 		// Extract field paths from the AST before creating the program.
 		// Per 004-graph-reconciliation.md § Hash Mechanics: "At graph compilation,
@@ -576,10 +662,15 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 	// Track which variable names are declared in the CEL env so that
 	// dynamic compilation during finalization can extend the env with
 	// only new variables (avoiding "overlapping identifier" errors).
-	declared := make(map[string]bool, len(allIDs))
+	declared := make(map[string]bool, len(allIDs)+1)
 	for _, id := range allIDs {
 		declared[id] = true
 	}
+	// The readiness sidecar is a reserved scope variable declared in the
+	// env above. Must be listed as declared so the dynamic-compile
+	// fallback does not re-declare it (which produces an "overlapping
+	// identifier" error at extend time).
+	declared[reservedNodeReadyVar] = true
 
 	return &compiledGraph{
 		specHash:       spec.Hash(),
@@ -590,6 +681,7 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 		spec:           spec,
 		dag:            dag,
 		unresolvedGVKs: typeInfo.unresolvedGVKs,
+		watchKindIDs:   watchKindIDs,
 	}, nil
 }
 
@@ -717,14 +809,17 @@ func celPluralFunction() []cel.EnvOption {
 //   - With readyWhen: __ready = (all conditions passed)
 //
 // For scalar nodes (Watch, Own, Contribute), .ready() reads __ready from
-// the object map. For collection nodes (forEach, WatchKind), .ready()
-// returns true when ALL items have __ready == true — the collection's
-// readiness is a function of its children's readiness.
+// the object map. For forEach parents, .ready() returns true when ALL items
+// have __ready == true — the collection's readiness is a function of its
+// children's readiness.
 //
-// This enables expressions like:
-//
-//	propagateWhen: ["${dependency.ready()}"]
-//	readyWhen: ["${workers.ready()}"]  // true when all forEach items ready
+// For WatchKind nodes, `.ready()` is rewritten at compile time to a
+// scope-variable lookup (see readyrewrite.go). That redirection surfaces
+// the node's readyWhen verdict directly — independent of the collection
+// being non-empty — so `pods.ready()` returns the correct value even when
+// the collection has zero items. This function's list branch is kept for
+// forEach parents whose readiness is aggregated from children's per-item
+// __ready stamping. Per 001-graph.md § readyWhen.
 func celReadyFunction() []cel.EnvOption {
 	impl := func(val ref.Val) ref.Val {
 		native, err := conversion.GoNativeType(val)

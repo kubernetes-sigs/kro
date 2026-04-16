@@ -1465,6 +1465,124 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 	t.Log("Empty collection .ready() is vacuously true — Graph reached Ready")
 }
 
+// TestWatchKindEmptyReadyWhenPropagates proves that a WatchKind with a
+// failing readyWhen on an EMPTY collection propagates .ready() = false to
+// consumers, transitioning the consuming Graph out of Ready.
+//
+// Regression: per-item `__ready` stamping returned vacuous true for empty
+// collections regardless of readyWhen. The fix rewrites `<wk_id>.ready()`
+// at compile time to consult a sidecar readiness map populated from the
+// node's readyWhen evaluation, independent of collection size.
+//
+// Per 001-graph.md § readyWhen: "A WatchKind's .ready() returns true when
+// the node's readyWhen conditions pass (evaluated once against the whole
+// array, not per-item) — including when the collection is empty."
+func TestWatchKindEmptyReadyWhenPropagates(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Graph: WatchKind with a readyWhen requiring at least one match, and
+	// a selector that matches nothing. readyWhen fails → .ready() must be
+	// false. Consumer's readyWhen depends on .ready() and must stay
+	// unsatisfied until matching resources are added.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-empty-readywhen-propagates",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "workers",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"selector": map[string]any{
+								"app": "empty-readywhen-none-match",
+							},
+						},
+						"readyWhen": []any{
+							"${workers.size() > 0}",
+						},
+					},
+					map[string]any{
+						"id": "summary",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "empty-readywhen-summary",
+							},
+							"data": map[string]any{
+								"status": "done",
+							},
+						},
+						"readyWhen": []any{
+							"${workers.ready()}",
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for the summary ConfigMap to be applied — the consumer
+	// resource exists regardless of readiness (readyWhen is a health
+	// signal, not a gate).
+	summaryCM := &unstructured.Unstructured{}
+	summaryCM.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "empty-readywhen-summary", Namespace: ns},
+		summaryCM))
+
+	// Graph must stay out of Ready: workers.ready() = false because
+	// workers.size() > 0 fails against the empty selector match.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "test-empty-readywhen-propagates", Namespace: ns}, g); err != nil {
+				return false, nil
+			}
+			return !graphReady(g), nil
+		}))
+	t.Log("Graph NOT Ready — empty WatchKind with failing readyWhen propagated .ready()=false")
+
+	// Add a matching ConfigMap. workers.size() > 0 now passes;
+	// workers.ready() becomes true; summary's readyWhen passes; Graph
+	// reaches Ready.
+	matching := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "empty-readywhen-match-a",
+				"namespace": ns,
+				"labels":    map[string]any{"app": "empty-readywhen-none-match"},
+			},
+			"data": map[string]any{"hello": "world"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, matching))
+
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "test-empty-readywhen-propagates", Namespace: ns}, g); err != nil {
+				return false, nil
+			}
+			return graphReady(g), nil
+		}))
+	t.Log("Graph reached Ready after collection became non-empty — readyWhen verdict flipped through .ready()")
+}
+
 // TestCollectionItemReadyViaIndex proves that workers[0].ready() works from
 // another node's readyWhen. Per-item __ready flags set during forEach
 // readyWhen evaluation are accessible via CEL indexing from other nodes.

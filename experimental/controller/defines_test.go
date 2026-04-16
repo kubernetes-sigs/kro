@@ -293,4 +293,56 @@ func TestDefinesForEachReconcile(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "forEach defines items")
 	})
+
+	// Regression: forEach parent scope must NOT be published when any child
+	// errored. Before the fix, eval.scope[parent] = partial allApplied was
+	// set BEFORE the error check — dependents could observe a partial array
+	// if the coordinator's Block path was ever weakened. Per 001-graph.md §
+	// forEach: "The parent enters scope (enabling downstream evaluation)
+	// once all children have applied successfully."
+	t.Run("ForEach_RegressionScopeNotPublishedOnChildError", func(t *testing.T) {
+		// forEach iterates ['a', 'b'] but the template references a missing
+		// key on upstream — both children error during evaluation.
+		spec := &GraphSpec{Nodes: []Node{
+			{ID: "upstream", Template: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": "cfg"},
+				// data.key is absent — ${upstream.data.key} fails
+			}},
+			{
+				ID:       "items",
+				ForEach:  map[string]string{"w": "${['a', 'b']}"},
+				Template: map[string]any{"val": "${upstream.data.key}"},
+			},
+		}}
+		compiled, err := compileGraphSpec(spec, nil)
+		require.NoError(t, err)
+
+		eval := &evaluator{
+			compiled:         compiled,
+			scope:            map[string]any{},
+			forEachNewScope:  map[string]map[string]any{},
+			forEachNewKeys:   map[string]map[string][]string{},
+			forEachNewItems:  map[string][]any{},
+			forEachPrevItems: map[string][]any{},
+			forEachPrevScope: map[string]map[string]any{},
+			forEachPrevKeys:  map[string]map[string][]string{},
+		}
+
+		graph := &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{"name": "test", "namespace": "default"},
+		}}
+
+		_, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false)
+		require.Error(t, err, "forEach with failing child templates must return an error")
+
+		// Invariant: when the forEach errors on any child, the parent's
+		// scope entry must NOT be published. The error-then-publish
+		// ordering makes this structural — dependents cannot observe a
+		// partial array.
+		_, published := eval.scope["items"]
+		assert.False(t, published,
+			"forEach parent scope must not be published when any child errored")
+	})
 }

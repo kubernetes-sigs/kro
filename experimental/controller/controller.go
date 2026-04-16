@@ -111,6 +111,7 @@ type GraphReconciler struct {
 	Resources      *resourceCache          // per-resource full object cache
 	DriftInterval  time.Duration           // per-node drift timer interval; 0 = use DefaultDriftInterval
 	DriftJitter    time.Duration           // max drift jitter; 0 = use MaxDriftJitter
+	Scope          GVKScopeResolver        // nil = unknown scope; staticResourceKey falls back to namespace-substitution heuristic
 }
 
 // nodeResult carries a worker's output back to the coordinator.
@@ -130,6 +131,17 @@ type nodeResult struct {
 	// WatchKind cache update — returned by WatchKind workers for the
 	// coordinator to merge back into the instance state.
 	watchKindCacheUpdate map[string][]any // node ID → updated cached list
+	// watchKindDidFullList is true when the WatchKind worker took the
+	// full-List path (full re-List from API server), as opposed to
+	// incremental merge. Coordinator uses this to clear the dirty flag
+	// only after an authoritative refresh.
+	watchKindDidFullList bool
+	// nodeReadyUpdate carries the node's readyWhen verdict from worker
+	// back to the coordinator. Used by the AST-rewritten `.ready()`
+	// lookup for WatchKind nodes (see readyrewrite.go). nil if the
+	// worker did not evaluate readiness (e.g., non-WatchKind or
+	// early-exit path).
+	nodeReadyUpdate *bool
 	// forEach propagateWhen aggregate — true if all items satisfy
 	// propagateWhen. nil if not applicable (non-forEach or no propagateWhen).
 	forEachAllItemsPropagateReady *bool
@@ -483,11 +495,21 @@ func (w *walkState) tryDispatch(idx int) {
 	// to the worker so reconcileWatchKind can GET only changed items.
 	if node.Reference() == ReferenceWatchKind {
 		workerEval.watchKindNodeID = node.ID
-		if cached, ok := w.state.watchKindCache[node.ID]; ok && !w.driftTriggered[node.ID] {
+		cached, hasCached := w.state.watchKindCache[node.ID]
+		// dirty: a previous incremental reconcile errored mid-merge,
+		// so the drained CollectionChanges were lost. Force a full
+		// re-List from the API server to recover authoritative state.
+		// Per 004-graph-reconciliation.md § Propagation: incremental
+		// updates must not allow the cache to serve stale data beyond
+		// the drift interval when a recoverable error interrupted a
+		// merge.
+		dirty := w.state.watchKindDirty[node.ID]
+		if hasCached && !w.driftTriggered[node.ID] && !dirty {
 			workerEval.watchKindCachedList = cached
 			workerEval.watchKindChanges = w.collectionChanges[node.ID]
 		} else {
-			// First reconcile or drift: force full list.
+			// First reconcile, drift, or previous incremental error:
+			// force full list.
 			workerEval.watchKindDriftOrFull = true
 		}
 	}
@@ -552,6 +574,17 @@ func (w *walkState) tryDispatch(idx int) {
 				state = NodeError
 			}
 		}
+		// Extract the worker's node-readiness verdict (WatchKind-only).
+		// The worker wrote its verdict into its local nodeReady copy;
+		// the coordinator merges the value back into the shared map
+		// once the result is received. Non-WatchKind workers do not
+		// write to nodeReady, so the lookup returns (false, false).
+		var nodeReadyUpdate *bool
+		if we.nodeReady != nil {
+			if v, ok := we.nodeReady[n.ID]; ok {
+				nodeReadyUpdate = &v
+			}
+		}
 		w.results <- nodeResult{
 			idx:                           idx,
 			keys:                          keys,
@@ -564,7 +597,9 @@ func (w *walkState) tryDispatch(idx int) {
 			forEachScopes:                 we.forEachNewScope,
 			forEachItems:                  we.forEachNewItems,
 			watchKindCacheUpdate:          we.watchKindCacheUpdate(),
+			watchKindDidFullList:          we.watchKindDidFullList,
 			forEachAllItemsPropagateReady: we.forEachAllItemsPropagateReady,
+			nodeReadyUpdate:               nodeReadyUpdate,
 		}
 	}(*node, workerEval, nodeRef, isDrift)
 	w.inflight++
@@ -922,6 +957,18 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			)).Observe(res.evalDuration.Seconds())
 		}
 
+		// WatchKind incremental-cache integrity: if the worker errored
+		// AND did not persist a cache update, the drained
+		// CollectionChanges are lost. Mark the node dirty so the next
+		// reconcile takes the full-list path to recover authoritative
+		// state from the API server. Without this, stale cache can
+		// persist for up to the drift interval (default 30m). Per
+		// 004-graph-reconciliation.md § Propagation.
+		if res.err != nil && node.Reference() == ReferenceWatchKind &&
+			len(res.watchKindCacheUpdate) == 0 {
+			state.watchKindDirty[node.ID] = true
+		}
+
 		// Error handling: block dependents, continue independent branches.
 		// Classify the API error to determine the plan state — NodeError
 		// for client errors (4xx), NodeSystemError for server/infra
@@ -980,6 +1027,15 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			eval.scope[res.scopeKey] = res.scopeValue
 		}
 
+		// Merge node-readiness verdict (WatchKind workers). Writing
+		// here makes the verdict visible to every subsequent node's
+		// CEL evaluations via the AST-rewritten `<wk_id>.ready()`
+		// lookup — including dependents that fan out after this node
+		// completes.
+		if res.nodeReadyUpdate != nil && eval.nodeReady != nil {
+			eval.nodeReady[res.scopeKey] = *res.nodeReadyUpdate
+		}
+
 		// Merge forEach state updates into the shared instance state.
 		for k, v := range res.forEachItems {
 			state.forEachItems[k] = v
@@ -992,8 +1048,16 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 
 		// Merge WatchKind cache updates into the shared instance state.
+		// Dirty is cleared only when the worker took the full-List path
+		// — that's the only thing that recovers from a lost incremental
+		// merge. An incremental success against an already-stale cache
+		// does not address the staleness. Per 004-graph-reconciliation.md
+		// § Propagation.
 		for nodeID, cached := range res.watchKindCacheUpdate {
 			state.watchKindCache[nodeID] = cached
+			if res.watchKindDidFullList {
+				delete(state.watchKindDirty, nodeID)
+			}
 		}
 
 		// Update plan state.
@@ -1216,7 +1280,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					if node.Finalizes != "" {
 						continue // finalizer node — dormant, never in applied set
 					}
-					if key := staticResourceKey(node.Template, graph.GetNamespace()); key != "" {
+					if key := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); key != "" {
 						allPreviousKeys[key] = true
 					}
 				}
@@ -1431,11 +1495,11 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if node.Template == nil {
 				continue
 			}
-			if key := staticResourceKey(node.Template, graph.GetNamespace()); key != "" {
+			if key := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); key != "" {
 				staticKeys[key] = true
 			}
 			if templateHasStatus(node.Template) {
-				if key := staticResourceKey(node.Template, graph.GetNamespace()); key != "" {
+				if key := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); key != "" {
 					contributeStatusMap[key] = true
 				}
 			}
@@ -1499,7 +1563,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if node.Finalizes != "" {
 				continue
 			}
-			if key := staticResourceKey(node.Template, graph.GetNamespace()); key != "" {
+			if key := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); key != "" {
 				ownKeys[key] = true
 			}
 		}
@@ -1540,26 +1604,33 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 	}
 
+	// Compile the active revision (if available) to get the DAG for
+	// finalizer relationships, deletion ordering, and an evaluator for
+	// template rendering. listRevisions returns ascending by generation,
+	// so the active revision is the last element. Per
+	// 004-graph-reconciliation.md § Teardown: "Ordering comes from the
+	// active revision's DAG." Compiled BEFORE deletionOrder so the
+	// already-compiled DAG can drive ordering rather than re-parsing the
+	// live Graph spec.
+	var teardownDAG *DAG
+	var teardownEval *evaluator
+	if len(revisions) > 0 {
+		active := revisions[len(revisions)-1]
+		if _, state, compileErr := r.compileRevision(active); compileErr == nil {
+			teardownDAG = state.compiled.dag
+			teardownEval = newEvaluator(state)
+		}
+	}
+
 	// Pass 1: Issue deletes in reverse topological order.
 	// Track which keys we actually attempted to delete (had our hash).
 	deletedKeys := map[string]bool{}
-	deleteOrder, err := r.deletionOrder(graph, keys)
+	deleteOrder, err := r.deletionOrder(graph, keys, teardownDAG)
 	if err != nil {
 		// Per the design (004-graph-reconciliation): teardown is blocked until
 		// ordering is available — never degrade to unordered deletion.
 		logger.Error(err, "cannot determine deletion order, requeueing")
 		return ctrl.Result{RequeueAfter: systemErrorRequeueInterval}, nil
-	}
-
-	// Compile the active revision (if available) to get the DAG for
-	// finalizer relationships and an evaluator for template rendering.
-	var teardownDAG *DAG
-	var teardownEval *evaluator
-	if len(revisions) > 0 {
-		if _, state, compileErr := r.compileRevision(revisions[0]); compileErr == nil {
-			teardownDAG = state.compiled.dag
-			teardownEval = newEvaluator(state)
-		}
 	}
 
 	// Build resource-key-to-node-ID map for finalizer lookup during teardown.
@@ -1568,7 +1639,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	if teardownDAG != nil {
 		for _, node := range teardownDAG.Nodes {
 			if node.Template != nil {
-				if rk := staticResourceKey(node.Template, graph.GetNamespace()); rk != "" {
+				if rk := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); rk != "" {
 					keyToNodeID[rk] = node.ID
 					if node.Finalizes != "" {
 						finalizerNodeKeys[rk] = true
@@ -1658,7 +1729,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 						if finIdx, ok2 := teardownDAG.Index[finNodeID]; ok2 {
 							finNode := &teardownDAG.Nodes[finIdx]
 							if finNode.Template != nil && finNode.ForEach == nil {
-								if fk := staticResourceKey(finNode.Template, graph.GetNamespace()); fk != "" {
+								if fk := staticResourceKey(finNode.Template, graph.GetNamespace(), r.Scope); fk != "" {
 									fGVK, fNN := parseResourceKey(fk)
 									finDel := &unstructured.Unstructured{}
 									finDel.SetGroupVersionKind(fGVK)
@@ -1914,6 +1985,12 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 		Caches:         newGraphCaches(),
 		Resources:      newResourceCache(),
 		DriftInterval:  driftInterval,
+		// Scope is used by staticResourceKey to avoid namespacing
+		// cluster-scoped resource keys. Without this, prune/teardown
+		// silently miss cluster-scoped resources because their keys
+		// never match post-apply resourceKey(). Per 003-ownership.md
+		// § Priority Resolution.
+		Scope: newRESTMapperGVKScopeResolver(mgr.GetRESTMapper()),
 	}
 
 	// When the watch infrastructure observes a new type (first informer for a

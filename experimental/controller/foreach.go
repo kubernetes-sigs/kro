@@ -19,16 +19,33 @@ import (
 // the previous forEach state from the instance. The worker writes to its own
 // maps — the coordinator merges them back after the worker returns.
 func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
-	snap := make(map[string]any, len(node.Dependencies))
+	snap := make(map[string]any, len(node.Dependencies)+1)
 	for depID := range node.Dependencies {
 		if v, ok := e.scope[depID]; ok {
 			snap[depID] = v
 		}
 	}
+	// The node-readiness sidecar must be visible to rewritten
+	// `<wk_id>.ready()` lookups, including those nested inside CEL
+	// comprehensions evaluated by the worker. The worker receives a
+	// COPY so its writes don't race with the coordinator or other
+	// workers; the coordinator merges the worker's verdict back via
+	// nodeResult.nodeReadyUpdate. Readiness is monotonic within a
+	// reconcile (a node's verdict is set once), so the copy sees a
+	// consistent snapshot.
+	var workerReady map[string]bool
+	if e.nodeReady != nil {
+		workerReady = make(map[string]bool, len(e.nodeReady))
+		for k, v := range e.nodeReady {
+			workerReady[k] = v
+		}
+		snap[reservedNodeReadyVar] = workerReady
+	}
 
 	worker := &evaluator{
 		compiled:         e.compiled,
 		scope:            snap,
+		nodeReady:        workerReady,
 		forEachNewScope:  map[string]map[string]any{},
 		forEachNewKeys:   map[string]map[string][]string{},
 		forEachNewItems:  map[string][]any{},
@@ -273,14 +290,21 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		// Record updated collection for next reconcile's diff.
 		eval.forEachNewItems[cacheKey] = items
 
-		eval.scope[node.ID] = allApplied
-
 		// Per 004-graph-reconciliation.md § Parent State: derive parent state from children.
 		// Error states take precedence over Pending; deterministic errors (Error)
 		// take precedence over transient errors (SystemError, Conflict).
+		//
+		// Per 001-graph.md § forEach: "The parent enters scope (enabling
+		// downstream evaluation) once all children have applied successfully."
+		// Do NOT publish partial scope on error — dependents must see the
+		// error classification from the coordinator's Block path, not a
+		// partially-applied array. Error-then-publish (not publish-then-error)
+		// makes the invariant structural rather than coordinator-dependent.
 		if len(childErrors) > 0 {
 			return keys, highestPriorityChildError(childErrors)
 		}
+
+		eval.scope[node.ID] = allApplied
 	}
 
 	// Check readyWhen per-item: all items must pass for the collection to be Ready.

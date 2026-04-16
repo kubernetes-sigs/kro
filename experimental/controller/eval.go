@@ -21,6 +21,13 @@ type evaluator struct {
 	compiled *compiledGraph
 	scope    map[string]any
 
+	// nodeReady carries per-WatchKind readyWhen verdicts. AST-rewritten
+	// `<wk_id>.ready()` expressions look up this map via the reserved
+	// scope key (see readyrewrite.go). Scalar/forEach readiness continues
+	// to flow through the per-item __ready stamping — those are unaffected
+	// by this sidecar. Per 001-graph.md § readyWhen.
+	nodeReady map[string]bool
+
 	// forEach state — populated by the coordinator before dispatching a
 	// forEach worker, and read by reconcileForEach. Workers write to these
 	// maps (they're private to the worker's evaluator copy), and the results
@@ -44,6 +51,15 @@ type evaluator struct {
 	watchKindChanges      []CollectionChange // buffered changes since last reconcile
 	watchKindUpdatedCache []any              // output: updated list for coordinator to store
 	watchKindDriftOrFull  bool               // true = bypass cache, do full list (drift or first reconcile)
+	// watchKindDidFullList is set true by reconcileWatchKind when the
+	// worker took the full-List path (as opposed to incremental merge).
+	// Used by the coordinator to tighten dirty-flag clearing: dirty is
+	// cleared only when a full re-List has successfully completed,
+	// because dirty means "drained incremental changes were lost, cache
+	// is suspect." An incremental-merge success with an already-stale
+	// cache does not address the staleness. Per 004-graph-reconciliation.md
+	// § Propagation.
+	watchKindDidFullList bool
 
 	// forEach propagateWhen aggregate — set by reconcileForEach when the
 	// node has propagateWhen expressions. The worker evaluates propagateWhen
@@ -55,16 +71,37 @@ type evaluator struct {
 
 // newEvaluator creates an evaluator for a reconcile cycle.
 func newEvaluator(state *instanceState) *evaluator {
+	// nodeReady carries per-WatchKind readyWhen verdicts. It lives on
+	// instanceState so verdicts persist across reconciles — a WatchKind
+	// that isn't re-evaluated on a given reconcile must still expose its
+	// last verdict to downstream `<wk_id>.ready()` lookups. Scope
+	// reference is stable — later writes to the map are observable by
+	// all subsequent evaluations through the same scope entry. Per
+	// 001-graph.md § readyWhen.
+	if state.nodeReady == nil {
+		state.nodeReady = map[string]bool{}
+	}
+	scope := map[string]any{
+		reservedNodeReadyVar: state.nodeReady,
+	}
 	return &evaluator{
-		compiled: state.compiled,
-		scope:    map[string]any{},
+		compiled:  state.compiled,
+		scope:     scope,
+		nodeReady: state.nodeReady,
 	}
 }
 
 // withScope returns a new evaluator that shares the compiled graph but has its own scope.
 // Used for forEach inner scopes and worker snapshots.
 func (e *evaluator) withScope(scope map[string]any) *evaluator {
-	return &evaluator{compiled: e.compiled, scope: scope}
+	// Preserve the node-readiness sidecar across scope substitutions so
+	// inner forEach evaluations see the same verdicts as the outer walk.
+	if e.nodeReady != nil {
+		if _, present := scope[reservedNodeReadyVar]; !present {
+			scope[reservedNodeReadyVar] = e.nodeReady
+		}
+	}
+	return &evaluator{compiled: e.compiled, scope: scope, nodeReady: e.nodeReady}
 }
 
 // watchKindCacheUpdate returns a map of WatchKind cache updates if the

@@ -381,7 +381,20 @@ func resourceKey(obj *unstructured.Unstructured) string {
 // the namespace is absent, empty, or contains ${...} expressions.
 // This is the spec-time equivalent of resourceKey — used during prune
 // diffing and revision spec scanning where templates haven't been evaluated.
-func staticResourceKey(tmpl map[string]any, fallbackNamespace string) string {
+//
+// scopeResolver (if non-nil) is consulted to determine whether the kind is
+// cluster-scoped. For cluster-scoped kinds the namespace segment is ""
+// regardless of fallbackNamespace — matching what resourceKey(obj) produces
+// post-apply, where the API server strips the namespace from cluster-scoped
+// responses. Without this, cluster-scoped resource keys produced by
+// staticResourceKey never match keys produced by resourceKey(liveObj), and
+// prune diffing / finalizer lookups silently miss cluster-scoped resources.
+// Per 003-ownership.md § Priority Resolution: "Cluster-scoped resources use
+// empty string for the namespace component."
+//
+// When scopeResolver is nil, the old heuristic is preserved for backward
+// compat with callers that don't have access to a RESTMapper.
+func staticResourceKey(tmpl map[string]any, fallbackNamespace string, scope GVKScopeResolver) string {
 	apiVersion, _ := tmpl["apiVersion"].(string)
 	kind, _ := tmpl["kind"].(string)
 	md, _ := tmpl["metadata"].(map[string]any)
@@ -393,11 +406,28 @@ func staticResourceKey(tmpl map[string]any, fallbackNamespace string) string {
 		return "" // dynamic name — can't determine key statically
 	}
 	ns, _ := md["namespace"].(string)
-	if ns == "" || strings.Contains(ns, "${") {
-		ns = fallbackNamespace
-	}
+	hasDynamicNS := strings.Contains(ns, "${")
 	gv, _ := schema.ParseGroupVersion(apiVersion)
 	gvk := gv.WithKind(kind)
+
+	// Scope-aware namespace resolution. For cluster-scoped kinds the
+	// namespace segment is always "", matching resourceKey(liveObj).
+	if scope != nil && kind != "" {
+		if isNS, known := scope.IsNamespaced(gvk); known {
+			if !isNS {
+				ns = ""
+			} else if ns == "" || hasDynamicNS {
+				ns = fallbackNamespace
+			}
+			return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, ns, name}, "/")
+		}
+	}
+	// Fallback heuristic: substitute fallbackNamespace for empty or dynamic
+	// namespace. Correct for namespaced kinds; produces a mismatched key for
+	// cluster-scoped kinds when scope is unknown.
+	if ns == "" || hasDynamicNS {
+		ns = fallbackNamespace
+	}
 	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, ns, name}, "/")
 }
 
@@ -709,7 +739,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	for _, d := range allDAGs {
 		for _, node := range d.Nodes {
 			if node.Template != nil {
-				if rk := staticResourceKey(node.Template, graph.GetNamespace()); rk != "" {
+				if rk := staticResourceKey(node.Template, graph.GetNamespace(), r.Scope); rk != "" {
 					keyToNodeID[rk] = node.ID
 					nodeIDToKey[node.ID] = rk
 				}
@@ -771,7 +801,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 	// Sort prune candidates in reverse dependency order so dependents are
 	// removed before their dependencies.
-	pruneCandidates = pruneOrder(pruneCandidates, allDAGs, graph.GetNamespace())
+	pruneCandidates = pruneOrder(pruneCandidates, allDAGs, graph.GetNamespace(), r.Scope)
 
 	for _, key := range pruneCandidates {
 		// Defer deletion of resources that are dependencies of in-flight
@@ -985,7 +1015,7 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 // available DAGs (active + superseded). Dependents are deleted before
 // their dependencies. Keys that don't match any DAG node are placed first
 // (highest position — deleted first).
-func pruneOrder(keys []string, dags []*DAG, defaultNS string) []string {
+func pruneOrder(keys []string, dags []*DAG, defaultNS string, scope GVKScopeResolver) []string {
 	// Build a map from resource key → topological position across all DAGs.
 	// Use the highest position found across all DAGs for each key.
 	keyPosition := map[string]int{}
@@ -1002,7 +1032,7 @@ func pruneOrder(keys []string, dags []*DAG, defaultNS string) []string {
 			if node.Template == nil {
 				continue
 			}
-			rk := staticResourceKey(node.Template, defaultNS)
+			rk := staticResourceKey(node.Template, defaultNS, scope)
 			if rk == "" {
 				continue
 			}
@@ -1048,13 +1078,25 @@ func pruneOrder(keys []string, dags []*DAG, defaultNS string) []string {
 }
 
 // deletionOrder returns resource keys ordered for deletion: reverse
-// topological order from the DAG. Rebuilds the DAG from the Graph spec.
-// Delegates to pruneOrder for the actual ordering logic.
+// topological order from the DAG. Delegates to pruneOrder for the actual
+// ordering logic.
 //
-// Returns an error if the Graph spec cannot be parsed or the DAG cannot
-// be built. Per the design (004-graph-reconciliation): "Teardown is blocked
-// until ordering is available — never degrade to unordered deletion."
-func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys []string) ([]string, error) {
+// Per 004-graph-reconciliation.md § Teardown: "Ordering comes from the
+// active revision's DAG [...] If the revision was deleted (ownerReference
+// cascade race), the controller regenerates the DAG from spec."
+//
+// preferredDAG is the active revision's DAG (already compiled elsewhere in
+// the teardown path). When non-nil it is used directly. When nil, the DAG
+// is regenerated from the live Graph spec as a fallback — this covers the
+// ownerReference cascade race where the revision was deleted before the
+// Graph. Returns an error only if the fallback compile fails.
+//
+// Per the design: "Teardown is blocked until ordering is available —
+// never degrade to unordered deletion."
+func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys []string, preferredDAG *DAG) ([]string, error) {
+	if preferredDAG != nil {
+		return pruneOrder(keys, []*DAG{preferredDAG}, graph.GetNamespace(), r.Scope), nil
+	}
 	graphSpec, err := extractGraphSpec(graph.Object)
 	if err != nil {
 		return nil, fmt.Errorf("extracting graph spec for deletion order: %w", err)
@@ -1063,7 +1105,7 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 	if err != nil {
 		return nil, fmt.Errorf("building DAG for deletion order: %w", err)
 	}
-	return pruneOrder(keys, []*DAG{dag}, graph.GetNamespace()), nil
+	return pruneOrder(keys, []*DAG{dag}, graph.GetNamespace(), r.Scope), nil
 }
 
 // ---------------------------------------------------------------------------

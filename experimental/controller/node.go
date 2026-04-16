@@ -373,6 +373,10 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 		for i, item := range list.Items {
 			items[i] = normalizeTypes(item.Object)
 		}
+		// Mark that this worker took the full-List path. The coordinator
+		// uses this to clear the watchKindDirty flag — only a successful
+		// full re-List recovers from a lost incremental merge.
+		eval.watchKindDidFullList = true
 		logger.V(1).Info("resolved watchKind (full list)", "node", node.ID, "gvk", gvk, "count", len(items))
 	}
 
@@ -382,22 +386,27 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 	eval.scope[node.ID] = items
 
 	// Per 001-graph.md: "A WatchKind's .ready() returns true when the
-	// node's readyWhen conditions pass (evaluated once against the whole array,
-	// not per-item)."
-	//
-	// Readiness is determined by readyWhen outcome (or absence of readyWhen).
-	// __ready is stamped AFTER readyWhen evaluation — one code path, not two
-	// compensating ones.
+	// node's readyWhen conditions pass (evaluated once against the whole
+	// array, not per-item)." The verdict is stored in eval.nodeReady so
+	// the AST rewrite of `<wk_id>.ready()` can surface it — including
+	// for empty collections, where per-item `__ready` stamping has
+	// nothing to attach to.
 	ready := true
 	if len(node.ReadyWhen) > 0 {
 		if err := eval.checkReadiness(node.ReadyWhen, node.ID); err != nil {
 			ready = false
-			// Set __ready on items, then return the error. Items stay in
-			// scope so downstream nodes can still reference the data.
+			// Set __ready on items (preserves scalar/forEach semantics
+			// for code paths that still consult per-item readiness),
+			// stamp the sidecar for the AST-rewritten path, then return
+			// the error. Items stay in scope so downstream nodes can
+			// still reference the data.
 			for _, item := range items {
 				if m, ok := item.(map[string]any); ok {
 					m["__ready"] = false
 				}
+			}
+			if eval.nodeReady != nil {
+				eval.nodeReady[node.ID] = false
 			}
 			return err
 		}
@@ -406,6 +415,9 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 		if m, ok := item.(map[string]any); ok {
 			m["__ready"] = ready
 		}
+	}
+	if eval.nodeReady != nil {
+		eval.nodeReady[node.ID] = ready
 	}
 
 	return nil

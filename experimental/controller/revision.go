@@ -606,6 +606,8 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 		existing.forEachItemScope = map[string]map[string]any{}
 		existing.forEachItemKeys = map[string]map[string][]string{}
 		existing.watchKindCache = make(map[string][]any)
+		existing.watchKindDirty = make(map[string]bool)
+		existing.nodeReady = make(map[string]bool)
 		existing.systemErrorBackoff = make(map[string]time.Duration)
 		existing.deferredPruneKeys = nil
 		// Ensure the compiled graph is tracked in the content-addressed cache.

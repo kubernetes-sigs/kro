@@ -303,7 +303,7 @@ func TestPruneOrderReverseDependency(t *testing.T) {
 		"/v1/ConfigMap/default/c",
 	}
 
-	ordered := pruneOrder(keys, []*DAG{dag}, "default")
+	ordered := pruneOrder(keys, []*DAG{dag}, "default", nil)
 
 	require.Len(t, ordered, 3)
 	// C depends on B depends on A. Reverse: C first, then B, then A.
@@ -327,7 +327,7 @@ func TestPruneOrderUnmatchedKeysFirst(t *testing.T) {
 		"/v1/ConfigMap/default/unknown-dynamic",
 	}
 
-	ordered := pruneOrder(keys, []*DAG{dag}, "default")
+	ordered := pruneOrder(keys, []*DAG{dag}, "default", nil)
 
 	require.Len(t, ordered, 2)
 	assert.Equal(t, "/v1/ConfigMap/default/unknown-dynamic", ordered[0], "unmatched key should be first")
@@ -349,7 +349,7 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 		"contribute:/v1/ConfigMap/default/b",
 	}
 
-	ordered := pruneOrder(keys, []*DAG{dag}, "default")
+	ordered := pruneOrder(keys, []*DAG{dag}, "default", nil)
 
 	require.Len(t, ordered, 2)
 	assert.Equal(t, "contribute:/v1/ConfigMap/default/b", ordered[0], "dependent contribute key should be first")
@@ -1057,7 +1057,7 @@ func TestStaticResourceKey_ExplicitNamespace(t *testing.T) {
 				"namespace": "kube-system",
 			},
 		}
-		key := staticResourceKey(tmpl, "default")
+		key := staticResourceKey(tmpl, "default", nil)
 		assert.Equal(t, "/v1/ConfigMap/kube-system/my-config", key,
 			"should use the template's literal namespace, not fallback")
 	})
@@ -1070,7 +1070,7 @@ func TestStaticResourceKey_ExplicitNamespace(t *testing.T) {
 				"name": "my-config",
 			},
 		}
-		key := staticResourceKey(tmpl, "default")
+		key := staticResourceKey(tmpl, "default", nil)
 		assert.Equal(t, "/v1/ConfigMap/default/my-config", key,
 			"should use fallback when namespace is absent")
 	})
@@ -1084,7 +1084,7 @@ func TestStaticResourceKey_ExplicitNamespace(t *testing.T) {
 				"namespace": "${ns.metadata.name}",
 			},
 		}
-		key := staticResourceKey(tmpl, "default")
+		key := staticResourceKey(tmpl, "default", nil)
 		assert.Equal(t, "/v1/ConfigMap/default/my-config", key,
 			"should use fallback when namespace contains ${...}")
 	})
@@ -1098,9 +1098,73 @@ func TestStaticResourceKey_ExplicitNamespace(t *testing.T) {
 				"namespace": "",
 			},
 		}
-		key := staticResourceKey(tmpl, "default")
+		key := staticResourceKey(tmpl, "default", nil)
 		assert.Equal(t, "/v1/ConfigMap/default/my-config", key,
 			"should use fallback when namespace is empty string")
+	})
+}
+
+// fakeGVKScopeResolver is a stub GVKScopeResolver that answers from a table.
+// Used to verify that staticResourceKey produces empty-namespace keys for
+// cluster-scoped kinds, matching what resourceKey(liveObj) produces after
+// an API server response strips the namespace for cluster-scoped responses.
+type fakeGVKScopeResolver map[string]bool // "group/version/Kind" → isNamespaced
+
+func (f fakeGVKScopeResolver) IsNamespaced(gvk schema.GroupVersionKind) (bool, bool) {
+	key := gvk.Group + "/" + gvk.Version + "/" + gvk.Kind
+	v, ok := f[key]
+	return v, ok
+}
+
+// TestStaticResourceKey_ClusterScopedNamespace_Regression proves that
+// staticResourceKey produces an empty-namespace key for cluster-scoped
+// kinds when a GVKScopeResolver is provided — matching what resourceKey(obj)
+// produces after the API server strips namespace from cluster-scoped
+// responses. Before this fix, staticResourceKey unconditionally
+// substituted the fallback (Graph's) namespace, so its keys never matched
+// post-apply resourceKey output — prune diffing and finalizer lookups
+// silently missed cluster-scoped resources.
+//
+// Per 003-ownership.md § Priority Resolution: "Cluster-scoped resources
+// use empty string for the namespace component."
+func TestStaticResourceKey_ClusterScopedNamespace_Regression(t *testing.T) {
+	scope := fakeGVKScopeResolver{
+		"rbac.authorization.k8s.io/v1/ClusterRole": false, // cluster-scoped
+		"/v1/ConfigMap": true, // namespaced
+	}
+
+	t.Run("cluster-scoped kind yields empty namespace segment", func(t *testing.T) {
+		tmpl := map[string]any{
+			"apiVersion": "rbac.authorization.k8s.io/v1",
+			"kind":       "ClusterRole",
+			"metadata":   map[string]any{"name": "platform-admin"},
+		}
+		key := staticResourceKey(tmpl, "my-graph-ns", scope)
+		assert.Equal(t, "rbac.authorization.k8s.io/v1/ClusterRole//platform-admin", key,
+			"cluster-scoped kinds must have empty namespace segment to match resourceKey(liveObj)")
+	})
+
+	t.Run("namespaced kind still substitutes fallback", func(t *testing.T) {
+		tmpl := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]any{"name": "app-config"},
+		}
+		key := staticResourceKey(tmpl, "my-graph-ns", scope)
+		assert.Equal(t, "/v1/ConfigMap/my-graph-ns/app-config", key,
+			"namespaced kinds with empty template namespace substitute fallback")
+	})
+
+	t.Run("unknown scope falls back to substitution heuristic", func(t *testing.T) {
+		tmpl := map[string]any{
+			"apiVersion": "unknown.example.com/v1",
+			"kind":       "UnknownKind",
+			"metadata":   map[string]any{"name": "x"},
+		}
+		// Not in scope map — treat as unknown.
+		key := staticResourceKey(tmpl, "my-ns", scope)
+		assert.Equal(t, "unknown.example.com/v1/UnknownKind/my-ns/x", key,
+			"unknown scope preserves pre-fix heuristic (substitute fallback)")
 	})
 }
 
@@ -1370,4 +1434,109 @@ func TestWatchKindCacheLifecycle(t *testing.T) {
 	cached, ok := state.watchKindCache["myWatchKind"]
 	assert.True(t, ok)
 	assert.Equal(t, 2, len(cached))
+}
+
+// TestWatchKindEmptyReadyWhenPropagates_Regression proves that `.ready()`
+// on a WatchKind with an empty collection reflects the node's readyWhen
+// verdict — not a vacuous true. The AST rewrite in readyrewrite.go
+// redirects `<wk_id>.ready()` to a scope-variable lookup populated from
+// the node's readyWhen evaluation, independent of collection size.
+//
+// Before the fix, empty collections returned true regardless of readyWhen
+// because the per-item `__ready` stamping had no items to attach to and
+// `.ready()` on an empty list defaulted to "vacuously true."
+//
+// Per 001-graph.md § readyWhen: "A WatchKind's `.ready()` returns true
+// when the node's readyWhen conditions pass (evaluated once against the
+// whole array, not per-item) — including when the collection is empty."
+func TestWatchKindEmptyReadyWhenPropagates_Regression(t *testing.T) {
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{
+				ID: "pods",
+				Template: map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"selector":   map[string]any{"app": "nope"},
+				},
+			},
+		},
+	}
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+
+	t.Run("empty collection with failing readyWhen → .ready() false", func(t *testing.T) {
+		state := newInstanceState(compiled)
+		eval := newEvaluator(state)
+		eval.scope["pods"] = []any{}
+		// Simulate reconcileWatchKind setting the verdict after a failed
+		// readyWhen evaluation on an empty collection.
+		eval.nodeReady["pods"] = false
+
+		out, err := compiled.eval("pods.ready()", eval.scope)
+		require.NoError(t, err)
+		assert.Equal(t, false, out,
+			"empty WatchKind with failing readyWhen must report .ready() = false")
+	})
+
+	t.Run("empty collection with no readyWhen → .ready() true", func(t *testing.T) {
+		state := newInstanceState(compiled)
+		eval := newEvaluator(state)
+		eval.scope["pods"] = []any{}
+		// reconcileWatchKind sets verdict = true when no readyWhen is
+		// specified — a collection is ready by virtue of being observed.
+		eval.nodeReady["pods"] = true
+
+		out, err := compiled.eval("pods.ready()", eval.scope)
+		require.NoError(t, err)
+		assert.Equal(t, true, out,
+			"empty WatchKind without readyWhen must report .ready() = true")
+	})
+
+	t.Run("non-empty collection respects readyWhen verdict", func(t *testing.T) {
+		state := newInstanceState(compiled)
+		eval := newEvaluator(state)
+		eval.scope["pods"] = []any{
+			map[string]any{"metadata": map[string]any{"name": "a"}},
+			map[string]any{"metadata": map[string]any{"name": "b"}},
+		}
+		eval.nodeReady["pods"] = false
+
+		out, err := compiled.eval("pods.ready()", eval.scope)
+		require.NoError(t, err)
+		assert.Equal(t, false, out,
+			"non-empty WatchKind with failing readyWhen must also report .ready() = false")
+	})
+}
+
+// TestWatchKindCacheDirty_Regression proves that instanceState carries a
+// per-node dirty flag that the coordinator uses to force a full re-List
+// after a failed incremental reconcile. Before this fix, a GET error in
+// the incremental merge loop discarded the drained CollectionChanges;
+// subsequent reconciles would take the incremental path against a stale
+// cache and silently serve pre-failure data for up to one drift interval
+// (default 30 minutes). The dirty flag makes the recovery explicit:
+// coordinator detects dirty → forces full list → cache converges.
+//
+// Per 004-graph-reconciliation.md § Propagation: incremental updates must
+// not allow the cache to serve stale data beyond the drift interval when
+// a recoverable error interrupted a merge.
+func TestWatchKindCacheDirty_Regression(t *testing.T) {
+	spec := buildBenchSpec(3)
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+
+	state := newInstanceState(compiled)
+	require.NotNil(t, state.watchKindDirty, "instanceState must initialize watchKindDirty map")
+
+	// Coordinator marks a node dirty after a WatchKind worker errors
+	// without producing a watchKindCacheUpdate.
+	state.watchKindDirty["pods"] = true
+	assert.True(t, state.watchKindDirty["pods"],
+		"dirty flag must persist until next successful merge")
+
+	// After a successful merge the coordinator clears the flag.
+	delete(state.watchKindDirty, "pods")
+	assert.False(t, state.watchKindDirty["pods"],
+		"dirty flag cleared on successful merge")
 }

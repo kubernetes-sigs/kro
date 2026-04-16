@@ -235,7 +235,8 @@ Kubernetes conditions check.
 For forEach nodes, readyWhen is evaluated per-child — each child checks readyWhen independently
 using the standard per-node mechanism. `.ready()` on a forEach parent returns true when all children
 are ready. A WatchKind's `.ready()` returns true when the node's readyWhen conditions pass
-(evaluated once against the whole array, not per-item).
+(evaluated once against the whole array, not per-item) — including when the collection is empty,
+where `.ready()` still reflects the readyWhen verdict rather than collapsing to vacuously-true.
 
 `.ready()` is not transitive across the DAG — it reflects only the node's own readiness, not its
 dependencies'. Most dependencies are partial (you depend on `dep.spec.something`, not full

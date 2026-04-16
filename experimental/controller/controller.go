@@ -9,7 +9,7 @@
 //
 // Phase 2 — Node reconciliation (from the active revision):
 //  1. Parse the active revision's spec into a DAG
-//  2. Walk the DAG in topological order, evaluating pre-compiled CEL programs
+//  2. Walk the DAG via dependency-driven scheduling, evaluating pre-compiled CEL programs
 //  3. Apply evaluated templates via server-side apply
 //  4. Prune resources removed between revisions
 //  5. Update revision and Graph status

@@ -15,7 +15,8 @@ Compilation produces:
 
 - **DAG** — nodes and edges. One node per resource declaration, edges inferred from CEL expression
   references. Both forward (dependency → dependent) and reverse adjacency are produced — propagation
-  walks the forward DAG, prune walks the reverse. Node types (Own, Watch, WatchKind, Contribute,
+  walks the forward DAG, prune walks the reverse. Topological order is stable with respect to
+  `spec.nodes` ordering (min-heap Kahn's). Node types (Own, Watch, WatchKind, Contribute,
   Definition) are defined in [001-graph](001-graph.md) and [003-ownership](003-ownership.md).
 - **Compiled CEL programs** — each expression is compiled once against a typed environment. Nodes
   with a known kind resolve OpenAPI schemas; definitions infer types from template structure. Nodes
@@ -44,14 +45,12 @@ changes or resync. Transient errors (5xx) retry with exponential backoff [1s, re
 
 ## Reconcile
 
-Reconcile is two walks of
-[Kahn's](https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm) topological sort,
-extended with change detection. Each walk maintains a frontier — the set of nodes whose dependencies
-have all been processed. Independent nodes in the frontier are dispatched concurrently; the
-topological sort is stable with respect to declaration order in `spec.nodes`. Only triggered nodes
-and their affected downstream are visited; the rest
-retain their previous state. Propagation walks forward DAG: evaluates triggered nodes, publishes
-results to scope. Prune walks the reverse DAG: removes resources absent from the desired set.
+Reconcile is two walks — propagation (forward) and prune (reverse). Each walk uses dependency-driven
+scheduling: level-0 nodes are seeded, and each completion dispatches dependents whose dependencies
+have all been processed. Independent nodes are dispatched concurrently. Only triggered nodes and
+their affected downstream are visited; the rest retain their previous state. Propagation walks the
+forward DAG: evaluates triggered nodes, publishes results to scope. Prune walks the reverse DAG:
+removes resources absent from the desired set.
 
 Each Graph converges one revision at a time. When a new revision is compiled, in-progress evaluation
 of the previous revision is abandoned — partially applied resources either match the new revision's

@@ -238,10 +238,15 @@ func TestRevisionConditionsHaveLastTransitionTime(t *testing.T) {
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-revision-ltt", Namespace: ns}))
 
-	// Find the revision (generation 1).
+	// Find the revision (generation 1). Wait for its Ready condition
+	// to be set — waitForRevision only waits for the object to exist, but
+	// the status subresource may not be written yet (race between Graph
+	// status write and revision status write).
 	revKey := types.NamespacedName{Name: "test-revision-ltt-g00001", Namespace: ns}
-	rev, err := waitForRevision(ctx, k8sClient, revKey)
-	require.NoError(t, err)
+	require.NoError(t, waitForRevisionCondition(ctx, k8sClient, revKey, "Ready", "True"))
+	rev := &unstructured.Unstructured{}
+	rev.SetGroupVersionKind(GraphRevisionGVK)
+	require.NoError(t, k8sClient.Get(ctx, revKey, rev))
 
 	// Verify conditions exist and each has lastTransitionTime.
 	status, _, _ := unstructured.NestedMap(rev.Object, "status")

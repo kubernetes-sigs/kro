@@ -1,8 +1,25 @@
 package graphcontroller
 
 import (
+	"container/heap"
 	"fmt"
 )
+
+// indexHeap is a min-heap of node indices for Kahn's algorithm.
+// Lower index = earlier declaration in spec.nodes = higher priority.
+type indexHeap []int
+
+func (h indexHeap) Len() int           { return len(h) }
+func (h indexHeap) Less(i, j int) bool { return h[i] < h[j] }
+func (h indexHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *indexHeap) Push(x any)        { *h = append(*h, x.(int)) }
+func (h *indexHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
 
 // DAG builds a dependency graph from a list of Nodes by scanning their
 // CEL expressions for variable references. It provides topological ordering
@@ -13,7 +30,9 @@ type DAG struct {
 	// Index from node ID to node index
 	Index map[string]int
 	// TopologicalOrder is the apply order (respects dependencies).
-	// Computed via Kahn's algorithm — declaration order is not significant.
+	// Computed via Kahn's algorithm with a min-heap keyed by declaration
+	// index. Stable with respect to spec.nodes ordering within each
+	// topological level.
 	TopologicalOrder []int
 	// References maps node ID to its detected reference type.
 	References map[string]Reference
@@ -37,8 +56,8 @@ type DAG struct {
 // compilation in compileGraphSpec). These replace string-scanning with AST-walked
 // field paths per 004-graph-reconciliation.md § Hash Mechanics.
 // Returns an error if the dependency graph contains a cycle (ErrCircularDependency).
-// Declaration order is not significant — topological order is computed from
-// the dependency graph via Kahn's algorithm.
+// Topological order is computed via Kahn's algorithm with a min-heap keyed by
+// declaration index, so independent nodes preserve their spec.nodes ordering.
 func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, error) {
 	dag := &DAG{
 		Nodes:      make([]Node, len(nodes)),
@@ -107,7 +126,11 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 		}
 	}
 
-	// Kahn's algorithm: topological sort with cycle detection.
+	// Kahn's algorithm with min-heap: topological sort with cycle detection.
+	// The min-heap is keyed by declaration index so that among nodes whose
+	// dependencies are all satisfied, the one declared earliest in spec.nodes
+	// is emitted first. This makes TopologicalOrder stable with respect to
+	// input ordering — independent nodes appear in declaration order.
 	// inDegree counts how many in-graph dependencies each node has.
 	n := len(nodes)
 	inDegree := make([]int, n)
@@ -119,18 +142,18 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 		}
 	}
 
-	// Seed the queue with nodes that have no in-graph dependencies.
-	var queue []int
+	// Seed the heap with nodes that have no in-graph dependencies.
+	ready := make(indexHeap, 0, n)
 	for i, d := range inDegree {
 		if d == 0 {
-			queue = append(queue, i)
+			ready = append(ready, i)
 		}
 	}
+	heap.Init(&ready)
 
-	var order []int
-	for len(queue) > 0 {
-		curr := queue[0]
-		queue = queue[1:]
+	order := make([]int, 0, n)
+	for ready.Len() > 0 {
+		curr := heap.Pop(&ready).(int)
 		order = append(order, curr)
 
 		currID := dag.Nodes[curr].ID
@@ -140,7 +163,7 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 		for _, depIdx := range dag.Dependents[currID] {
 			inDegree[depIdx]--
 			if inDegree[depIdx] == 0 {
-				queue = append(queue, depIdx)
+				heap.Push(&ready, depIdx)
 			}
 		}
 	}

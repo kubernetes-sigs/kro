@@ -1491,7 +1491,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 				continue
 			}
 			// Skip Watch, WatchKind (read-only), and Definition (no resource).
-			ref := DetectReference(node.Template)
+			ref := node.Reference()
 			if ref == ReferenceWatch || ref == ReferenceWatchKind || ref == ReferenceDefinition {
 				continue
 			}

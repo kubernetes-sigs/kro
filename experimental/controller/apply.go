@@ -937,7 +937,7 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 			if node.Template == nil {
 				continue
 			}
-			ref := DetectReference(node.Template)
+			ref := node.Reference()
 			if ref == ReferenceWatch || ref == ReferenceWatchKind {
 				continue // read-only references don't create resources
 			}

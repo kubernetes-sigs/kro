@@ -96,7 +96,7 @@ func ReferenceFromLabelValue(s string) (Reference, bool) {
 	}
 }
 
-// DetectReference returns the Reference type of a node's template map.
+// detectReference returns the Reference type of a node's template map.
 //
 // Detection order (from 003-ownership.md):
 //  1. Definition — non-empty template with no apiVersion and no kind
@@ -104,7 +104,9 @@ func ReferenceFromLabelValue(s string) (Reference, bool) {
 //  3. Watch — only identity fields (apiVersion, kind, metadata.name/namespace)
 //  4. Unresolved — has fields beyond identity; Own vs Contribute determined
 //     at reconcile time by resource existence
-func DetectReference(tmpl map[string]any) Reference {
+//
+// Internal to the Node derivation path — callers should use node.Reference().
+func detectReference(tmpl map[string]any) Reference {
 	if len(tmpl) == 0 {
 		return ReferenceUnresolved
 	}
@@ -216,19 +218,34 @@ type Node struct {
 	ReadinessDeps map[string]bool
 }
 
-// Reference returns the Reference type of this node's template.
-// Identity-only templates (apiVersion+kind+metadata only) are normally
-// classified as Watch. However, if the node has management signals
-// (readyWhen, propagateWhen, includeWhen), it's clearly intended to be
-// managed, not observed — upgrade to Unresolved so the reconciler
-// resolves it against the cluster state.
+// Reference returns the Reference type of this node.
 //
-// Tradeoff: this forecloses "watch a resource I don't own but gate on its
-// readiness." If that use case arises, the discriminator needs refinement
-// (e.g., an explicit watch-only annotation). For now, management signals
-// on an identity-only template imply ownership intent.
+// Today this derives from Template shape on every call — cheap and
+// stateless. When the explicit-keyword schema lands, this becomes a
+// direct read of the declared keyword; call sites already route through
+// here so the change is local to Node.
+//
+// Tradeoff in the current derivation: identity-only templates with
+// management signals (readyWhen, propagateWhen, includeWhen) upgrade
+// from Watch to Unresolved because those signals imply ownership
+// intent. This forecloses "watch a resource I don't own but gate on
+// its readiness"; if that use case arises, the discriminator needs
+// refinement (e.g., an explicit watch-only annotation).
 func (n *Node) Reference() Reference {
-	ref := DetectReference(n.Template)
+	return deriveReference(n)
+}
+
+// deriveReference classifies a node's reference type from its template
+// shape and management signals. Single source of truth — invoked only
+// from Reference().
+//
+// TODO: when the explicit keyword schema lands (template/patch/watch/
+// watchKind/def), this reads the declared keyword and the
+// ReferenceUnresolved branch goes away — ReferenceUnresolved exists
+// only to defer Watch-vs-Own disambiguation that the current shape-
+// sniffing can't settle at parse time.
+func deriveReference(n *Node) Reference {
+	ref := detectReference(n.Template)
 	if ref == ReferenceWatch && (len(n.ReadyWhen) > 0 || len(n.PropagateWhen) > 0 || len(n.IncludeWhen) > 0) {
 		return ReferenceUnresolved
 	}

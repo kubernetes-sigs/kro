@@ -74,7 +74,7 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 	for _, node := range nodes {
 		seen[node.ID] = true
 
-		ref := DetectReference(node.Template)
+		ref := node.Reference()
 		switch {
 		case ref == ReferenceDefinition:
 			// Phase 2: infer type from template structure.

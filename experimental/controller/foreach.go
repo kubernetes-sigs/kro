@@ -166,7 +166,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 			// Definition forEach: evaluate the template per item, collect
 			// values into []any. No resource is created or tracked.
-			if DetectReference(node.Template) == ReferenceDefinition {
+			if node.Reference() == ReferenceDefinition {
 				evalMap, err := innerEval.toMapNode(node)
 				if err != nil {
 					childErrors = append(childErrors, fmt.Errorf("forEach defines %s item: %w", node.ID, err))

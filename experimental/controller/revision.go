@@ -561,8 +561,9 @@ func DiffRevisionNodesForTest(active *GraphSpec, superseded []*unstructured.Unst
 func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (*GraphSpec, *instanceState, error) {
 	instanceKey := revision.GetNamespace() + "/" + revision.GetName()
 
-	// Fast path: instance state already exists (steady-state reconcile).
-	if existing := r.Caches.get(instanceKey); existing != nil {
+	// Fast path: instance state already exists with a valid compilation
+	// (steady-state reconcile).
+	if existing := r.Caches.get(instanceKey); existing != nil && existing.compiled != nil {
 		return existing.compiled.spec, existing, nil
 	}
 
@@ -583,50 +584,35 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 		}
 	}
 
-	// Create per-instance mutable state pointing to the shared compiled graph.
-	state := newInstanceState(compiled)
-
-	// Migrate state from evicted entries. When evictUnresolved removes an
-	// instanceState (because a new type schema was discovered), it stashes
-	// the old state. The node structure is unchanged — only type resolution
-	// improved — so all per-node hashes, scopes, and references are valid.
-	// This prevents unnecessary re-evaluation and SSA applies after a
-	// recompilation triggered by type discovery.
+	// Check if this is an evicted instance (compiled was nil'd by
+	// evictUnresolved). The per-node mutable state is valid across
+	// type-resolution recompilation — only the compiled pointer needs
+	// to be replaced and runtime caches reset.
 	//
 	// Safety invariant: schema resolution does not affect template evaluation.
 	// CEL expressions produce identical output for identical inputs regardless
 	// of whether the target GVK schema is resolved. If recompilation ever
-	// changes template output semantics (not just validation), this migration
-	// must be gated on a compilation fingerprint that detects the change.
-	if old := r.Caches.popEvicted(instanceKey); old != nil {
-		for _, node := range state.compiled.spec.Nodes {
-			nodeID := node.ID
-			if v, ok := old.previousScope[nodeID]; ok {
-				state.previousScope[nodeID] = v
-			}
-			if v, ok := old.previousPlanStates[nodeID]; ok {
-				state.previousPlanStates[nodeID] = v
-			}
-			if v, ok := old.previousPropagateReady[nodeID]; ok {
-				state.previousPropagateReady[nodeID] = v
-			}
-			if v, ok := old.previousEvalHashes[nodeID]; ok {
-				state.previousEvalHashes[nodeID] = v
-			}
-			if v, ok := old.previousSelfHashes[nodeID]; ok {
-				state.previousSelfHashes[nodeID] = v
-			}
-			if v, ok := old.previousKeys[nodeID]; ok {
-				state.previousKeys[nodeID] = v
-			}
-			if v, ok := old.resolvedReferences[nodeID]; ok {
-				state.resolvedReferences[nodeID] = v
-			}
-		}
-		state.previousAppliedKeys = old.previousAppliedKeys
-		state.driftTimers = old.driftTimers
+	// changes template output semantics (not just validation), this in-place
+	// update must be gated on a compilation fingerprint that detects the change.
+	if existing := r.Caches.get(instanceKey); existing != nil {
+		// existing.compiled is nil (evicted). Recompile in-place.
+		existing.compiled = compiled
+		// Reset runtime caches that should not survive recompilation.
+		// Per-node state (hashes, scopes, references, drift timers,
+		// applied keys) is preserved — node structure is unchanged.
+		existing.forEachItems = map[string][]any{}
+		existing.forEachItemScope = map[string]map[string]any{}
+		existing.forEachItemKeys = map[string]map[string][]string{}
+		existing.watchKindCache = make(map[string][]any)
+		existing.systemErrorBackoff = make(map[string]time.Duration)
+		existing.deferredPruneKeys = nil
+		// Ensure the compiled graph is tracked in the content-addressed cache.
+		r.Caches.set(instanceKey, existing)
+		return spec, existing, nil
 	}
 
+	// New instance — create fresh mutable state.
+	state := newInstanceState(compiled)
 	r.Caches.set(instanceKey, state)
 	return spec, state, nil
 }

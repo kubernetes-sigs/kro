@@ -717,7 +717,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		if isRevisionTransition && state.previousAppliedKeys == nil {
 			for _, rev := range supersededRevisions {
 				oldKey := rev.GetNamespace() + "/" + rev.GetName()
-				if oldState := r.Caches.getAny(oldKey); oldState != nil {
+				if oldState := r.Caches.get(oldKey); oldState != nil {
 					for k := range oldState.previousAppliedKeys {
 						if state.previousAppliedKeys == nil {
 							state.previousAppliedKeys = make(map[string]bool)
@@ -740,7 +740,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				// Transfer state from the most recent superseded revision.
 				baseline := supersededRevisions[len(supersededRevisions)-1]
 				oldKey := baseline.GetNamespace() + "/" + baseline.GetName()
-				if oldState := r.Caches.getAny(oldKey); oldState != nil {
+				if oldState := r.Caches.get(oldKey); oldState != nil {
 					for _, node := range dag.Nodes {
 						if !changedNodes[node.ID] {
 							// Node spec unchanged — inherit previous state.

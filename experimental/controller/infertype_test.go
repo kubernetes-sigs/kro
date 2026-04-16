@@ -661,14 +661,23 @@ func TestEvictUnresolved(t *testing.T) {
 		// Evict unresolved.
 		affected := caches.evictUnresolved()
 
-		// Only the unresolved compilation should be evicted.
+		// The unresolved compiledGraph is removed from the compiled cache.
+		// The instanceState stays in instances with compiled == nil.
 		compiledCount, instanceCount = caches.CacheSizes()
 		assert.Equal(t, 1, compiledCount)
-		assert.Equal(t, 1, instanceCount)
+		assert.Equal(t, 2, instanceCount) // instance stays, compiled is nil
 
 		// The resolved graph should still be cached.
 		assert.NotNil(t, caches.getCompiled("hash-resolved"))
 		assert.Nil(t, caches.getCompiled("hash-unresolved"))
+
+		// The evicted instance's compiled pointer should be nil.
+		evictedState := caches.get("default/my-graph-g00001")
+		assert.NotNil(t, evictedState)
+		assert.Nil(t, evictedState.compiled)
+
+		// The resolved instance should be unaffected.
+		assert.NotNil(t, caches.get("default/other-graph-g00001").compiled)
 
 		// Affected should contain the graph key.
 		require.Len(t, affected, 1)

@@ -356,6 +356,12 @@ func (s *instanceState) initResolvedReferences() {
 // This separation means N identical child graphs (common in nested graph
 // patterns with forEach) share one compiledGraph instead of each independently
 // compiling identical CEL programs and DAGs.
+//
+// When evictUnresolved fires (CRD discovery), affected instanceStates have
+// their compiled pointer set to nil rather than being moved to a separate map.
+// compileRevision detects this (compiled == nil) and recompiles in-place,
+// preserving the per-node mutable state that is valid across type-resolution
+// recompilation (hashes, scopes, references, drift timers, applied keys).
 type graphCaches struct {
 	// RWMutex: get and getCompiled are read-only and take RLock; set and remove
 	// mutate both maps and take Lock. The read path (one get per reconcile per
@@ -363,21 +369,12 @@ type graphCaches struct {
 	mu        sync.RWMutex
 	compiled  map[string]*compiledGraph // spec hash → shared compiled graph
 	instances map[string]*instanceState // namespace/revision-name → per-instance state
-
-	// evicted holds instance states that were evicted by evictUnresolved().
-	// When a type schema becomes available and triggers recompilation, the
-	// node structure is unchanged — only type resolution improved. The
-	// evicted state is used by compileRevision to migrate hashes and
-	// references into the new instanceState, avoiding unnecessary re-evaluation
-	// and re-application of unchanged nodes.
-	evicted map[string]*instanceState
 }
 
 func newGraphCaches() *graphCaches {
 	return &graphCaches{
 		compiled:  make(map[string]*compiledGraph),
 		instances: make(map[string]*instanceState),
-		evicted:   make(map[string]*instanceState),
 	}
 }
 
@@ -385,24 +382,6 @@ func (gc *graphCaches) get(key string) *instanceState {
 	gc.mu.RLock()
 	defer gc.mu.RUnlock()
 	return gc.instances[key]
-}
-
-// getAny returns the instanceState for the given key, checking both the active
-// instances map and the evicted map. Used during revision transitions to
-// transfer previousAppliedKeys from a superseded revision whose state may
-// have been evicted by evictUnresolved (schema discovery race).
-//
-// The returned pointer is safe to use after lock release because popEvicted
-// (the only evicted-map removal path) runs on the reconciler goroutine, which
-// is serialized with callers of getAny by the controller-runtime work queue.
-// If this invariant changes, the returned pointer requires a defensive copy.
-func (gc *graphCaches) getAny(key string) *instanceState {
-	gc.mu.RLock()
-	defer gc.mu.RUnlock()
-	if s := gc.instances[key]; s != nil {
-		return s
-	}
-	return gc.evicted[key]
 }
 
 func (gc *graphCaches) set(key string, s *instanceState) {
@@ -440,18 +419,6 @@ func (gc *graphCaches) remove(key string) {
 	}
 }
 
-// popEvicted returns and removes a stashed instanceState that was evicted by
-// evictUnresolved for the given instance key. Returns nil if no evicted state
-// exists. Used by compileRevision to migrate per-node state into the
-// replacement instanceState after a type-resolution-triggered recompilation.
-func (gc *graphCaches) popEvicted(key string) *instanceState {
-	gc.mu.Lock()
-	defer gc.mu.Unlock()
-	old := gc.evicted[key]
-	delete(gc.evicted, key)
-	return old
-}
-
 // getCompiled returns a shared compiledGraph by spec hash, or nil if not cached.
 func (gc *graphCaches) getCompiled(specHash string) *compiledGraph {
 	gc.mu.RLock()
@@ -466,10 +433,16 @@ func (gc *graphCaches) CacheSizes() (compiledCount, instanceCount int) {
 	return len(gc.compiled), len(gc.instances)
 }
 
-// evictUnresolved removes compiled graphs that have unresolved GVKs and their
-// instance states. Returns the affected Graph keys so callers can enqueue them
-// for recompilation. Called when a CRD is installed — the previously-unresolvable
-// schema may now be available.
+// evictUnresolved nils out compiled pointers for instance states whose
+// compiledGraph had unresolved GVKs, and removes those compiledGraphs from
+// the compiled cache. Returns the affected Graph keys so callers can enqueue
+// them for recompilation. Called when a CRD is installed — the previously-
+// unresolvable schema may now be available.
+//
+// The instanceState stays in the instances map with compiled == nil. On the
+// next reconcile, compileRevision detects this and recompiles in-place,
+// preserving per-node mutable state (hashes, scopes, drift timers, applied
+// keys) that is valid across type-resolution recompilation.
 func (gc *graphCaches) evictUnresolved() []graphKey {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()
@@ -486,15 +459,12 @@ func (gc *graphCaches) evictUnresolved() []graphKey {
 		return nil
 	}
 
-	// Evict instance states pointing to evicted compilations.
-	// Stash them for state migration when the replacement instanceState is
-	// created by compileRevision.
-	// Extract Graph keys from instance keys (format: "namespace/revision-name").
+	// Nil out compiled pointers on affected instance states. The instance
+	// stays in the map — compileRevision will recompile in-place.
 	var affected []graphKey
 	for key, state := range gc.instances {
 		if state.compiled != nil && evictHashes[state.compiled.specHash] {
-			gc.evicted[key] = state
-			delete(gc.instances, key)
+			state.compiled = nil
 			// Instance key is "namespace/revision-name". The Graph name
 			// is the revision name minus the "-gNNNNN" suffix.
 			if gk, ok := instanceKeyToGraphKey(key); ok {

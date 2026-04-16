@@ -49,6 +49,7 @@ const stdlibReconcileTimeout = 120 * time.Second
 // ═══════════════════════════════════════════════════════════════════════════════
 
 func TestStdlibKind(t *testing.T) {
+	t.Parallel()
 	require.NoError(t, waitForCRD(ctx, k8sClient, "kinds.experimental.kro.run", stdlibCRDTimeout))
 
 	// Phase 1: Create a Kind that defines TestWidget.
@@ -144,6 +145,12 @@ func TestStdlibKind(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 func TestStdlibDecorator(t *testing.T) {
+	// Intentionally serial: this Decorator's items WatchKind uses an empty
+	// selector, so it picks up every ConfigMap in kro-system — including
+	// those created by TestStdlibKind when running concurrently. Parallel
+	// execution is safe but stamps extra "-decorated" ConfigMaps that
+	// inflate runtime and muddy the test's intent. Keep serial until the
+	// stdlib Decorator template honors spec.watch.selector.
 	require.NoError(t, waitForCRD(ctx, k8sClient, "decorators.experimental.kro.run", stdlibCRDTimeout))
 
 	// Phase 1: Create a Decorator that watches ConfigMaps and creates
@@ -242,6 +249,7 @@ func TestStdlibDecorator(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 func TestStdlibSingleton(t *testing.T) {
+	t.Parallel()
 	require.NoError(t, waitForCRD(ctx, k8sClient, "singletons.experimental.kro.run", stdlibCRDTimeout))
 
 	ns := createNamespace(t)

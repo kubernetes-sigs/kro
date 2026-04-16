@@ -387,6 +387,24 @@ func (gc *graphCaches) get(key string) *instanceState {
 	return gc.instances[key]
 }
 
+// getAny returns the instanceState for the given key, checking both the active
+// instances map and the evicted map. Used during revision transitions to
+// transfer previousAppliedKeys from a superseded revision whose state may
+// have been evicted by evictUnresolved (schema discovery race).
+//
+// The returned pointer is safe to use after lock release because popEvicted
+// (the only evicted-map removal path) runs on the reconciler goroutine, which
+// is serialized with callers of getAny by the controller-runtime work queue.
+// If this invariant changes, the returned pointer requires a defensive copy.
+func (gc *graphCaches) getAny(key string) *instanceState {
+	gc.mu.RLock()
+	defer gc.mu.RUnlock()
+	if s := gc.instances[key]; s != nil {
+		return s
+	}
+	return gc.evicted[key]
+}
+
 func (gc *graphCaches) set(key string, s *instanceState) {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()

@@ -1505,7 +1505,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 	}
 
-	// Release Contribute fields first via skeleton apply.
+	// Release Contribute fields first via release apply.
 	// Per the design (003-ownership): Contribute never deletes — it releases
 	// field ownership so the actual owner retains the resource.
 	fieldOwner := graphFieldOwner(graph)
@@ -1518,7 +1518,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if gvk.Kind == "" {
 			continue
 		}
-		if err := skeletonApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
+		if err := releaseApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
 			logger.Error(err, "releasing contribution fields during teardown", "key", resKey)
 		} else {
 			logger.V(1).Info("released contribution fields during teardown", "key", resKey)

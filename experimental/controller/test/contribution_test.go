@@ -560,7 +560,7 @@ func TestContributeReferenceDetectedByExistence(t *testing.T) {
 }
 
 // TestContribute_RegressionStatusSubresourceTeardown proves that a Contribute
-// node writing status fields releases field ownership via skeleton apply during
+// node writing status fields releases field ownership via release apply during
 // Graph deletion. The target must survive (it's Contribute, not Own) and the
 // Graph's field manager must not retain contributed status fields.
 //
@@ -651,22 +651,22 @@ func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
 		types.NamespacedName{Name: "status-target", Namespace: ns}, finalTarget),
 		"Contribute target must survive Graph deletion")
 
-	// Verify the Graph's field manager state after skeleton apply.
+	// Verify the Graph's field manager state after release apply.
 	managedFields := finalTarget.GetManagedFields()
 	graphManager := "contrib-status-teardown." + ns + ".internal.kro.run"
 
-	// Main resource: skeleton apply should release identity labels/annotations.
+	// Main resource: release apply should release identity labels/annotations.
 	for _, mf := range managedFields {
 		if mf.Manager == graphManager && mf.Subresource == "" {
 			if mf.FieldsV1 != nil {
 				fields := string(mf.FieldsV1.Raw)
 				assert.NotContains(t, fields, "f:spec",
-					"main resource fields should be released after skeleton apply")
+					"main resource fields should be released after release apply")
 			}
 		}
 	}
 
-	// Status subresource: skeleton apply should release status fields.
+	// Status subresource: release apply should release status fields.
 	var graphOwnsStatusFields bool
 	for _, mf := range managedFields {
 		if mf.Manager == graphManager && mf.Subresource == "status" && mf.FieldsV1 != nil {
@@ -688,13 +688,13 @@ func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
 // TestContributeMetadataAndStatus proves that a Contribute node writing both
 // metadata (annotations) and status fields to a resource with a real status
 // subresource exercises both apply paths: main resource apply for metadata,
-// status subresource apply for status. On Graph deletion, skeleton apply must
+// status subresource apply for status. On Graph deletion, release apply must
 // release field ownership on both subresources.
 //
 // This is the dual-subresource path: applySSA splits the template into a
 // main payload (everything except status) and a status payload, applies each
 // to the appropriate endpoint. The contribute key encodes hasStatus=true so
-// skeleton apply knows to release both.
+// release apply knows to release both.
 //
 // Per 003-ownership.md § Status Subresource: "Releases only target the
 // subresources the template actually applied to."
@@ -802,7 +802,7 @@ func TestContributeMetadataAndStatus(t *testing.T) {
 		"Graph's field manager should have a status subresource entry")
 	t.Log("Field manager has entries for both main resource and status subresource")
 
-	// Delete the Graph — triggers skeleton apply on both subresources.
+	// Delete the Graph — triggers release apply on both subresources.
 	require.NoError(t, k8sClient.Delete(ctx, graph))
 
 	// Wait for Graph to be fully deleted.
@@ -813,7 +813,7 @@ func TestContributeMetadataAndStatus(t *testing.T) {
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: graphName, Namespace: ns}, g)
 			return err != nil, nil
 		}))
-	t.Log("Graph deleted — skeleton apply should have run on both subresources")
+	t.Log("Graph deleted — release apply should have run on both subresources")
 
 	// The target MUST still exist (Contribute, not Own).
 	finalTarget := &unstructured.Unstructured{}
@@ -823,22 +823,22 @@ func TestContributeMetadataAndStatus(t *testing.T) {
 		"Contribute target must survive Graph deletion")
 
 	// Assert contributed annotation VALUES are gone after teardown.
-	// Skeleton apply sends an identity-only skeleton to the main resource.
-	// SSA releases ownership of all previously-owned fields not in the skeleton.
+	// Release apply sends an identity-only release body to the main resource.
+	// SSA releases ownership of all previously-owned fields not in the release body.
 	// Since the Graph was the sole owner of these annotations, SSA removes them.
 	finalAnn := finalTarget.GetAnnotations()
 	assert.Empty(t, finalAnn["kro.run/managed"],
-		"contributed annotation should be removed after skeleton apply during teardown")
+		"contributed annotation should be removed after release apply during teardown")
 	assert.Empty(t, finalAnn["kro.run/revision"],
-		"contributed annotation should be removed after skeleton apply during teardown")
+		"contributed annotation should be removed after release apply during teardown")
 
 	// Assert contributed status VALUES are gone after teardown.
-	// Skeleton apply sends {status: {}} to the /status subresource, releasing
+	// Release apply sends {status: {}} to the /status subresource, releasing
 	// ownership of all previously-owned status fields. Since the Graph was
 	// the sole owner, SSA removes them.
 	finalStatus, _, _ := unstructured.NestedMap(finalTarget.Object, "status")
 	assert.Nil(t, finalStatus["message"],
-		"contributed status.message should be removed after skeleton apply during teardown")
+		"contributed status.message should be removed after release apply during teardown")
 
 	// Assert the Graph's field manager no longer owns contributed fields.
 	finalMF := finalTarget.GetManagedFields()
@@ -873,7 +873,7 @@ func TestContributeMetadataAndStatus(t *testing.T) {
 
 // TestContributeMapFieldOwnership proves that a Contribute node writing
 // specific keys to a map field (ConfigMap .data) takes field-level ownership
-// of only those keys, and skeleton apply releases that ownership on prune.
+// of only those keys, and release apply releases that ownership on prune.
 //
 // SSA semantics for maps: each key is an independently owned field. When a
 // field manager applies a map with keys {a, b}, it owns those keys. When it
@@ -884,7 +884,7 @@ func TestContributeMetadataAndStatus(t *testing.T) {
 // This test asserts:
 //  1. Contributed keys are applied (values present on resource)
 //  2. Original keys from another field manager are untouched
-//  3. After prune (skeleton apply), contributed key VALUES are deleted
+//  3. After prune (release apply), contributed key VALUES are deleted
 //     (sole owner released → SSA removes the field)
 //  4. Graph's field manager no longer owns the contributed keys
 //  5. External manager's field ownership is unaffected
@@ -1011,7 +1011,7 @@ func TestContributeMapFieldOwnership(t *testing.T) {
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
 		types.NamespacedName{Name: graphName, Namespace: ns}))
 
-	// Re-read the target to check field ownership after skeleton apply.
+	// Re-read the target to check field ownership after release apply.
 	final := &unstructured.Unstructured{}
 	final.SetGroupVersionKind(cmGVK)
 	require.NoError(t, k8sClient.Get(ctx,
@@ -1031,10 +1031,10 @@ func TestContributeMapFieldOwnership(t *testing.T) {
 	// the Graph stops contributing.
 	_, contributedExists := finalData["contributed-key"]
 	assert.False(t, contributedExists,
-		"contributed key should be removed entirely when sole owner releases via skeleton apply")
+		"contributed key should be removed entirely when sole owner releases via release apply")
 	_, anotherExists := finalData["another-key"]
 	assert.False(t, anotherExists,
-		"contributed key should be removed entirely when sole owner releases via skeleton apply")
+		"contributed key should be removed entirely when sole owner releases via release apply")
 
 	// ASSERTION 3: Graph's field manager should no longer own the data keys.
 	finalMF := final.GetManagedFields()
@@ -1048,7 +1048,7 @@ func TestContributeMapFieldOwnership(t *testing.T) {
 		}
 	}
 	assert.False(t, graphStillOwnsDataKeys,
-		"after skeleton apply, Graph's field manager should not own .data.contributed-key")
+		"after release apply, Graph's field manager should not own .data.contributed-key")
 
 	// ASSERTION 4: External manager's ownership is unaffected.
 	var externalStillOwnsKeys bool
@@ -1061,6 +1061,6 @@ func TestContributeMapFieldOwnership(t *testing.T) {
 		}
 	}
 	assert.True(t, externalStillOwnsKeys,
-		"external manager's field ownership must be unaffected by skeleton apply")
+		"external manager's field ownership must be unaffected by release apply")
 	t.Log("Map field ownership proved: contributed keys deleted (sole owner released), external keys untouched")
 }

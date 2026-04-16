@@ -355,9 +355,9 @@ func resolvedResourceKey(tmpl map[string]any, defaultNS string) string {
 //   Contribute: contribute:group/version/Kind/namespace/name[+status]
 //
 // The "contribute:" prefix distinguishes resources where cleanup means
-// skeleton apply (release field ownership) from resources where cleanup
+// release apply (release field ownership) from resources where cleanup
 // means delete. The "+status" suffix marks contributions that included
-// status subresource fields, so skeleton apply must release both the
+// status subresource fields, so release apply must release both the
 // main resource and the status subresource.
 //
 // resourceKey, contributeKey, and parseContributeKey are the sole
@@ -433,7 +433,7 @@ func parseContributeKey(key string) (resKey string, hasStatus bool) {
 }
 
 // templateHasStatus returns true if a template map contains a non-nil
-// status field. Used during teardown to determine whether skeleton apply
+// status field. Used during teardown to determine whether release apply
 // must also release the status subresource.
 func templateHasStatus(tmpl map[string]any) bool {
 	s, ok := tmpl["status"]
@@ -783,13 +783,13 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue
 		}
 
-		// Contribute keys use skeleton apply (release fields), not delete.
+		// Contribute keys use release apply (release fields), not delete.
 		if resKey, hasStatus := parseContributeKey(key); resKey != "" {
 			gvk, nn := parseResourceKey(resKey)
 			if gvk.Kind == "" {
 				continue
 			}
-			if err := skeletonApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
+			if err := releaseApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
 				logger.Error(err, "releasing contribution fields", "key", resKey)
 			} else {
 				logger.Info("released contribution fields", "key", resKey)
@@ -1067,15 +1067,15 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 }
 
 // ---------------------------------------------------------------------------
-// Skeleton apply — release field ownership without deleting the object
+// Release apply — release field ownership without deleting the object
 // ---------------------------------------------------------------------------
 
-func skeletonApply(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, namespace, name string, fieldOwner client.FieldOwner, hasStatus bool) error {
+func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, namespace, name string, fieldOwner client.FieldOwner, hasStatus bool) error {
 	apiVersion := gvk.Group + "/" + gvk.Version
 	if gvk.Group == "" {
 		apiVersion = gvk.Version
 	}
-	skeleton := map[string]any{
+	release := map[string]any{
 		"apiVersion": apiVersion,
 		"kind":       gvk.Kind,
 		"metadata": map[string]any{
@@ -1084,9 +1084,9 @@ func skeletonApply(ctx context.Context, c client.Client, gvk schema.GroupVersion
 		},
 	}
 
-	data, err := json.Marshal(skeleton)
+	data, err := json.Marshal(release)
 	if err != nil {
-		return fmt.Errorf("marshaling skeleton: %w", err)
+		return fmt.Errorf("marshaling release: %w", err)
 	}
 
 	target := &unstructured.Unstructured{}
@@ -1097,15 +1097,15 @@ func skeletonApply(ctx context.Context, c client.Client, gvk schema.GroupVersion
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
-		return fmt.Errorf("skeleton apply for %s/%s: %w", namespace, name, err)
+		return fmt.Errorf("release apply for %s/%s: %w", namespace, name, err)
 	}
 
 	if hasStatus {
 		// The status subresource endpoint only processes fields under .status.
-		// An identity-only skeleton (apiVersion/kind/metadata) is ignored by the
-		// status endpoint — no fields are claimed, so no ownership is released.
+		// An identity-only release body (apiVersion/kind/metadata) is ignored by
+		// the status endpoint — no fields are claimed, so no ownership is released.
 		// Include "status": {} so SSA releases all previously-owned status fields.
-		statusSkeleton := map[string]any{
+		statusRelease := map[string]any{
 			"apiVersion": apiVersion,
 			"kind":       gvk.Kind,
 			"metadata": map[string]any{
@@ -1114,9 +1114,9 @@ func skeletonApply(ctx context.Context, c client.Client, gvk schema.GroupVersion
 			},
 			"status": map[string]any{},
 		}
-		statusData, err := json.Marshal(statusSkeleton)
+		statusData, err := json.Marshal(statusRelease)
 		if err != nil {
-			return fmt.Errorf("marshaling status skeleton: %w", err)
+			return fmt.Errorf("marshaling status release: %w", err)
 		}
 		statusTarget := &unstructured.Unstructured{}
 		statusTarget.SetGroupVersionKind(gvk)
@@ -1124,7 +1124,7 @@ func skeletonApply(ctx context.Context, c client.Client, gvk schema.GroupVersion
 		statusTarget.SetNamespace(namespace)
 		if err := c.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, statusData), fieldOwner, client.ForceOwnership); err != nil {
 			if !apierrors.IsNotFound(err) {
-				return fmt.Errorf("skeleton status apply for %s/%s: %w", namespace, name, err)
+				return fmt.Errorf("status release apply for %s/%s: %w", namespace, name, err)
 			}
 		}
 	}

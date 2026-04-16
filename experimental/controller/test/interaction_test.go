@@ -511,7 +511,7 @@ func TestPropagateWhenContribute(t *testing.T) {
 }
 
 // TestIncludeWhenContributeReleaseFields proves that when includeWhen toggles
-// a Contribute node to false, skeleton apply releases the contributed fields.
+// a Contribute node to false, release apply releases the contributed fields.
 func TestIncludeWhenContributeReleaseFields(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -629,7 +629,7 @@ func TestIncludeWhenContributeReleaseFields(t *testing.T) {
 
 // TestForEachContributeScaleDown proves that forEach can stamp Contribute
 // resources (write fields to pre-existing targets per collection item),
-// and that scale-down releases fields via skeleton apply without deleting.
+// and that scale-down releases fields via release apply without deleting.
 func TestForEachContributeScaleDown(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)

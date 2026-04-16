@@ -412,7 +412,7 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 // reconcileApply evaluates and applies an Own or Contribute template.
 // The ref parameter controls SSA behavior (identity labels, pre-apply checks)
 // and applied set key format: Own keys use resourceKey (prune → delete),
-// Contribute keys use contributeKey (prune → skeleton apply to release fields).
+// Contribute keys use contributeKey (prune → release apply to release fields).
 // See applySSA for the full ref-dependent behavior.
 // driftCorrection bypasses the apply-hash check in applySSA.
 func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, ref Reference, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
@@ -434,7 +434,7 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 
 	if ref == ReferenceContribute {
 		// Track the contribution in the applied set with a "contribute:" prefix.
-		// This lets prune and teardown distinguish Contribute keys (skeleton apply
+		// This lets prune and teardown distinguish Contribute keys (release apply
 		// to release fields) from Own keys (delete).
 		hasStatus := evalMap["status"] != nil
 		return contributeKey(applied, hasStatus), nil

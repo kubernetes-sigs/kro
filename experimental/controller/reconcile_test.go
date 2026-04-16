@@ -1110,7 +1110,7 @@ func TestStaticResourceKey_ExplicitNamespace(t *testing.T) {
 
 // TestContributeStatusDetection proves that contributeHasStatus correctly
 // detects whether a template's Contribute node applies status fields.
-// During teardown, this determines whether skeletonApply releases the
+// During teardown, this determines whether releaseApply releases the
 // status subresource.
 //
 // Per 003-ownership.md § Status Subresource: "Releases only target the

@@ -218,14 +218,14 @@ func TestMultiHopRevisionPrune(t *testing.T) {
 
 // TestContributeCleanupOnPrune proves that when a Contribute template is
 // removed from a Graph spec, the controller releases its field ownership
-// via skeleton apply instead of deleting the target resource.
+// via release apply instead of deleting the target resource.
 //
 // Regression: reconcileApply() for Contribute returned "" as the resource key, so
-// contributions never entered the applied set. skeletonApply() existed
+// contributions never entered the applied set. releaseApply() existed
 // but had zero callers. On spec change removing a Contribute template,
 // the contributed fields were never released.
 //
-// The invariant: pruning a Contribute key triggers skeleton apply (field
+// The invariant: pruning a Contribute key triggers release apply (field
 // release), not delete. The target resource survives.
 func TestContributeCleanupOnPrune(t *testing.T) {
 	t.Parallel()
@@ -322,14 +322,14 @@ func TestContributeCleanupOnPrune(t *testing.T) {
 	finalTarget.SetGroupVersionKind(regressionCMGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "contribute-target", Namespace: ns}, finalTarget))
 
-	// The original data must be preserved — skeleton apply releases OUR fields
+	// The original data must be preserved — release apply releases OUR fields
 	// but must not disturb fields we never owned.
 	data, _, _ := unstructured.NestedStringMap(finalTarget.Object, "data")
 	assert.Equal(t, "data", data["original"],
 		"original data must survive contribution cleanup")
 
-	// The contributed annotation should be released by skeleton apply.
-	// After skeleton apply, the field manager for "graph-contributed" is
+	// The contributed annotation should be released by release apply.
+	// After release apply, the field manager for "graph-contributed" is
 	// released, but the annotation value may persist until the next
 	// apply from another manager overwrites it. The key assertion is
 	// that the resource exists and original data is intact — the Graph's
@@ -338,7 +338,7 @@ func TestContributeCleanupOnPrune(t *testing.T) {
 }
 
 // TestContributeCleanupOnTeardown proves that Graph deletion releases
-// Contribute field ownership via skeleton apply instead of skipping
+// Contribute field ownership via release apply instead of skipping
 // or deleting.
 //
 // Regression: reconcileDelete() previously skipped Contribute templates
@@ -428,11 +428,11 @@ func TestContributeCleanupOnTeardown(t *testing.T) {
 	finalTarget.SetGroupVersionKind(regressionCMGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "teardown-target", Namespace: ns}, finalTarget))
 
-	// Original data from the resource's creator must survive — skeleton apply
+	// Original data from the resource's creator must survive — release apply
 	// releases the Graph's fields without disturbing other managers' fields.
 	data, _, _ := unstructured.NestedStringMap(finalTarget.Object, "data")
 	assert.Equal(t, "me", data["keep"],
-		"target's original data must survive Graph teardown — skeleton apply must not disturb other managers' fields")
+		"target's original data must survive Graph teardown — release apply must not disturb other managers' fields")
 	t.Log("Teardown proved: Contribute target survived Graph deletion with data intact")
 }
 
@@ -913,12 +913,12 @@ func TestContributeReadyWhenGatesGraphReadiness(t *testing.T) {
 // TestContributeIdentityLabels proves that Contribute resources carry identity
 // labels with role "contribute". These labels make Contribute resources
 // discoverable via deriveAppliedSet() after controller restart, ensuring
-// teardown can release their fields via skeleton apply.
+// teardown can release their fields via release apply.
 //
 // Regression: applySSA for Contribute references previously did not call setIdentityLabels.
 // After a controller restart, deriveAppliedSet() scanned informer caches for
 // identity labels and found nothing for Contribute resources — teardown
-// orphaned their fields (never released via skeleton apply).
+// orphaned their fields (never released via release apply).
 func TestContributeIdentityLabels(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)

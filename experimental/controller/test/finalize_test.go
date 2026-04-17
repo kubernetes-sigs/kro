@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -959,4 +960,139 @@ func TestFinalizer_RegressionSkippedNotSurfaced(t *testing.T) {
 		"Ready condition message must surface FinalizerSkipped when target was absent")
 	t.Logf("Ready message: %s", msg)
 	t.Log("FinalizerSkipped correctly surfaced in Graph status")
+}
+
+// TestFinalizer_RegressionDependencyOrdering verifies that when multiple
+// finalizer nodes target the same resource with inter-finalizer CEL
+// dependencies, they execute in dependency order — not declaration order.
+//
+// Setup: finalizer B references finalizer A's output (${snapshotA.data.marker}).
+// B is declared BEFORE A in the spec. Without topological ordering, B would
+// evaluate first and fail because A's data isn't in scope yet.
+//
+// This test would fail without the fix to sort finalizer nodes by their
+// topological position in the DAG.
+func TestFinalizer_RegressionDependencyOrdering(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	graphKey := types.NamespacedName{Name: "test-fin-dep-order", Namespace: ns}
+
+	// Phase 1: Create a Graph with a target and two finalizer nodes.
+	// snapshotB is declared BEFORE snapshotA but depends on snapshotA's data.
+	// If finalization respects dependency order, snapshotA is created first
+	// (it has no dependencies) and snapshotB second (depends on snapshotA).
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      graphKey.Name,
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "dep-order-target"},
+							"data":       map[string]any{"state": "active"},
+						},
+					},
+					// snapshotB declared FIRST but depends on snapshotA.
+					map[string]any{
+						"id":        "snapshotB",
+						"finalizes": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "dep-order-snap-b"},
+							"data": map[string]any{
+								"derived": "${snapshotA.data.marker}",
+							},
+						},
+					},
+					// snapshotA declared SECOND but has no inter-finalizer deps.
+					map[string]any{
+						"id":        "snapshotA",
+						"finalizes": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "dep-order-snap-a"},
+							"data": map[string]any{
+								"marker": "alpha",
+							},
+						},
+					},
+					// A keep node so the Graph isn't empty after target removal.
+					map[string]any{
+						"id": "keep",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "dep-order-keep"},
+							"data":       map[string]any{"role": "anchor"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for the target to be created and Graph to be ready.
+	targetCM := &unstructured.Unstructured{}
+	targetCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "dep-order-target", Namespace: ns}, targetCM))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	t.Log("Target created, Graph ready")
+
+	// Phase 2: Remove the target and finalizer nodes from the spec.
+	// This makes "target" a prune candidate. The finalization logic runs
+	// from the SUPERSEDED revision's DAG, which contains the finalizer
+	// relationships and inter-finalizer dependency edges.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, graphKey,
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "keep",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "dep-order-keep"},
+						"data":       map[string]any{"role": "anchor"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+	t.Log("Target removed from spec — finalization should start")
+
+	// Wait for the target to be deleted. This proves finalization completed
+	// successfully: both snapshotA and snapshotB were created (in the
+	// correct dependency order), reached readyWhen, and then the target
+	// was deleted. The finalizer resources are ephemeral — created and
+	// cleaned up within the same reconcile cycle — so we verify the
+	// outcome (target deletion) rather than observing intermediate state.
+	//
+	// Without dependency-ordered finalization, snapshotB would fail to
+	// evaluate (it references ${snapshotA.data.marker} which isn't in
+	// scope if snapshotA hasn't been created yet), and the target would
+	// remain stuck with a TeardownBlocked condition.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: "dep-order-target", Namespace: ns}, check)
+			return apierrors.IsNotFound(err), nil
+		}), "target should be deleted after dependency-ordered finalization completes")
+	t.Log("Target deleted — finalization complete with correct dependency ordering")
+
+	// The Graph should converge to Ready.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	t.Log("Graph Ready — dependency-ordered finalization verified")
 }

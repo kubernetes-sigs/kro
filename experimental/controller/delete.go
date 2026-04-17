@@ -148,7 +148,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if err := releaseApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
 			logger.Error(err, "releasing patch fields during teardown", "key", resKey)
 		} else {
-			logger.V(1).Info("released patch fields during teardown", "key", resKey)
+			logger.Info("released patch fields during teardown", "key", resKey)
 		}
 	}
 
@@ -331,7 +331,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 				return ctrl.Result{}, fmt.Errorf("deleting managed resource %s: %w", key, err)
 			}
 		} else {
-			logger.V(1).Info("deleted managed resource", "key", key)
+			logger.Info("deleted managed resource", "key", key)
 
 			// Clean up finalizer resources after the target is deleted.
 			if teardownDAG != nil {
@@ -440,7 +440,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 				logger.Error(err, "deleting revision", "revision", rev.GetName())
 			}
 		} else {
-			logger.V(1).Info("deleted revision", "revision", rev.GetName())
+			logger.Info("deleted revision", "revision", rev.GetName())
 		}
 	}
 

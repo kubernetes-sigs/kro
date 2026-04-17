@@ -82,16 +82,16 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 			if !exists {
 				return nil, fmt.Errorf("node %q declares finalizes %q, but no node with that ID exists", node.ID, node.Finalizes)
 			}
-			// Finalization only applies to resource-managing nodes (Own,
-			// Contribute, Unresolved). Definition, Watch, and Watch
-			// nodes never produce managed resources and never become prune
-			// candidates — finalizing them is nonsensical.
+			// Finalization only applies to resource-managing nodes (Template,
+			// Patch). Definition, Ref, and Watch nodes never produce managed
+			// resources and never become prune candidates — finalizing them
+			// is nonsensical.
 			targetRef := dag.References[dag.Nodes[targetIdx].ID]
 			switch targetRef {
 			case NodeTypeDef:
 				return nil, fmt.Errorf("node %q cannot finalize %q: Definition nodes do not manage resources", node.ID, node.Finalizes)
 			case NodeTypeRef:
-				return nil, fmt.Errorf("node %q cannot finalize %q: Watch nodes are read-only", node.ID, node.Finalizes)
+				return nil, fmt.Errorf("node %q cannot finalize %q: Ref nodes are read-only", node.ID, node.Finalizes)
 			case NodeTypeWatch:
 				return nil, fmt.Errorf("node %q cannot finalize %q: Watch nodes are read-only", node.ID, node.Finalizes)
 			}

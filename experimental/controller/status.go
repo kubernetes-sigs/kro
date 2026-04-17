@@ -108,7 +108,11 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 				strings.Join(s.nodeErrors, "; "))
 	}
 	if s.HasConflict {
-		return ConditionFalse, "Conflict", "One or more resources have SSA field ownership conflicts"
+		msg := "One or more resources have SSA field ownership conflicts"
+		if len(s.nodeErrors) > 0 {
+			msg += ": " + strings.Join(s.nodeErrors, "; ")
+		}
+		return ConditionFalse, "Conflict", msg
 	}
 	if s.HasBlocked {
 		msg := "One or more resources blocked by upstream errors"

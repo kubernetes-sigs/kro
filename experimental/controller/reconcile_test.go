@@ -602,7 +602,7 @@ func TestForEachVariableCollision(t *testing.T) {
 	}
 	_, err := parseNodeList(raw)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "collides with a node ID")
+	assert.Contains(t, err.Error(), "collides with node ID")
 }
 
 // TestNodeStateString verifies that NodeState.String() returns the design's

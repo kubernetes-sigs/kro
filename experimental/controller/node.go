@@ -366,7 +366,9 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 	}
 
 	eval.scope[node.ID] = normalizeTypes(applied.Object)
-	logger.V(1).Info("applied resource", "node", node.ID, "ref", ref,
+	// Side effects (apply, delete, create) log at V(0) so operators see
+	// which resources are being managed at default verbosity.
+	logger.Info("applied resource", "node", node.ID, "ref", ref,
 		"gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
 	if ref == NodeTypePatch {

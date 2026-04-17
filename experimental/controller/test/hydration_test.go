@@ -1,15 +1,18 @@
 package graphcontroller_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // TestDynamicWatchCELIdentity proves that watch nodes with CEL expressions in
@@ -498,4 +501,155 @@ func TestHydrationStartupWithDynamicRevision(t *testing.T) {
 	assert.Equal(t, "1", data["found"],
 		"dynamic watch result should be stable after settle")
 	t.Log("Dynamic watch graph stable — startup hydration fix verified")
+}
+
+// TestUnresolvedGVK_RegressionCRDInstallConvergence proves the first-run
+// experience: a Graph referencing a CRD that doesn't exist yet compiles with
+// an unresolved GVK. When the CRD is installed, the Graph recompiles and
+// converges.
+//
+// This is the critical bootstrap path — stdlib Kinds create CRDs, and
+// downstream Graphs may reference those CRDs before they exist. Without
+// recompilation on CRD install, those Graphs remain stuck.
+func TestUnresolvedGVK_RegressionCRDInstallConvergence(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	group := uniqueGroup()
+	crdName := "widgets." + group
+	widgetGVK := schema.GroupVersionKind{
+		Group: group, Version: "v1alpha1", Kind: "Widget",
+	}
+	graphKey := types.NamespacedName{Name: "test-unresolved-gvk", Namespace: ns}
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Phase 1: Create a Graph that references a Widget (CRD not installed).
+	// The ref node targets a non-existent GVK. The Graph should compile
+	// (unresolved GVKs compile untyped per 004 § Compilation) and the ref
+	// node should be Pending until the CRD and resource exist.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      graphKey.Name,
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// A ConfigMap that doesn't depend on the Widget — should converge immediately.
+					map[string]any{
+						"id": "config",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "gvk-test-config"},
+							"data":       map[string]any{"state": "waiting"},
+						},
+					},
+					// A ref to the Widget — should be Pending until CRD + resource exist.
+					map[string]any{
+						"id": "widget",
+						"ref": map[string]any{
+							"apiVersion": group + "/v1alpha1",
+							"kind":       "Widget",
+							"metadata":   map[string]any{"name": "my-widget"},
+						},
+					},
+					// A ConfigMap that depends on the Widget — should be Pending while widget is Pending.
+					map[string]any{
+						"id": "derived",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "gvk-test-derived"},
+							"data": map[string]any{
+								"widgetName": "${widget.metadata.name}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// The independent ConfigMap should be created even though the Widget is unresolved.
+	configCM := &unstructured.Unstructured{}
+	configCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "gvk-test-config", Namespace: ns}, configCM))
+	t.Log("Independent ConfigMap created while Widget GVK is unresolved")
+
+	// The Graph should NOT be fully Ready — the widget ref can't resolve yet.
+	// It may show various non-Ready states (Pending, Error, NotReady) depending
+	// on whether the unresolved GVK fails at compile or runtime. We just need
+	// to verify it's not Ready.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			if err := k8sClient.Get(ctx, graphKey, g); err != nil {
+				return false, nil
+			}
+			// Any non-Ready state is acceptable here — the point is the
+			// Graph is not converged because the Widget GVK doesn't exist.
+			status, _ := g.Object["status"].(map[string]any)
+			conditions, _ := status["conditions"].([]any)
+			if len(conditions) == 0 {
+				return false, nil // status not yet populated
+			}
+			return !graphReady(g), nil
+		}),
+		"Graph should not be Ready while Widget GVK is unresolved")
+	t.Log("Graph is not Ready (expected — Widget CRD not installed)")
+
+	// Phase 2: Install the Widget CRD.
+	crd := buildCustomCRD(crdName, group, "Widget", "widgets")
+	require.NoError(t, k8sClient.Create(ctx, crd))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, crd) })
+	require.NoError(t, waitForCRD(ctx, k8sClient, crdName))
+	t.Log("Widget CRD installed and Established")
+
+	// Phase 3: Create the Widget instance the ref node references.
+	widget := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": group + "/v1alpha1",
+			"kind":       "Widget",
+			"metadata": map[string]any{
+				"name":      "my-widget",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"color": "blue",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, widget))
+	t.Log("Widget instance created")
+
+	// Phase 4: The Graph should recompile and converge.
+	// The derived ConfigMap should be created with the widget's name.
+	derivedCM := &unstructured.Unstructured{}
+	derivedCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 60*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "gvk-test-derived", Namespace: ns}, derivedCM); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(derivedCM.Object, "data")
+			return data["widgetName"] == "my-widget", nil
+		}), "derived ConfigMap should be created with widget's name after CRD install")
+	t.Log("Derived ConfigMap created with correct widget reference")
+
+	// The Graph should be Ready now.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey),
+		"Graph should converge to Ready after CRD install + instance creation")
+	t.Log("Graph converged to Ready — CRD-not-installed → install → converge verified")
+
+	// Cleanup.
+	require.NoError(t, k8sClient.Delete(ctx, graph))
+	require.NoError(t, k8sClient.Delete(ctx, widget))
+
+	_ = widgetGVK // referenced to avoid unused import
 }

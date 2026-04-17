@@ -113,6 +113,13 @@ func isAPIServerManager(manager string) bool {
 //  2. Finalizer resource exists, readyWhen false → in progress
 //  3. Finalizer resource exists, readyWhen true → this finalizer is done
 //  4. All finalizers done → target can be deleted
+//
+// Finalizer nodes are processed in topological order — inter-finalizer CEL
+// references produce edges in the main DAG, and the DAG's topological
+// position is the sort key. This ensures that if finalizer B references
+// finalizer A's output, A is created and populated into scope before B
+// evaluates. Per 004-graph-reconciliation.md § Finalization: "dependencies
+// among them determine ordering."
 func (r *GraphReconciler) runFinalization(
 	ctx context.Context,
 	graph *unstructured.Unstructured,
@@ -137,8 +144,24 @@ func (r *GraphReconciler) runFinalization(
 		eval.scope[targetNodeID] = normalizeTypes(target.Object)
 	}
 
+	// Sort finalizer nodes by their topological position in the main DAG.
+	// Inter-finalizer CEL references produce DAG edges, so the main DAG's
+	// topological order is a valid ordering for the induced subgraph of
+	// finalizer nodes. This invariant holds because all dependency edges
+	// are derived from CEL expression references during compilation.
+	ordered := make([]string, len(finalizerNodeIDs))
+	copy(ordered, finalizerNodeIDs)
+	// Build position map: node index → topological position.
+	topoPos := make(map[string]int, len(dag.TopologicalOrder))
+	for pos, nodeIdx := range dag.TopologicalOrder {
+		topoPos[dag.Nodes[nodeIdx].ID] = pos
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return topoPos[ordered[i]] < topoPos[ordered[j]]
+	})
+
 	allReady := true
-	for _, finNodeID := range finalizerNodeIDs {
+	for _, finNodeID := range ordered {
 		idx, ok := dag.Index[finNodeID]
 		if !ok {
 			return false, keys, fmt.Errorf("finalizer node %q not found in DAG", finNodeID)

@@ -63,6 +63,19 @@ var (
 		},
 		[]string{"graph_name", "graph_namespace", "node_id"},
 	)
+
+	// NodeStateGauge reports the current state of each node in a Graph.
+	// Each node has exactly one state at any given time. The gauge value
+	// is 1 for the node's current state label and 0 for all others.
+	// Enables "how many nodes are in Error right now?" without querying
+	// the Graph status API object.
+	NodeStateGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "graph_node_state",
+			Help: "Current state of each node (1 = active, 0 = inactive). State label is one of: Ready, NotReady, Pending, Excluded, Blocked, Error, Conflict, SystemError",
+		},
+		[]string{"graph_name", "graph_namespace", "node_id", "state"},
+	)
 )
 
 // RegisterMetrics registers graph controller metrics with the given
@@ -75,6 +88,7 @@ func RegisterMetrics(registry prometheus.Registerer) {
 		SystemErrorRetriesTotal,
 		ReconcileDurationSeconds,
 		NodeEvalDurationSeconds,
+		NodeStateGauge,
 	} {
 		if err := registry.Register(c); err != nil {
 			if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
@@ -106,6 +120,7 @@ func deleteGraphMetricsForGraph(graphName, graphNamespace string) {
 	SystemErrorRetriesTotal.DeletePartialMatch(labels)
 	ReconcileDurationSeconds.DeletePartialMatch(labels)
 	NodeEvalDurationSeconds.DeletePartialMatch(labels)
+	NodeStateGauge.DeletePartialMatch(labels)
 }
 
 // deleteNodeMetrics removes time series for specific nodes within a graph.
@@ -117,5 +132,45 @@ func deleteNodeMetrics(graphName, graphNamespace string, nodeIDs map[string]bool
 		DriftTimerFiresTotal.Delete(labels)
 		SystemErrorRetriesTotal.Delete(labels)
 		NodeEvalDurationSeconds.Delete(labels)
+		// Delete all state label variants for the node state gauge.
+		for _, state := range nodeStateLabels {
+			NodeStateGauge.Delete(prometheus.Labels{
+				"graph_name":      graphName,
+				"graph_namespace": graphNamespace,
+				"node_id":         nodeID,
+				"state":           state,
+			})
+		}
+	}
+}
+
+// nodeStateLabels is the complete set of state labels for the node state
+// gauge. Kept in sync with NodeState constants in dag.go.
+var nodeStateLabels = []string{
+	"Ready", "NotReady", "Pending", "Excluded", "Blocked",
+	"Error", "Conflict", "SystemError",
+}
+
+// updateNodeStateMetrics sets the node state gauge for all nodes in a graph.
+// Each node gets value 1 for its current state and 0 for all other states.
+func updateNodeStateMetrics(graphName, graphNamespace string, plan *PlanState, dag *DAG) {
+	for _, node := range dag.Nodes {
+		currentState := plan.States[node.ID].String()
+		// Skip unvisited nodes — they haven't been processed by the walk.
+		if plan.States[node.ID] == nodeUnvisited {
+			continue
+		}
+		for _, state := range nodeStateLabels {
+			val := float64(0)
+			if state == currentState {
+				val = 1
+			}
+			NodeStateGauge.With(prometheus.Labels{
+				"graph_name":      graphName,
+				"graph_namespace": graphNamespace,
+				"node_id":         node.ID,
+				"state":           state,
+			}).Set(val)
+		}
 	}
 }

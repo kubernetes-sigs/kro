@@ -376,7 +376,7 @@ func TestParseKeyword_ZeroKeywordsLists(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// patch body with status populates HasStatusSubresource
+// patch body with status populates hasStatusSubresource
 // ---------------------------------------------------------------------------
 
 func TestParseKeyword_PatchWithStatus(t *testing.T) {
@@ -393,7 +393,7 @@ func TestParseKeyword_PatchWithStatus(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
-	assert.True(t, nodes[0].HasStatusSubresource())
+	assert.True(t, nodes[0].hasStatusSubresource)
 }
 
 func TestParseKeyword_PatchWithoutStatus(t *testing.T) {
@@ -410,7 +410,7 @@ func TestParseKeyword_PatchWithoutStatus(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
-	assert.False(t, nodes[0].HasStatusSubresource())
+	assert.False(t, nodes[0].hasStatusSubresource)
 }
 
 // ---------------------------------------------------------------------------
@@ -529,4 +529,128 @@ func TestForEachSingleVariableAccepted(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
 	assert.Len(t, nodes[0].ForEach, 1)
+}
+
+// ---------------------------------------------------------------------------
+// Regression: forEach variable collision check is global
+// ---------------------------------------------------------------------------
+
+// TestForEachVarCollision_RegressionLaterNodeID verifies that a forEach
+// variable name colliding with a node ID declared LATER in the list is
+// caught. Before the fix, only collisions with already-parsed nodes were
+// detected.
+func TestForEachVarCollision_RegressionLaterNodeID(t *testing.T) {
+	raw := []any{
+		map[string]any{
+			"id":      "deployer",
+			"forEach": map[string]any{"target": "${items}"},
+			"template": map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "${target}"},
+			},
+		},
+		// "target" is a node ID declared AFTER the forEach variable.
+		map[string]any{
+			"id": "target",
+			"template": map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "the-target"},
+			},
+		},
+	}
+
+	_, err := parseNodeList(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "collides with node ID",
+		"forEach variable matching a later node ID should be rejected")
+	assert.Contains(t, err.Error(), "target",
+		"error message should name the colliding variable/ID")
+}
+
+// TestForEachVarCollision_RegressionCaseInsensitive verifies case-insensitive
+// collision detection between forEach variables and node IDs.
+func TestForEachVarCollision_RegressionCaseInsensitive(t *testing.T) {
+	raw := []any{
+		map[string]any{
+			"id":      "deployer",
+			"forEach": map[string]any{"MyNode": "${items}"},
+			"template": map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "${MyNode}"},
+			},
+		},
+		map[string]any{
+			"id": "mynode",
+			"template": map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "x"},
+			},
+		},
+	}
+
+	_, err := parseNodeList(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "collides with node ID",
+		"case-insensitive forEach variable collision should be rejected")
+}
+
+// ---------------------------------------------------------------------------
+// Regression: non-string expressions rejected
+// ---------------------------------------------------------------------------
+
+// TestNonStringExpression_RegressionReadyWhen verifies that non-string
+// elements in readyWhen/includeWhen/propagateWhen are rejected with
+// an error, not silently dropped.
+func TestNonStringExpression_RegressionReadyWhen(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		value []any
+	}{
+		{
+			name:  "readyWhen with boolean",
+			field: "readyWhen",
+			value: []any{true},
+		},
+		{
+			name:  "readyWhen with integer",
+			field: "readyWhen",
+			value: []any{42},
+		},
+		{
+			name:  "includeWhen with boolean",
+			field: "includeWhen",
+			value: []any{false},
+		},
+		{
+			name:  "propagateWhen with map",
+			field: "propagateWhen",
+			value: []any{map[string]any{"key": "val"}},
+		},
+		{
+			name:  "readyWhen mixed valid and invalid",
+			field: "readyWhen",
+			value: []any{"${valid.expr}", 123},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := []any{
+				map[string]any{
+					"id":     "node1",
+					tt.field: tt.value,
+					"template": map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						"metadata": map[string]any{"name": "x"},
+					},
+				},
+			}
+
+			_, err := parseNodeList(raw)
+			require.Error(t, err, "non-string %s element should be rejected", tt.field)
+			assert.Contains(t, err.Error(), "must be a string",
+				"error should mention type requirement")
+		})
+	}
 }

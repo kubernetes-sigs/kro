@@ -261,13 +261,6 @@ func (n *Node) HasBody() bool {
 	return n.Payload() != nil || n.TemplateExpr != ""
 }
 
-// HasStatusSubresource returns true when a Patch node declares a
-// non-nil status field in its body. Used by releaseApply during teardown
-// to decide whether the status subresource must also be released.
-func (n *Node) HasStatusSubresource() bool {
-	return n.hasStatusSubresource
-}
-
 // Note: there is no IdentityKey method because computing the applied-set
 // key requires a GVKScopeResolver (to handle cluster-scoped resources
 // correctly per 003-ownership.md § Priority Resolution). The scope
@@ -401,6 +394,19 @@ func parseNodeList(raw any) ([]Node, error) {
 	// "The node ID is lowercased when embedded in the identity label key;
 	// IDs that collide after lowercasing are rejected at compile time."
 	seenLower := make(map[string]string, len(list)) // lowercased → original
+	// First pass: collect all node IDs (lowercased) so the forEach
+	// variable collision check can catch collisions with nodes declared
+	// anywhere in the list, not just those parsed so far. Both node IDs
+	// and forEach variables enter the same CEL scope — collisions cause
+	// silent shadowing.
+	allNodeIDsLower := make(map[string]string, len(list)) // lowercased → original
+	for _, item := range list {
+		if m, ok := item.(map[string]any); ok {
+			if id, ok := m["id"].(string); ok && id != "" {
+				allNodeIDsLower[strings.ToLower(id)] = id
+			}
+		}
+	}
 	var nodes []Node
 	for i, item := range list {
 		m, ok := item.(map[string]any)
@@ -498,10 +504,14 @@ func parseNodeList(raw any) ([]Node, error) {
 		}
 		if node.ForEach != nil {
 			// Validate: forEach iterator variable names must not collide
-			// with any node ID. A collision would shadow the node in scope.
+			// with any node ID in the graph (case-insensitive). Both enter the
+			// same CEL scope, so a collision would shadow the node. The check
+			// uses allNodeIDs (collected in the first pass above) rather than
+			// `seen` to catch collisions with nodes declared later in the list.
 			for varName := range node.ForEach {
-				if seen[varName] {
-					return nil, fmt.Errorf("node[%d] %q: forEach variable %q collides with a node ID", i, id, varName)
+				varLower := strings.ToLower(varName)
+				if collidingID, exists := allNodeIDsLower[varLower]; exists {
+					return nil, fmt.Errorf("node[%d] %q: forEach variable %q collides with node ID %q (both enter CEL scope)", i, id, varName, collidingID)
 				}
 			}
 		}
@@ -523,24 +533,30 @@ func parseNodeList(raw any) ([]Node, error) {
 			}
 		}
 		if iw, ok := m["includeWhen"].([]any); ok {
-			for _, expr := range iw {
-				if s, ok := expr.(string); ok {
-					node.IncludeWhen = append(node.IncludeWhen, s)
+			for j, expr := range iw {
+				s, ok := expr.(string)
+				if !ok {
+					return nil, fmt.Errorf("node[%d] %q: includeWhen[%d] must be a string, got %T", i, id, j, expr)
 				}
+				node.IncludeWhen = append(node.IncludeWhen, s)
 			}
 		}
 		if rw, ok := m["readyWhen"].([]any); ok {
-			for _, expr := range rw {
-				if s, ok := expr.(string); ok {
-					node.ReadyWhen = append(node.ReadyWhen, s)
+			for j, expr := range rw {
+				s, ok := expr.(string)
+				if !ok {
+					return nil, fmt.Errorf("node[%d] %q: readyWhen[%d] must be a string, got %T", i, id, j, expr)
 				}
+				node.ReadyWhen = append(node.ReadyWhen, s)
 			}
 		}
 		if pw, ok := m["propagateWhen"].([]any); ok {
-			for _, expr := range pw {
-				if s, ok := expr.(string); ok {
-					node.PropagateWhen = append(node.PropagateWhen, s)
+			for j, expr := range pw {
+				s, ok := expr.(string)
+				if !ok {
+					return nil, fmt.Errorf("node[%d] %q: propagateWhen[%d] must be a string, got %T", i, id, j, expr)
 				}
+				node.PropagateWhen = append(node.PropagateWhen, s)
 			}
 		}
 		nodes = append(nodes, node)

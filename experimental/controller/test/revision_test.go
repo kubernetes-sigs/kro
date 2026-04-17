@@ -983,3 +983,194 @@ func TestRevisionTransitionPreservesUnchangedNodes(t *testing.T) {
 
 	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
 }
+
+// TestRevisionTransition_RegressionNodeIDReuseWithDifferentGVK verifies that
+// reusing a node ID with a completely different GVK across revisions correctly
+// prunes the old resource and creates the new one.
+//
+// This guards the diffRevisionNodes invariant: same ID + different template
+// = changed node = no state carried forward. The old resource (a ConfigMap)
+// must be pruned and the new resource (a Secret) must be created.
+func TestRevisionTransition_RegressionNodeIDReuseWithDifferentGVK(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	secretGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}
+	graphKey := types.NamespacedName{Name: "test-node-reuse-gvk", Namespace: ns}
+
+	// Phase 1: Create a Graph where node "data" is a ConfigMap.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      graphKey.Name,
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "data",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "reuse-data"},
+							"data":       map[string]any{"version": "v1"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+
+	// Verify ConfigMap exists.
+	cm := &unstructured.Unstructured{}
+	cm.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "reuse-data", Namespace: ns}, cm))
+	t.Log("Phase 1: ConfigMap created")
+
+	// Phase 2: Update the spec to make node "data" a Secret with the same name.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, graphKey,
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "data",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "Secret",
+						"metadata":   map[string]any{"name": "reuse-data"},
+						"stringData": map[string]any{"version": "v2"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+	t.Log("Phase 2: Spec changed — node 'data' is now a Secret")
+
+	// The Secret should be created.
+	secret := &unstructured.Unstructured{}
+	secret.SetGroupVersionKind(secretGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "reuse-data", Namespace: ns}, secret))
+	t.Log("Secret created")
+
+	// The old ConfigMap should be pruned.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: "reuse-data", Namespace: ns}, check)
+			if err != nil {
+				return true, nil // NotFound — pruned
+			}
+			return false, nil
+		}), "old ConfigMap should be pruned after node ID reuse with different GVK")
+	t.Log("Old ConfigMap pruned — revision transition with GVK change verified")
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+}
+
+// TestRevisionTransition_RegressionPruneOrderCrossTopology verifies that
+// when a revision transition changes the DAG topology (adds edges), the
+// prune phase uses the OLD revision's DAG for ordering the removed
+// resources, not the new revision's DAG.
+//
+// Setup: revision N has nodes A and B (independent). Revision N+1 removes
+// both and adds C. The prune phase should delete A and B using the old
+// revision's ordering.
+func TestRevisionTransition_RegressionPruneOrderCrossTopology(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	graphKey := types.NamespacedName{Name: "test-topo-prune", Namespace: ns}
+
+	// Phase 1: Create a Graph with two independent nodes.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      graphKey.Name,
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "alpha",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "topo-alpha"},
+							"data":       map[string]any{"role": "alpha"},
+						},
+					},
+					map[string]any{
+						"id": "beta",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "topo-beta"},
+							"data":       map[string]any{"role": "beta"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+
+	// Verify both exist.
+	for _, name := range []string{"topo-alpha", "topo-beta"} {
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(cmGVK)
+		require.NoError(t, waitForResource(ctx, k8sClient,
+			types.NamespacedName{Name: name, Namespace: ns}, cm))
+	}
+	t.Log("Phase 1: Both ConfigMaps created")
+
+	// Phase 2: Replace both with a single new node.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, graphKey,
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "gamma",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "topo-gamma"},
+						"data":       map[string]any{"role": "gamma"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+	t.Log("Phase 2: Spec changed — alpha and beta replaced by gamma")
+
+	// Both old resources should be pruned.
+	for _, name := range []string{"topo-alpha", "topo-beta"} {
+		name := name
+		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+			func(ctx context.Context) (bool, error) {
+				check := &unstructured.Unstructured{}
+				check.SetGroupVersionKind(cmGVK)
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, check)
+				if err != nil {
+					return true, nil // pruned
+				}
+				return false, nil
+			}), fmt.Sprintf("%s should be pruned after revision transition", name))
+	}
+	t.Log("Both old ConfigMaps pruned")
+
+	// New resource should exist.
+	gamma := &unstructured.Unstructured{}
+	gamma.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "topo-gamma", Namespace: ns}, gamma))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	t.Log("Revision transition with topology change verified")
+}

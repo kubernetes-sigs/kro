@@ -665,7 +665,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	var compilationErr error // non-nil when current generation failed to compile
 	if err != nil {
 		// Compilation or materialization failure — no revision created for
-		// the current generation. Per 004-graph-execution.md § Compilation:
+		// the current generation. Per 004-graph-reconciliation.md § Compilation:
 		// "Reconciliation continues on the previous revision if one exists."
 		// Fall back to the most recent existing revision so healthy resources
 		// keep converging. A typo in the spec should not halt management.
@@ -755,7 +755,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				}
 			}
 		}
-		// Per 004-graph-execution.md § Revision transition: "Nodes that
+		// Per 004-graph-reconciliation.md § Revision transition: "Nodes that
 		// differ are triggered." On revision transition, transfer previous
 		// state from the superseded revision's cache for unchanged nodes.
 		// The evaluation hash check at Step 4 will then skip unchanged
@@ -1195,6 +1195,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	// Derive aggregate state from the DAG plan
 	summary := plan.Summary()
+
+	// Update node state gauge metrics for operator visibility.
+	updateNodeStateMetrics(graph.GetName(), graph.GetNamespace(), plan, dag)
 
 	// -----------------------------------------------------------------------
 	// Prune resources no longer in the applied set

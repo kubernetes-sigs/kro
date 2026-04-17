@@ -556,7 +556,7 @@ func (r *GraphReconciler) findSupersededRevisions(ctx context.Context, graphName
 // set of node IDs that changed (or are new). Unchanged nodes retain their
 // previous state and are not triggered on revision transition.
 //
-// Per 004-graph-execution.md § Revision transition: "Nodes that differ are
+// Per 004-graph-reconciliation.md § Revision transition: "Nodes that differ are
 // triggered." The comparison covers all fields that affect a node's behavior:
 // Template, IncludeWhen, ReadyWhen, PropagateWhen, ForEach, Finalizes.
 //

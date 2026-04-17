@@ -33,6 +33,14 @@ import (
 )
 
 func main() {
+	// Pin the controller-runtime logger before any other package can
+	// touch it. The delegating sink warns after 30s if SetLogger is
+	// called late, and leaves earlier calls buffered — both hurt
+	// observability.
+	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+	log := ctrl.Log.WithName("main")
+	log.Info("graph-controller starting")
+
 	var (
 		bootstrapFlag          bool
 		healthProbeBindAddress string
@@ -49,9 +57,6 @@ func main() {
 	flag.IntVar(&maxWorkers, "max-workers", 0, "Maximum concurrent reconcile workers. 0 uses the default.")
 	flag.DurationVar(&driftInterval, "drift-interval", 0, "Per-node drift timer interval. 0 uses the default (30m).")
 	flag.Parse()
-
-	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
-	log := ctrl.Log.WithName("main")
 
 	if pprofBindAddress != "" {
 		// Register pprof handlers — will start after SetupWithManager.

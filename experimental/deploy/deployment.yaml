@@ -22,6 +22,31 @@ spec:
           image: ko://github.com/kubernetes-sigs/kro/experimental/cmd
           args:
             - --bootstrap
+          # Surface crash-time stderr in pod status when the CRI log
+          # pipeline is healthy but the container is restarting, and as
+          # a fallback when it isn't.
+          terminationMessagePolicy: FallbackToLogsOnError
+          # Probe the manager's healthz server so Ready reflects the
+          # manager actually running, not just the process existing.
+          # startupProbe tolerates slow bootstrap (CRD install + cache
+          # hydration can take ~30s+); liveness/readiness only engage
+          # once startup succeeds.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            periodSeconds: 5
+            failureThreshold: 60 # up to 5 minutes of startup
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            periodSeconds: 10
           resources:
             requests:
               cpu: 100m

@@ -1,5 +1,5 @@
 // apply.go contains the cluster-mutating operations for the Graph controller:
-// resource apply (Own and Contribute), pruning, deletion ordering, and the
+// resource apply (Template and Patch), pruning, deletion ordering, and the
 // applied set key format.
 //
 // The reconcile loop in controller.go dispatches nodes; this file executes
@@ -52,7 +52,7 @@ func graphFieldOwner(graph *unstructured.Unstructured) client.FieldOwner {
 // not this Graph's own manager and not the API server's defaulting manager.
 // Only SSA Apply managers are considered — Update managers (from kubectl edit,
 // plain client.Update, etc.) don't declare field ownership and shouldn't block
-// deletion. Per 003-ownership.md: before deleting an Own resource, check
+// deletion. Per 003-ownership.md: before deleting a Template resource, check
 // managedFields for other field managers (excluding the API server's own).
 func thirdPartyFieldManagers(obj *unstructured.Unstructured, ownFieldManager string) []string {
 	managedFields := obj.GetManagedFields()
@@ -183,7 +183,7 @@ func (r *GraphReconciler) runFinalization(
 			// Step 1: Finalizer resource doesn't exist — create it.
 			logger.Info("creating finalizer resource", "finalizer", finNodeID,
 				"target", target.GetName())
-			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, NodeTypeOwn, eval.effectiveGeneration, false)
+			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, NodeTypeTemplate, eval.effectiveGeneration, false)
 			if applyErr != nil {
 				return false, keys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
 			}
@@ -275,7 +275,7 @@ func (r *GraphReconciler) runForEachFinalization(
 				childObj.GetName(), childObj.GetNamespace(),
 				gvk.Kind, gv.Group,
 				graph.GetName(), graph.GetNamespace(),
-				generation, NodeTypeOwn,
+				generation, NodeTypeTemplate,
 			)
 			childObj.SetLabels(lbls)
 			evalMap = childObj.Object
@@ -295,7 +295,7 @@ func (r *GraphReconciler) runForEachFinalization(
 				// Child doesn't exist — create it.
 				logger.Info("creating forEach finalizer child",
 					"finalizer", finNode.ID, "name", childObj.GetName())
-				applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, NodeTypeOwn, eval.effectiveGeneration, false)
+				applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, NodeTypeTemplate, eval.effectiveGeneration, false)
 				if applyErr != nil {
 					return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
 				}
@@ -330,23 +330,25 @@ func (r *GraphReconciler) runForEachFinalization(
 // Keys in the applied set identify resources the controller has written to.
 // Two formats:
 //
-//   Own:        group/version/Kind/namespace/name
-//   Contribute: contribute:group/version/Kind/namespace/name[+status]
+//   Template:   group/version/Kind/namespace/name
+//   Patch:      patch:group/version/Kind/namespace/name[+status]
 //
-// The "contribute:" prefix distinguishes resources where cleanup means
+// The "patch:" prefix distinguishes resources where cleanup means
 // release apply (release field ownership) from resources where cleanup
-// means delete. The "+status" suffix marks contributions that included
+// means delete. The "+status" suffix marks patches that included
 // status subresource fields, so release apply must release both the
 // main resource and the status subresource.
 //
-// resourceKey, contributeKey, and parseContributeKey are the sole
+// resourceKey, patchKey, and parsePatchKey are the sole
 // constructors and parsers for these formats.
 
-// contributeKeyPrefix distinguishes Contribute keys from Own keys.
-const contributeKeyPrefix = "contribute:"
+// patchKeyPrefix marks applied-set entries whose fields are released (not
+// deleted) on prune, corresponding to patch: nodes in the graph spec.
+const patchKeyPrefix = "patch:"
 
-// contributeStatusSuffix marks that the contribution included status fields.
-const contributeStatusSuffix = "+status"
+// patchStatusSuffix marks that the patch included status subresource fields,
+// so release apply must target both the main resource and status subresource.
+const patchStatusSuffix = "+status"
 
 func resourceKey(obj *unstructured.Unstructured) string {
 	gvk := obj.GroupVersionKind()
@@ -419,24 +421,24 @@ func parseResourceKey(key string) (schema.GroupVersionKind, types.NamespacedName
 		types.NamespacedName{Namespace: parts[3], Name: parts[4]}
 }
 
-// contributeKey builds a Contribute applied set key.
-func contributeKey(obj *unstructured.Unstructured, hasStatus bool) string {
-	key := contributeKeyPrefix + resourceKey(obj)
+// patchKey builds a Patch applied set key.
+func patchKey(obj *unstructured.Unstructured, hasStatus bool) string {
+	key := patchKeyPrefix + resourceKey(obj)
 	if hasStatus {
-		key += contributeStatusSuffix
+		key += patchStatusSuffix
 	}
 	return key
 }
 
-// parseContributeKey extracts the resource key and status flag from a
-// contribute applied set key. Returns ("", false) if not a contribute key.
-func parseContributeKey(key string) (resKey string, hasStatus bool) {
-	if !strings.HasPrefix(key, contributeKeyPrefix) {
+// parsePatchKey extracts the resource key and status flag from a
+// patch applied set key. Returns ("", false) if not a patch key.
+func parsePatchKey(key string) (resKey string, hasStatus bool) {
+	if !strings.HasPrefix(key, patchKeyPrefix) {
 		return "", false
 	}
-	rest := strings.TrimPrefix(key, contributeKeyPrefix)
-	if strings.HasSuffix(rest, contributeStatusSuffix) {
-		return strings.TrimSuffix(rest, contributeStatusSuffix), true
+	rest := strings.TrimPrefix(key, patchKeyPrefix)
+	if strings.HasSuffix(rest, patchStatusSuffix) {
+		return strings.TrimSuffix(rest, patchStatusSuffix), true
 	}
 	return rest, false
 }
@@ -453,19 +455,19 @@ func templateHasStatus(tmpl map[string]any) bool {
 // Apply
 // ---------------------------------------------------------------------------
 
-// applySSA applies a template via server-side apply (SSA). Handles both Own
-// and Contribute references — the ref parameter controls:
-//   - Identity labels: Own skips if present (forEach children stamp their own),
-//     Contribute always stamps.
-//   - Pre-apply check: Own does a kro label check (cross-Graph ownership guard),
-//     Contribute checks target existence (contributions patch into existing resources).
-//   - Cache miss on NotFound: Own clears cache + returns ErrPending,
-//     Contribute falls through to apply.
-//   - Apply hash annotation: Own only (Contribute targets are owned by others).
+// applySSA applies a template via server-side apply (SSA). Handles both
+// Template and Patch references — the ref parameter controls:
+//   - Identity labels: Template skips if present (forEach children stamp their own),
+//     Patch always stamps.
+//   - Pre-apply check: Template does a kro label check (cross-Graph ownership guard),
+//     Patch checks target existence (patches apply to existing resources).
+//   - Cache miss on NotFound: Template clears cache + returns ErrPending,
+//     Patch falls through to apply.
+//   - Apply hash annotation: Template only (Patch targets are owned by others).
 //
-// applySSA applies a template via server-side apply (SSA). Handles both Own
-// and Contribute references — the ref parameter gates identity-label stamping,
-// SSA fieldOwner, and the kro-label conflict check (Own only).
+// applySSA applies a template via server-side apply (SSA). Handles both
+// Template and Patch references — the ref parameter gates identity-label stamping,
+// SSA fieldOwner, and the kro-label conflict check (Template only).
 //
 // generation is the value to stamp on the identity-generation label. Normally
 // matches graph.GetGeneration(); callers pass the reconcile-scoped effective
@@ -493,17 +495,17 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	if lbls == nil {
 		lbls = map[string]string{}
 	}
-	if ref == NodeTypeOwn {
-		// Own: skip stamping if identity labels are already present (e.g., forEach
+	if ref == NodeTypeTemplate {
+		// Template: skip stamping if identity labels are already present (e.g., forEach
 		// children stamp their own child-scoped labels before calling applySSA).
 		if !hasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
-			lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, NodeTypeOwn)
+			lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, NodeTypeTemplate)
 			obj.SetLabels(lbls)
 		}
 	} else {
-		// Contribute: always stamp identity labels so resources are discoverable via
+		// Patch: always stamp identity labels so resources are discoverable via
 		// deriveAppliedSet() after controller restart.
-		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, NodeTypeContribute)
+		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, NodeTypePatch)
 		obj.SetLabels(lbls)
 	}
 
@@ -537,12 +539,12 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 				if !apierrors.IsNotFound(err) {
 					return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
 				}
-				if ref == NodeTypeOwn {
-					// Own: externally deleted. Clear cache + ErrPending.
+				if ref == NodeTypeTemplate {
+					// Template: externally deleted. Clear cache + ErrPending.
 					r.Resources.remove(cacheKey)
 					return nil, fmt.Errorf("resource %s externally deleted: %w", obj.GetName(), ErrPending)
 				}
-				// Contribute: object might not exist yet (race), fall through to apply
+				// Patch: object might not exist yet (race), fall through to apply
 			} else {
 				r.Resources.set(cacheKey, &cachedObject{
 					resourceVersion: readBack.GetResourceVersion(),
@@ -554,8 +556,8 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		}
 	} // !driftCorrection
 
-	// Own: set the apply hash annotation for future comparisons.
-	if ref == NodeTypeOwn {
+	// Template: set the apply hash annotation for future comparisons.
+	if ref == NodeTypeTemplate {
 		annotations := obj.GetAnnotations()
 		if annotations == nil {
 			annotations = map[string]string{}
@@ -567,7 +569,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	forceApply := isForceApply(obj)
 
 	// Pre-apply check differs by reference type.
-	if ref == NodeTypeOwn {
+	if ref == NodeTypeTemplate {
 		// kro label check: if the existing resource has a different Graph's identity
 		// label, require Force to proceed. Prevents accidental cross-Graph ownership.
 		existing := &unstructured.Unstructured{}
@@ -582,14 +584,14 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 			}
 		}
 	} else {
-		// Contribute: target must exist — contributions patch into existing resources.
+		// Patch: target must exist — patches apply to existing resources.
 		targetCheck := &unstructured.Unstructured{}
 		targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
 		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
 			if apierrors.IsNotFound(err) {
-				return nil, fmt.Errorf("contribute target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), ErrPending)
+				return nil, fmt.Errorf("patch target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), ErrPending)
 			}
-			return nil, fmt.Errorf("checking contribute target %s: %w", obj.GetName(), err)
+			return nil, fmt.Errorf("checking patch target %s: %w", obj.GetName(), err)
 		}
 	}
 
@@ -808,8 +810,8 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue
 		}
 
-		// Contribute keys use release apply (release fields), not delete.
-		if resKey, hasStatus := parseContributeKey(key); resKey != "" {
+		// Patch keys use release apply (release fields), not delete.
+		if resKey, hasStatus := parsePatchKey(key); resKey != "" {
 			gvk, nn := parseResourceKey(resKey)
 			if gvk.Kind == "" {
 				continue
@@ -823,7 +825,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue
 		}
 
-		// Own keys: delete the resource.
+		// Template keys: delete the resource.
 		gvk, nn := parseResourceKey(key)
 		if gvk.Kind == "" {
 			continue
@@ -1062,8 +1064,8 @@ func pruneOrder(keys []string, dags []*DAG, defaultNS string, scope GVKScopeReso
 	for _, key := range keys {
 		pos, ok := keyPosition[key]
 		if !ok {
-			// Also check contribute keys against their underlying resource key.
-			if resKey, _ := parseContributeKey(key); resKey != "" {
+			// Also check patch keys against their underlying resource key.
+			if resKey, _ := parsePatchKey(key); resKey != "" {
 				pos, ok = keyPosition[resKey]
 			}
 		}

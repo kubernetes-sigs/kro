@@ -12,18 +12,14 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// NodeType classifies a Graph node by what it does at reconcile time and
-// what it owes on cleanup. Every kind-informed node is backed by a watch at
-// the transport layer — the NodeType names the user's intent on top of that
-// shared machinery, not the transport itself.
+// NodeType classifies a Graph node by the keyword the user declares. Each
+// keyword names a distinct ownership and cleanup contract:
 //
-// NodeType is set at parse time by the declared keyword:
-//
-//	template:   → Own
-//	patch:      → Contribute
+//	template:   → Template     (create, manage, delete on prune)
+//	patch:      → Patch        (write fields, release on prune)
 //	ref:        → Ref          (dereference a named object)
 //	watch:      → Watch        (observe a collection by selector)
-//	def:        → Definition
+//	def:        → Definition   (computed values, no Kubernetes resource)
 //
 // The value under template/patch/def may be either a static map or a CEL
 // expression string that yields the body at runtime — the shape is
@@ -36,12 +32,12 @@ import (
 type NodeType int
 
 const (
-	// NodeTypeOwn — the Graph creates the resource. Applied via SSA. Tracked
-	// for cleanup. Deleted on prune.
-	NodeTypeOwn NodeType = iota
-	// NodeTypeContribute — writes fields on a resource the Graph does not
+	// NodeTypeTemplate — the Graph creates the resource. Applied via SSA.
+	// Tracked for cleanup. Deleted on prune.
+	NodeTypeTemplate NodeType = iota
+	// NodeTypePatch — writes fields on a resource the Graph does not
 	// create. Applied via SSA. Tracked for cleanup. Releases fields on prune.
-	NodeTypeContribute
+	NodeTypePatch
 	// NodeTypeRef — dereference a named object into scope. Identity is
 	// apiVersion + kind + metadata.name (+namespace optional). Read-only;
 	// the node pulls a single object's current state from the shared
@@ -63,10 +59,10 @@ const (
 // String returns the human-readable name of the NodeType for logging and display.
 func (r NodeType) String() string {
 	switch r {
-	case NodeTypeOwn:
-		return "own"
-	case NodeTypeContribute:
-		return "contribute"
+	case NodeTypeTemplate:
+		return "template"
+	case NodeTypePatch:
+		return "patch"
 	case NodeTypeRef:
 		return "ref"
 	case NodeTypeWatch:
@@ -80,15 +76,15 @@ func (r NodeType) String() string {
 
 // LabelValue returns the identity label value for this node type. Returns
 // ("", false) for classifications that do not stamp an identity label
-// (Ref, Watch, Definition). Own and Contribute are the only label-bearing
+// (Ref, Watch, Definition). Template and Patch are the only label-bearing
 // classifications — they are the two that apply via SSA and must be
 // discoverable by the applied-set scan on restart.
 func (r NodeType) LabelValue() (string, bool) {
 	switch r {
-	case NodeTypeOwn:
-		return "own", true
-	case NodeTypeContribute:
-		return "contribute", true
+	case NodeTypeTemplate:
+		return "template", true
+	case NodeTypePatch:
+		return "patch", true
 	default:
 		return "", false
 	}
@@ -96,13 +92,13 @@ func (r NodeType) LabelValue() (string, bool) {
 
 // NodeTypeFromLabelValue parses an identity label value back to a NodeType.
 // Returns (0, false) if the value is not a recognized label value. Labels
-// only carry Own or Contribute by construction.
+// only carry Template or Patch by construction.
 func NodeTypeFromLabelValue(s string) (NodeType, bool) {
 	switch s {
-	case "own":
-		return NodeTypeOwn, true
-	case "contribute":
-		return NodeTypeContribute, true
+	case "template":
+		return NodeTypeTemplate, true
+	case "patch":
+		return NodeTypePatch, true
 	default:
 		return 0, false
 	}
@@ -132,8 +128,8 @@ type Node struct {
 
 	// Body fields — exactly one is non-nil when the body is a static map.
 	// Parser validates mutual exclusivity across all five.
-	Template map[string]any // Own — Graph creates and manages this resource
-	Patch    map[string]any // Contribute — Graph writes fields on another actor's resource
+	Template map[string]any // template: — Graph creates and manages this resource
+	Patch    map[string]any // patch: — Graph writes fields on another actor's resource
 	Ref      map[string]any // single-object reference (apiVersion + kind + metadata.name)
 	Watch    map[string]any // collection observation (apiVersion + kind + optional selector)
 	Def      map[string]any // Definition — computed values into scope, no K8s resource
@@ -141,7 +137,7 @@ type Node struct {
 	// TemplateExpr — CEL expression string that evaluates to the whole body
 	// map at runtime. Set when a body-producing keyword (template / patch /
 	// def) supplies a string value instead of a map. ExprKeyword records
-	// which classification the expression belongs to (Own / Contribute /
+	// which classification the expression belongs to (Template / Patch /
 	// Definition). Never set for Ref/Watch — those classifications
 	// are identity-only and have no CEL-as-whole-body form.
 	TemplateExpr string
@@ -150,7 +146,7 @@ type Node struct {
 	// ref is the parse-time classification. Read via Type().
 	ref NodeType
 
-	// hasStatusSubresource is true when a Contribute node's body declares a
+	// hasStatusSubresource is true when a Patch node's body declares a
 	// non-nil status field. Used by the teardown path to decide whether
 	// release-apply must also release the status subresource.
 	// Per 003-ownership.md § Status Subresource.
@@ -194,9 +190,9 @@ func (n *Node) Type() NodeType {
 // available until evaluation).
 func (n *Node) Identity() map[string]any {
 	switch n.ref {
-	case NodeTypeOwn:
+	case NodeTypeTemplate:
 		return n.Template
-	case NodeTypeContribute:
+	case NodeTypePatch:
 		return n.Patch
 	case NodeTypeRef:
 		return n.Ref
@@ -247,9 +243,9 @@ func isCELExpression(s string) bool {
 // TemplateExpr separately — see eval.toMapNode).
 func (n *Node) Payload() map[string]any {
 	switch n.ref {
-	case NodeTypeOwn:
+	case NodeTypeTemplate:
 		return n.Template
-	case NodeTypeContribute:
+	case NodeTypePatch:
 		return n.Patch
 	case NodeTypeDef:
 		return n.Def
@@ -265,7 +261,7 @@ func (n *Node) HasBody() bool {
 	return n.Payload() != nil || n.TemplateExpr != ""
 }
 
-// HasStatusSubresource returns true when a Contribute node declares a
+// HasStatusSubresource returns true when a Patch node declares a
 // non-nil status field in its body. Used by releaseApply during teardown
 // to decide whether the status subresource must also be released.
 func (n *Node) HasStatusSubresource() bool {
@@ -560,7 +556,7 @@ func parseNodeList(raw any) ([]Node, error) {
 func setNodeKeyword(node *Node, kw string, raw any) error {
 	switch kw {
 	case "template":
-		node.ref = NodeTypeOwn
+		node.ref = NodeTypeTemplate
 		switch v := raw.(type) {
 		case map[string]any:
 			if err := validateTemplate(v); err != nil {
@@ -572,12 +568,12 @@ func setNodeKeyword(node *Node, kw string, raw any) error {
 				return fmt.Errorf("template: empty string (expected CEL expression or non-empty map)")
 			}
 			node.TemplateExpr = v
-			node.ExprKeyword = NodeTypeOwn
+			node.ExprKeyword = NodeTypeTemplate
 		default:
 			return fmt.Errorf("template: expected map or string (CEL expression), got %T", raw)
 		}
 	case "patch":
-		node.ref = NodeTypeContribute
+		node.ref = NodeTypePatch
 		switch v := raw.(type) {
 		case map[string]any:
 			if err := validatePatch(v); err != nil {
@@ -592,7 +588,7 @@ func setNodeKeyword(node *Node, kw string, raw any) error {
 				return fmt.Errorf("patch: empty string (expected CEL expression or non-empty map)")
 			}
 			node.TemplateExpr = v
-			node.ExprKeyword = NodeTypeContribute
+			node.ExprKeyword = NodeTypePatch
 		default:
 			return fmt.Errorf("patch: expected map or string (CEL expression), got %T", raw)
 		}
@@ -639,9 +635,9 @@ func setNodeKeyword(node *Node, kw string, raw any) error {
 	return nil
 }
 
-// validateTemplate enforces shape rules for template: (Own) bodies.
+// validateTemplate enforces shape rules for template: bodies.
 //
-// An Own body must declare identity (apiVersion + kind) — the graph needs to
+// A template body must declare identity (apiVersion + kind) — the graph needs to
 // know what it is creating. metadata.name is not strictly required at parse
 // time because it may come from a CEL expression that is resolved at runtime,
 // but apiVersion and kind must be literal or ${...}-interpolated strings
@@ -656,9 +652,9 @@ func validateTemplate(tmpl map[string]any) error {
 	return nil
 }
 
-// validatePatch enforces shape rules for patch: (Contribute) bodies.
+// validatePatch enforces shape rules for patch: bodies.
 //
-// A Contribute body must carry full identity (apiVersion + kind +
+// A patch body must carry full identity (apiVersion + kind +
 // metadata.name) — the graph writes fields to a specific existing object.
 // Identity-only patches are nonsensical (use ref: for read-only
 // single-object observation). Force adoption is not valid on patch: — that

@@ -146,6 +146,14 @@ func (e *evaluator) evalBoolCondition(expr string) (bool, error) {
 // markReady injects the __ready flag into a node's scope data. This is
 // read by the .ready() CEL member function to expose the graph controller's
 // readiness assessment to CEL expressions like propagateWhen and readyWhen.
+//
+// Safety: this mutates a map inside e.scope. The mutation is safe because
+// markReady runs only in two contexts: (1) inside a worker goroutine
+// operating on a snapshot created by snapshotFor — the map is private to
+// that worker, and (2) in the coordinator after the worker's result has
+// been merged into scope — single-threaded, no concurrent readers. If the
+// concurrency model changes (e.g., shared scope across workers), this
+// mutation would introduce a data race.
 func (e *evaluator) markReady(nodeID string, ready bool) {
 	if m, ok := e.scope[nodeID].(map[string]any); ok {
 		m["__ready"] = ready

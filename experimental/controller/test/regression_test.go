@@ -910,14 +910,14 @@ func TestContributeReadyWhenGatesGraphReadiness(t *testing.T) {
 	t.Log("Graph is Ready — contribute readyWhen satisfied")
 }
 
-// TestContributeIdentityLabels proves that Contribute resources carry identity
-// labels with role "contribute". These labels make Contribute resources
+// TestContributeIdentityLabels proves that Patch resources carry identity
+// labels with role "patch". These labels make Patch resources
 // discoverable via deriveAppliedSet() after controller restart, ensuring
 // teardown can release their fields via release apply.
 //
-// Regression: applySSA for Contribute references previously did not call setIdentityLabels.
+// Regression: applySSA for Patch references previously did not call setIdentityLabels.
 // After a controller restart, deriveAppliedSet() scanned informer caches for
-// identity labels and found nothing for Contribute resources — teardown
+// identity labels and found nothing for Patch resources — teardown
 // orphaned their fields (never released via release apply).
 func TestContributeIdentityLabels(t *testing.T) {
 	t.Parallel()
@@ -993,16 +993,16 @@ func TestContributeIdentityLabels(t *testing.T) {
 	result.SetGroupVersionKind(cmGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-label-target", Namespace: ns}, result))
 
-	// THE KEY ASSERTION: The contributed resource must have an identity label
-	// with role "contribute" for our graph. This makes it discoverable by
+	// THE KEY ASSERTION: The patched resource must have an identity label
+	// with role "patch" for our graph. This makes it discoverable by
 	// deriveAppliedSet() after controller restart.
 	resultLabels := result.GetLabels()
 	labelSuffix := "." + graphName + "." + ns + ".internal.kro.run/type"
 	foundContribLabel := false
 	for key, val := range resultLabels {
 		if strings.HasSuffix(key, labelSuffix) {
-			assert.Equal(t, "contribute", val,
-				"Contribute resource must have role 'contribute', not 'own'")
+			assert.Equal(t, "patch", val,
+				"Contribute resource must have role 'patch', not 'template'")
 			foundContribLabel = true
 			break
 		}

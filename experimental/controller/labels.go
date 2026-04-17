@@ -3,7 +3,7 @@
 // Each managed resource carries two labels per Graph-node pair. The label
 // key is a DNS subdomain that encodes the node ID, graph name, and namespace:
 //
-//	<nodeID>.<graphName>.<namespace>.internal.kro.run/type  → "own" | "contribute"
+//	<nodeID>.<graphName>.<namespace>.internal.kro.run/type  → "template" | "patch"
 //	<nodeID>.<graphName>.<namespace>.internal.kro.run/generation → graph.metadata.generation
 //
 // The identity label key is unique per node-graph-namespace triple. Multiple
@@ -186,7 +186,7 @@ func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 		// This is an identity label. Check if it belongs to a different graph.
 		if !strings.HasSuffix(lowerKey, mySuffix) {
 			// Different graph. Extract graph name for the error message.
-			if val == NodeTypeOwn.String() || val == NodeTypeContribute.String() {
+			if val == NodeTypeTemplate.String() || val == NodeTypePatch.String() {
 				return graphNameFromLabel(lowerKey), true
 			}
 		}
@@ -195,9 +195,9 @@ func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 }
 
 // setIdentityLabels stamps identity and generation labels onto a resource's
-// metadata labels map. Called during apply for Own and Contribute references.
+// metadata labels map. Called during apply for Template and Patch references.
 // Panics if ref does not have a label value — this is an invariant violation,
-// as all call sites pass NodeTypeOwn or NodeTypeContribute
+// as all call sites pass NodeTypeTemplate or NodeTypePatch
 // directly.
 func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, generation string, ref NodeType) map[string]string {
 	lv, ok := ref.LabelValue()
@@ -247,7 +247,7 @@ func forEachChildGenerationLabelKey(parentID, resName, resNamespace, kind, group
 
 // setForEachChildIdentityLabels stamps forEach child identity and generation labels.
 // Panics if ref does not have a label value — this is an invariant violation,
-// as all call sites pass NodeTypeOwn or NodeTypeContribute
+// as all call sites pass NodeTypeTemplate or NodeTypePatch
 // directly.
 func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation string, ref NodeType) map[string]string {
 	lv, ok := ref.LabelValue()
@@ -265,7 +265,7 @@ func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, 
 // appliedEntry represents a resource in the applied set, derived from the
 // watch cache by scanning identity labels.
 type appliedEntry struct {
-	NodeID    string
-	NodeType NodeType // NodeTypeOwn or NodeTypeContribute
-	Key       string            // resource key (group/version/Kind/namespace/name)
+	NodeID   string
+	NodeType NodeType // NodeTypeTemplate or NodeTypePatch
+	Key      string   // resource key (group/version/Kind/namespace/name)
 }

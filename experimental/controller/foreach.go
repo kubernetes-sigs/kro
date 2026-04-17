@@ -247,10 +247,10 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			evalMap = childObj.Object
 
 			var applied *unstructured.Unstructured
-			if childRef == NodeTypeContribute {
-				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeContribute, eval.effectiveGeneration, driftCorrection)
+			if childRef == NodeTypePatch {
+				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypePatch, eval.effectiveGeneration, driftCorrection)
 			} else {
-				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeOwn, eval.effectiveGeneration, driftCorrection)
+				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeTemplate, eval.effectiveGeneration, driftCorrection)
 			}
 			if err != nil {
 				// Per 004-graph-reconciliation.md § Parent State: track per-child errors
@@ -265,9 +265,9 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			}
 			allApplied = append(allApplied, applied.Object)
 			var itemKeys []string
-			if childRef == NodeTypeContribute {
+			if childRef == NodeTypePatch {
 				hasStatus := evalMap["status"] != nil
-				itemKeys = []string{contributeKey(applied, hasStatus)}
+				itemKeys = []string{patchKey(applied, hasStatus)}
 			} else {
 				itemKeys = []string{resourceKey(applied)}
 			}

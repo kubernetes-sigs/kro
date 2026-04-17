@@ -94,7 +94,7 @@ func TestParseKeyword_ClassificationMap(t *testing.T) {
 				"id":       "a",
 				"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "x"}, "data": map[string]any{"k": "v"}},
 			},
-			want: NodeTypeOwn,
+			want: NodeTypeTemplate,
 		},
 		{
 			name: "patch → Contribute",
@@ -102,7 +102,7 @@ func TestParseKeyword_ClassificationMap(t *testing.T) {
 				"id":    "a",
 				"patch": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "x"}, "data": map[string]any{"k": "v"}},
 			},
-			want: NodeTypeContribute,
+			want: NodeTypePatch,
 		},
 		{
 			name: "ref → Ref",
@@ -157,12 +157,12 @@ func TestParseKeyword_ClassificationExpr(t *testing.T) {
 		{
 			name: "template string → Own",
 			raw:  map[string]any{"id": "a", "template": "${schema.spec.template}"},
-			want: NodeTypeOwn,
+			want: NodeTypeTemplate,
 		},
 		{
 			name: "patch string → Contribute",
 			raw:  map[string]any{"id": "a", "patch": "${schema.spec.patch}"},
-			want: NodeTypeContribute,
+			want: NodeTypePatch,
 		},
 		{
 			name: "def string → Definition",
@@ -358,7 +358,7 @@ func TestParseKeyword_ForceOnTemplate(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
-	assert.Equal(t, NodeTypeOwn, nodes[0].Type())
+	assert.Equal(t, NodeTypeTemplate, nodes[0].Type())
 }
 
 // ---------------------------------------------------------------------------
@@ -435,8 +435,8 @@ func TestParseKeyword_ExprEvaluatesToNonMap(t *testing.T) {
 		keyword string
 		want    NodeType
 	}{
-		{"template expr → non-map", "template", NodeTypeOwn},
-		{"patch expr → non-map", "patch", NodeTypeContribute},
+		{"template expr → non-map", "template", NodeTypeTemplate},
+		{"patch expr → non-map", "patch", NodeTypePatch},
 		{"def expr → non-map", "def", NodeTypeDef},
 	}
 	for _, tc := range cases {
@@ -464,7 +464,7 @@ func TestParseKeyword_ExprReferencesUndefined(t *testing.T) {
 	// in the graph spec fails at compile time. The parser accepts the
 	// string; compileGraphSpec surfaces the error.
 	spec := &GraphSpec{Nodes: []Node{
-		{ID: "a", TemplateExpr: "${undeclaredThing.field}", ExprKeyword: NodeTypeOwn, ref: NodeTypeOwn},
+		{ID: "a", TemplateExpr: "${undeclaredThing.field}", ExprKeyword: NodeTypeTemplate, ref: NodeTypeTemplate},
 	}}
 	_, err := compileGraphSpec(spec, nil)
 	require.Error(t, err, "compile should reject expression referencing undeclared identifier")

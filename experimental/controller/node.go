@@ -54,7 +54,7 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 		if err := r.reconcileRef(ctx, graph, node, eval, watcher); err != nil {
 			return nil, err
 		}
-	default: // NodeTypeOwn, NodeTypeContribute
+	default: // NodeTypeTemplate, NodeTypePatch
 		key, err := r.reconcileApply(ctx, graph, node, ref, eval, watcher, driftCorrection)
 		if err != nil {
 			if key != "" {
@@ -346,10 +346,10 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 	return nil
 }
 
-// reconcileApply evaluates and applies an Own or Contribute template.
+// reconcileApply evaluates and applies a Template or Patch node.
 // The ref parameter controls SSA behavior (identity labels, pre-apply checks)
-// and applied set key format: Own keys use resourceKey (prune → delete),
-// Contribute keys use contributeKey (prune → release apply to release fields).
+// and applied set key format: Template keys use resourceKey (prune → delete),
+// Patch keys use patchKey (prune → release apply to release fields).
 // See applySSA for the full ref-dependent behavior.
 // driftCorrection bypasses the apply-hash check in applySSA.
 func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, ref NodeType, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
@@ -369,12 +369,12 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 	logger.V(1).Info("applied resource", "node", node.ID, "ref", ref,
 		"gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
-	if ref == NodeTypeContribute {
-		// Track the contribution in the applied set with a "contribute:" prefix.
+	if ref == NodeTypePatch {
+		// Track the patch in the applied set with a "patch:" prefix.
 		// This lets prune and teardown distinguish Contribute keys (release apply
 		// to release fields) from Own keys (delete).
 		hasStatus := evalMap["status"] != nil
-		return contributeKey(applied, hasStatus), nil
+		return patchKey(applied, hasStatus), nil
 	}
 	return resourceKey(applied), nil
 }

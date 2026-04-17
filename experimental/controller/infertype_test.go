@@ -16,7 +16,7 @@ import (
 // ownNode builds an Own-classified Node from a template map. Test-only helper;
 // production code sets the classification via parseNodeList.
 func ownNode(id string, tmpl map[string]any) Node {
-	return Node{ID: id, Template: tmpl, ref: NodeTypeOwn}
+	return Node{ID: id, Template: tmpl, ref: NodeTypeTemplate}
 }
 
 // defNode builds a Definition-classified Node from a map of values.
@@ -181,7 +181,7 @@ func TestResolveNodeTypes(t *testing.T) {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "test"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 		}
 		ts := resolveNodeTypes(nodes, nil)
 
@@ -211,7 +211,7 @@ func TestResolveNodeTypes(t *testing.T) {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.prefix}"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 		}
 		ts := resolveNodeTypes(nodes, nil)
 
@@ -233,7 +233,7 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.prefix + '-deploy'}"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.typo}"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.Error(t, err)
@@ -265,7 +265,7 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${cfg.metadata.env + '-deploy'}"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -282,7 +282,7 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${cfg.metadata.typo}"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.Error(t, err)
@@ -297,7 +297,7 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 			{ID: "derived", Def: map[string]any{
 				"data": "${upstream.data}",
 			}, ref: NodeTypeDef},
@@ -305,7 +305,7 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "${derived.data.someKey}"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -320,7 +320,7 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "v1",
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${b.full}"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -354,7 +354,7 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"data":       map[string]any{"items": "a,b,c"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 			{
 				ID:      "items",
 				ForEach: map[string]string{"item": "${upstream.data.items}"},
@@ -592,7 +592,7 @@ func TestSchemaResolutionIntegration(t *testing.T) {
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "test"},
 				"data":       map[string]any{"key": "value"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 		}
 		ts := resolveNodeTypes(nodes, resolver)
 
@@ -609,7 +609,7 @@ func TestSchemaResolutionIntegration(t *testing.T) {
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "test"},
 				"data":       map[string]any{"key": "value"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 			{ID: "naming", Def: map[string]any{
 				"prefix": "myapp",
 			}, ref: NodeTypeDef},
@@ -618,7 +618,7 @@ func TestSchemaResolutionIntegration(t *testing.T) {
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "${naming.prefix + '-cfg'}"},
 				"data":       map[string]any{"ref": "${cm.data}"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 		}}
 		typeInfo := resolveNodeTypes(graphSpec.Nodes, resolver)
 		_, err := compileGraphSpec(graphSpec, typeInfo)
@@ -631,7 +631,7 @@ func TestSchemaResolutionIntegration(t *testing.T) {
 				"apiVersion": "custom.example.com/v1",
 				"kind":       "Widget",
 				"metadata":   map[string]any{"name": "test"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 		}
 		ts := resolveNodeTypes(nodes, resolver)
 
@@ -799,7 +799,7 @@ func TestRecompilationOnSchemaChange(t *testing.T) {
 			"apiVersion": "example.com/v1",
 			"kind":       "Widget",
 			"metadata":   map[string]any{"name": "test"},
-		}, ref: NodeTypeOwn},
+		}, ref: NodeTypeTemplate},
 		// Consumer is a definition — no GVK to resolve, so the only
 		// unresolved GVK is Widget.
 		{ID: "consumer", Def: map[string]any{

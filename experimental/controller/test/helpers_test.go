@@ -280,7 +280,7 @@ func waitForAbsence(ctx context.Context, c client.Client, gvk schema.GroupVersio
 }
 
 // referenceLabelValue returns the identity label value stamped on obj for
-// the named Graph — "own" or "contribute" — or ("", false) if no identity
+// the named Graph — "template" or "patch" — or ("", false) if no identity
 // label is present for that Graph.
 //
 // The identity label key encodes the stamping Graph's name and namespace,
@@ -305,13 +305,13 @@ func assertManagedBy(t *testing.T, obj *unstructured.Unstructured, graphName str
 		"%s should be managed by Graph %s (no identity label found)", obj.GetName(), graphName) {
 		return
 	}
-	assert.Contains(t, []string{"own", "contribute"}, val,
+	assert.Contains(t, []string{"template", "patch"}, val,
 		"%s should have valid role label for Graph %s", obj.GetName(), graphName)
 }
 
 // assertReferenceClassification asserts that a resource's identity label for
-// the named Graph matches want ("own" or "contribute"). Use this to pin the
-// classification a Graph has arrived at — e.g., to verify a Contribute→Own
+// the named Graph matches want ("template" or "patch"). Use this to pin the
+// classification a Graph has arrived at — e.g., to verify a Patch→Template
 // transition has completed.
 func assertReferenceClassification(t *testing.T, obj *unstructured.Unstructured, graphName, want string) {
 	t.Helper()
@@ -332,7 +332,7 @@ func assertReferenceClassification(t *testing.T, obj *unstructured.Unstructured,
 //
 // This helper only confirms the final state, not that a transition occurred.
 // When verifying a transition, book-end the wait with a pre-state assertion
-// (e.g., assertReferenceClassification(..., "contribute") before the
+// (e.g., assertReferenceClassification(..., "patch") before the
 // triggering action) so that an unexpectedly-already-terminal label fails the
 // test loudly rather than passing silently.
 //

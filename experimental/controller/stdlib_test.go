@@ -360,7 +360,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 					"metadata":   map[string]any{"name": "default-deny", "namespace": "${item.metadata.name}"},
 					"spec":       map[string]any{"podSelector": map[string]any{}},
 				},
-				ref: NodeTypeOwn,
+				ref: NodeTypeTemplate,
 			},
 		}
 		graph := &GraphSpec{Nodes: graphNodes}
@@ -394,7 +394,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 					"metadata":   map[string]any{"name": "default", "namespace": "${item.metadata.name}"},
 					"spec":       map[string]any{"hard": map[string]any{"pods": "10"}},
 				},
-				ref: NodeTypeOwn,
+				ref: NodeTypeTemplate,
 			},
 			{
 				ID: "policy",
@@ -404,7 +404,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 					"metadata":   map[string]any{"name": "${quota.metadata.name}-deny", "namespace": "${item.metadata.name}"},
 					"spec":       map[string]any{"podSelector": map[string]any{}},
 				},
-				ref: NodeTypeOwn,
+				ref: NodeTypeTemplate,
 			},
 		}
 		graph := &GraphSpec{Nodes: graphNodes}
@@ -684,7 +684,7 @@ func TestStdlibSizeGuard(t *testing.T) {
 					"metadata":   map[string]any{"name": "webapp-dashboard", "namespace": "monitoring"},
 					"data":       map[string]any{},
 				},
-				ref: NodeTypeOwn,
+				ref: NodeTypeTemplate,
 			},
 		},
 	}
@@ -719,7 +719,7 @@ func TestStdlibDistinctCEL(t *testing.T) {
 					"kind":       "ServiceAccount",
 					"metadata":   map[string]any{"name": "monitoring", "namespace": "${ns}"},
 				},
-				ref: NodeTypeOwn,
+				ref: NodeTypeTemplate,
 			},
 		},
 	}

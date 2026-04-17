@@ -347,13 +347,13 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 
 	keys := []string{
 		"/v1/ConfigMap/default/a",
-		"contribute:/v1/ConfigMap/default/b",
+		"patch:/v1/ConfigMap/default/b",
 	}
 
 	ordered := pruneOrder(keys, []*DAG{dag}, "default", nil)
 
 	require.Len(t, ordered, 2)
-	assert.Equal(t, "contribute:/v1/ConfigMap/default/b", ordered[0], "dependent contribute key should be first")
+	assert.Equal(t, "patch:/v1/ConfigMap/default/b", ordered[0], "dependent patch key should be first")
 	assert.Equal(t, "/v1/ConfigMap/default/a", ordered[1])
 }
 
@@ -577,7 +577,7 @@ func TestFinalizesTargetMustBeResource(t *testing.T) {
 				tc.target,
 				{ID: "snapshot", Finalizes: tc.target.ID, Template: map[string]any{
 					"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "snap"},
-				}, ref: NodeTypeOwn},
+				}, ref: NodeTypeTemplate},
 			}
 			_, err := BuildDAG(nodes, nil)
 			require.Error(t, err)

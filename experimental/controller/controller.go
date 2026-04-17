@@ -572,8 +572,8 @@ func (w *walkState) tryDispatch(idx int) {
 			forEachUpdates:                we.forEachNewKeys,
 			forEachScopes:                 we.forEachNewScope,
 			forEachItems:                  we.forEachNewItems,
-			collectionCacheUpdate:          we.collectionCacheUpdate(),
-			collectionDidFullList:          we.collectionDidFullList,
+			collectionCacheUpdate:         we.collectionCacheUpdate(),
+			collectionDidFullList:         we.collectionDidFullList,
 			forEachAllItemsPropagateReady: we.forEachAllItemsPropagateReady,
 			nodeReadyUpdate:               nodeReadyUpdate,
 		}
@@ -988,7 +988,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 		if res.state == NodePending {
 			plan.SetState(dag, node.ID, NodePending)
-			// Under declared-keyword classification, Contribute→Own is an
+			// Under declared-keyword classification, Patch→Template is an
 			// authoring event (patch: → template: spec edit) handled by
 			// revision supersession. No runtime reclassification reset.
 			state.previousPlanStates[node.ID] = NodePending
@@ -1460,14 +1460,14 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// Keys come from two sources:
 	// 1. Watch cache — informer stores scanned for identity labels
 	// 2. Static spec extraction (fallback for resources not in cache)
-	ownKeys := map[string]bool{}
-	contributeKeys := map[string]bool{} // key → hasStatus encoded in the key
+	templateKeys := map[string]bool{}
+	patchKeys := map[string]bool{} // key → hasStatus encoded in the key
 
 	// Build a map from resource keys to hasStatus by scanning revision specs.
 	// This recovers the +status suffix that the watch cache cannot provide.
 	// Per 003-ownership.md § Status Subresource: "Releases only target the
 	// subresources the template actually applied to."
-	contributeStatusMap := map[string]bool{} // resource key → hasStatus
+	patchStatusMap := map[string]bool{} // resource key → hasStatus
 	// Also collect all static keys with correct Kind casing for cross-referencing.
 	staticKeys := map[string]bool{} // all static resource keys from revision specs
 	for _, rev := range revisions {
@@ -1484,7 +1484,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			}
 			if templateHasStatus(node.Payload()) {
 				if key := staticResourceKey(node.Identity(), graph.GetNamespace(), r.Scope); key != "" {
-					contributeStatusMap[key] = true
+					patchStatusMap[key] = true
 				}
 			}
 		}
@@ -1494,7 +1494,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// Must run BEFORE removeGraph — removeGraph releases watch ownership,
 	// which can stop informers if this Graph is the sole watcher of a GVR.
 	// deriveAppliedSet needs those informers to scan for identity labels on
-	// Contribute targets.
+	// Patch targets.
 	//
 	// deriveAppliedSet keys may have incorrect Kind casing (metadata informers
 	// don't always populate TypeMeta, falling back to singularize which doesn't
@@ -1510,20 +1510,20 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if corrected, ok := normalizedToStatic[strings.ToLower(key)]; ok {
 				key = corrected
 			}
-			if entry.NodeType == NodeTypeContribute {
-				// For contribute keys, encode hasStatus from revision spec scan.
-				cKey := contributeKeyPrefix + key
-				if contributeStatusMap[key] {
-					cKey += contributeStatusSuffix
+			if entry.NodeType == NodeTypePatch {
+				// For patch keys, encode hasStatus from revision spec scan.
+				cKey := patchKeyPrefix + key
+				if patchStatusMap[key] {
+					cKey += patchStatusSuffix
 				}
-				contributeKeys[cKey] = true
+				patchKeys[cKey] = true
 			} else {
-				ownKeys[key] = true
+				templateKeys[key] = true
 			}
 		}
 	}
 
-	// Release watch state now that contribute keys have been collected.
+	// Release watch state now that patch keys have been collected.
 	if r.Watcher != nil {
 		r.Watcher.removeGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
 	}
@@ -1548,17 +1548,17 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 				continue
 			}
 			if key := staticResourceKey(node.Identity(), graph.GetNamespace(), r.Scope); key != "" {
-				ownKeys[key] = true
+				templateKeys[key] = true
 			}
 		}
 	}
 
-	// Release Contribute fields first via release apply.
-	// Per the design (003-ownership): Contribute never deletes — it releases
+	// Release Patch fields first via release apply.
+	// Per the design (003-ownership): Patch never deletes — it releases
 	// field ownership so the actual owner retains the resource.
 	fieldOwner := graphFieldOwner(graph)
-	for key := range contributeKeys {
-		resKey, hasStatus := parseContributeKey(key)
+	for key := range patchKeys {
+		resKey, hasStatus := parsePatchKey(key)
 		if resKey == "" {
 			continue
 		}
@@ -1567,15 +1567,15 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			continue
 		}
 		if err := releaseApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
-			logger.Error(err, "releasing contribution fields during teardown", "key", resKey)
+			logger.Error(err, "releasing patch fields during teardown", "key", resKey)
 		} else {
-			logger.V(1).Info("released contribution fields during teardown", "key", resKey)
+			logger.V(1).Info("released patch fields during teardown", "key", resKey)
 		}
 	}
 
-	// Convert Own keys to slice for ordered deletion.
+	// Convert Template keys to slice for ordered deletion.
 	var keys []string
-	for k := range ownKeys {
+	for k := range templateKeys {
 		keys = append(keys, k)
 	}
 
@@ -1583,7 +1583,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// This catches forEach-stamped resources that aren't in the static spec.
 	dynamicKeys, _ := r.findManagedResourceKeys(ctx, graph)
 	for _, k := range dynamicKeys {
-		if !ownKeys[k] {
+		if !templateKeys[k] {
 			keys = append(keys, k)
 		}
 	}

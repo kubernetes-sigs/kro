@@ -124,9 +124,9 @@ func snapshotNode(node Node) map[string]any {
 		// CEL-as-whole-body: the value under the classification keyword
 		// is a string. ExprKeyword tells us which keyword to use.
 		switch node.ExprKeyword {
-		case NodeTypeOwn:
+		case NodeTypeTemplate:
 			entry["template"] = node.TemplateExpr
-		case NodeTypeContribute:
+		case NodeTypePatch:
 			entry["patch"] = node.TemplateExpr
 		case NodeTypeDef:
 			entry["def"] = node.TemplateExpr
@@ -135,11 +135,11 @@ func snapshotNode(node Node) map[string]any {
 		}
 	} else {
 		switch node.Type() {
-		case NodeTypeOwn:
+		case NodeTypeTemplate:
 			if node.Template != nil {
 				entry["template"] = deepCopyMap(node.Template)
 			}
-		case NodeTypeContribute:
+		case NodeTypePatch:
 			if node.Patch != nil {
 				entry["patch"] = deepCopyMap(node.Patch)
 			}

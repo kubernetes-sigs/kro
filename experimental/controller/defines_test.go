@@ -24,7 +24,7 @@ func TestDefinesReference(t *testing.T) {
 		assert.Equal(t, NodeTypeDef, n.Type())
 	})
 
-	t.Run("template with apiVersion/kind yields NodeTypeOwn", func(t *testing.T) {
+	t.Run("template with apiVersion/kind yields NodeTypeTemplate", func(t *testing.T) {
 		n := Node{
 			ID: "cfg",
 			Template: map[string]any{
@@ -33,9 +33,9 @@ func TestDefinesReference(t *testing.T) {
 				"metadata":   map[string]any{"name": "cfg"},
 				"data":       map[string]any{"k": "v"},
 			},
-			ref: NodeTypeOwn,
+			ref: NodeTypeTemplate,
 		}
-		assert.Equal(t, NodeTypeOwn, n.Type())
+		assert.Equal(t, NodeTypeTemplate, n.Type())
 	})
 }
 
@@ -53,7 +53,7 @@ func TestDefinesDAGDependencies(t *testing.T) {
 				"metadata":   map[string]any{"name": "my-app"},
 				"spec":       map[string]any{"replicas": 1},
 			},
-			ref: NodeTypeOwn,
+			ref: NodeTypeTemplate,
 		},
 		{
 			ID: "naming",
@@ -69,7 +69,7 @@ func TestDefinesDAGDependencies(t *testing.T) {
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${naming.fullName + '-svc'}"},
 			},
-			ref: NodeTypeOwn,
+			ref: NodeTypeTemplate,
 		},
 	}
 	dag, err := BuildDAG(nodes, nil)
@@ -101,7 +101,7 @@ func TestDefinesCycleDetection(t *testing.T) {
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${naming.prefix + '-svc'}"},
 			},
-			ref: NodeTypeOwn,
+			ref: NodeTypeTemplate,
 		},
 	}
 	_, err := BuildDAG(nodes, nil)
@@ -128,7 +128,7 @@ func TestDefinesChain(t *testing.T) {
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${b.fullName}"},
 			},
-			ref: NodeTypeOwn,
+			ref: NodeTypeTemplate,
 		},
 	}
 	dag, err := BuildDAG(nodes, nil)
@@ -242,7 +242,7 @@ func TestDefinesReconcile(t *testing.T) {
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 			{ID: "bad", Def: map[string]any{"val": "${upstream.data.key}"}, ref: NodeTypeDef},
 		}}
 		eval := compileDefinesSpec(t, spec)
@@ -266,7 +266,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 			{
 				ID:      "items",
 				ForEach: map[string]string{"w": "${['a', 'b']}"},
@@ -312,7 +312,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
 				// data.key is absent — ${upstream.data.key} fails
-			}, ref: NodeTypeOwn},
+			}, ref: NodeTypeTemplate},
 			{
 				ID:      "items",
 				ForEach: map[string]string{"w": "${['a', 'b']}"},

@@ -705,7 +705,7 @@ func TestForEachContributeScaleDown(t *testing.T) {
 		types.NamespacedName{Name: "test-foreach-contrib", Namespace: ns}))
 	t.Log("All 3 contributions applied")
 
-	// Verify children have "contribute" role labels.
+	// Verify children have "patch" role labels.
 	for _, name := range targets {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(gvk)
@@ -714,8 +714,8 @@ func TestForEachContributeScaleDown(t *testing.T) {
 		labels := check.GetLabels()
 		for key, val := range labels {
 			if strings.HasSuffix(key, ".internal.kro.run/type") {
-				assert.Equal(t, "contribute", val,
-					"%s should have 'contribute' role label (pre-existing target)", name)
+				assert.Equal(t, "patch", val,
+					"%s should have 'patch' role label (pre-existing target)", name)
 			}
 		}
 	}
@@ -1511,7 +1511,7 @@ func TestIncludeWhenFinalizesNeverCreatedTarget(t *testing.T) {
 }
 
 // TestContributeIdentityLabelsPerGraph proves that when two Graphs contribute
-// to the same resource, each gets its own identity labels with "contribute" role.
+// to the same resource, each gets its own identity labels with "patch" role.
 func TestContributeIdentityLabelsPerGraph(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -1575,11 +1575,11 @@ func TestContributeIdentityLabelsPerGraph(t *testing.T) {
 	foundA, foundB := false, false
 	for key, val := range labels {
 		if strings.Contains(key, ".test-labels-a.") && strings.HasSuffix(key, ".internal.kro.run/type") {
-			assert.Equal(t, "contribute", val)
+			assert.Equal(t, "patch", val)
 			foundA = true
 		}
 		if strings.Contains(key, ".test-labels-b.") && strings.HasSuffix(key, ".internal.kro.run/type") {
-			assert.Equal(t, "contribute", val)
+			assert.Equal(t, "patch", val)
 			foundB = true
 		}
 	}

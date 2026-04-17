@@ -324,10 +324,10 @@ func TestContribution(t *testing.T) {
 	assert.Equal(t, "3", data["replicas"],
 		"contribution should preserve existing data fields")
 
-	// THE KEY ASSERTION: the external object carries a "contribute" identity
-	// label from our Graph, not "own". Contributions are partial writes —
+	// THE KEY ASSERTION: the external object carries a "patch" identity
+	// label from our Graph, not "template". Patches are partial writes —
 	// they must never claim full ownership of a resource they didn't create.
-	assertReferenceClassification(t, updatedExternal, "test-contribution", "contribute")
+	assertReferenceClassification(t, updatedExternal, "test-contribution", "patch")
 
 	t.Logf("Contribution applied: webapp-instance now has deployment-name=%s, deployment-uid=%s",
 		annotations["kro.run/deployment-name"], annotations["kro.run/deployment-uid"])

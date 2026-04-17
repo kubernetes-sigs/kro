@@ -114,14 +114,14 @@ func TestIsGraphIdentityLabel(t *testing.T) {
 func TestHasOtherGraphIdentityLabel(t *testing.T) {
 	// Resource with our label only — no conflict
 	labels1 := map[string]string{
-		"deploy.my-app.default.internal.kro.run/type": "own",
+		"deploy.my-app.default.internal.kro.run/type": "template",
 	}
 	_, found := hasOtherGraphIdentityLabel(labels1, "my-app", "default")
 	assert.False(t, found)
 
 	// Resource with another graph's label — conflict
 	labels2 := map[string]string{
-		"deploy.other-app.default.internal.kro.run/type": "own",
+		"deploy.other-app.default.internal.kro.run/type": "template",
 	}
 	otherGraph, found := hasOtherGraphIdentityLabel(labels2, "my-app", "default")
 	assert.True(t, found)
@@ -129,8 +129,8 @@ func TestHasOtherGraphIdentityLabel(t *testing.T) {
 
 	// Resource with both our label and another graph's label — conflict
 	labels3 := map[string]string{
-		"deploy.my-app.default.internal.kro.run/type":    "own",
-		"deploy.other-app.default.internal.kro.run/type": "contribute",
+		"deploy.my-app.default.internal.kro.run/type":    "template",
+		"deploy.other-app.default.internal.kro.run/type": "patch",
 	}
 	otherGraph, found = hasOtherGraphIdentityLabel(labels3, "my-app", "default")
 	assert.True(t, found)
@@ -154,7 +154,7 @@ func TestHasOtherGraphIdentityLabel_RegressionMixedCase(t *testing.T) {
 		// Identity label key with uppercase characters — would never be
 		// stamped by the controller (stamping enforces lowercase), but
 		// could be present from an edit or older stamping.
-		"Deploy.Other-App.Default.internal.kro.run/type": "own",
+		"Deploy.Other-App.Default.internal.kro.run/type": "template",
 	}
 	otherGraph, found := hasOtherGraphIdentityLabel(mixedCase, "my-app", "default")
 	assert.True(t, found, "mixed-case identity label from another graph must be detected")
@@ -162,8 +162,8 @@ func TestHasOtherGraphIdentityLabel_RegressionMixedCase(t *testing.T) {
 }
 
 func TestSetIdentityLabels(t *testing.T) {
-	labels := setIdentityLabels(nil, "deploy", "my-app", "default", "3", NodeTypeOwn)
-	assert.Equal(t, "own", labels["deploy.my-app.default.internal.kro.run/type"])
+	labels := setIdentityLabels(nil, "deploy", "my-app", "default", "3", NodeTypeTemplate)
+	assert.Equal(t, "template", labels["deploy.my-app.default.internal.kro.run/type"])
 	assert.Equal(t, "3", labels["deploy.my-app.default.internal.kro.run/generation"])
 }
 

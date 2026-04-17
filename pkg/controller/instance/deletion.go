@@ -15,6 +15,7 @@
 package instance
 
 import (
+	"encoding/json"
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -22,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
@@ -241,16 +243,50 @@ func resourceClientFor(
 	return rcx.Client.Resource(desc.GVR)
 }
 
-// setUnmanaged removes the instance finalizer using SSA.
+// setUnmanaged removes the instance finalizer using JSON merge patch with retry on conflict.
+// Uses merge patch (not SSA) to avoid field manager ownership blocking finalizer removal.
 func (c *Controller) setUnmanaged(rcx *ReconcileContext, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if exist := metadata.HasInstanceFinalizer(obj); !exist {
 		return obj, nil
 	}
 	rcx.Log.Info("Removing managed state", "name", obj.GetName(), "namespace", obj.GetNamespace())
-	instancePatch := instanceSSAPatch(obj)
-	instancePatch.SetFinalizers(obj.GetFinalizers())
-	metadata.RemoveInstanceFinalizer(instancePatch)
-	updated, err := rcx.InstanceClient().Apply(rcx.Ctx, instancePatch.GetName(), instancePatch, metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})
+
+	var updated *unstructured.Unstructured
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		// Re-fetch fresh object on each retry attempt
+		current, err := rcx.InstanceClient().Get(rcx.Ctx, obj.GetName(), metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+
+		// Check if finalizer still exists after re-fetch
+		if !metadata.HasInstanceFinalizer(current) {
+			updated = current
+			return nil
+		}
+
+		clone := current.DeepCopy()
+		metadata.RemoveInstanceFinalizer(clone)
+
+		patchData, err := json.Marshal(map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"resourceVersion": current.GetResourceVersion(),
+				"finalizers":      clone.GetFinalizers(),
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to marshal finalizer patch: %w", err)
+		}
+
+		updated, err = rcx.InstanceClient().Patch(
+			rcx.Ctx,
+			current.GetName(),
+			types.MergePatchType,
+			patchData,
+			metav1.PatchOptions{},
+		)
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update unmanaged state: %w", err)
 	}

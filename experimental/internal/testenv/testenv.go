@@ -70,10 +70,16 @@ func (e *Environment) Start() (*rest.Config, error) {
 		return nil, fmt.Errorf("building binary: %w", err)
 	}
 
-	// Set up log writer.
+	// Set up log writer. If KRO_TEST_TAG is set, per-run log lives at
+	// build/controller-<tag>.log — lets multiple test files keep their
+	// own logs without clobbering each other.
 	logWriter := e.LogWriter
 	if logWriter == nil {
-		logPath := filepath.Join(filepath.Dir(binaryPath), "controller.log")
+		logName := "controller.log"
+		if tag := os.Getenv("KRO_TEST_TAG"); tag != "" {
+			logName = "controller-" + tag + ".log"
+		}
+		logPath := filepath.Join(filepath.Dir(binaryPath), logName)
 		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			return nil, fmt.Errorf("creating log file: %w", err)

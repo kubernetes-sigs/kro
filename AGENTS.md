@@ -60,3 +60,8 @@ path change is scoped to experimental consumers only.
 
 `experimental/Makefile` defines common development recipes (`run`, `apply`,
 `test`, `bench`). Check there before reaching for raw `go` commands.
+
+If working on upstream compat (`experimental/test/graph-compat/`), read
+the `##@ Upstream compat` section of `experimental/Makefile` — it
+documents the per-file loop (`compat-one`, `compat-presubmit`,
+`compat-count`) and the allowlist contract.

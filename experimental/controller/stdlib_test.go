@@ -350,7 +350,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 					"kind":       "Namespace",
 					"metadata":   map[string]any{"name": "test-ns"},
 				},
-				ref: NodeTypeRef,
+				nodeType: NodeTypeRef,
 			},
 			{
 				ID: "policy",
@@ -360,7 +360,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 					"metadata":   map[string]any{"name": "default-deny", "namespace": "${item.metadata.name}"},
 					"spec":       map[string]any{"podSelector": map[string]any{}},
 				},
-				ref: NodeTypeTemplate,
+				nodeType: NodeTypeTemplate,
 			},
 		}
 		graph := &GraphSpec{Nodes: graphNodes}
@@ -384,7 +384,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 					"kind":       "Namespace",
 					"metadata":   map[string]any{"name": "test-ns"},
 				},
-				ref: NodeTypeRef,
+				nodeType: NodeTypeRef,
 			},
 			{
 				ID: "quota",
@@ -394,7 +394,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 					"metadata":   map[string]any{"name": "default", "namespace": "${item.metadata.name}"},
 					"spec":       map[string]any{"hard": map[string]any{"pods": "10"}},
 				},
-				ref: NodeTypeTemplate,
+				nodeType: NodeTypeTemplate,
 			},
 			{
 				ID: "policy",
@@ -404,7 +404,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 					"metadata":   map[string]any{"name": "${quota.metadata.name}-deny", "namespace": "${item.metadata.name}"},
 					"spec":       map[string]any{"podSelector": map[string]any{}},
 				},
-				ref: NodeTypeTemplate,
+				nodeType: NodeTypeTemplate,
 			},
 		}
 		graph := &GraphSpec{Nodes: graphNodes}
@@ -673,7 +673,7 @@ func TestStdlibSizeGuard(t *testing.T) {
 					"kind":       "WebApp",
 					"selector":   map[string]any{},
 				},
-				ref: NodeTypeWatch,
+				nodeType: NodeTypeWatch,
 			},
 			{
 				ID:          "dashboard",
@@ -684,7 +684,7 @@ func TestStdlibSizeGuard(t *testing.T) {
 					"metadata":   map[string]any{"name": "webapp-dashboard", "namespace": "monitoring"},
 					"data":       map[string]any{},
 				},
-				ref: NodeTypeTemplate,
+				nodeType: NodeTypeTemplate,
 			},
 		},
 	}
@@ -709,7 +709,7 @@ func TestStdlibDistinctCEL(t *testing.T) {
 					"kind":       "Pod",
 					"selector":   map[string]any{"app": "monitoring"},
 				},
-				ref: NodeTypeWatch,
+				nodeType: NodeTypeWatch,
 			},
 			{
 				ID:      "sa",
@@ -719,7 +719,7 @@ func TestStdlibDistinctCEL(t *testing.T) {
 					"kind":       "ServiceAccount",
 					"metadata":   map[string]any{"name": "monitoring", "namespace": "${ns}"},
 				},
-				ref: NodeTypeTemplate,
+				nodeType: NodeTypeTemplate,
 			},
 		},
 	}

@@ -443,7 +443,7 @@ func TestParseKeyword_ExprEvaluatesToNonMap(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// An expression that evaluates to a string, not a map.
 			spec := &GraphSpec{Nodes: []Node{
-				{ID: "a", TemplateExpr: "${'not a map'}", ExprKeyword: tc.want, ref: tc.want},
+				{ID: "a", TemplateExpr: "${'not a map'}", ExprKeyword: tc.want, nodeType: tc.want},
 			}}
 			compiled, err := compileGraphSpec(spec, nil)
 			require.NoError(t, err, "compile should succeed; evaluation failure is runtime")
@@ -464,7 +464,7 @@ func TestParseKeyword_ExprReferencesUndefined(t *testing.T) {
 	// in the graph spec fails at compile time. The parser accepts the
 	// string; compileGraphSpec surfaces the error.
 	spec := &GraphSpec{Nodes: []Node{
-		{ID: "a", TemplateExpr: "${undeclaredThing.field}", ExprKeyword: NodeTypeTemplate, ref: NodeTypeTemplate},
+		{ID: "a", TemplateExpr: "${undeclaredThing.field}", ExprKeyword: NodeTypeTemplate, nodeType: NodeTypeTemplate},
 	}}
 	_, err := compileGraphSpec(spec, nil)
 	require.Error(t, err, "compile should reject expression referencing undeclared identifier")

@@ -110,7 +110,7 @@ func NodeTypeFromLabelValue(s string) (NodeType, bool) {
 // It is the unit of the dependency graph: each node has an identity, a body,
 // and computed dependency edges populated by BuildDAG.
 //
-// Exactly one of the five body fields (Template/Patch/Watch/Watch/Def) is
+// Exactly one of the five body fields (Template/Patch/Ref/Watch/Def) is
 // populated when the body is a static map. When a body-producing keyword
 // (template/patch/def) supplies a CEL expression string instead of a map,
 // TemplateExpr holds the expression and ExprKeyword records which
@@ -143,8 +143,8 @@ type Node struct {
 	TemplateExpr string
 	ExprKeyword  NodeType
 
-	// ref is the parse-time classification. Read via Type().
-	ref NodeType
+	// nodeType is the parse-time classification. Read via Type().
+	nodeType NodeType
 
 	// hasStatusSubresource is true when a Patch node's body declares a
 	// non-nil status field. Used by the teardown path to decide whether
@@ -179,7 +179,7 @@ type Node struct {
 
 // NodeType returns the parse-time classification of this node.
 func (n *Node) Type() NodeType {
-	return n.ref
+	return n.nodeType
 }
 
 // Identity returns the static identity view of this node's target — the
@@ -189,7 +189,7 @@ func (n *Node) Type() NodeType {
 // and for nodes whose body comes from TemplateExpr (the map isn't
 // available until evaluation).
 func (n *Node) Identity() map[string]any {
-	switch n.ref {
+	switch n.nodeType {
 	case NodeTypeTemplate:
 		return n.Template
 	case NodeTypePatch:
@@ -238,11 +238,11 @@ func isCELExpression(s string) bool {
 
 // Payload returns the evaluable body of this node — the map fed to CEL
 // evaluation, expression walking, and structural inspection. Returns nil
-// for Watch/Watch (identity-only, no body) and for nodes whose body
+// for Ref/Watch (identity-only, no body) and for nodes whose body
 // comes from TemplateExpr (callers that need both paths should handle
 // TemplateExpr separately — see eval.toMapNode).
 func (n *Node) Payload() map[string]any {
-	switch n.ref {
+	switch n.nodeType {
 	case NodeTypeTemplate:
 		return n.Template
 	case NodeTypePatch:
@@ -256,7 +256,7 @@ func (n *Node) Payload() map[string]any {
 
 // HasBody returns true if the node has an evaluable body — either a
 // static map or a CEL expression that yields a map at runtime. Returns
-// false for Watch/Watch (identity-only).
+// false for Ref/Watch (identity-only).
 func (n *Node) HasBody() bool {
 	return n.Payload() != nil || n.TemplateExpr != ""
 }
@@ -333,7 +333,7 @@ func (s *GraphSpec) AllExpressions() []string {
 	// Collect expressions from each node
 	for _, node := range s.Nodes { // Template expressions
 		var templateStrings []string
-		// Walk all body maps that may carry CEL expressions. Watch/Watch
+		// Walk all body maps that may carry CEL expressions. Ref/Watch
 		// bodies (identity-only) also contain ${...} in metadata.name,
 		// metadata.namespace, selector values — they must be compiled too.
 		for _, body := range []map[string]any{node.Template, node.Patch, node.Ref, node.Watch, node.Def} {
@@ -556,7 +556,7 @@ func parseNodeList(raw any) ([]Node, error) {
 func setNodeKeyword(node *Node, kw string, raw any) error {
 	switch kw {
 	case "template":
-		node.ref = NodeTypeTemplate
+		node.nodeType = NodeTypeTemplate
 		switch v := raw.(type) {
 		case map[string]any:
 			if err := validateTemplate(v); err != nil {
@@ -573,7 +573,7 @@ func setNodeKeyword(node *Node, kw string, raw any) error {
 			return fmt.Errorf("template: expected map or string (CEL expression), got %T", raw)
 		}
 	case "patch":
-		node.ref = NodeTypePatch
+		node.nodeType = NodeTypePatch
 		switch v := raw.(type) {
 		case map[string]any:
 			if err := validatePatch(v); err != nil {
@@ -601,7 +601,7 @@ func setNodeKeyword(node *Node, kw string, raw any) error {
 			return err
 		}
 		node.Ref = m
-		node.ref = NodeTypeRef
+		node.nodeType = NodeTypeRef
 	case "watch":
 		m, ok := raw.(map[string]any)
 		if !ok {
@@ -611,9 +611,9 @@ func setNodeKeyword(node *Node, kw string, raw any) error {
 			return err
 		}
 		node.Watch = m
-		node.ref = NodeTypeWatch
+		node.nodeType = NodeTypeWatch
 	case "def":
-		node.ref = NodeTypeDef
+		node.nodeType = NodeTypeDef
 		switch v := raw.(type) {
 		case map[string]any:
 			if err := validateDef(v); err != nil {

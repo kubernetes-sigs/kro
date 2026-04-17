@@ -252,8 +252,8 @@ func (e *evaluator) toMap(tmpl map[string]any) (map[string]any, error) {
 }
 
 // toMapNode evaluates a node's body — either a static map (Template/Patch/
-// Watch/Watch/Def) or a CEL expression string under template/patch/def
-// that yields the body map at runtime. For Watch/Watch (identity-only)
+// Ref/Watch/Def) or a CEL expression string under template/patch/def
+// that yields the body map at runtime. For Ref/Watch (identity-only)
 // the identity map is evaluated — its fields may still contain CEL
 // expressions.
 func (e *evaluator) toMapNode(node Node) (map[string]any, error) {
@@ -275,7 +275,7 @@ func (e *evaluator) toMapNode(node Node) (map[string]any, error) {
 		return result, nil
 	}
 	// Payload() returns the body map for Template/Patch/Def. For
-	// Watch/Watch (identity-only) Payload returns nil; identity
+	// Ref/Watch (identity-only) Payload returns nil; identity
 	// fields still need to be evaluated (name/namespace may be CEL).
 	body := node.Payload()
 	if body == nil {
@@ -543,7 +543,7 @@ func extractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 
 	// Process body + includeWhen + forEach expressions → depPaths.
 	// Walk every possible body map — Template/Patch/Def (Payload) plus
-	// Watch/Watch (Identity) — because identity fields on Watch and
+	// Ref/Watch (Identity) — because identity fields on Ref and
 	// Watch may still carry CEL expressions (e.g., a dynamic name
 	// from an upstream node).
 	var templateStrs []string

@@ -543,7 +543,7 @@ func TestFinalizesTargetMustBeResource(t *testing.T) {
 			target: Node{
 				ID:  "naming",
 				Def: map[string]any{"prefix": "app"},
-				ref: NodeTypeDef,
+				nodeType: NodeTypeDef,
 			},
 		},
 		{
@@ -555,7 +555,7 @@ func TestFinalizesTargetMustBeResource(t *testing.T) {
 					"kind":       "ConfigMap",
 					"metadata":   map[string]any{"name": "config"},
 				},
-				ref: NodeTypeRef,
+				nodeType: NodeTypeRef,
 			},
 		},
 		{
@@ -566,7 +566,7 @@ func TestFinalizesTargetMustBeResource(t *testing.T) {
 					"apiVersion": "v1",
 					"kind":       "Namespace",
 				},
-				ref: NodeTypeWatch,
+				nodeType: NodeTypeWatch,
 			},
 		},
 	}
@@ -577,7 +577,7 @@ func TestFinalizesTargetMustBeResource(t *testing.T) {
 				tc.target,
 				{ID: "snapshot", Finalizes: tc.target.ID, Template: map[string]any{
 					"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "snap"},
-				}, ref: NodeTypeTemplate},
+				}, nodeType: NodeTypeTemplate},
 			}
 			_, err := BuildDAG(nodes, nil)
 			require.Error(t, err)
@@ -1464,7 +1464,7 @@ func TestWatchKindEmptyReadyWhenPropagates_Regression(t *testing.T) {
 					"kind":       "ConfigMap",
 					"selector":   map[string]any{"app": "nope"},
 				},
-				ref: NodeTypeWatch,
+				nodeType: NodeTypeWatch,
 			},
 		},
 	}

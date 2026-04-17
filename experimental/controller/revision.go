@@ -603,11 +603,6 @@ func diffRevisionNodes(active *GraphSpec, superseded []*unstructured.Unstructure
 	return changed
 }
 
-// DiffRevisionNodesForTest exports diffRevisionNodes for the test package.
-func DiffRevisionNodesForTest(active *GraphSpec, superseded []*unstructured.Unstructured) map[string]bool {
-	return diffRevisionNodes(active, superseded)
-}
-
 //   - Instance state: keyed by namespace/revision-name (per-Graph mutable state)
 //   - Compiled graph: keyed by spec content hash (shared across identical specs)
 //

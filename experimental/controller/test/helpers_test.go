@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
@@ -199,7 +200,7 @@ func buildRGDCRD() *apiextensionsv1.CustomResourceDefinition {
 				Schema: &apiextensionsv1.CustomResourceValidation{
 					OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
 						Type:                   "object",
-						XPreserveUnknownFields: ptr(true),
+						XPreserveUnknownFields: ptr.To(true),
 					},
 				},
 				Subresources: &apiextensionsv1.CustomResourceSubresources{
@@ -398,8 +399,6 @@ func createNamespace(t *testing.T) string {
 	return ns.GetName()
 }
 
-func ptr[T any](v T) *T { return &v }
-
 func buildSimpleAppCRD() *apiextensionsv1.CustomResourceDefinition {
 	return &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: "simpleapps.test.kro.run"},
@@ -419,7 +418,7 @@ func buildSimpleAppCRD() *apiextensionsv1.CustomResourceDefinition {
 				Schema: &apiextensionsv1.CustomResourceValidation{
 					OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
 						Type:                   "object",
-						XPreserveUnknownFields: ptr(true),
+						XPreserveUnknownFields: ptr.To(true),
 					},
 				},
 				Subresources: &apiextensionsv1.CustomResourceSubresources{
@@ -455,7 +454,7 @@ func buildStrictStatusCRD() *apiextensionsv1.CustomResourceDefinition {
 						Properties: map[string]apiextensionsv1.JSONSchemaProps{
 							"spec": {
 								Type:                   "object",
-								XPreserveUnknownFields: ptr(true),
+								XPreserveUnknownFields: ptr.To(true),
 							},
 							"status": {
 								Type: "object",

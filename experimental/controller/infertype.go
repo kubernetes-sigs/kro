@@ -12,8 +12,6 @@
 package graphcontroller
 
 import (
-	"fmt"
-
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -248,30 +246,4 @@ func extractLiteralGVK(tmpl map[string]any) *runtimeschema.GroupVersionKind {
 	}
 	gvk := gv.WithKind(kind)
 	return &gvk
-}
-
-// nodeTypeInfo returns a human-readable description of a node's type source.
-// Used for logging and status reporting.
-func nodeTypeInfo(ts *typeSource, nodeID string) string {
-	if _, ok := ts.resourceSchemas[nodeID]; ok {
-		return "schema"
-	}
-	if _, ok := ts.definitionTypes[nodeID]; ok {
-		return "inferred"
-	}
-	return "dyn"
-}
-
-// countTypedNodes returns the number of nodes with resolved types (not dyn).
-func countTypedNodes(ts *typeSource) (schemas, definitions, untyped int) {
-	return len(ts.resourceSchemas), len(ts.definitionTypes), len(ts.untypedIDs)
-}
-
-// ---------------------------------------------------------------------------
-// Formatting
-// ---------------------------------------------------------------------------
-
-func formatTypeSource(ts *typeSource) string {
-	schemas, defs, untyped := countTypedNodes(ts)
-	return fmt.Sprintf("schemas=%d definitions=%d untyped=%d", schemas, defs, untyped)
 }

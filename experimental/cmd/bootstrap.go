@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubernetes-sigs/kro/experimental/deploy"
@@ -52,7 +53,7 @@ func bootstrap(ctx context.Context, cfg *rest.Config) error {
 		log.Info("applying CRD", "name", crd.Name)
 		if _, err := cs.ApiextensionsV1().CustomResourceDefinitions().Patch(
 			ctx, crd.Name, types.ApplyPatchType, data,
-			metav1.PatchOptions{FieldManager: "graph-controller", Force: ptr(true)},
+			metav1.PatchOptions{FieldManager: "graph-controller", Force: ptr.To(true)},
 		); err != nil {
 			return fmt.Errorf("applying CRD %s: %w", crd.Name, err)
 		}
@@ -84,5 +85,3 @@ func waitForEstablished(ctx context.Context, cs apiextensionsclient.Interface, n
 		return false, nil
 	})
 }
-
-func ptr[T any](v T) *T { return &v }

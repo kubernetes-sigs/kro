@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -80,7 +81,7 @@ func main() {
 		HealthProbeBindAddress: healthProbeBindAddress,
 		Metrics:                server.Options{BindAddress: metricsBindAddress},
 		Controller: config.Controller{
-			SkipNameValidation: ptr(true),
+			SkipNameValidation: ptr.To(true),
 		},
 	})
 	if err != nil {

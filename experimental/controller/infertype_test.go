@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
@@ -16,17 +15,17 @@ import (
 // ownNode builds an Own-classified Node from a template map. Test-only helper;
 // production code sets the classification via parseNodeList.
 func ownNode(id string, tmpl map[string]any) Node {
-	return Node{ID: id, Template: tmpl, ref: NodeTypeTemplate}
+	return Node{ID: id, Template: tmpl, nodeType: NodeTypeTemplate}
 }
 
 // defNode builds a Definition-classified Node from a map of values.
 func defNode(id string, body map[string]any) Node {
-	return Node{ID: id, Def: body, ref: NodeTypeDef}
+	return Node{ID: id, Def: body, nodeType: NodeTypeDef}
 }
 
 // watchNode builds a Watch-classified Node (collection) from a body.
 func watchNode(id string, body map[string]any) Node {
-	return Node{ID: id, Watch: body, ref: NodeTypeWatch}
+	return Node{ID: id, Watch: body, nodeType: NodeTypeWatch}
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +165,7 @@ func TestInferObjectType(t *testing.T) {
 func TestResolveNodeTypes(t *testing.T) {
 	t.Run("definition nodes are typed", func(t *testing.T) {
 		nodes := []Node{
-			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, ref: NodeTypeDef},
+			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, nodeType: NodeTypeDef},
 		}
 		ts := resolveNodeTypes(nodes, nil)
 
@@ -181,7 +180,7 @@ func TestResolveNodeTypes(t *testing.T) {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "test"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 		}
 		ts := resolveNodeTypes(nodes, nil)
 
@@ -192,10 +191,10 @@ func TestResolveNodeTypes(t *testing.T) {
 	t.Run("forEach iterator variables are untyped", func(t *testing.T) {
 		nodes := []Node{
 			{
-				ID:      "items",
-				ForEach: map[string]string{"item": "${spec.items}"},
-				Def:     map[string]any{"name": "${item}"},
-				ref:     NodeTypeDef},
+				ID:       "items",
+				ForEach:  map[string]string{"item": "${spec.items}"},
+				Def:      map[string]any{"name": "${item}"},
+				nodeType: NodeTypeDef},
 		}
 		ts := resolveNodeTypes(nodes, nil)
 
@@ -206,12 +205,12 @@ func TestResolveNodeTypes(t *testing.T) {
 
 	t.Run("mixed definitions and resources", func(t *testing.T) {
 		nodes := []Node{
-			{ID: "naming", Def: map[string]any{"prefix": "app"}, ref: NodeTypeDef},
+			{ID: "naming", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
 			{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.prefix}"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 		}
 		ts := resolveNodeTypes(nodes, nil)
 
@@ -228,12 +227,12 @@ func TestResolveNodeTypes(t *testing.T) {
 func TestDefinitionFieldValidation(t *testing.T) {
 	t.Run("valid field access compiles", func(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, ref: NodeTypeDef},
+			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, nodeType: NodeTypeDef},
 			{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.prefix + '-deploy'}"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -241,12 +240,12 @@ func TestDefinitionFieldValidation(t *testing.T) {
 
 	t.Run("wrong field on definition fails compilation", func(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, ref: NodeTypeDef},
+			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, nodeType: NodeTypeDef},
 			{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.typo}"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.Error(t, err)
@@ -260,12 +259,12 @@ func TestDefinitionFieldValidation(t *testing.T) {
 					"env":    "prod",
 					"region": "us-west-2",
 				},
-			}, ref: NodeTypeDef},
+			}, nodeType: NodeTypeDef},
 			{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${cfg.metadata.env + '-deploy'}"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -277,12 +276,12 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"metadata": map[string]any{
 					"env": "prod",
 				},
-			}, ref: NodeTypeDef},
+			}, nodeType: NodeTypeDef},
 			{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${cfg.metadata.typo}"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.Error(t, err)
@@ -297,15 +296,15 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 			{ID: "derived", Def: map[string]any{
 				"data": "${upstream.data}",
-			}, ref: NodeTypeDef},
+			}, nodeType: NodeTypeDef},
 			{ID: "consumer", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "${derived.data.someKey}"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -314,13 +313,13 @@ func TestDefinitionFieldValidation(t *testing.T) {
 	t.Run("cross-definition validation", func(t *testing.T) {
 		// Definition A → Definition B → resource node.
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "a", Def: map[string]any{"prefix": "app"}, ref: NodeTypeDef},
-			{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}, ref: NodeTypeDef},
+			{ID: "a", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
+			{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}, nodeType: NodeTypeDef},
 			{ID: "svc", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${b.full}"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -328,8 +327,8 @@ func TestDefinitionFieldValidation(t *testing.T) {
 
 	t.Run("cross-definition wrong field fails", func(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "a", Def: map[string]any{"prefix": "app"}, ref: NodeTypeDef},
-			{ID: "b", Def: map[string]any{"full": "${a.typo}"}, ref: NodeTypeDef},
+			{ID: "a", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
+			{ID: "b", Def: map[string]any{"full": "${a.typo}"}, nodeType: NodeTypeDef},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.Error(t, err)
@@ -342,7 +341,7 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				ID:        "cfg",
 				Def:       map[string]any{"count": "3"},
 				ReadyWhen: []string{"${cfg.count == '3'}"},
-				ref:       NodeTypeDef},
+				nodeType:  NodeTypeDef},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -354,12 +353,12 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"data":       map[string]any{"items": "a,b,c"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 			{
-				ID:      "items",
-				ForEach: map[string]string{"item": "${upstream.data.items}"},
-				Def:     map[string]any{"name": "${item}", "port": int64(80)},
-				ref:     NodeTypeDef},
+				ID:       "items",
+				ForEach:  map[string]string{"item": "${upstream.data.items}"},
+				Def:      map[string]any{"name": "${item}", "port": int64(80)},
+				nodeType: NodeTypeDef},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -451,10 +450,10 @@ func TestPathBasedNamingPreventsCollisions(t *testing.T) {
 	ts := resolveNodeTypes([]Node{
 		{ID: "alpha", Def: map[string]any{
 			"nested": map[string]any{"x": "hello"},
-		}, ref: NodeTypeDef},
+		}, nodeType: NodeTypeDef},
 		{ID: "beta", Def: map[string]any{
 			"nested": map[string]any{"y": int64(42)},
-		}, ref: NodeTypeDef},
+		}, nodeType: NodeTypeDef},
 	}, nil)
 
 	alphaDT := ts.definitionTypes["alpha"]
@@ -492,10 +491,10 @@ func TestDefinitionTypingRuntimeCompat(t *testing.T) {
 		{ID: "cfg", Def: map[string]any{
 			"region": "us-west-2",
 			"count":  int64(3),
-		}, ref: NodeTypeDef},
+		}, nodeType: NodeTypeDef},
 		{ID: "derived", Def: map[string]any{
 			"name": "${cfg.region + '-app'}",
-		}, ref: NodeTypeDef},
+		}, nodeType: NodeTypeDef},
 	}}
 
 	compiled, err := compileGraphSpec(spec, nil)
@@ -519,23 +518,6 @@ func TestDefinitionTypingRuntimeCompat(t *testing.T) {
 	derivedResult, ok := eval.scope["derived"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "us-west-2-app", derivedResult["name"])
-}
-
-// ---------------------------------------------------------------------------
-// countTypedNodes / formatTypeSource tests
-// ---------------------------------------------------------------------------
-
-func TestCountTypedNodes(t *testing.T) {
-	ts := &typeSource{
-		resourceSchemas:    map[string]*spec.Schema{"a": nil, "b": nil},
-		definitionTypes:    map[string]*apiservercel.DeclType{"c": nil},
-		forEachDefinitions: map[string]bool{},
-		untypedIDs:         []string{"d", "e", "f"},
-	}
-	schemas, defs, untyped := countTypedNodes(ts)
-	assert.Equal(t, 2, schemas)
-	assert.Equal(t, 1, defs)
-	assert.Equal(t, 3, untyped)
 }
 
 // ---------------------------------------------------------------------------
@@ -592,14 +574,13 @@ func TestSchemaResolutionIntegration(t *testing.T) {
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "test"},
 				"data":       map[string]any{"key": "value"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 		}
 		ts := resolveNodeTypes(nodes, resolver)
 
 		// The ConfigMap node should be resolved via schema.
 		assert.Contains(t, ts.resourceSchemas, "cm")
 		assert.Empty(t, ts.untypedIDs)
-		assert.Equal(t, "schema", nodeTypeInfo(ts, "cm"))
 	})
 
 	t.Run("mixed schema and definition types compile together", func(t *testing.T) {
@@ -609,16 +590,16 @@ func TestSchemaResolutionIntegration(t *testing.T) {
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "test"},
 				"data":       map[string]any{"key": "value"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 			{ID: "naming", Def: map[string]any{
 				"prefix": "myapp",
-			}, ref: NodeTypeDef},
+			}, nodeType: NodeTypeDef},
 			{ID: "consumer", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "${naming.prefix + '-cfg'}"},
 				"data":       map[string]any{"ref": "${cm.data}"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 		}}
 		typeInfo := resolveNodeTypes(graphSpec.Nodes, resolver)
 		_, err := compileGraphSpec(graphSpec, typeInfo)
@@ -631,14 +612,13 @@ func TestSchemaResolutionIntegration(t *testing.T) {
 				"apiVersion": "custom.example.com/v1",
 				"kind":       "Widget",
 				"metadata":   map[string]any{"name": "test"},
-			}, ref: NodeTypeTemplate},
+			}, nodeType: NodeTypeTemplate},
 		}
 		ts := resolveNodeTypes(nodes, resolver)
 
 		// Widget is not in the stub resolver — should fall back to dyn.
 		assert.Empty(t, ts.resourceSchemas)
 		assert.Contains(t, ts.untypedIDs, "custom")
-		assert.Equal(t, "dyn", nodeTypeInfo(ts, "custom"))
 
 		// The unresolved GVK should be tracked for CRD watch.
 		require.Len(t, ts.unresolvedGVKs, 1)
@@ -799,12 +779,12 @@ func TestRecompilationOnSchemaChange(t *testing.T) {
 			"apiVersion": "example.com/v1",
 			"kind":       "Widget",
 			"metadata":   map[string]any{"name": "test"},
-		}, ref: NodeTypeTemplate},
+		}, nodeType: NodeTypeTemplate},
 		// Consumer is a definition — no GVK to resolve, so the only
 		// unresolved GVK is Widget.
 		{ID: "consumer", Def: map[string]any{
 			"name": "${widget.status.typo}",
-		}, ref: NodeTypeDef},
+		}, nodeType: NodeTypeDef},
 	}}
 
 	// Phase 1: compile with empty resolver — Widget falls back to dyn.

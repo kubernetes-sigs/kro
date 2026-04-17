@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 )
 
 // Apply installs the stdlib resources with retry. Some resources
@@ -37,7 +38,7 @@ func Apply(ctx context.Context, log logr.Logger, cfg *rest.Config) error {
 		"metadata":   map[string]any{"name": "kro-system"},
 	})
 	if _, err := dc.Resource(nsGVR).Patch(ctx, "kro-system", types.ApplyPatchType, nsData,
-		metav1.PatchOptions{FieldManager: "graph-controller", Force: ptr(true)}); err != nil {
+		metav1.PatchOptions{FieldManager: "graph-controller", Force: ptr.To(true)}); err != nil {
 		return fmt.Errorf("ensuring kro-system namespace: %w", err)
 	}
 
@@ -98,7 +99,7 @@ func apply(ctx context.Context, dc dynamic.Interface, r resource) error {
 		rc = dc.Resource(gvr).Namespace(ns)
 	}
 	_, err := rc.Patch(ctx, r.gvr.GetName(), types.ApplyPatchType, r.data,
-		metav1.PatchOptions{FieldManager: "graph-controller", Force: ptr(true)})
+		metav1.PatchOptions{FieldManager: "graph-controller", Force: ptr.To(true)})
 	return err
 }
 
@@ -154,5 +155,3 @@ func plural(kind string) string {
 		panic("stdlib: unknown kind " + kind)
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

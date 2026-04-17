@@ -15,14 +15,18 @@
 package instance
 
 import (
+	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -323,6 +327,58 @@ func TestSetUnmanaged(t *testing.T) {
 			assert.Equal(t, tt.wantManaged, metadata.HasInstanceFinalizer(patched))
 		})
 	}
+}
+
+func TestSetUnmanagedRetriesOnConflict(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	instance.SetResourceVersion("1")
+	metadata.SetInstanceFinalizer(instance)
+	instance.SetFinalizers(append(instance.GetFinalizers(), "other.io/finalizer"))
+
+	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
+
+	var attempts atomic.Int32
+	raw.PrependReactor("get", "webapps", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+		attempt := attempts.Add(1)
+		obj := instance.DeepCopy()
+		obj.SetResourceVersion(string(rune('0' + attempt)))
+		return true, obj, nil
+	})
+
+	raw.PrependReactor("patch", "webapps", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+		patchAction := action.(k8stesting.PatchAction)
+		var patchPayload map[string]interface{}
+		err := json.Unmarshal(patchAction.GetPatch(), &patchPayload)
+		require.NoError(t, err)
+
+		patchMeta, ok := patchPayload["metadata"].(map[string]interface{})
+		require.True(t, ok, "patch must include metadata")
+		_, hasResourceVersion := patchMeta["resourceVersion"]
+		require.True(t, hasResourceVersion, "patch must include resourceVersion")
+
+		finalizers, ok := patchMeta["finalizers"].([]interface{})
+		require.True(t, ok, "patch must include finalizers array")
+		require.Equal(t, []interface{}{"other.io/finalizer"}, finalizers, "only kro finalizer should be removed")
+
+		attempt := attempts.Load()
+		if attempt == 1 {
+			return true, nil, apierrors.NewConflict(
+				schema.GroupResource{Group: "kro.run", Resource: "webapps"},
+				"demo",
+				errors.New("conflict"),
+			)
+		}
+		result := instance.DeepCopy()
+		result.SetFinalizers([]string{"other.io/finalizer"})
+		result.SetResourceVersion("2")
+		return true, result, nil
+	})
+
+	patched, err := controller.setUnmanaged(rcx, rcx.Instance)
+	require.NoError(t, err)
+	assert.False(t, metadata.HasInstanceFinalizer(patched))
+	assert.Equal(t, []string{"other.io/finalizer"}, patched.GetFinalizers())
+	assert.GreaterOrEqual(t, attempts.Load(), int32(2))
 }
 
 func TestRemoveFinalizerMarksInstanceNotManagedOnError(t *testing.T) {

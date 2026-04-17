@@ -1627,3 +1627,70 @@ func TestForEachNamespaceCollision(t *testing.T) {
 	}
 	t.Log("forEach across cluster-wide watch with same-named items across namespaces expanded correctly")
 }
+
+// TestForEach_RegressionMultiVariableRejected proves that a Graph declaring
+// multiple forEach variables is rejected at compile time. The runtime
+// iterates node.ForEach and overwrites scope per variable — only the last
+// variable's results would survive. Reject at the boundary.
+func TestForEach_RegressionMultiVariableRejected(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	tests := []struct {
+		name    string
+		forEach any
+	}{
+		{
+			name: "flat map with two variables",
+			forEach: map[string]any{
+				"ns":   "${namespaces}",
+				"tier": "${tiers}",
+			},
+		},
+		{
+			name: "array format with two dimensions",
+			forEach: []any{
+				map[string]any{"ns": "${namespaces}"},
+				map[string]any{"tier": "${tiers}"},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			graphName := "test-foreach-multi-" + tc.name[:4]
+			graph := &unstructured.Unstructured{
+				Object: map[string]any{
+					"apiVersion": "experimental.kro.run/v1alpha1",
+					"kind":       "Graph",
+					"metadata": map[string]any{
+						"name":      graphName,
+						"namespace": ns,
+					},
+					"spec": map[string]any{
+						"nodes": []any{
+							map[string]any{
+								"id":      "items",
+								"forEach": tc.forEach,
+								"template": map[string]any{
+									"apiVersion": "v1",
+									"kind":       "ConfigMap",
+									"metadata":   map[string]any{"name": "${ns}-${tier}"},
+								},
+							},
+						},
+					},
+				},
+			}
+			require.NoError(t, k8sClient.Create(ctx, graph))
+
+			graphKey := types.NamespacedName{Name: graphName, Namespace: ns}
+			require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient, graphKey, "False"))
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+			assert.Equal(t, "DeclarationError", graphCompiledReason(g),
+				"multi-variable forEach should be a DeclarationError")
+			t.Logf("multi-variable forEach (%s) correctly rejected", tc.name)
+		})
+	}
+}

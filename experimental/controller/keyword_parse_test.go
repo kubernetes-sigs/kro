@@ -507,3 +507,26 @@ func TestParseKeyword_MutualExclusionAllPairs(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// forEach validation
+// ---------------------------------------------------------------------------
+
+// TestForEachSingleVariableAccepted confirms single-variable forEach parses.
+func TestForEachSingleVariableAccepted(t *testing.T) {
+	raw := []any{map[string]any{
+		"id": "items",
+		"template": map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]any{"name": "${ns.metadata.name}"},
+		},
+		"forEach": map[string]any{
+			"ns": "${namespaces}",
+		},
+	}}
+	nodes, err := parseNodeList(raw)
+	require.NoError(t, err)
+	require.Len(t, nodes, 1)
+	assert.Len(t, nodes[0].ForEach, 1)
+}

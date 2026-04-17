@@ -1730,3 +1730,64 @@ func TestPickEffectiveGeneration_FallbackWithoutRevision(t *testing.T) {
 	assert.Equal(t, int64(5), got,
 		"without an active revision, fall back to the graph's generation rather than stamping 0")
 }
+
+// ---------------------------------------------------------------------------
+// forEach scope type safety
+// ---------------------------------------------------------------------------
+
+// TestForEach_RegressionNonSliceScopeReadyWhenNoPanic proves that if a forEach
+// node's scope entry is not []any, the readyWhen stamping path returns an
+// error instead of panicking on a type assertion.
+//
+// Regression: scopeVal.([]any) at foreach.go:312 is an unchecked type
+// assertion that panics when scope contains a non-slice value.
+func TestForEach_RegressionNonSliceScopeReadyWhenNoPanic(t *testing.T) {
+	// forEachStampReadyWhen is the function under test (extracted helper).
+	// Inject a non-slice value into scope for the forEach node.
+	scope := map[string]any{
+		"items": "not-a-slice",
+	}
+	err := forEachStampReadyWhen(scope, "items", []string{"true"}, nil)
+	assert.Error(t, err, "non-slice scope should produce an error")
+	assert.Contains(t, err.Error(), "expected []any")
+}
+
+// TestForEach_RegressionNonSliceScopeNoReadyWhenNoPanic proves the same for
+// the no-readyWhen path (forEach nodes without readyWhen stamp all items
+// __ready=true).
+func TestForEach_RegressionNonSliceScopeNoReadyWhenNoPanic(t *testing.T) {
+	scope := map[string]any{
+		"items": 42, // should be []any
+	}
+	err := forEachStampReadyWhen(scope, "items", nil, nil)
+	assert.Error(t, err, "non-slice scope should produce an error")
+}
+
+// TestForEach_RegressionNonSliceScopePropagateWhenNoPanic proves the same
+// for the propagateWhen path.
+func TestForEach_RegressionNonSliceScopePropagateWhenNoPanic(t *testing.T) {
+	scope := map[string]any{
+		"items": map[string]any{"wrong": "type"},
+	}
+	_, err := forEachStampPropagateWhen(scope, "items", []string{"true"}, nil)
+	assert.Error(t, err, "non-slice scope should produce an error")
+	assert.Contains(t, err.Error(), "expected []any")
+}
+
+// TestForEach_SliceScopeReadyWhenWorks confirms the happy path still works.
+func TestForEach_SliceScopeReadyWhenWorks(t *testing.T) {
+	scope := map[string]any{
+		"items": []any{
+			map[string]any{"metadata": map[string]any{"name": "a"}},
+			map[string]any{"metadata": map[string]any{"name": "b"}},
+		},
+	}
+	// No readyWhen expressions — all items get __ready=true.
+	err := forEachStampReadyWhen(scope, "items", nil, nil)
+	require.NoError(t, err)
+	items := scope["items"].([]any)
+	for _, item := range items {
+		m := item.(map[string]any)
+		assert.Equal(t, true, m["__ready"])
+	}
+}

@@ -493,6 +493,9 @@ func parseNodeList(raw any) ([]Node, error) {
 		if node.ForEach != nil && len(node.ForEach) == 0 {
 			return nil, fmt.Errorf("node[%d] %q: forEach must have at least one dimension", i, id)
 		}
+		if len(node.ForEach) > 1 {
+			return nil, fmt.Errorf("node[%d] %q: forEach must have exactly one variable (got %d); multi-variable cross-product expansion is not supported", i, id, len(node.ForEach))
+		}
 		if node.ForEach != nil {
 			// Validate: forEach iterator variable names must not collide
 			// with any node ID. A collision would shadow the node in scope.

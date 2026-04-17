@@ -302,76 +302,104 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		eval.scope[node.ID] = allApplied
 	}
 
-	// Check readyWhen per-item: all items must pass for the collection to be Ready.
-	// Per 001-graph.md: "For forEach nodes, readyWhen is evaluated per-child —
-	// each child checks readyWhen independently using the standard per-node mechanism."
+	// Check readyWhen per-item and stamp __ready on each item.
+	if err := forEachStampReadyWhen(eval.scope, node.ID, node.ReadyWhen, eval); err != nil {
+		return keys, err
+	}
 	if len(node.ReadyWhen) > 0 {
-		scopeVal := eval.scope[node.ID]
-		if scopeVal != nil {
-			anyNotReady := false
-			for _, applied := range scopeVal.([]any) {
-				saved := eval.scope[node.ID]
-				eval.scope[node.ID] = applied
-				err := eval.checkReadiness(node.ReadyWhen, node.ID)
-				eval.scope[node.ID] = saved // restore before branching
-				if err != nil {
-					if m, ok := applied.(map[string]any); ok {
-						m["__ready"] = false
-					}
-					anyNotReady = true
-					// Don't return immediately — mark all items' readiness first
-					// so .ready() on the parent reflects accurate per-item state.
-					continue
-				}
-				if m, ok := applied.(map[string]any); ok {
-					m["__ready"] = true
-				}
-			}
-			if anyNotReady {
-				return keys, ErrWaitingForReadiness
-			}
-			logger.V(1).Info("all forEach items ready", "node", node.ID)
+		logger.V(1).Info("all forEach items ready", "node", node.ID)
+	}
+
+	// Check propagateWhen per-item: all items must pass for the parent's
+	// propagation to be satisfied.
+	if len(node.PropagateWhen) > 0 {
+		allPass, err := forEachStampPropagateWhen(eval.scope, node.ID, node.PropagateWhen, eval)
+		if err != nil {
+			return keys, err
 		}
-	} else if scopeVal := eval.scope[node.ID]; scopeVal != nil {
-		// No readyWhen — all items are ready on apply
-		for _, applied := range scopeVal.([]any) {
+		eval.forEachAllItemsPropagateReady = &allPass
+		logger.V(1).Info("forEach propagateWhen per-item result",
+			"node", node.ID, "allItemsPropagateReady", allPass)
+	}
+
+	return keys, nil
+}
+
+// forEachStampReadyWhen evaluates readyWhen per-item and stamps __ready on
+// each item in scope[nodeID]. When readyWhen is empty, all items are stamped
+// __ready=true (applied = ready). Returns ErrWaitingForReadiness if any item
+// fails its readyWhen check.
+//
+// eval may be nil when readyWhen is empty (no expressions to evaluate).
+func forEachStampReadyWhen(scope map[string]any, nodeID string, readyWhen []string, eval *evaluator) error {
+	scopeVal := scope[nodeID]
+	if scopeVal == nil {
+		return nil
+	}
+	items, ok := scopeVal.([]any)
+	if !ok {
+		return fmt.Errorf("forEach %s: scope value is %T, expected []any", nodeID, scopeVal)
+	}
+
+	if len(readyWhen) > 0 {
+		anyNotReady := false
+		for _, applied := range items {
+			saved := scope[nodeID]
+			scope[nodeID] = applied
+			err := eval.checkReadiness(readyWhen, nodeID)
+			scope[nodeID] = saved
+			if err != nil {
+				if m, ok := applied.(map[string]any); ok {
+					m["__ready"] = false
+				}
+				anyNotReady = true
+				continue
+			}
+			if m, ok := applied.(map[string]any); ok {
+				m["__ready"] = true
+			}
+		}
+		if anyNotReady {
+			return ErrWaitingForReadiness
+		}
+	} else {
+		// No readyWhen — all items are ready on apply.
+		for _, applied := range items {
 			if m, ok := applied.(map[string]any); ok {
 				m["__ready"] = true
 			}
 		}
 	}
+	return nil
+}
 
-	// Check propagateWhen per-item: all items must pass for the parent's
-	// propagation to be satisfied. Per design: "The parent's propagateWhen
-	// is satisfied when all children's propagateWhen are satisfied."
-	//
-	// This is the forEach-specific automatic rollup. The coordinator evaluates
-	// propagateWhen against the aggregate scope — but for forEach nodes, the
-	// aggregate is an array, so per-field expressions like ${items.data.x}
-	// don't work against the array. Per-item evaluation resolves this:
-	// scope[nodeID] is temporarily set to each item, and the expression is
-	// checked per-item. All items must pass.
-	if len(node.PropagateWhen) > 0 {
-		scopeVal := eval.scope[node.ID]
-		if scopeVal != nil {
-			allPass := true
-			for _, applied := range scopeVal.([]any) {
-				saved := eval.scope[node.ID]
-				eval.scope[node.ID] = applied
-				ok := eval.checkPropagateWhen(node.PropagateWhen, node.ID)
-				eval.scope[node.ID] = saved
-				if !ok {
-					allPass = false
-					break // one failure is enough — parent won't propagate
-				}
-			}
-			eval.forEachAllItemsPropagateReady = &allPass
-			logger.V(1).Info("forEach propagateWhen per-item result",
-				"node", node.ID, "allItemsPropagateReady", allPass)
+// forEachStampPropagateWhen evaluates propagateWhen per-item and returns
+// whether all items passed. Per design: "The parent's propagateWhen is
+// satisfied when all children's propagateWhen are satisfied."
+//
+// eval may be nil only if propagateWhen is empty (caller should not call
+// this function with empty propagateWhen).
+func forEachStampPropagateWhen(scope map[string]any, nodeID string, propagateWhen []string, eval *evaluator) (bool, error) {
+	scopeVal := scope[nodeID]
+	if scopeVal == nil {
+		return true, nil
+	}
+	items, ok := scopeVal.([]any)
+	if !ok {
+		return false, fmt.Errorf("forEach %s: scope value is %T, expected []any", nodeID, scopeVal)
+	}
+	allPass := true
+	for _, applied := range items {
+		saved := scope[nodeID]
+		scope[nodeID] = applied
+		ok := eval.checkPropagateWhen(propagateWhen, nodeID)
+		scope[nodeID] = saved
+		if !ok {
+			allPass = false
+			break
 		}
 	}
-
-	return keys, nil
+	return allPass, nil
 }
 
 // forEachItemIdentity extracts a stable identity from a forEach collection item.

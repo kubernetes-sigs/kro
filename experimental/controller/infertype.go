@@ -28,6 +28,10 @@ import (
 type typeSource struct {
 	// resourceSchemas maps node ID → OpenAPI schema for nodes with resolved GVKs.
 	resourceSchemas map[string]*spec.Schema
+	// resourceCollections marks resolved-schema node IDs whose CEL variable
+	// should be typed as list(element) rather than the element itself
+	// (Watch-class nodes expose a collection of observed objects).
+	resourceCollections map[string]bool
 	// definitionTypes maps node ID → inferred DeclType for definition nodes.
 	definitionTypes map[string]*apiservercel.DeclType
 	// forEachDefinitions tracks definition nodes that have forEach (scope is list, not object).
@@ -48,9 +52,10 @@ type typeSource struct {
 // The resolver may be nil — all resource nodes fall back to dyn.
 func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typeSource {
 	ts := &typeSource{
-		resourceSchemas:    make(map[string]*spec.Schema),
-		definitionTypes:    make(map[string]*apiservercel.DeclType),
-		forEachDefinitions: make(map[string]bool),
+		resourceSchemas:     make(map[string]*spec.Schema),
+		resourceCollections: make(map[string]bool),
+		definitionTypes:     make(map[string]*apiservercel.DeclType),
+		forEachDefinitions:  make(map[string]bool),
 	}
 
 	// Track all identifiers that need CEL declarations.
@@ -72,23 +77,35 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 
 		case schemaResolver != nil && ref != NodeTypeDef:
 			// Phase 1: resolve schema for resource nodes with literal GVK.
-			gvk := extractLiteralGVK(node.Identity())
-			if gvk != nil {
-				s, err := schemaResolver.ResolveSchema(*gvk)
-				if err == nil && s != nil {
-					ts.resourceSchemas[node.ID] = s
-					if ref == NodeTypeWatch {
-						ts.listIDs = append(ts.listIDs, node.ID)
+			//
+			// forEach nodes skip schema resolution: the same variable
+			// appears in two runtime contexts with incompatible shapes.
+			// Inside per-item readyWhen, the coordinator swaps
+			// scope[nodeID] to a single item map; sibling expressions
+			// see the collection. A typed declaration breaks one of
+			// the two access patterns. dyn accepts both.
+			resolved := false
+			if node.ForEach == nil {
+				gvk := extractLiteralGVK(node.Identity())
+				if gvk != nil && !isUpstreamKroGroup(gvk.Group) {
+					s, err := schemaResolver.ResolveSchema(*gvk)
+					if err == nil && s != nil {
+						ts.resourceSchemas[node.ID] = s
+						if ref == NodeTypeWatch {
+							ts.resourceCollections[node.ID] = true
+						}
+						resolved = true
+					} else {
+						ts.unresolvedGVKs = append(ts.unresolvedGVKs, *gvk)
 					}
-					continue
 				}
-				// Resolution failed — track as unresolved, fall through to dyn.
-				ts.unresolvedGVKs = append(ts.unresolvedGVKs, *gvk)
 			}
-			if ref == NodeTypeWatch {
-				ts.listIDs = append(ts.listIDs, node.ID)
-			} else {
-				ts.untypedIDs = append(ts.untypedIDs, node.ID)
+			if !resolved {
+				if ref == NodeTypeWatch {
+					ts.listIDs = append(ts.listIDs, node.ID)
+				} else {
+					ts.untypedIDs = append(ts.untypedIDs, node.ID)
+				}
 			}
 
 		default:
@@ -124,10 +141,22 @@ func buildTypedEnvOptions(ts *typeSource) []cel.EnvOption {
 		if declType == nil {
 			continue
 		}
+		// Post-process: loosen list fields whose items have
+		// x-kubernetes-preserve-unknown-fields in the raw OpenAPI schema.
+		// These lists contain partially-opaque items that can't be used
+		// in typed list concat. We check the SCHEMA, not the DeclType,
+		// because SchemaDeclTypeWithMetadata may elide metadata for
+		// schemas without an explicit type declaration (e.g. simpleSchema
+		// `any` produces preserve-unknown-fields with no `type: object`).
+		declType = loosenOpaqueFields(declType, s)
 		typeName := krocel.TypeNamePrefix + id
 		declType = declType.MaybeAssignTypeName(typeName)
 		allDeclTypes = append(allDeclTypes, declType)
-		declarations = append(declarations, cel.Variable(id, declType.CelType()))
+		celType := declType.CelType()
+		if ts.resourceCollections[id] {
+			celType = cel.ListType(celType)
+		}
+		declarations = append(declarations, cel.Variable(id, celType))
 	}
 
 	// Definition types → DeclTypes from structural inference.
@@ -154,6 +183,152 @@ func buildTypedEnvOptions(ts *typeSource) []cel.EnvOption {
 	}
 
 	return declarations
+}
+
+// loosenOpaqueFields walks a DeclType tree and replaces list-typed
+// fields whose items have x-kubernetes-preserve-unknown-fields in the
+// raw OpenAPI schema with DynType. This enables typed list operations
+// (concat, map, filter) to work when the list items are partially-opaque.
+//
+// The standard CEL list concat overload requires list(A) + list(A) with
+// the SAME type parameter A. When one operand is a map literal
+// (list(map(string,dyn))) and the other is a typed list of named structs
+// (list(Node)), the type checker cannot unify A. Declaring such lists as
+// dyn allows concat to work via CEL's permissive dyn handling.
+//
+// This is targeted: only list fields whose items carry preserve-unknown
+// in the raw schema get loosened. Scalar and object fields retain their
+// declared types — field-name checking on e.g. k.spec.kind still catches
+// typos.
+func loosenOpaqueFields(dt *apiservercel.DeclType, schema *spec.Schema) *apiservercel.DeclType {
+	if dt == nil || !dt.IsObject() || schema == nil {
+		return dt
+	}
+	newFields := make(map[string]*apiservercel.DeclField, len(dt.Fields))
+	changed := false
+	for name, field := range dt.Fields {
+		ft := field.Type
+		propSchema := schemaProperty(schema, name)
+		switch {
+		case ft.IsList() && propSchema != nil && schemaItemsHavePreserveUnknown(propSchema):
+			// List of partially-opaque items → dyn.
+			newFields[name] = apiservercel.NewDeclField(
+				name, apiservercel.DynType, field.Required, nil, nil,
+			)
+			changed = true
+		case ft.IsObject() && propSchema != nil && schemaIsSelfPreserveUnknown(propSchema):
+			// Object field declared with x-kubernetes-preserve-unknown-fields.
+			// These fields are intentionally opaque — their content shape
+			// is not statically known. Declaring them as dyn allows
+			// ternary expressions, map operations, and .merge() to work
+			// without type mismatches against map literals.
+			newFields[name] = apiservercel.NewDeclField(
+				name, apiservercel.DynType, field.Required, nil, nil,
+			)
+			changed = true
+		case ft.IsObject() && propSchema != nil:
+			loosened := loosenOpaqueFields(ft, propSchema)
+			if loosened != ft {
+				newFields[name] = apiservercel.NewDeclField(
+					name, loosened, field.Required, nil, nil,
+				)
+				changed = true
+			} else {
+				newFields[name] = field
+			}
+		default:
+			newFields[name] = field
+		}
+	}
+	if !changed {
+		return dt
+	}
+	result := apiservercel.NewObjectType(dt.TypeName(), newFields)
+	// Preserve metadata from the original type. NewObjectType does not
+	// copy metadata, but MaybeAssignTypeName does. If the original type
+	// carried x-kubernetes-preserve-unknown-fields metadata (e.g., the
+	// spec object itself allows unknown fields), we must not lose it.
+	if dt.Metadata != nil {
+		result.Metadata = make(map[string]string, len(dt.Metadata))
+		for k, v := range dt.Metadata {
+			result.Metadata[k] = v
+		}
+	}
+	return result
+}
+
+// schemaProperty returns the sub-schema for a named property, or nil.
+func schemaProperty(schema *spec.Schema, name string) *spec.Schema {
+	if schema == nil {
+		return nil
+	}
+	if p, ok := schema.Properties[name]; ok {
+		return &p
+	}
+	return nil
+}
+
+// schemaIsSelfPreserveUnknown checks whether the schema itself (not children)
+// declares x-kubernetes-preserve-unknown-fields.
+func schemaIsSelfPreserveUnknown(schema *spec.Schema) bool {
+	if schema == nil || schema.VendorExtensible.Extensions == nil {
+		return false
+	}
+	v, ok := schema.VendorExtensible.Extensions.GetBool("x-kubernetes-preserve-unknown-fields")
+	return ok && v
+}
+
+// schemaItemsHavePreserveUnknown checks whether an array schema's
+// items carry x-kubernetes-preserve-unknown-fields anywhere in their tree.
+func schemaItemsHavePreserveUnknown(schema *spec.Schema) bool {
+	if schema == nil || schema.Items == nil || schema.Items.Schema == nil {
+		return false
+	}
+	return schemaHasPreserveUnknown(schema.Items.Schema)
+}
+
+// schemaHasPreserveUnknown reports whether the schema declares
+// x-kubernetes-preserve-unknown-fields anywhere in its tree.
+func schemaHasPreserveUnknown(s *spec.Schema) bool {
+	if s == nil {
+		return false
+	}
+	if s.VendorExtensible.Extensions != nil {
+		if v, ok := s.VendorExtensible.Extensions.GetBool("x-kubernetes-preserve-unknown-fields"); ok && v {
+			return true
+		}
+	}
+	for i := range s.Properties {
+		p := s.Properties[i]
+		if schemaHasPreserveUnknown(&p) {
+			return true
+		}
+	}
+	if s.Items != nil && s.Items.Schema != nil {
+		if schemaHasPreserveUnknown(s.Items.Schema) {
+			return true
+		}
+	}
+	if s.AdditionalProperties != nil && s.AdditionalProperties.Schema != nil {
+		if schemaHasPreserveUnknown(s.AdditionalProperties.Schema) {
+			return true
+		}
+	}
+	return false
+}
+
+// upstreamKroAPIGroup is the API group for upstream kro CRDs. Schema
+// resolution is skipped for this group because the API server may normalize
+// the OpenAPI schema in ways that differ from the CRD YAML (e.g., stripping
+// nested "metadata" properties). The experimental controller consumes but
+// does not own these CRDs, and their stdlib templates (rgd.yaml) are
+// authored against dyn semantics.
+const upstreamKroAPIGroup = "kro.run"
+
+// isUpstreamKroGroup reports whether a GVK group belongs to the upstream
+// kro API. These CRDs skip schema resolution — see upstreamKroAPIGroup.
+func isUpstreamKroGroup(group string) bool {
+	return group == upstreamKroAPIGroup
 }
 
 // ---------------------------------------------------------------------------

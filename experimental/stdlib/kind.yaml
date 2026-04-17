@@ -59,7 +59,7 @@ spec:
 
     - id: watchKinds
       includeWhen:
-        - ${has(kindCrd.status) && has(kindCrd.status.conditions) && kindCrd.status.conditions != null && kindCrd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
+        - ${has(kindCrd.status) && has(kindCrd.status.conditions) && kindCrd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
       # No metadata.namespace: watch Kinds across all namespaces
       # (k8s list/watch semantics — absent namespace = all).
       watch:
@@ -109,7 +109,7 @@ spec:
 
             - id: watchInstances
               includeWhen:
-                - $${has(crd.status) && has(crd.status.conditions) && crd.status.conditions != null && crd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
+                - $${has(crd.status) && has(crd.status.conditions) && crd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
               # No metadata.namespace: watch items of this Kind
               # across all namespaces (k8s list/watch semantics —
               # absent namespace = all).

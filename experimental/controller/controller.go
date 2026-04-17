@@ -1583,7 +1583,18 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 	// Create schema resolver for compile-time type checking.
 	// Core types resolve from compiled-in definitions, CRDs resolve via
 	// cached discovery client.
-	schemaResolver, err := schemaresolver.NewCombinedResolver(restConfig, nil)
+	//
+	// The HTTP client must inherit TLS settings from rest.Config (CAData,
+	// ServerName, ClientCert). Passing nil causes the discovery client to
+	// build an internal HTTP client that doesn't pick up TLS config in all
+	// environments (notably envtest with self-signed certs). Mirrors
+	// upstream pkg/client/set.go which constructs rest.HTTPClientFor once.
+	httpClient, err := rest.HTTPClientFor(restConfig)
+	if err != nil {
+		log.Log.Error(err, "failed to build HTTP client for schema resolver; compile-time type checking disabled for resource nodes")
+		httpClient = nil
+	}
+	schemaResolver, err := schemaresolver.NewCombinedResolver(restConfig, httpClient)
 	if err != nil {
 		// Schema resolution is an operational dependency — log the failure.
 		// All resource nodes will fall back to dyn (no field-level type checking).

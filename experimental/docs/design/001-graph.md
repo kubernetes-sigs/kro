@@ -67,41 +67,34 @@ parsed as subtraction by the CEL evaluator (e.g., `my-app` is `my` minus `app`).
 for readability.
 
 After a node is applied, its `id` enters scope as a variable available to CEL expressions in
-downstream nodes. The value and type depend on the reference type — see below.
+downstream nodes. The value depends on the node's type — see below.
 
-#### template
+#### type
 
-A Kubernetes resource declaration. The reference type determines how the controller handles it:
+A node's type is the keyword it declares. Five types exist:
 
-- **Own** — a full resource specification. The Graph creates the resource if it doesn't exist,
-  applies the specified fields via SSA, and tracks the resource for cleanup. The template declares
-  the complete desired state — `apiVersion`, `kind`, `metadata`, and the resource body (spec, data,
-  etc.).
-- **Watch** — specifies only identity (`apiVersion`, `kind`, `metadata.name`, `metadata.namespace`).
-  The Graph reads the resource into scope without managing it.
-- **WatchKind** — specifies `apiVersion` and `kind` with an optional `selector` but no
-  `metadata.name`. The Graph discovers all resources of that kind matching the selector and enters
-  them into scope as an array. Create, update, and delete events on matching objects trigger
-  re-reconciliation.
-- **Contribute** — specifies a subset of fields on a resource that another actor manages (e.g., only
-  status, or only labels). The Graph applies exactly those fields and tracks them for cleanup. This
-  is how a Graph writes status to a custom resource, adds labels to an existing object, or
-  contributes any partial state. Each field has exactly one writer — an owning node can delegate
-  specific fields to a contributor, but two nodes cannot write the same field.
-- **Definition** — no `apiVersion`, `kind`, or identity fields. The template is a map of key-value
-  pairs where values are literals or `${...}` CEL expressions. The node produces no Kubernetes
-  resource — it defines computed values and enters the result into scope as `map[string]any`.
-
-After a node is applied, its result enters scope under its `id` — as the full Kubernetes object for
-Own, Watch, and Contribute, as an array for WatchKind, or as `map[string]any` for Definition.
+- **`template:`** — A full resource specification. The controller creates the resource if it
+  doesn't exist, applies the specified fields via SSA, and tracks the resource for cleanup. The
+  template declares the complete desired state — `apiVersion`, `kind`, `metadata`, and the
+  resource fields (spec, data, etc.). Deleted on prune.
+- **`patch:`** — A subset of fields on a resource another actor manages (e.g., only status, or
+  only labels). The controller applies exactly those fields via SSA and tracks them for cleanup.
+  Each field has exactly one writer — a `template:` can delegate specific fields to a `patch:`,
+  but two nodes cannot write the same field. On prune, the fields are released; the resource is
+  never deleted.
+- **`ref:`** — Reference a resource outside this graph. The controller reads it without managing
+  it.
+- **`watch:`** — Observe a collection of resources. The controller enters the matched resources
+  into scope and re-reconciles when they change.
+- **`def:`** — Computed values into scope. The node produces no Kubernetes resource.
 
 ```yaml
-# Definition — reusable naming values, no Kubernetes resource created
+# def: — reusable naming values, no Kubernetes resource created
 - id: naming
-  template:
+  def:
     prefix: ${spec.name + '-' + spec.env}
 
-# Own — creates and manages a Deployment using the definition
+# template: — creates and manages a Deployment using the definition
 - id: deploy
   template:
     apiVersion: apps/v1
@@ -122,17 +115,17 @@ Own, Watch, and Contribute, as an array for WatchKind, or as `map[string]any` fo
             - name: app
               image: nginx
 
-# Watch — reads an existing WebApp into scope
+# ref: — reads an existing WebApp into scope
 - id: webapp
-  template:
+  ref:
     apiVersion: kro.run/v1alpha1
     kind: WebApp
     metadata:
       name: my-app
 
-# Contribute — writes status fields to the WebApp
+# patch: — writes status fields to the WebApp
 - id: webappStatus
-  template:
+  patch:
     apiVersion: kro.run/v1alpha1
     kind: WebApp
     metadata:
@@ -141,9 +134,9 @@ Own, Watch, and Contribute, as an array for WatchKind, or as `map[string]any` fo
     status:
       deploymentReady: ${deploy.status.availableReplicas == deploy.spec.replicas}
 
-# WatchKind — discovers all Pods matching a selector
+# watch: — discovers all Pods matching a selector
 - id: appPods
-  template:
+  watch:
     apiVersion: v1
     kind: Pod
     selector:
@@ -152,18 +145,17 @@ Own, Watch, and Contribute, as an array for WatchKind, or as `map[string]any` fo
 
 #### forEach
 
-Expands the template once per item in an array. The array is a CEL expression referencing a WatchKind
-or any array in scope. Each iteration binds the item to a named variable available within the
-template. The forEach node is a logical parent — it expands into one child node per item. Each child
-is a real node that manages one resource. Child identity is derived from the parent's ID combined
-with the rendered resource key (GVK + namespace + name).
+Expands a node once per item in an array. Each iteration binds the item to a named variable
+available during evaluation. The forEach node is a logical parent — it expands into one child node
+per item. Each child is a real node that manages one resource. Child identity is derived from the
+parent's ID combined with the rendered resource key (GVK + namespace + name).
 
-For definition templates (no `apiVersion`/`kind`), forEach produces `[]any` of values instead of
-managed resources — no children are created.
+For `def:` nodes, forEach produces an array of values instead of managed resources — no children
+are created.
 
-After evaluation, the parent enters scope as an array of child outputs — `${policies}` is `[]any`.
-Downstream nodes depend on the parent, not individual children. The parent enters scope (enabling
-downstream evaluation) once all children have applied successfully.
+After evaluation, the parent enters scope as an array of child outputs. Downstream nodes depend on
+the parent, not individual children. The parent enters scope (enabling downstream evaluation) once
+all children have applied successfully.
 
 ```yaml
 - id: policies
@@ -180,11 +172,11 @@ downstream evaluation) once all children have applied successfully.
       policyTypes:
         - Ingress
 
-# forEach + definition template: computed container list embedded in a Deployment
+# forEach + def: computed container list embedded in a Deployment
 - id: containers
   forEach:
     w: ${spec.workers}
-  template:
+  def:
     name: ${w}
     image: ${spec.appImage}
     args: ["--worker=${w}"]
@@ -234,7 +226,7 @@ Kubernetes conditions check.
 
 For forEach nodes, readyWhen is evaluated per-child — each child checks readyWhen independently
 using the standard per-node mechanism. `.ready()` on a forEach parent returns true when all children
-are ready. A WatchKind's `.ready()` returns true when the node's readyWhen conditions pass
+are ready. A `watch:` node's `.ready()` returns true when the node's readyWhen conditions pass
 (evaluated once against the whole array, not per-item) — including when the collection is empty,
 where `.ready()` still reflects the readyWhen verdict rather than collapsing to vacuously-true.
 
@@ -319,14 +311,14 @@ A Graph whose template contains another Graph creates a nested scope. The inner 
 Kubernetes object — it is created via the API server and reconciled independently by its own
 reconciliation. Each level is a separate reconciliation loop with its own resource scope.
 
-The combination of WatchKind, forEach, and nested Graphs creates per-instance controllers. A parent
-Graph watches a kind via WatchKind, forEach creates one child Graph per item, and each child Graph
+The combination of `watch:`, forEach, and nested Graphs creates per-instance controllers. A parent
+Graph observes a kind via `watch:`, forEach creates one child Graph per item, and each child Graph
 independently reconciles resources for its item.
 
 ```yaml
 # Parent Graph — watches all Namespaces, creates a child Graph per Namespace
 - id: namespaces
-  template:
+  watch:
     apiVersion: v1
     kind: Namespace
     selector: {}
@@ -342,7 +334,7 @@ independently reconciles resources for its item.
     spec:
       nodes:
         - id: nsRef
-          template:
+          ref:
             apiVersion: v1
             kind: Namespace
             metadata:
@@ -448,5 +440,4 @@ status:
 
 The Graph's status contains only controller-managed conditions. There are no user-defined status
 fields on the Graph itself. User-defined status (e.g., `deploymentReady`, `address`) lives on custom
-resource types and is written via contribute templates targeting the custom resource's status
-subresource.
+resource types and is written via `patch:` nodes targeting the custom resource's status subresource.

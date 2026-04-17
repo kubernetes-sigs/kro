@@ -81,10 +81,10 @@ details.
 ## Decorator
 
 A Decorator watches instances of an existing Kind and creates a sub-Graph per instance. It does not
-define a new Kind — it watches an existing one and creates resources per instance. WatchKind only —
-for watching a single resource, use a plain Graph.
+define a new Kind — it watches an existing one and creates resources per instance. Collection watch
+only — for a single-resource dereference, use a plain Graph with a `ref:` node.
 
-Each sub-Graph gets an auto-prepended `item` Watch node that fetches the specific instance, plus
+Each sub-Graph gets an auto-prepended `item` ref node that fetches the specific instance, plus
 the user's nodes. User nodes reference `${item.metadata.name}`, `${item.spec.foo}`, etc.
 
 ```yaml
@@ -153,8 +153,8 @@ the same priority are broken by lexicographically lowest name. Resource identity
 apiVersion + kind + namespace + name. Cluster-scoped resources use empty string for the namespace
 component.
 
-Singleton is a Kind (`singleton.yaml`). Resolution uses a shared Graph with `.distinct()` forEach
-over unique target identity keys.
+Singleton is a Kind (`singleton.yaml`). Each per-instance Graph watches all Singletons, computes the
+winner for its target, and gates resource creation on `includeWhen` matching its own name.
 
 ## Installation
 
@@ -200,17 +200,17 @@ Three resources are embedded in `experimental/stdlib/` and applied in order:
 
 **Namespace scoping.** Two rules, one per primitive.
 
-*WatchKind* follows k8s list/watch semantics: absent `metadata.namespace` on a WatchKind template
+*Collection watch* (`watch:` nodes) follows k8s list/watch semantics: absent `metadata.namespace`
 means all namespaces, matching `ListOptions`, informer caches, and every client library. An explicit
 namespace narrows the watch to one namespace. The Graph's own namespace is never used as a default —
-a WatchKind's scope is its targets, not where the Graph lives. The stdlib Kind and RGD controller
+a watch's scope is its targets, not where the Graph lives. The stdlib Kind and RGD controller
 Graphs live in `kro-system` but watch instances across all namespaces; users can create Kind and RGD
 instances anywhere. CRDs are cluster-scoped, so the type is available everywhere.
 
-*Resources* (non-Watch) default to the Graph's own namespace when `metadata.namespace` is absent,
-matching upstream kro's behavior. Per-instance Graphs live in the instance's namespace (or
-`kro-system` for cluster-scoped instances), so resources inside a per-instance Graph default to the
-instance's namespace.
+*Resources* (`template:`, `patch:`, `ref:`) default to the Graph's own namespace when
+`metadata.namespace` is absent, matching upstream kro's behavior. Per-instance Graphs live in the
+instance's namespace (or `kro-system` for cluster-scoped instances), so resources inside a
+per-instance Graph default to the instance's namespace.
 
 **Drift reconciliation during bootstrap.** When the Kind controller creates a CRD, the CRD
 transitions to Established asynchronously. The owned-resource watch does not reliably trigger a
@@ -222,11 +222,6 @@ this is acceptable — bootstrap happens once. Tests use a shorter interval (5s)
 which owns the CRD, which cascades to all instances. Decorators watching those instances lose their
 targets — the Decorator's sub-Graphs are cleaned up through normal ownership. A finalizer on Kind
 to block deletion until confirmed is not yet implemented.
-
-**String templates not supported in Node.** The Node struct stores templates as `map[string]any`.
-Nodes whose entire template is a CEL expression (a string) are silently dropped during parsing.
-The Singleton resolution works around this by creating sub-Graphs whose `spec.nodes` is a CEL
-expression that constructs the node list (including the winning template as a map).
 
 ## What Would Force a Fourth Primitive
 
@@ -256,8 +251,8 @@ are applied as-is and resolve through the standard reconciliation loop.
 **Package as a stdlib primitive.** Conflated dependency declaration with content. Real package
 management requires content-addressed references, not inlined manifests.
 
-**Decorator with single-resource Watch mode.** Watching a single resource is just a Graph. Decorator
-is exclusively for the "watch a kind, create sub-Graph per instance" pattern.
+**Decorator with single-resource dereference.** A named-object reference is a `ref:` node in a
+plain Graph. Decorator is exclusively for the "watch a kind, create sub-Graph per instance" pattern.
 
 **Decorator as bootstrap root.** Doubled the Graph nesting depth for every Kind instance (6
 reconciliation cycles vs 3). Kind as the bootstrap root keeps the critical path shorter.

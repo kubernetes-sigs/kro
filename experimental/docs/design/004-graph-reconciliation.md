@@ -16,8 +16,8 @@ Compilation produces:
 - **DAG** — nodes and edges. One node per resource declaration, edges inferred from CEL expression
   references. Both forward (dependency → dependent) and reverse adjacency are produced — propagation
   walks the forward DAG, prune walks the reverse. Topological order is stable with respect to
-  `spec.nodes` ordering (min-heap Kahn's). Node types (Own, Watch, WatchKind, Contribute,
-  Definition) are defined in [001-graph](001-graph.md) and [003-ownership](003-ownership.md).
+  `spec.nodes` ordering (min-heap Kahn's). Node types are the five keywords (`template:`,
+  `patch:`, `ref:`, `watch:`, `def:`) defined in [001-graph](001-graph.md) § type.
 - **Compiled CEL programs** — each expression is compiled once against a typed environment. Nodes
   with a known kind resolve OpenAPI schemas; definitions infer types from template structure. Nodes
   whose kind is a CEL expression compile untyped — the kind is not known until runtime. Nodes whose
@@ -83,7 +83,7 @@ Ready and NotReady are both "applied and in scope." readyWhen is a health signal
 dependents. Pending and Blocked both represent uncertain absence — previous applied keys are
 retained, not safe to prune. Excluded propagates as Excluded (definitive absence — safe to prune).
 
-Definition nodes can be Ready, NotReady (readyWhen unsatisfied), Pending (upstream dependency
+`def:` nodes can be Ready, NotReady (readyWhen unsatisfied), Pending (upstream dependency
 unresolved — the CEL expression references scope data that is not yet available), or Error (CEL
 evaluation failure). They do not produce Pending from their own execution (no API calls), but inherit
 it from unresolved upstream dependencies. They cannot be Conflict (no SSA) or SystemError (no API
@@ -133,9 +133,9 @@ At each frontier node:
    - input-hash mismatch → continue
    - input-hash match + resourceVersion unchanged → skip
    - input-hash match + resourceVersion changed → GET live object, re-evaluate readyWhen, check
-     output-hash. Template not re-evaluated. For Watch/WatchKind, this is the primary evaluation
-     path — their output depends on cluster state, not template inputs, so input-hash stability
-     doesn't imply output stability.
+     output-hash. Template not re-evaluated. For `ref:` and `watch:`, this is the primary
+     evaluation path — their output depends on cluster state, not template inputs, so input-hash
+     stability doesn't imply output stability.
    - Resync → continue
 
 4. **includeWhen**
@@ -144,15 +144,15 @@ At each frontier node:
      inclusion
 
 5. **Resolve**
-   - Watch: GET full object. Data enters scope. Pending if absent.
-   - WatchKind: list matching objects by label selector. List enters scope (supports `.filter()`,
+   - `ref:` — GET the named object. Data enters scope. Pending if absent.
+   - `watch:` — list matching objects by label selector. List enters scope (supports `.filter()`,
      `.map()`, etc.). When a single resource changes, update the cached list incrementally rather
      than re-listing — O(1) per event, not O(matching).
-   - forEach parent: evaluate collection, determine children, dispatch changed children.
-   - Definition: resolve all values in the template against the current scope. No API calls.
-   - Own: evaluate template, hash desired state (apply-hash), compare against previous. Match → omit
-     write. Resync bypasses — apply unconditionally. Differs → SSA apply. 409 → Conflict.
-   - Contribute: same as Own. 409 → Conflict. Auto-splits status subresource.
+   - forEach parent — evaluate collection, determine children, dispatch changed children.
+   - `def:` — resolve all values against the current scope. No API calls.
+   - `template:` — evaluate, hash desired state (apply-hash), compare against previous. Match →
+     omit write. Resync bypasses — apply unconditionally. Differs → SSA apply. 409 → Conflict.
+   - `patch:` — same as `template:`. 409 → Conflict. Auto-splits status subresource.
 
    The apply-hash within Resolve is the third hash layer — it skips the SSA write when the desired
    state is unchanged. When a template targets both the main resource and the status subresource,
@@ -172,8 +172,8 @@ After propagation determines the desired set, prune removes resources that shoul
 
 The applied set is a live view derived from identity labels in the controller's informer stores —
 all resources where the Graph's identity label exists. Not persisted. Hydrated on startup from
-informer list and kept current by watch events. Both Own and Contribute targets are in the applied
-set; the label value (`own` or `contribute`) determines the prune action.
+informer list and kept current by watch events. Resources written by both `template:` and `patch:`
+nodes are in the applied set; the label value (`template` or `patch`) determines the prune action.
 
 Prune candidates are the set difference: resources in the applied set minus the current reconcile's
 output set. Revision transitions, includeWhen toggles, and forEach scale-down all produce prune
@@ -186,11 +186,11 @@ contested field ownership.
 
 Prune walks the reverse DAG — the same algorithm as propagation, edges pointing from dependent to
 dependency. The frontier is seeded by leaf nodes (no dependents in the forward DAG = no dependencies
-in the reverse DAG). Own → delete. Contribute → release fields via skeleton SSA apply (omit managed
-fields, relinquishing ownership; see [003-ownership](003-ownership.md)).
-Watch/WatchKind → no action. Independent nodes in the frontier can be removed concurrently. If the
-DAG is unavailable, prune is blocked — never degrade to unordered deletion. If another node declares
-`finalizes` targeting a prune candidate, finalization runs first.
+in the reverse DAG). `template:` → delete. `patch:` → release fields via skeleton SSA apply (omit
+managed fields, relinquishing ownership; see [003-ownership](003-ownership.md)).
+`ref:`/`watch:`/`def:` → no action. Independent nodes in the frontier can be removed concurrently.
+If the DAG is unavailable, prune is blocked — never degrade to unordered deletion. If another node
+declares `finalizes` targeting a prune candidate, finalization runs first.
 
 Reverse dependency ordering comes from the most recent revision that defined the resource.
 Superseded revisions must be retained until their unique resources are pruned — they carry the
@@ -281,16 +281,16 @@ applies.
 A child's identity is scoped to its parent and encodes the full resource key as DNS subdomain labels
 within the label key:
 
-    <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/reference
+    <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/type
 
 For example — Deployment `frontend` in namespace `default`, parent `deploys`, graph `mygraph` in
 namespace `default`:
 
-    deploys.frontend.default.deployment.apps.mygraph.default.internal.kro.run/reference
+    deploys.frontend.default.deployment.apps.mygraph.default.internal.kro.run/type
 
 This is the same label key structure as any node — the parent ID is the first label, followed by the
 resource key components as additional DNS labels before the graph identity. A non-forEach node
-`config` produces `config.mygraph.default.internal.kro.run/reference`. The label prefix is a DNS
+`config` produces `config.mygraph.default.internal.kro.run/type`. The label prefix is a DNS
 subdomain (253-character limit); graph names and non-forEach node IDs are single DNS labels, forEach
 children extend the prefix with additional labels. Uniqueness is across the full resource key (GVK +
 namespace + name). If the rendered key changes, that's a new child — the old one is a prune
@@ -388,7 +388,7 @@ The controller uses metadata-only informers — spec and status are not fetched 
 Full object reads happen only during Resolve, on demand. Each managed resource carries an identity
 label per Graph-node pair:
 
-    <node>.<graph>.<ns>.internal.kro.run/reference = own | contribute
+    <node>.<graph>.<ns>.internal.kro.run/type = template | patch
 
 The label key encodes the node ID using DNS subdomain structure, enabling watch event routing and
 prune selection. Multiple Graphs targeting the same resource coexist without collision (2N labels for

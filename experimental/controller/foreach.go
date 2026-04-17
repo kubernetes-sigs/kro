@@ -10,7 +10,6 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -223,27 +222,13 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			}
 			seenResourceKeys[childResKey] = id
 
-			gv, _ := schema.ParseGroupVersion(childObj.GetAPIVersion())
-			generation := fmt.Sprintf("%d", eval.effectiveGeneration)
-
 			// forEach child classification is inherited from the parent's
 			// declared keyword. template: → Own per child; patch: →
 			// Contribute per child. Declaration is authoritative — no
 			// per-child runtime resolution.
 			childRef := node.Type()
 
-			lbls := childObj.GetLabels()
-			if lbls == nil {
-				lbls = map[string]string{}
-			}
-			lbls = setForEachChildIdentityLabels(
-				lbls, node.ID,
-				childObj.GetName(), childObj.GetNamespace(),
-				gvk.Kind, gv.Group,
-				graph.GetName(), graph.GetNamespace(),
-				generation, childRef,
-			)
-			childObj.SetLabels(lbls)
+			stampForEachChildLabels(childObj, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, childRef)
 			evalMap = childObj.Object
 
 			var applied *unstructured.Unstructured

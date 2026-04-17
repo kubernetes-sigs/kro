@@ -532,32 +532,20 @@ func parseNodeList(raw any) ([]Node, error) {
 				return nil, fmt.Errorf("node[%d] %q: finalizes is not valid on def nodes (no Kubernetes resource to finalize)", i, id)
 			}
 		}
-		if iw, ok := m["includeWhen"].([]any); ok {
-			for j, expr := range iw {
-				s, ok := expr.(string)
-				if !ok {
-					return nil, fmt.Errorf("node[%d] %q: includeWhen[%d] must be a string, got %T", i, id, j, expr)
-				}
-				node.IncludeWhen = append(node.IncludeWhen, s)
-			}
+		if iw, err := parseStringList(m, "includeWhen", i, id); err != nil {
+			return nil, err
+		} else if len(iw) > 0 {
+			node.IncludeWhen = iw
 		}
-		if rw, ok := m["readyWhen"].([]any); ok {
-			for j, expr := range rw {
-				s, ok := expr.(string)
-				if !ok {
-					return nil, fmt.Errorf("node[%d] %q: readyWhen[%d] must be a string, got %T", i, id, j, expr)
-				}
-				node.ReadyWhen = append(node.ReadyWhen, s)
-			}
+		if rw, err := parseStringList(m, "readyWhen", i, id); err != nil {
+			return nil, err
+		} else if len(rw) > 0 {
+			node.ReadyWhen = rw
 		}
-		if pw, ok := m["propagateWhen"].([]any); ok {
-			for j, expr := range pw {
-				s, ok := expr.(string)
-				if !ok {
-					return nil, fmt.Errorf("node[%d] %q: propagateWhen[%d] must be a string, got %T", i, id, j, expr)
-				}
-				node.PropagateWhen = append(node.PropagateWhen, s)
-			}
+		if pw, err := parseStringList(m, "propagateWhen", i, id); err != nil {
+			return nil, err
+		} else if len(pw) > 0 {
+			node.PropagateWhen = pw
 		}
 		nodes = append(nodes, node)
 	}
@@ -787,4 +775,32 @@ func parseForEachMap(m map[string]any) (map[string]string, error) {
 		result[k] = vs
 	}
 	return result, nil
+}
+
+// parseStringList extracts a validated []string from a map key that holds []any.
+// Returns an error if any element is not a string, including the node index and
+// ID for diagnostics.
+func parseStringList(m map[string]any, key string, nodeIdx int, nodeID string) ([]string, error) {
+	raw, ok := m[key].([]any)
+	if !ok {
+		return nil, nil
+	}
+	result := make([]string, 0, len(raw))
+	for j, v := range raw {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("node[%d] %q: %s[%d] must be a string, got %T", nodeIdx, nodeID, key, j, v)
+		}
+		result = append(result, s)
+	}
+	return result, nil
+}
+
+// stringsToAny converts []string to []any for unstructured serialization.
+func stringsToAny(ss []string) []any {
+	result := make([]any, len(ss))
+	for i, s := range ss {
+		result[i] = s
+	}
+	return result
 }

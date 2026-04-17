@@ -203,6 +203,49 @@ func (w *walkState) carryForwardKeys(nodeID string) {
 	}
 }
 
+// evaluatePropagateWhen evaluates or carries forward a node's propagateWhen
+// result. For forEach nodes, carries forward the previous per-item aggregate
+// (per-item evaluation only happens in the worker). For regular nodes,
+// evaluates against the coordinator scope.
+func (w *walkState) evaluatePropagateWhen(node *Node) {
+	if len(node.PropagateWhen) == 0 {
+		return
+	}
+	if w.eval.scope[node.ID] == nil && w.state.previousScope[node.ID] == nil {
+		return
+	}
+	if node.ForEach != nil {
+		if prev, exists := w.state.previousPropagateReady[node.ID]; exists {
+			w.plan.PropagateReady[node.ID] = prev
+		}
+	} else {
+		w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
+			node.PropagateWhen, node.ID)
+	}
+}
+
+// skipNode retains a node's previous state without re-evaluation. Used when
+// no external trigger fired and propagation didn't reach the node, or when
+// evaluation hashing proves inputs are unchanged.
+func (w *walkState) skipNode(node *Node) {
+	if prev, ok := w.state.previousScope[node.ID]; ok {
+		w.eval.scope[node.ID] = prev
+	}
+	w.carryForwardKeys(node.ID)
+	if w.watcher != nil {
+		w.watcher.retainWatches(node.ID)
+	}
+	if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
+		if prevState == NodeReady || prevState == NodeNotReady {
+			w.evaluatePropagateWhen(node)
+		}
+	}
+	w.outputsReady[node.ID] = true
+	for _, depIdx := range w.dag.Dependents[node.ID] {
+		w.tryDispatch(depIdx)
+	}
+}
+
 // tryDispatch checks if a node can be dispatched. Three outcomes:
 // 1. All dependencies resolved → dispatch to worker
 // 2. Some dependency still inflight → skip, retried when dependency completes
@@ -227,33 +270,7 @@ func (w *walkState) tryDispatch(idx int) {
 
 	// Step 1: Skip check — no external trigger and no propagation trigger.
 	if !w.triggered[node.ID] && !w.propagationTriggered[node.ID] {
-		if prev, ok := w.state.previousScope[node.ID]; ok {
-			w.eval.scope[node.ID] = prev
-		}
-		w.carryForwardKeys(node.ID)
-		if w.watcher != nil {
-			w.watcher.retainWatches(node.ID)
-		}
-		if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
-			if (prevState == NodeReady || prevState == NodeNotReady) &&
-				len(node.PropagateWhen) > 0 && w.state.previousScope[node.ID] != nil {
-				if node.ForEach != nil {
-					// forEach: carry forward the previous PropagateReady.
-					// Per-item evaluation only happens in the worker;
-					// the coordinator scope has the array, not items.
-					if prev, exists := w.state.previousPropagateReady[node.ID]; exists {
-						w.plan.PropagateReady[node.ID] = prev
-					}
-				} else {
-					w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
-						node.PropagateWhen, node.ID)
-				}
-			}
-		}
-		w.outputsReady[node.ID] = true
-		for _, depIdx := range w.dag.Dependents[node.ID] {
-			w.tryDispatch(depIdx)
-		}
+		w.skipNode(node)
 		return
 	}
 
@@ -378,31 +395,10 @@ func (w *walkState) tryDispatch(idx int) {
 					// Path 1: skip everything.
 					logger.V(1).Info("evaluation hash match — skipping evaluation",
 						"node", node.ID)
-					if prev, ok := w.state.previousScope[node.ID]; ok {
-						w.eval.scope[node.ID] = prev
-					}
-					w.carryForwardKeys(node.ID)
-					if w.watcher != nil {
-						w.watcher.retainWatches(node.ID)
-					}
 					if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
 						w.plan.States[node.ID] = prevState
-						if prevState == NodeReady || prevState == NodeNotReady {
-							if len(node.PropagateWhen) > 0 && prevScope != nil {
-								if node.ForEach != nil {
-									if prev, exists := w.state.previousPropagateReady[node.ID]; exists {
-										w.plan.PropagateReady[node.ID] = prev
-									}
-								} else {
-									w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
-										node.PropagateWhen, node.ID)
-								}
-							}
-						}
 					}
-					for _, depIdx := range w.dag.Dependents[node.ID] {
-						w.tryDispatch(depIdx)
-					}
+					w.skipNode(node)
 					return
 				}
 
@@ -439,18 +435,8 @@ func (w *walkState) tryDispatch(idx int) {
 					}
 				}
 				w.plan.States[node.ID] = nodeState
-				if (nodeState == NodeReady || nodeState == NodeNotReady) &&
-					len(node.PropagateWhen) > 0 && scopeData != nil {
-					if node.ForEach != nil {
-						// forEach: self-state changed but we're in the coordinator,
-						// not the worker. Carry forward previous per-item result.
-						if prev, exists := w.state.previousPropagateReady[node.ID]; exists {
-							w.plan.PropagateReady[node.ID] = prev
-						}
-					} else {
-						w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
-							node.PropagateWhen, node.ID)
-					}
+				if nodeState == NodeReady || nodeState == NodeNotReady {
+					w.evaluatePropagateWhen(node)
 				}
 				w.state.previousPlanStates[node.ID] = nodeState
 				for _, depIdx := range w.dag.Dependents[node.ID] {

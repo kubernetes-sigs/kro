@@ -286,21 +286,7 @@ func (r *GraphReconciler) runForEachFinalization(
 
 			// Stamp forEach child identity labels using the reconcile-scoped
 			// effective generation (falls back to graph generation when unset).
-			gvk := childObj.GroupVersionKind()
-			gv, _ := schema.ParseGroupVersion(childObj.GetAPIVersion())
-			generation := fmt.Sprintf("%d", eval.effectiveGeneration)
-			lbls := childObj.GetLabels()
-			if lbls == nil {
-				lbls = map[string]string{}
-			}
-			lbls = setForEachChildIdentityLabels(
-				lbls, finNode.ID,
-				childObj.GetName(), childObj.GetNamespace(),
-				gvk.Kind, gv.Group,
-				graph.GetName(), graph.GetNamespace(),
-				generation, NodeTypeTemplate,
-			)
-			childObj.SetLabels(lbls)
+			stampForEachChildLabels(childObj, finNode.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, NodeTypeTemplate)
 			evalMap = childObj.Object
 
 			// Check if this child already exists.
@@ -399,8 +385,7 @@ func resourceKey(obj *unstructured.Unstructured) string {
 // When scopeResolver is nil, the old heuristic is preserved for backward
 // compat with callers that don't have access to a RESTMapper.
 func staticResourceKey(tmpl map[string]any, fallbackNamespace string, scope GVKScopeResolver) string {
-	apiVersion, _ := tmpl["apiVersion"].(string)
-	kind, _ := tmpl["kind"].(string)
+	gvk := gvkFromMap(tmpl)
 	md, _ := tmpl["metadata"].(map[string]any)
 	if md == nil {
 		return ""
@@ -411,12 +396,10 @@ func staticResourceKey(tmpl map[string]any, fallbackNamespace string, scope GVKS
 	}
 	ns, _ := md["namespace"].(string)
 	hasDynamicNS := strings.Contains(ns, "${")
-	gv, _ := schema.ParseGroupVersion(apiVersion)
-	gvk := gv.WithKind(kind)
 
 	// Scope-aware namespace resolution. For cluster-scoped kinds the
 	// namespace segment is always "", matching resourceKey(liveObj).
-	if scope != nil && kind != "" {
+	if scope != nil && gvk.Kind != "" {
 		if isNS, known := scope.IsNamespaced(gvk); known {
 			if !isNS {
 				ns = ""
@@ -442,6 +425,28 @@ func parseResourceKey(key string) (schema.GroupVersionKind, types.NamespacedName
 	}
 	return schema.GroupVersionKind{Group: parts[0], Version: parts[1], Kind: parts[2]},
 		types.NamespacedName{Namespace: parts[3], Name: parts[4]}
+}
+
+// unstructuredFromKey parses a resource key and returns a typed stub suitable
+// for Get/Delete. Returns false if the key doesn't parse (empty Kind).
+func unstructuredFromKey(key string) (*unstructured.Unstructured, types.NamespacedName, bool) {
+	gvk, nn := parseResourceKey(key)
+	if gvk.Kind == "" {
+		return nil, nn, false
+	}
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetName(nn.Name)
+	obj.SetNamespace(nn.Namespace)
+	return obj, nn, true
+}
+
+// gvkFromMap extracts a GroupVersionKind from a template/identity map.
+func gvkFromMap(m map[string]any) schema.GroupVersionKind {
+	apiVersion, _ := m["apiVersion"].(string)
+	kind, _ := m["kind"].(string)
+	gv, _ := schema.ParseGroupVersion(apiVersion)
+	return gv.WithKind(kind)
 }
 
 // patchKey builds a Patch applied set key.
@@ -849,14 +854,12 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		}
 
 		// Template keys: delete the resource.
-		gvk, nn := parseResourceKey(key)
-		if gvk.Kind == "" {
+		obj, nn, ok := unstructuredFromKey(key)
+		if !ok {
 			continue
 		}
 
 		// Check if it exists and is ours before deleting.
-		obj := &unstructured.Unstructured{}
-		obj.SetGroupVersionKind(gvk)
 		if err := r.Client.Get(ctx, nn, obj); err != nil {
 			// Per 004-graph-reconciliation.md § Finalization: "If the target resource
 			// does not exist in the cluster (creation failed, already deleted
@@ -955,14 +958,10 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	// Finalization: "The finalizer resources are in the applied set but
 	// not in the desired state — they are prune candidates."
 	for _, fk := range deferredDeletes {
-		fGVK, fNN := parseResourceKey(fk)
-		if fGVK.Kind == "" {
+		finDel, _, ok := unstructuredFromKey(fk)
+		if !ok {
 			continue
 		}
-		finDel := &unstructured.Unstructured{}
-		finDel.SetGroupVersionKind(fGVK)
-		finDel.SetName(fNN.Name)
-		finDel.SetNamespace(fNN.Namespace)
 		if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
 			if client.IgnoreNotFound(delErr) != nil {
 				logger.Error(delErr, "deferred finalizer cleanup failed", "key", fk)
@@ -1004,13 +1003,11 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 				continue // read-only references don't create resources
 			}
 			id := node.Identity()
-			apiVersion, _ := id["apiVersion"].(string)
-			kind, _ := id["kind"].(string)
-			if apiVersion == "" || kind == "" {
+			gvk := gvkFromMap(id)
+			if gvk.Kind == "" {
 				continue
 			}
-			gv, _ := schema.ParseGroupVersion(apiVersion)
-			gvkSet[gv.WithKind(kind)] = true
+			gvkSet[gvk] = true
 		}
 	}
 
@@ -1180,16 +1177,8 @@ func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionK
 		// An identity-only release body (apiVersion/kind/metadata) is ignored by
 		// the status endpoint — no fields are claimed, so no ownership is released.
 		// Include "status": {} so SSA releases all previously-owned status fields.
-		statusRelease := map[string]any{
-			"apiVersion": apiVersion,
-			"kind":       gvk.Kind,
-			"metadata": map[string]any{
-				"name":      name,
-				"namespace": namespace,
-			},
-			"status": map[string]any{},
-		}
-		statusData, err := json.Marshal(statusRelease)
+		release["status"] = map[string]any{}
+		statusData, err := json.Marshal(release)
 		if err != nil {
 			return fmt.Errorf("marshaling status release: %w", err)
 		}

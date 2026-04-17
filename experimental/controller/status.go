@@ -169,49 +169,17 @@ func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.
 		return fmt.Errorf("reading latest for status update: %w", err)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-
 	// Build both conditions
 	compiledStatus, compiledReason, compiledMessage := state.deriveCompiledCondition()
-	compiledCondition := map[string]any{
-		"type":               string(ConditionCompiled),
-		"status":             string(compiledStatus),
-		"reason":             compiledReason,
-		"message":            compiledMessage,
-		"lastTransitionTime": now,
-	}
+	compiledCondition := buildCondition(string(ConditionCompiled), compiledStatus, compiledReason, compiledMessage)
 
 	readyStatus, readyReason, readyMessage := state.deriveReadyCondition()
-	readyCondition := map[string]any{
-		"type":               string(ConditionReady),
-		"status":             string(readyStatus),
-		"reason":             readyReason,
-		"message":            readyMessage,
-		"lastTransitionTime": now,
-	}
+	readyCondition := buildCondition(string(ConditionReady), readyStatus, readyReason, readyMessage)
 
 	// Preserve lastTransitionTime for conditions whose status hasn't changed
 	existingConditions, _, _ := unstructured.NestedSlice(latest.Object, "status", "conditions")
-	for _, ec := range existingConditions {
-		ecMap, ok := ec.(map[string]any)
-		if !ok {
-			continue
-		}
-		switch ecMap["type"] {
-		case string(ConditionCompiled):
-			if ecMap["status"] == string(compiledStatus) {
-				if ltt, ok := ecMap["lastTransitionTime"].(string); ok {
-					compiledCondition["lastTransitionTime"] = ltt
-				}
-			}
-		case string(ConditionReady):
-			if ecMap["status"] == string(readyStatus) {
-				if ltt, ok := ecMap["lastTransitionTime"].(string); ok {
-					readyCondition["lastTransitionTime"] = ltt
-				}
-			}
-		}
-	}
+	preserveTransitionTime(existingConditions, compiledCondition, compiledStatus)
+	preserveTransitionTime(existingConditions, readyCondition, readyStatus)
 
 	status := map[string]any{
 		"conditions": []any{
@@ -249,4 +217,32 @@ func statusEqual(a, b map[string]any) bool {
 		return false
 	}
 	return string(aj) == string(bj)
+}
+
+// buildCondition creates a condition map with the current timestamp.
+func buildCondition(condType string, status ConditionStatus, reason, message string) map[string]any {
+	return map[string]any{
+		"type":               condType,
+		"status":             string(status),
+		"reason":             reason,
+		"message":            message,
+		"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+// preserveTransitionTime scans existing conditions for a match on type+status
+// and preserves the lastTransitionTime if the status hasn't changed.
+func preserveTransitionTime(existing []any, cond map[string]any, status ConditionStatus) {
+	for _, ec := range existing {
+		ecMap, ok := ec.(map[string]any)
+		if !ok {
+			continue
+		}
+		if ecMap["type"] == cond["type"] && ecMap["status"] == string(status) {
+			if ltt, ok := ecMap["lastTransitionTime"].(string); ok {
+				cond["lastTransitionTime"] = ltt
+			}
+			return
+		}
+	}
 }

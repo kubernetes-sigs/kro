@@ -168,25 +168,13 @@ func snapshotNode(node Node) map[string]any {
 		entry["finalizes"] = node.Finalizes
 	}
 	if len(node.IncludeWhen) > 0 {
-		iw := make([]any, len(node.IncludeWhen))
-		for i, s := range node.IncludeWhen {
-			iw[i] = s
-		}
-		entry["includeWhen"] = iw
+		entry["includeWhen"] = stringsToAny(node.IncludeWhen)
 	}
 	if len(node.ReadyWhen) > 0 {
-		rw := make([]any, len(node.ReadyWhen))
-		for i, s := range node.ReadyWhen {
-			rw[i] = s
-		}
-		entry["readyWhen"] = rw
+		entry["readyWhen"] = stringsToAny(node.ReadyWhen)
 	}
 	if len(node.PropagateWhen) > 0 {
-		pw := make([]any, len(node.PropagateWhen))
-		for i, s := range node.PropagateWhen {
-			pw[i] = s
-		}
-		entry["propagateWhen"] = pw
+		entry["propagateWhen"] = stringsToAny(node.PropagateWhen)
 	}
 
 	return entry
@@ -304,32 +292,9 @@ func setRevisionCondition(ctx context.Context, c client.Client, revision *unstru
 		existingStatus = map[string]any{}
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
 	conditions, _ := existingStatus["conditions"].([]any)
-
-	newCondition := map[string]any{
-		"type":               string(condType),
-		"status":             string(status),
-		"reason":             reason,
-		"message":            message,
-		"lastTransitionTime": now,
-	}
-
-	// Preserve lastTransitionTime when the status value hasn't changed.
-	for _, existing := range conditions {
-		eMap, ok := existing.(map[string]any)
-		if !ok {
-			continue
-		}
-		if eMap["type"] == string(condType) {
-			if eMap["status"] == string(status) {
-				if ltt, ok := eMap["lastTransitionTime"].(string); ok && ltt != "" {
-					newCondition["lastTransitionTime"] = ltt
-				}
-			}
-			break
-		}
-	}
+	newCondition := buildCondition(string(condType), status, reason, message)
+	preserveTransitionTime(conditions, newCondition, status)
 
 	// Replace or append the condition.
 	found := false

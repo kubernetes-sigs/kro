@@ -20,6 +20,8 @@ import (
 	"hash/fnv"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
@@ -268,4 +270,23 @@ type appliedEntry struct {
 	NodeID   string
 	NodeType NodeType // NodeTypeTemplate or NodeTypePatch
 	Key      string   // resource key (group/version/Kind/namespace/name)
+}
+
+// stampForEachChildLabels stamps identity labels on a forEach child object.
+// Handles nil label maps, GVK extraction, and generation formatting.
+func stampForEachChildLabels(childObj *unstructured.Unstructured, parentID, graphName, graphNamespace string, generation int64, ref NodeType) {
+	gvk := childObj.GroupVersionKind()
+	gv, _ := schema.ParseGroupVersion(childObj.GetAPIVersion())
+	lbls := childObj.GetLabels()
+	if lbls == nil {
+		lbls = map[string]string{}
+	}
+	lbls = setForEachChildIdentityLabels(
+		lbls, parentID,
+		childObj.GetName(), childObj.GetNamespace(),
+		gvk.Kind, gv.Group,
+		graphName, graphNamespace,
+		fmt.Sprintf("%d", generation), ref,
+	)
+	childObj.SetLabels(lbls)
 }

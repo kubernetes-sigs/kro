@@ -10,7 +10,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -93,10 +92,7 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 		return fmt.Errorf("ref %s: %w", node.ID, err)
 	}
 
-	apiVersion, _ := tmpl["apiVersion"].(string)
-	kind, _ := tmpl["kind"].(string)
-	gv, _ := schema.ParseGroupVersion(apiVersion)
-	gvk := gv.WithKind(kind)
+	gvk := gvkFromMap(tmpl)
 	md, _ := tmpl["metadata"].(map[string]any)
 
 	name, _ := md["name"].(string)
@@ -113,9 +109,9 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 	obj.SetGroupVersionKind(gvk)
 	if err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("ref %s: resource %s/%s %s/%s not found: %w", node.ID, apiVersion, kind, namespace, name, ErrPending)
+			return fmt.Errorf("ref %s: resource %s %s/%s not found: %w", node.ID, gvk, namespace, name, ErrPending)
 		}
-		return fmt.Errorf("reading %s/%s %s/%s: %w", apiVersion, kind, namespace, name, err)
+		return fmt.Errorf("reading %s %s/%s: %w", gvk, namespace, name, err)
 	}
 
 	eval.scope[node.ID] = normalizeTypes(obj.Object)
@@ -140,10 +136,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 		return fmt.Errorf("watch %s: %w", node.ID, err)
 	}
 
-	apiVersion, _ := tmpl["apiVersion"].(string)
-	kind, _ := tmpl["kind"].(string)
-	gv, _ := schema.ParseGroupVersion(apiVersion)
-	gvk := gv.WithKind(kind)
+	gvk := gvkFromMap(tmpl)
 
 	var selectorRaw any
 	if sel, ok := tmpl["selector"]; ok {

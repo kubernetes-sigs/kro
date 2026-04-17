@@ -66,6 +66,17 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 					patchStatusMap[key] = true
 				}
 			}
+			// Also extract static template keys (merged from separate loop).
+			ref := node.Type()
+			if ref == NodeTypeRef || ref == NodeTypeWatch {
+				continue // read-only
+			}
+			if node.Finalizes != "" {
+				continue // dormant during normal operation
+			}
+			if key := staticResourceKey(node.Identity(), graph.GetNamespace(), r.Scope); key != "" {
+				ownKeys[key] = true
+			}
 		}
 	}
 
@@ -105,31 +116,6 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// Release watch state now that patch keys have been collected.
 	if r.Watcher != nil {
 		r.Watcher.removeGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
-	}
-
-	// Also extract static keys from revision specs for coverage.
-	for _, rev := range revisions {
-		spec, err := extractRevisionSpec(rev)
-		if err != nil {
-			continue
-		}
-		for _, node := range spec.Nodes {
-			if node.Identity() == nil {
-				continue
-			}
-			// Skip Ref, Watch (read-only).
-			ref := node.Type()
-			if ref == NodeTypeRef || ref == NodeTypeWatch {
-				continue
-			}
-			// Skip finalizer nodes — dormant during normal operation.
-			if node.Finalizes != "" {
-				continue
-			}
-			if key := staticResourceKey(node.Identity(), graph.GetNamespace(), r.Scope); key != "" {
-				ownKeys[key] = true
-			}
-		}
 	}
 
 	// Release Patch fields first via release apply.
@@ -257,10 +243,10 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if gvk.Kind == "" {
 			continue
 		}
-		obj := &unstructured.Unstructured{}
-		obj.SetGroupVersionKind(gvk)
-		obj.SetName(nn.Name)
-		obj.SetNamespace(nn.Namespace)
+		obj, _, ok := unstructuredFromKey(key)
+		if !ok {
+			continue
+		}
 
 		// Check if we successfully owned this resource (has our hash annotation).
 		// Target absent is not a teardown block — the design classifies it as
@@ -343,11 +329,10 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 							finNode := &teardownDAG.Nodes[finIdx]
 							if finNode.Identity() != nil && finNode.ForEach == nil {
 								if fk := staticResourceKey(finNode.Identity(), graph.GetNamespace(), r.Scope); fk != "" {
-									fGVK, fNN := parseResourceKey(fk)
-									finDel := &unstructured.Unstructured{}
-									finDel.SetGroupVersionKind(fGVK)
-									finDel.SetName(fNN.Name)
-									finDel.SetNamespace(fNN.Namespace)
+									finDel, _, ok := unstructuredFromKey(fk)
+									if !ok {
+										continue
+									}
 									if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
 										logger.V(1).Info("finalizer resource cleanup", "key", fk, "error", delErr)
 									} else {
@@ -359,14 +344,10 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 					}
 					// Second, clean up forEach finalizer children via their tracked keys.
 					for _, fk := range finKeys {
-						fGVK, fNN := parseResourceKey(fk)
-						if fGVK.Kind == "" {
+						finDel, _, ok := unstructuredFromKey(fk)
+						if !ok {
 							continue
 						}
-						finDel := &unstructured.Unstructured{}
-						finDel.SetGroupVersionKind(fGVK)
-						finDel.SetName(fNN.Name)
-						finDel.SetNamespace(fNN.Namespace)
 						if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
 							logger.V(1).Info("forEach finalizer child cleanup", "key", fk, "error", delErr)
 						} else {
@@ -382,13 +363,11 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// Only check resources that had our apply hash — others (e.g., conflicted
 	// resources that were never successfully applied) are not our responsibility.
 	for key := range deletedKeys {
-		gvk, nn := parseResourceKey(key)
-		if gvk.Kind == "" {
+		check, _, ok := unstructuredFromKey(key)
+		if !ok {
 			continue
 		}
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(gvk)
-		if err := r.Client.Get(ctx, nn, check); err == nil {
+		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(check), check); err == nil {
 			logger.V(1).Info("waiting for managed resource to be deleted", "key", key)
 			return ctrl.Result{RequeueAfter: 500 * time.Millisecond}, nil
 		}

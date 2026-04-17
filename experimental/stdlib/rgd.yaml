@@ -8,12 +8,28 @@ apiVersion: experimental.kro.run/v1alpha1
 kind: Kind
 metadata:
   name: resourcegraphdefinition
-  namespace: kro-system
 spec:
   kind: ResourceGraphDefinition
   group: kro.run
   version: v1alpha1
   scope: Cluster
+  additionalPrinterColumns:
+    - name: APIVERSION
+      type: string
+      jsonPath: .spec.schema.apiVersion
+    - name: KIND
+      type: string
+      jsonPath: .spec.schema.kind
+    - name: STATE
+      type: string
+      jsonPath: .status.state
+    - name: TOPOLOGICALORDER
+      type: string
+      priority: 1
+      jsonPath: .status.topologicalOrder
+    - name: AGE
+      type: date
+      jsonPath: .metadata.creationTimestamp
   schema:
     types:
       ExternalRefMetadata:
@@ -35,6 +51,13 @@ spec:
         readyWhen: "[]string"
         includeWhen: "[]string"
         forEach: "[]map[string]string"
+      PrinterColumn:
+        name: string | required=true
+        type: string | required=true
+        jsonPath: string | required=true
+        description: string
+        format: string
+        priority: integer
     spec:
       schema:
         kind: string
@@ -43,6 +66,7 @@ spec:
         scope: string | default=Namespaced
         spec: object
         status: object
+        additionalPrinterColumns: "[]PrinterColumn"
       resources: "[]Resource"
   nodes:
     - id: crd
@@ -67,6 +91,7 @@ spec:
                 status: {}
               schema:
                 openAPIV3Schema: ${simpleSchema.toOpenAPI(schema.spec.schema, schema.spec.resources)}
+              additionalPrinterColumns: '${has(schema.spec.schema.additionalPrinterColumns) ? schema.spec.schema.additionalPrinterColumns : []}'
 
     - id: watchInstances
       includeWhen:

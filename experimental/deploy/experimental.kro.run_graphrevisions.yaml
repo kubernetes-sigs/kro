@@ -27,3 +27,13 @@ spec:
                   message: "GraphRevision spec is immutable"
       subresources:
         status: {}
+      additionalPrinterColumns:
+        - name: Active
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Active")].status
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

@@ -1535,3 +1535,95 @@ func TestForEachInvalidType(t *testing.T) {
 	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
 	t.Log("Invalid forEach type (string) correctly rejected")
 }
+
+// TestForEachNamespaceCollision proves that a forEach collection containing
+// same-named resources in different namespaces expands without the children
+// colliding on identity. This is the cluster-wide-watch case: e.g. a
+// Decorator observing ConfigMaps cluster-wide sees "kube-root-ca.crt" in
+// every namespace. Name-only identity treats them as duplicates and fails
+// expansion with "duplicate item identity". Identity must be namespace/name
+// for namespaced objects.
+func TestForEachNamespaceCollision(t *testing.T) {
+	t.Parallel()
+	nsA := createNamespace(t)
+	nsB := createNamespace(t)
+
+	// Pre-create two ConfigMaps with the SAME name in DIFFERENT namespaces.
+	// A cluster-wide watch returns both. Under name-only identity they
+	// collide; under namespace/name identity they are distinct.
+	for _, ns := range []string{nsA, nsB} {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      "collision-cm",
+					"namespace": ns,
+					"labels":    map[string]any{"group": "collision-sources"},
+				},
+				"data": map[string]any{"from": ns},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+
+	// Graph: watch the ConfigMaps cluster-wide (no namespace bound), then
+	// forEach them into per-namespace child ConfigMaps. Child names embed
+	// the source namespace so they don't collide in their OWN namespace.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-ns-collision",
+				"namespace": nsA,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "sources",
+						"watch": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							// No metadata.namespace → cluster-wide list/watch.
+							"selector": map[string]any{"group": "collision-sources"},
+						},
+					},
+					map[string]any{
+						"id": "children",
+						"forEach": map[string]any{
+							"item": "${sources}",
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name":      "${'child-' + item.metadata.namespace}",
+								"namespace": nsA,
+							},
+							"data": map[string]any{
+								"mirrored-from": "${item.metadata.namespace + '/' + item.metadata.name}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	graphKey := types.NamespacedName{Name: "test-foreach-ns-collision", Namespace: nsA}
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey),
+		"Graph should become Ready — same-named objects in different namespaces must not collide")
+
+	// Both children should exist.
+	for _, srcNs := range []string{nsA, nsB} {
+		childName := "child-" + srcNs
+		child := &unstructured.Unstructured{}
+		child.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: childName, Namespace: nsA}, child),
+			"child %s should have been created", childName)
+	}
+	t.Log("forEach across cluster-wide watch with same-named items across namespaces expanded correctly")
+}

@@ -20,3 +20,17 @@ spec:
           x-kubernetes-preserve-unknown-fields: true
       subresources:
         status: {}
+      additionalPrinterColumns:
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Compiled
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Compiled")].status
+        - name: Message
+          type: string
+          priority: 1
+          jsonPath: .status.conditions[?(@.type=="Ready")].message
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

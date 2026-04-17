@@ -10,11 +10,20 @@ apiVersion: experimental.kro.run/v1alpha1
 kind: Kind
 metadata:
   name: decorator
-  namespace: kro-system
 spec:
   kind: Decorator
   group: experimental.kro.run
   version: v1alpha1
+  additionalPrinterColumns:
+    - name: Watches
+      type: string
+      jsonPath: .spec.watch.kind
+    - name: Items
+      type: integer
+      jsonPath: .status.items
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp
   schema:
     types:
       Node:
@@ -35,6 +44,8 @@ spec:
         kind: string
         selector: map[string]string
       nodes: "[]Node"
+    status:
+      items: integer
   nodes:
     - id: controllerGraph
       template:
@@ -42,6 +53,7 @@ spec:
         kind: Graph
         metadata:
           name: decorator-${schema.metadata.namespace}-${schema.metadata.name}
+          namespace: kro-system
         spec:
           nodes:
             # Watch the Decorator to access its spec at L1.
@@ -83,3 +95,14 @@ spec:
                       }}]
                       + decorator.spec.nodes
                     }
+
+            # Reflect the count of matched items onto the Decorator instance.
+            - id: decoratorStatus
+              patch:
+                apiVersion: experimental.kro.run/v1alpha1
+                kind: Decorator
+                metadata:
+                  name: $${decorator.metadata.name}
+                  namespace: $${decorator.metadata.namespace}
+                status:
+                  items: $${items.size()}

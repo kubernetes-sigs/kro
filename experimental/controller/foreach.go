@@ -380,7 +380,16 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 func forEachItemIdentity(item any) string {
 	if m, ok := item.(map[string]any); ok {
 		if md, ok := m["metadata"].(map[string]any); ok {
-			if name, ok := md["name"].(string); ok {
+			name, hasName := md["name"].(string)
+			ns, hasNs := md["namespace"].(string)
+			switch {
+			case hasName && hasNs && ns != "":
+				// Namespaced k8s object: namespace/name is the cluster-unique
+				// key. Using only name collides across namespaces when a
+				// forEach collection spans them (e.g. watching ConfigMaps
+				// cluster-wide: every namespace has a kube-root-ca.crt).
+				return ns + "/" + name
+			case hasName:
 				return name
 			}
 			if uid, ok := md["uid"].(string); ok {

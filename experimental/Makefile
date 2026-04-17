@@ -56,7 +56,7 @@ run: ## Run the graph controller locally (bootstraps CRDs automatically).
 
 .PHONY: apply
 apply: ## Build and deploy the graph controller to the current cluster.
-	$(KO) apply -f $(ROOT)/experimental/deploy/
+	cd $(ROOT) && $(KO) apply --bare -f experimental/deploy/
 
 .PHONY: test
 test: ## Run tests with verbose output.

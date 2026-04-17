@@ -1,5 +1,4 @@
 # Deployment for the experimental Graph controller.
-# --bootstrap is not passed here; it's for `go run` local dev only.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -21,6 +20,8 @@ spec:
       containers:
         - name: controller
           image: ko://github.com/kubernetes-sigs/kro/experimental/cmd
+          args:
+            - --bootstrap
           resources:
             requests:
               cpu: 100m

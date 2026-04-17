@@ -111,10 +111,23 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 		return ConditionFalse, "Conflict", "One or more resources have SSA field ownership conflicts"
 	}
 	if s.HasBlocked {
-		return ConditionUnknown, "Blocked", "One or more resources blocked by upstream errors"
+		msg := "One or more resources blocked by upstream errors"
+		// Surface TeardownBlocked reasons (third-party field managers,
+		// finalizer creation failure, finalizer not ready) so operators can
+		// pick the right remediation. Per 004-graph-reconciliation.md §
+		// Finalization, the three causes need different responses — collapsing
+		// them into one message is observability without actionability.
+		if len(s.nodeErrors) > 0 {
+			msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
+		}
+		return ConditionUnknown, "Blocked", msg
 	}
 	if s.HasPending {
-		return ConditionUnknown, "Pending", "One or more resources waiting for upstream data"
+		msg := "One or more resources waiting for upstream data"
+		if len(s.nodeErrors) > 0 {
+			msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
+		}
+		return ConditionUnknown, "Pending", msg
 	}
 	if s.HasNotReady {
 		msg := "One or more resources have not satisfied their readyWhen conditions"

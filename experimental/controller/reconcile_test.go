@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -1540,4 +1541,188 @@ func TestWatchKindCacheDirty_Regression(t *testing.T) {
 	delete(state.watchKindDirty, "pods")
 	assert.False(t, state.watchKindDirty["pods"],
 		"dirty flag cleared on successful merge")
+}
+
+// ---------------------------------------------------------------------------
+// finalizeSkippedStates — silent Ready fallthrough (#14) regression
+// ---------------------------------------------------------------------------
+
+// TestFinalizeSkippedStates_RestoresPreviousState exercises the happy path —
+// a node in the outputsReady set with a previousPlanStates entry has its
+// state restored so PlanSummary counts it.
+func TestFinalizeSkippedStates_RestoresPreviousState(t *testing.T) {
+	plan := &PlanState{
+		States: map[string]NodeState{
+			"n1": nodeUnvisited,
+		},
+	}
+	outputsReady := map[string]bool{"n1": true}
+	prev := map[string]NodeState{"n1": NodeReady}
+
+	finalizeSkippedStates(plan, outputsReady, prev, nil)
+
+	assert.Equal(t, NodeReady, plan.States["n1"],
+		"skipped node with prior state should restore to prior state")
+}
+
+// TestFinalizeSkippedStates_RegressionSilentReady guards against the
+// silent-Ready fallthrough documented in #14: a node in outputsReady with no
+// previousPlanStates entry previously stayed nodeUnvisited, which PlanSummary
+// silently counts as zero — the graph appeared Ready with one fewer node
+// than it actually had. The fix explicitly marks such nodes NodePending.
+func TestFinalizeSkippedStates_RegressionSilentReady(t *testing.T) {
+	plan := &PlanState{
+		States: map[string]NodeState{
+			"n1": nodeUnvisited,
+		},
+	}
+	outputsReady := map[string]bool{"n1": true}
+	// Empty previousPlanStates — the structurally-impossible case.
+	prev := map[string]NodeState{}
+
+	var diagnosedNode string
+	finalizeSkippedStates(plan, outputsReady, prev, func(id string) {
+		diagnosedNode = id
+	})
+
+	assert.Equal(t, NodePending, plan.States["n1"],
+		"skipped node with no prior state must be marked Pending, not left Unvisited")
+	assert.Equal(t, "n1", diagnosedNode,
+		"the callback should surface the diagnostic so logs record the invariant break")
+}
+
+// TestFinalizeSkippedStates_IgnoresNonSkipped confirms the helper only
+// touches nodes in outputsReady AND in nodeUnvisited — nodes that were
+// actually walked keep whatever the walker set.
+func TestFinalizeSkippedStates_IgnoresNonSkipped(t *testing.T) {
+	plan := &PlanState{
+		States: map[string]NodeState{
+			"walked": NodeError,
+			"skip":   nodeUnvisited,
+		},
+	}
+	outputsReady := map[string]bool{"skip": true} // "walked" is NOT in outputsReady
+	prev := map[string]NodeState{"skip": NodeReady, "walked": NodeReady}
+
+	finalizeSkippedStates(plan, outputsReady, prev, nil)
+
+	assert.Equal(t, NodeError, plan.States["walked"],
+		"node not in outputsReady must not be overwritten")
+	assert.Equal(t, NodeReady, plan.States["skip"],
+		"node in outputsReady with prior state gets restored")
+}
+
+// ---------------------------------------------------------------------------
+// deriveReadyCondition — structured messages for Blocked/Pending (#11, #20)
+// ---------------------------------------------------------------------------
+
+// TestDeriveReadyCondition_BlockedSurfacesStructuredReasons guards against
+// the regression where TeardownBlocked's three distinct causes (third-party
+// field managers, finalizer creation failure, finalizer not ready) collapsed
+// into one opaque "blocked by upstream errors" message. Each message is in
+// nodeErrors; the Ready condition must include them.
+func TestDeriveReadyCondition_BlockedSurfacesStructuredReasons(t *testing.T) {
+	tests := []struct {
+		name   string
+		errors []string
+		want   string
+	}{
+		{
+			name:   "third-party field managers",
+			errors: []string{"TeardownBlocked: v1/ConfigMap/default/cfg (third-party field managers: kubectl)"},
+			want:   "third-party field managers",
+		},
+		{
+			name:   "finalizer creation failure",
+			errors: []string{"TeardownBlocked: v1/PVC/default/data (finalizer creation failed: no finalizer node for target)"},
+			want:   "finalizer creation failed",
+		},
+		{
+			name:   "finalizer not ready",
+			errors: []string{"TeardownBlocked: v1/PVC/default/data (finalizer not ready: drain)"},
+			want:   "finalizer not ready",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &reconcileState{
+				compiled:    true,
+				PlanSummary: PlanSummary{HasBlocked: true},
+				nodeErrors:  tc.errors,
+			}
+			status, reason, message := s.deriveReadyCondition()
+			assert.Equal(t, ConditionUnknown, status)
+			assert.Equal(t, "Blocked", reason)
+			assert.Contains(t, message, tc.want,
+				"Blocked message must surface the structured TeardownBlocked reason, not a hardcoded stub")
+		})
+	}
+}
+
+// TestDeriveReadyCondition_PendingSurfacesReasons is the equivalent check
+// for HasPending — the stub "waiting for upstream data" is fine on its own
+// but must include nodeErrors when the Pending cause is diagnosable.
+func TestDeriveReadyCondition_PendingSurfacesReasons(t *testing.T) {
+	s := &reconcileState{
+		compiled:    true,
+		PlanSummary: PlanSummary{HasPending: true},
+		nodeErrors:  []string{"deploy: waiting for input from cfg"},
+	}
+	_, _, message := s.deriveReadyCondition()
+	assert.Contains(t, message, "waiting for input from cfg")
+}
+
+// ---------------------------------------------------------------------------
+// pickEffectiveGeneration — compile-failure fallback generation (#19)
+// ---------------------------------------------------------------------------
+
+// revisionWithGeneration builds a minimal revision fixture for tests that
+// only care about the generation label.
+func revisionWithGeneration(gen int64) *unstructured.Unstructured {
+	r := &unstructured.Unstructured{}
+	r.SetLabels(map[string]string{
+		LabelGraphGeneration: fmt.Sprintf("%d", gen),
+	})
+	return r
+}
+
+// TestPickEffectiveGeneration_HappyPath proves the default branch: when
+// compilation succeeded, the graph's live generation is what was applied,
+// so that's what gets stamped.
+func TestPickEffectiveGeneration_HappyPath(t *testing.T) {
+	graph := &unstructured.Unstructured{}
+	graph.SetGeneration(7)
+	active := revisionWithGeneration(7)
+
+	got := pickEffectiveGeneration(graph, active, nil)
+	assert.Equal(t, int64(7), got)
+}
+
+// TestPickEffectiveGeneration_RegressionFallbackGeneration guards #19: on
+// compile-failure fallback, stamping the graph's generation would label
+// resources with the generation whose spec didn't compile. The active
+// revision's generation reflects what actually materialized.
+func TestPickEffectiveGeneration_RegressionFallbackGeneration(t *testing.T) {
+	graph := &unstructured.Unstructured{}
+	graph.SetGeneration(10) // the spec at gen 10 failed to compile
+	active := revisionWithGeneration(9)
+	compileErr := errors.New("cel: undeclared reference to 'foo'")
+
+	got := pickEffectiveGeneration(graph, active, compileErr)
+	assert.Equal(t, int64(9), got,
+		"fallback must stamp the active revision's generation, not the failed one")
+}
+
+// TestPickEffectiveGeneration_FallbackWithoutRevision is a defensive case.
+// If compile failed AND no prior revision exists, the fallback path in the
+// reconciler returns early before this is called. But the helper should
+// still behave sanely: fall back to the graph generation rather than 0,
+// which would produce a "generation=0" label.
+func TestPickEffectiveGeneration_FallbackWithoutRevision(t *testing.T) {
+	graph := &unstructured.Unstructured{}
+	graph.SetGeneration(5)
+
+	got := pickEffectiveGeneration(graph, nil, errors.New("compile failed"))
+	assert.Equal(t, int64(5), got,
+		"without an active revision, fall back to the graph's generation rather than stamping 0")
 }

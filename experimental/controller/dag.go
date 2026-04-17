@@ -292,6 +292,35 @@ func (ps *PlanState) DependencyPropagateBlocked(node *Node) string {
 	return ""
 }
 
+// finalizeSkippedStates resolves node states for nodes that took the
+// outputsReady skip path and never re-dispatched via a propagation trigger.
+// Their plan.States stay at nodeUnvisited through the walk; status derivation
+// needs a real state. Restores from previousPlanStates when available, falls
+// back to NodePending when the invariant "skipped nodes have prior state" is
+// violated.
+//
+// Fallthrough case: outputsReady without a previousPlanStates entry is
+// structurally impossible today — the skip paths that set outputsReady only
+// fire when the node has prior state — but defending explicitly makes the
+// invariant checkable. A silent Ready (zero-value nodeUnvisited slipping
+// through PlanSummary, which ignores it) would under-report node count and
+// mask latent bugs. Treat "skipped with no prior state" as Pending.
+func finalizeSkippedStates(plan *PlanState, outputsReady map[string]bool, previousPlanStates map[string]NodeState, unrecognizedSkip func(nodeID string)) {
+	for nodeID := range outputsReady {
+		if plan.States[nodeID] != nodeUnvisited {
+			continue
+		}
+		if prev, ok := previousPlanStates[nodeID]; ok {
+			plan.States[nodeID] = prev
+			continue
+		}
+		plan.States[nodeID] = NodePending
+		if unrecognizedSkip != nil {
+			unrecognizedSkip(nodeID)
+		}
+	}
+}
+
 // SetState records a node's authoritative state.
 //
 // State does NOT propagate to dependents — the walk coordinator

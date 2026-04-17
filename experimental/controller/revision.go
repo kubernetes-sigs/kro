@@ -356,6 +356,23 @@ func revisionGeneration(revision *unstructured.Unstructured) int64 {
 	return gen
 }
 
+// pickEffectiveGeneration returns the generation to stamp on identity labels
+// during this reconcile. When the current-generation spec compiled cleanly,
+// the graph's live generation is what's being converged — stamp that.
+// When compilation failed and the reconciler fell back to the prior revision,
+// the labels must reflect that revision's generation, not the failed one —
+// otherwise labels lie about which generation materialized the resource.
+//
+// Per 004-graph-reconciliation.md § API Server Interaction: identity labels
+// are "the receipt of what was applied." On a fallback reconcile, what's
+// being applied is the active revision; the receipt must match.
+func pickEffectiveGeneration(graph, activeRevision *unstructured.Unstructured, compilationErr error) int64 {
+	if compilationErr != nil && activeRevision != nil {
+		return revisionGeneration(activeRevision)
+	}
+	return graph.GetGeneration()
+}
+
 // ListRevisionsForTest exports listRevisions for the test package
 // (package graphcontroller_test). Necessary because the tests are in
 // a separate package for black-box testing.

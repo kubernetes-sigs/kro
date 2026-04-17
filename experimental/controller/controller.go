@@ -742,10 +742,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// identity labels lie about which generation materialized the resource.
 	// Plumbed as an explicit parameter so the choice is visible at stamp
 	// sites rather than mutating the graph object as a side channel.
-	effectiveGeneration := graph.GetGeneration()
-	if compilationErr != nil {
-		effectiveGeneration = revisionGeneration(activeRevision)
-	}
+	effectiveGeneration := pickEffectiveGeneration(graph, activeRevision, compilationErr)
 
 	// -----------------------------------------------------------------------
 	// Phase 2: Node reconciliation from the active revision
@@ -1226,26 +1223,10 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Finalize skipped nodes: nodes that were skipped (outputsReady) and never
 	// re-dispatched via propagation trigger still have plan.States = Pending.
 	// Restore their previous state for the plan summary (status reporting).
-	//
-	// Fallthrough case: outputsReady without a previousPlanStates entry is
-	// structurally impossible today — the skip paths that set outputsReady
-	// only fire when the node has prior state — but defending explicitly
-	// makes the invariant checkable. A silent Ready (zero-value nodeUnvisited
-	// slipping through Summary, which ignores it) would under-report node
-	// count and mask latent bugs. Treat "skipped with no prior state" as
-	// Pending: we haven't confirmed anything about this node yet.
 	walkAttempted = true
-	for nodeID := range walk.outputsReady {
-		if plan.States[nodeID] == nodeUnvisited {
-			if prevState, ok := state.previousPlanStates[nodeID]; ok {
-				plan.States[nodeID] = prevState
-			} else {
-				plan.States[nodeID] = NodePending
-				logger.V(1).Info("skipped node with no prior state — marking Pending",
-					"node", nodeID)
-			}
-		}
-	}
+	finalizeSkippedStates(plan, walk.outputsReady, state.previousPlanStates, func(nodeID string) {
+		logger.V(1).Info("skipped node with no prior state — marking Pending", "node", nodeID)
+	})
 
 	// Retain previous keys for uncertain-absence nodes. These nodes were never
 	// dispatched to workers, so their keys aren't in appliedKeys yet.

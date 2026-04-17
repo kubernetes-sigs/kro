@@ -21,6 +21,15 @@ type evaluator struct {
 	compiled *compiledGraph
 	scope    map[string]any
 
+	// effectiveGeneration is the generation string to stamp on identity
+	// labels during apply. Normally matches graph.GetGeneration(). On a
+	// compilation-failure fallback, the active revision's generation is
+	// stamped instead — the labels reflect what materialized, not the
+	// generation whose spec didn't compile. Plumbed here rather than read
+	// from graph.GetGeneration() at stamp time so the choice is explicit
+	// and the graph object isn't mutated as a side channel.
+	effectiveGeneration int64
+
 	// nodeReady carries per-WatchKind readyWhen verdicts. AST-rewritten
 	// `<wk_id>.ready()` expressions look up this map via the reserved
 	// scope key (see readyrewrite.go). Scalar/forEach readiness continues
@@ -101,7 +110,7 @@ func (e *evaluator) withScope(scope map[string]any) *evaluator {
 			scope[reservedNodeReadyVar] = e.nodeReady
 		}
 	}
-	return &evaluator{compiled: e.compiled, scope: scope, nodeReady: e.nodeReady}
+	return &evaluator{compiled: e.compiled, scope: scope, nodeReady: e.nodeReady, effectiveGeneration: e.effectiveGeneration}
 }
 
 // watchKindCacheUpdate returns a map of WatchKind cache updates if the

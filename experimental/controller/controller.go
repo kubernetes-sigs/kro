@@ -466,6 +466,14 @@ func (w *walkState) tryDispatch(idx int) {
 	if len(node.IncludeWhen) > 0 {
 		included, err := w.eval.includeWhen(node.IncludeWhen)
 		if err != nil {
+			// Retain previous applied keys — the resource may still exist
+			// from a prior successful apply, and the gate expression errored
+			// before we could definitively include or exclude. Without this,
+			// includeWhen errors would produce a phantom prune candidate the
+			// prune gate already blocks on Pending/Error states, but key
+			// retention makes correctness structural rather than relying on
+			// a distant safety net.
+			w.carryForwardKeys(node.ID)
 			if errors.Is(err, ErrPending) {
 				w.plan.SetState(w.dag, node.ID, NodePending)
 			} else {
@@ -475,6 +483,10 @@ func (w *walkState) tryDispatch(idx int) {
 			return
 		}
 		if !included {
+			// Excluded is definitive absence — the node's previous resources
+			// are a legitimate prune candidate, so keys are NOT carried
+			// forward. Per 004-graph-reconciliation.md § Prune: "Excluded
+			// propagates as Excluded (definitive absence — safe to prune)."
 			w.plan.SetState(w.dag, node.ID, NodeExcluded)
 			w.notifyDependents(node.ID)
 			return
@@ -722,6 +734,19 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			"generation", revisionGeneration(activeRevision))
 	}
 
+	// effectiveGeneration is the generation to stamp on identity labels
+	// during apply. Normally this is graph.GetGeneration() — the current
+	// generation matches what we're converging to. On a compilation-failure
+	// fallback, we're converging to a prior revision, so the labels must
+	// reflect that revision's generation, not the failed one — otherwise
+	// identity labels lie about which generation materialized the resource.
+	// Plumbed as an explicit parameter so the choice is visible at stamp
+	// sites rather than mutating the graph object as a side channel.
+	effectiveGeneration := graph.GetGeneration()
+	if compilationErr != nil {
+		effectiveGeneration = revisionGeneration(activeRevision)
+	}
+
 	// -----------------------------------------------------------------------
 	// Phase 2: Node reconciliation from the active revision
 	// -----------------------------------------------------------------------
@@ -736,6 +761,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	eval := newEvaluator(state)
+	eval.effectiveGeneration = effectiveGeneration
 	dag := state.compiled.dag
 	state.initResolvedReferences()
 	plan := NewPlanState(dag)
@@ -1200,11 +1226,23 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Finalize skipped nodes: nodes that were skipped (outputsReady) and never
 	// re-dispatched via propagation trigger still have plan.States = Pending.
 	// Restore their previous state for the plan summary (status reporting).
+	//
+	// Fallthrough case: outputsReady without a previousPlanStates entry is
+	// structurally impossible today — the skip paths that set outputsReady
+	// only fire when the node has prior state — but defending explicitly
+	// makes the invariant checkable. A silent Ready (zero-value nodeUnvisited
+	// slipping through Summary, which ignores it) would under-report node
+	// count and mask latent bugs. Treat "skipped with no prior state" as
+	// Pending: we haven't confirmed anything about this node yet.
 	walkAttempted = true
 	for nodeID := range walk.outputsReady {
 		if plan.States[nodeID] == nodeUnvisited {
 			if prevState, ok := state.previousPlanStates[nodeID]; ok {
 				plan.States[nodeID] = prevState
+			} else {
+				plan.States[nodeID] = NodePending
+				logger.V(1).Info("skipped node with no prior state — marking Pending",
+					"node", nodeID)
 			}
 		}
 	}
@@ -1225,6 +1263,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	appliedKeys := walk.appliedKeys
 	nodeErrors := walk.nodeErrors
+	var nodeNotes []string // informational messages (e.g., FinalizerSkipped) routed to status without gating Ready
 
 	// Derive aggregate state from the DAG plan
 	summary := plan.Summary()
@@ -1303,12 +1342,18 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 		if len(allPreviousKeys) > 0 {
 			var deferred []string
+			var pruneBlockedReasons []string
 			var pruneNotes []string
-			deferred, pruneNotes, err = r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
-			// Surface informational notes (e.g., FinalizerSkipped) in the
-			// Graph status. Per 004-graph-reconciliation.md § Finalization:
-			// "FinalizerSkipped with a message naming the resource."
-			nodeErrors = append(nodeErrors, pruneNotes...)
+			deferred, pruneBlockedReasons, pruneNotes, err = r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
+			// Route structured results:
+			//   - blocked reasons become error text and gate Ready (HasBlocked set below)
+			//   - notes (FinalizerSkipped) become informational text, Ready stays True
+			// Per 004-graph-reconciliation.md § Finalization.
+			nodeErrors = append(nodeErrors, pruneBlockedReasons...)
+			nodeNotes = append(nodeNotes, pruneNotes...)
+			if len(pruneBlockedReasons) > 0 {
+				summary.HasBlocked = true
+			}
 			if len(deferred) > 0 {
 				prunePending = true
 				// Store deferred keys for the next reconcile to retry.
@@ -1356,6 +1401,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		nodeCount:   len(revisionSpec.Nodes),
 		PlanSummary: summary,
 		nodeErrors:  nodeErrors,
+		nodeNotes:   nodeNotes,
 	}
 	if err := r.updateStatus(ctx, graph, rstate); err != nil {
 		logger.Error(err, "status update")
@@ -1624,11 +1670,27 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// live Graph spec.
 	var teardownDAG *DAG
 	var teardownEval *evaluator
+	var teardownCompileErr error
 	if len(revisions) > 0 {
 		active := revisions[len(revisions)-1]
 		if _, state, compileErr := r.compileRevision(active); compileErr == nil {
 			teardownDAG = state.compiled.dag
 			teardownEval = newEvaluator(state)
+			// During teardown, the effective generation is the active
+			// revision's generation — the graph's live generation is
+			// irrelevant because we're not applying new state, just
+			// stamping any finalizer resources we need to create.
+			teardownEval.effectiveGeneration = revisionGeneration(active)
+		} else {
+			// Per 004-graph-reconciliation.md § Teardown, ordering comes from
+			// the active revision's DAG. If compile fails at teardown — a
+			// CRD was uninstalled mid-life, a schema change invalidated the
+			// revision — surface it so operators know why ordering fell back
+			// to the live Graph spec, and why finalizer templates that
+			// depend on evaluated scope may not run.
+			teardownCompileErr = compileErr
+			logger.Error(compileErr, "active revision failed to compile during teardown; falling back to live Graph spec",
+				"revision", active.GetName())
 		}
 	}
 
@@ -1659,7 +1721,22 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 	}
 
-	teardownBlocked := false
+	// Track structured teardown-blocked reasons per-resource so the Graph
+	// status can distinguish:
+	//   - third-party field managers still writing the resource
+	//   - finalizer creation failed (can't build or apply the finalizer resource)
+	//   - finalizer created but never reaches readyWhen
+	// Per 004-graph-reconciliation.md § Finalization, these three causes have
+	// different remediation actions; collapsing them into one message sends
+	// operators chasing the wrong problem.
+	var teardownBlockedReasons []string
+	// teardownNotes accumulates informational notes (e.g., FinalizerSkipped)
+	// that don't block teardown but are operationally useful. Per
+	// 004-graph-reconciliation.md § Finalization: "The Graph's status surfaces
+	// this: FinalizerSkipped with a message naming the resource." The prune
+	// path already surfaces these via pruneNotes; teardown gets the same
+	// treatment so the signal is consistent across both deletion paths.
+	var teardownNotes []string
 	for _, key := range deleteOrder {
 		if key == "" {
 			continue
@@ -1678,8 +1755,22 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		obj.SetName(nn.Name)
 		obj.SetNamespace(nn.Namespace)
 
-		// Check if we successfully owned this resource (has our hash annotation)
+		// Check if we successfully owned this resource (has our hash annotation).
+		// Target absent is not a teardown block — the design classifies it as
+		// FinalizerSkipped when a finalizer was declared, or a silent no-op
+		// otherwise. Emit the note so operators can tell finalization was
+		// bypassed vs never needed.
 		if err := r.Client.Get(ctx, nn, obj); err != nil {
+			if teardownDAG != nil {
+				if nodeID := keyToNodeID[key]; nodeID != "" {
+					if finalizerNodeIDs, ok := teardownDAG.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
+						logger.Info("teardown finalization skipped: target resource does not exist",
+							"key", key, "finalizers", finalizerNodeIDs)
+						teardownNotes = append(teardownNotes,
+							fmt.Sprintf("FinalizerSkipped: %s (target absent)", key))
+					}
+				}
+			}
 			continue // already gone
 		}
 		objAnnotations := obj.GetAnnotations()
@@ -1695,7 +1786,9 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if blockers := thirdPartyFieldManagers(obj, ownManager); len(blockers) > 0 {
 			logger.Info("teardown blocked: resource has other field managers",
 				"key", key, "blockers", blockers)
-			teardownBlocked = true
+			teardownBlockedReasons = append(teardownBlockedReasons,
+				fmt.Sprintf("TeardownBlocked: %s (third-party field managers: %s)",
+					key, strings.Join(blockers, ", ")))
 			continue // skip delete — finalizer holds
 		}
 
@@ -1705,17 +1798,20 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if teardownDAG != nil && teardownEval != nil {
 			nodeID := keyToNodeID[key]
 			if finalizerNodeIDs, ok := teardownDAG.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
-				ready, fk, finErr := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, teardownDAG, teardownEval, nil)
+				ready, fk, finErr := r.runFinalization(ctx, graph, obj, nodeID, finalizerNodeIDs, teardownDAG, teardownEval, nil)
 				finKeys = fk
 				if finErr != nil {
 					logger.Error(finErr, "teardown finalization failed", "key", key)
-					teardownBlocked = true
+					teardownBlockedReasons = append(teardownBlockedReasons,
+						fmt.Sprintf("TeardownBlocked: %s (finalizer creation failed: %s)", key, finErr))
 					continue // TeardownBlocked — can't create/check finalizer
 				}
 				if !ready {
 					logger.Info("teardown finalization in progress — deletion deferred",
 						"key", key, "finalizers", finalizerNodeIDs)
-					teardownBlocked = true
+					teardownBlockedReasons = append(teardownBlockedReasons,
+						fmt.Sprintf("TeardownBlocked: %s (finalizer not ready: %s)",
+							key, strings.Join(finalizerNodeIDs, ", ")))
 					continue // block deletion until all finalizers ready
 				}
 				logger.Info("teardown finalization complete", "key", key)
@@ -1791,20 +1887,43 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 	}
 
-	// If any resource deletion was blocked by third-party field managers,
-	// requeue — the finalizer holds until the other managers release.
-	// Per 004-graph-reconciliation.md § Teardown: surface TeardownBlocked so
-	// operators can identify why the Graph is stuck in deleting state.
-	if teardownBlocked {
-		logger.Info("teardown blocked: waiting for third-party field managers to release")
+	// If any resource deletion was blocked, surface each distinct reason so
+	// operators can triage. Per 004-graph-reconciliation.md § Teardown:
+	// TeardownBlocked is not a skip — the target has data the user intended
+	// to finalize. A single "teardown blocked" message collapses three
+	// distinct causes (third-party field managers, finalizer creation
+	// failure, finalizer not ready); the per-reason messages make the
+	// remediation path obvious from status.
+	//
+	// FinalizerSkipped notes are surfaced alongside blocked reasons when
+	// teardown is otherwise blocked; when teardown completes cleanly,
+	// skipped notes only appear if the Graph is about to be removed, so
+	// we log-and-drop them (status is about to vanish).
+	if len(teardownBlockedReasons) > 0 {
+		logger.Info("teardown blocked", "reasons", teardownBlockedReasons)
+		nodeErrors := append([]string{}, teardownBlockedReasons...)
+		if teardownCompileErr != nil {
+			// A compile failure during teardown degrades finalizer-aware
+			// ordering and prevents finalizer expressions from evaluating.
+			// Surface alongside the blocked reasons so the operator sees
+			// both symptoms of the same underlying cause.
+			nodeErrors = append(nodeErrors,
+				fmt.Sprintf("active revision compile failed: %s", teardownCompileErr))
+		}
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{
 			compiled:    true,
 			PlanSummary: PlanSummary{HasBlocked: true},
-			nodeErrors:  []string{"teardown blocked: waiting for third-party field managers to release"},
+			nodeErrors:  nodeErrors,
+			nodeNotes:   teardownNotes, // FinalizerSkipped — informational
 		}); statusErr != nil {
 			logger.Error(statusErr, "updating status during teardown")
 		}
 		return ctrl.Result{RequeueAfter: systemErrorRequeueInterval}, nil
+	}
+	// FinalizerSkipped during teardown: log so the event is visible even if
+	// status vanishes before the next reconcile picks it up.
+	for _, note := range teardownNotes {
+		logger.Info("teardown note", "note", note)
 	}
 
 	// Pass 3: Delete all GraphRevisions.
@@ -2004,11 +2123,13 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 	}
 
 	// When the watch infrastructure observes a new type (first informer for a
-	// GVR), check if any compiled graph had that type unresolved. If so, evict
-	// and recompile — the schema may now be available. Handles CRDs, aggregated
-	// APIs, and any other mechanism that makes a new type watchable.
+	// GVR), check if any compiled graph had that specific GVR unresolved. If
+	// so, evict and recompile — the schema may now be available. Handles
+	// CRDs, aggregated APIs, and any other mechanism that makes a new type
+	// watchable. Filtering by GVR prevents thundering-herd recompilation when
+	// only one type becomes available.
 	watchMgr.onNewType = func(gvr schema.GroupVersionResource) {
-		affected := reconciler.Caches.evictUnresolved()
+		affected := reconciler.Caches.evictUnresolved(gvr)
 		if len(affected) == 0 {
 			return
 		}

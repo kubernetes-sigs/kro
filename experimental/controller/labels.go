@@ -170,17 +170,24 @@ func hasGraphIdentityLabels(labels map[string]string, graphName, namespace strin
 // identity labels from a DIFFERENT graph than the specified one. Used by
 // the kro label check before applying an Own template — if present,
 // another kro Graph manages this resource.
+//
+// Label keys are compared case-insensitively. stamping writes lowercase keys
+// (DNS-1123 requires lowercase), but the Kubernetes API preserves whatever
+// case the client sent — an externally-authored label with mixed case would
+// escape detection if we relied on exact-match. isGraphIdentityLabel and
+// isIdentityLabel both lowercase; this function matches that invariant.
 func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespace string) (otherGraph string, found bool) {
 	mySuffix := graphLabelSuffix(myGraphName, myNamespace)
 	for key, val := range labels {
-		if !strings.HasSuffix(key, identityLabelSuffix) {
+		lowerKey := strings.ToLower(key)
+		if !strings.HasSuffix(lowerKey, identityLabelSuffix) {
 			continue
 		}
 		// This is an identity label. Check if it belongs to a different graph.
-		if !strings.HasSuffix(key, mySuffix) {
+		if !strings.HasSuffix(lowerKey, mySuffix) {
 			// Different graph. Extract graph name for the error message.
 			if val == ReferenceOwn.String() || val == ReferenceContribute.String() {
-				return graphNameFromLabel(key), true
+				return graphNameFromLabel(lowerKey), true
 			}
 		}
 	}

@@ -43,15 +43,16 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 	}
 
 	worker := &evaluator{
-		compiled:         e.compiled,
-		scope:            snap,
-		nodeReady:        workerReady,
-		forEachNewScope:  map[string]map[string]any{},
-		forEachNewKeys:   map[string]map[string][]string{},
-		forEachNewItems:  map[string][]any{},
-		forEachPrevItems: map[string][]any{},
-		forEachPrevScope: map[string]map[string]any{},
-		forEachPrevKeys:  map[string]map[string][]string{},
+		compiled:            e.compiled,
+		scope:               snap,
+		effectiveGeneration: e.effectiveGeneration,
+		nodeReady:           workerReady,
+		forEachNewScope:     map[string]map[string]any{},
+		forEachNewKeys:      map[string]map[string][]string{},
+		forEachNewItems:     map[string][]any{},
+		forEachPrevItems:    map[string][]any{},
+		forEachPrevScope:    map[string]map[string]any{},
+		forEachPrevKeys:     map[string]map[string][]string{},
 	}
 
 	// Copy forEach previous state from the shared instance for this node.
@@ -223,7 +224,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			seenResourceKeys[childResKey] = id
 
 			gv, _ := schema.ParseGroupVersion(childObj.GetAPIVersion())
-			generation := fmt.Sprintf("%d", graph.GetGeneration())
+			generation := fmt.Sprintf("%d", eval.effectiveGeneration)
 
 			// Resolve Own vs Contribute per child. Each child targets a
 			// different resource, so the reference type is item-specific.
@@ -253,9 +254,9 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 			var applied *unstructured.Unstructured
 			if childRef == ResolvedReferenceContribute {
-				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ResolvedReferenceContribute, driftCorrection)
+				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ResolvedReferenceContribute, eval.effectiveGeneration, driftCorrection)
 			} else {
-				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ResolvedReferenceOwn, driftCorrection)
+				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ResolvedReferenceOwn, eval.effectiveGeneration, driftCorrection)
 			}
 			if err != nil {
 				// Per 004-graph-reconciliation.md § Parent State: track per-child errors
@@ -399,7 +400,10 @@ func forEachItemIdentity(item any) string {
 		}
 		return h
 	}
-	// Scalar item — use string representation
+	// Scalar item — use string representation.
+	// %v on Go maps and slices is deterministic (sorts map keys as of Go 1.12),
+	// and %v on numeric types stringifies float64(5) and int64(5) to the same
+	// "5", so CEL type drift does not cause phantom child churn.
 	return fmt.Sprintf("%v", item)
 }
 

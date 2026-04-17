@@ -496,25 +496,36 @@ func (gc *graphCaches) CacheSizes() (compiledCount, instanceCount int) {
 }
 
 // evictUnresolved nils out compiled pointers for instance states whose
-// compiledGraph had unresolved GVKs, and removes those compiledGraphs from
-// the compiled cache. Returns the affected Graph keys so callers can enqueue
-// them for recompilation. Called when a CRD is installed — the previously-
+// compiledGraph had the specified GVR as an unresolved GVK, and removes those
+// compiledGraphs from the compiled cache. Returns the affected Graph keys so
+// callers can enqueue them for recompilation. Called when a new type becomes
+// watchable (CRD install, aggregated API registration) — the previously-
 // unresolvable schema may now be available.
+//
+// Filtering by GVR prevents thundering-herd recompilation when one new type
+// appears: only Graphs that reference THAT type are recompiled. Graphs still
+// waiting on other unresolved GVKs are left alone — their compiled cache stays
+// valid until the GVK they actually need resolves.
 //
 // The instanceState stays in the instances map with compiled == nil. On the
 // next reconcile, compileRevision detects this and recompiles in-place,
 // preserving per-node mutable state (hashes, scopes, drift timers, applied
 // keys) that is valid across type-resolution recompilation.
-func (gc *graphCaches) evictUnresolved() []graphKey {
+func (gc *graphCaches) evictUnresolved(gvr schema.GroupVersionResource) []graphKey {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()
 
-	// Find compiled graphs with unresolved GVKs.
+	// Find compiled graphs whose unresolved GVK set matches this GVR.
+	// GVR comparison: group + version must match, resource must match the
+	// pluralized kind. Use gvkToGVR for a single source of truth.
 	evictHashes := make(map[string]bool)
 	for hash, compiled := range gc.compiled {
-		if len(compiled.unresolvedGVKs) > 0 {
-			evictHashes[hash] = true
-			delete(gc.compiled, hash)
+		for _, unresolved := range compiled.unresolvedGVKs {
+			if gvkToGVR(unresolved) == gvr {
+				evictHashes[hash] = true
+				delete(gc.compiled, hash)
+				break
+			}
 		}
 	}
 	if len(evictHashes) == 0 {

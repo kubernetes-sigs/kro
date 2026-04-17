@@ -134,18 +134,23 @@ func (m *WatchManager) ensureWatch(gvr schema.GroupVersionResource, ownerID stri
 	m.log.V(1).Info("informer started", "gvr", gvr)
 	m.mu.Unlock()
 
-	// Notify that a new type is being watched. This triggers recompilation
-	// for Graphs that had this type unresolved — the schema may now be available.
-	if m.onNewType != nil {
-		m.onNewType(gvr)
-	}
-
-	// Wait for sync outside the lock
+	// Wait for sync outside the lock. Firing onNewType BEFORE the cache is
+	// synced races the recompile: a Graph that evicts and recompiles on the
+	// notification may hit the schema resolver before the informer has
+	// populated the discovery cache, and compile silently falls back to dyn
+	// again. Sync first, notify second — the informer is authoritative by
+	// the time the callback runs.
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer syncCancel()
 	if !cache.WaitForCacheSync(syncCtx.Done(), inf.HasSynced) {
 		m.forceStop(gvr)
 		return fmt.Errorf("cache sync timeout for %s", gvr)
+	}
+
+	// Notify that a new type is being watched. This triggers recompilation
+	// for Graphs that had this type unresolved — the schema may now be available.
+	if m.onNewType != nil {
+		m.onNewType(gvr)
 	}
 
 	return nil

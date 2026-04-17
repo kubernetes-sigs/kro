@@ -101,6 +101,12 @@ func isAPIServerManager(manager string) bool {
 // can be deleted. Returns (false, nil) when finalizers are in progress.
 // Returns (false, err) when a finalizer can't be created.
 //
+// targetNodeID is the node ID whose template produces the target — the caller
+// has already matched the target's resource key to a node, so we don't
+// re-discover it here. Passing the nodeID explicitly removes the dependence
+// on name/namespace being statically resolvable (templated names would have
+// failed the previous match-by-template loop silently).
+//
 // The sequence is recoverable — no state machine. Each call derives position
 // from cluster state:
 //  1. Finalizer resource doesn't exist → create it
@@ -111,6 +117,7 @@ func (r *GraphReconciler) runFinalization(
 	ctx context.Context,
 	graph *unstructured.Unstructured,
 	target *unstructured.Unstructured,
+	targetNodeID string,
 	finalizerNodeIDs []string,
 	dag *DAG,
 	eval *evaluator,
@@ -122,22 +129,12 @@ func (r *GraphReconciler) runFinalization(
 	// the target is successfully deleted.
 	var keys []string
 
-	// Put the target's data in scope so finalizer templates can reference it.
-	// The target is still alive (no deletionTimestamp).
-	//
-	// TODO(suspected-bug): resolvedResourceKey's doc says it operates on
-	// templates where CEL expressions have already been resolved, but this
-	// call passes node.Identity() (formerly node.Template) — the unresolved
-	// template. Identity() preserves the pre-existing behavior of this
-	// call, but the behavior itself may be wrong: nodes whose metadata.name
-	// contains ${...} would fail to match the target even when they should.
-	// Investigate whether the doc is wrong (this is the intended call) or
-	// the call is wrong (should evaluate before computing the key).
-	for _, node := range dag.Nodes {
-		if resourceKey(target) == resolvedResourceKey(node.Identity(), graph.GetNamespace()) {
-			eval.scope[node.ID] = normalizeTypes(target.Object)
-			break
-		}
+	// Put the target's data in scope under its node ID so finalizer
+	// templates can reference it (e.g., to embed the target's name/uid
+	// in the finalizer resource). The target is still alive (no
+	// deletionTimestamp).
+	if targetNodeID != "" {
+		eval.scope[targetNodeID] = normalizeTypes(target.Object)
 	}
 
 	allReady := true
@@ -186,7 +183,7 @@ func (r *GraphReconciler) runFinalization(
 			// Step 1: Finalizer resource doesn't exist — create it.
 			logger.Info("creating finalizer resource", "finalizer", finNodeID,
 				"target", target.GetName())
-			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, ResolvedReferenceOwn, false)
+			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, ResolvedReferenceOwn, eval.effectiveGeneration, false)
 			if applyErr != nil {
 				return false, keys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
 			}
@@ -264,10 +261,11 @@ func (r *GraphReconciler) runForEachFinalization(
 				childObj.SetNamespace(graph.GetNamespace())
 			}
 
-			// Stamp forEach child identity labels.
+			// Stamp forEach child identity labels using the reconcile-scoped
+			// effective generation (falls back to graph generation when unset).
 			gvk := childObj.GroupVersionKind()
 			gv, _ := schema.ParseGroupVersion(childObj.GetAPIVersion())
-			generation := fmt.Sprintf("%d", graph.GetGeneration())
+			generation := fmt.Sprintf("%d", eval.effectiveGeneration)
 			lbls := childObj.GetLabels()
 			if lbls == nil {
 				lbls = map[string]string{}
@@ -297,7 +295,7 @@ func (r *GraphReconciler) runForEachFinalization(
 				// Child doesn't exist — create it.
 				logger.Info("creating forEach finalizer child",
 					"finalizer", finNode.ID, "name", childObj.GetName())
-				applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, ResolvedReferenceOwn, false)
+				applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, ResolvedReferenceOwn, eval.effectiveGeneration, false)
 				if applyErr != nil {
 					return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
 				}
@@ -323,34 +321,6 @@ func (r *GraphReconciler) runForEachFinalization(
 	}
 
 	return allReady, createdKeys, nil
-}
-
-// resolvedResourceKey builds a resource key from an already-evaluated
-// template map, matching the key format used by resourceKey(). Unlike
-// staticResourceKey, this operates on templates where CEL expressions have
-// already been resolved — it reads metadata.namespace directly and never
-// skips names containing ${...}. Used for finalizer target lookup during
-// prune/teardown.
-func resolvedResourceKey(tmpl map[string]any, defaultNS string) string {
-	if tmpl == nil {
-		return ""
-	}
-	apiVersion, _ := tmpl["apiVersion"].(string)
-	kind, _ := tmpl["kind"].(string)
-	md, _ := tmpl["metadata"].(map[string]any)
-	if md == nil {
-		return ""
-	}
-	name, _ := md["name"].(string)
-	ns, _ := md["namespace"].(string)
-	if ns == "" {
-		ns = defaultNS
-	}
-	if apiVersion == "" || kind == "" || name == "" {
-		return ""
-	}
-	gvk := schema.FromAPIVersionAndKind(apiVersion, kind)
-	return fmt.Sprintf("%s/%s/%s/%s/%s", gvk.Group, gvk.Version, gvk.Kind, ns, name)
 }
 
 // ---------------------------------------------------------------------------
@@ -474,11 +444,6 @@ func parseContributeKey(key string) (resKey string, hasStatus bool) {
 // templateHasStatus returns true if a template map contains a non-nil
 // status field. Used during teardown to determine whether release apply
 // must also release the status subresource.
-//
-// TODO: when the explicit keyword schema lands, Contribute nodes declare
-// status delegation via the `patch` keyword's shape — this shape-sniffing
-// becomes unnecessary because the parser already knows whether a patch
-// body includes status.
 func templateHasStatus(tmpl map[string]any) bool {
 	s, ok := tmpl["status"]
 	return ok && s != nil
@@ -498,13 +463,23 @@ func templateHasStatus(tmpl map[string]any) bool {
 //     Contribute falls through to apply.
 //   - Apply hash annotation: Own only (Contribute targets are owned by others).
 //
+// applySSA applies a template via server-side apply (SSA). Handles both Own
+// and Contribute references — the ref parameter gates identity-label stamping,
+// SSA fieldOwner, and the kro-label conflict check (Own only).
+//
+// generation is the value to stamp on the identity-generation label. Normally
+// matches graph.GetGeneration(); callers pass the reconcile-scoped effective
+// generation (the active revision's generation when the current generation
+// failed to compile). Explicit parameter rather than reading from graph so
+// the choice is visible at the call site.
+//
 // driftCorrection bypasses the content-addressed apply hash check.
 // Per 004-graph-reconciliation.md § Reconcile: "The drift timer bypasses the
 // template-hash check — apply unconditionally, because server-side
 // defaulters and mutating webhooks can change fields without changing
 // the desired state hash. SSA is idempotent; the apply corrects drift
 // as a side effect."
-func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, ref ResolvedReference, driftCorrection bool) (*unstructured.Unstructured, error) {
+func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, ref ResolvedReference, generation int64, driftCorrection bool) (*unstructured.Unstructured, error) {
 	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
@@ -513,7 +488,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	}
 
 	// Stamp identity labels per 004-graph-reconciliation.md § API Server Interaction.
-	generation := fmt.Sprintf("%d", graph.GetGeneration())
+	generationStr := fmt.Sprintf("%d", generation)
 	lbls := obj.GetLabels()
 	if lbls == nil {
 		lbls = map[string]string{}
@@ -522,13 +497,13 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		// Own: skip stamping if identity labels are already present (e.g., forEach
 		// children stamp their own child-scoped labels before calling applySSA).
 		if !hasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
-			lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ResolvedReferenceOwn)
+			lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, ResolvedReferenceOwn)
 			obj.SetLabels(lbls)
 		}
 	} else {
 		// Contribute: always stamp identity labels so resources are discoverable via
 		// deriveAppliedSet() after controller restart.
-		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generation, ResolvedReferenceContribute)
+		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, ResolvedReferenceContribute)
 		obj.SetLabels(lbls)
 	}
 
@@ -707,19 +682,25 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 // ---------------------------------------------------------------------------
 
 // pruneRemovedResources deletes or releases resources no longer in the applied
-// set. Returns (deferredKeys, notes, err):
+// set. Returns (deferredKeys, blockedReasons, notes, err):
 //   - deferredKeys: keys of resources whose deletion was deferred this cycle
 //     (finalization in progress, blocked by third-party field managers, etc.).
 //     The caller must include these in deferredPruneKeys for the next
 //     reconcile so they remain visible as prune candidates, AND must not GC
 //     superseded revisions while any deferral is active — the superseded DAG's
 //     finalizer relationships are still needed to complete the sequence.
-//   - notes: informational messages for the Graph status (e.g., FinalizerSkipped).
+//   - blockedReasons: TeardownBlocked messages distinguishing third-party
+//     field managers, finalizer creation failure, and readyWhen failure.
+//     These become error text in the Ready condition — they gate Ready.
+//   - notes: informational messages (e.g., FinalizerSkipped) that don't gate
+//     Ready. Routed to reconcileState.nodeNotes at the caller so healthy
+//     graphs with notes still report Ready=True with the note in the message.
 //   - err: hard error from an API call; sets pruneOK=false at the call site.
-func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, supersededDAGs map[string]*DAG, eval *evaluator, watcher *graphWatcher) ([]string, []string, error) {
+func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, supersededDAGs map[string]*DAG, eval *evaluator, watcher *graphWatcher) ([]string, []string, []string, error) {
 	logger := log.FromContext(ctx)
 	var deferredKeys []string
-	var notes []string // informational messages for status (e.g., FinalizerSkipped)
+	var blockedReasons []string // TeardownBlocked messages — gates Ready
+	var notes []string          // informational messages (FinalizerSkipped) — does not gate Ready
 	// deferredDeletes collects finalizer resource keys whose targets were
 	// successfully deleted in this walk. These are processed after the walk
 	// completes — not inline — to avoid corrupting forEach finalization
@@ -893,24 +874,36 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		if blockers := thirdPartyFieldManagers(obj, ownManager); len(blockers) > 0 {
 			logger.Info("prune blocked: resource has other field managers",
 				"key", key, "blockers", blockers)
+			blockedReasons = append(blockedReasons, fmt.Sprintf(
+				"TeardownBlocked: %s (third-party field managers: %s)",
+				key, strings.Join(blockers, ", ")))
 			deferredKeys = append(deferredKeys, key)
 			continue // resource stays in applied set — retry next reconcile
 		}
 
 		// Finalization: if this target has finalizer nodes (from any revision),
-		// run the finalization sequence before deleting.
+		// run the finalization sequence before deleting. Per
+		// 004-graph-reconciliation.md § Finalization, creation failure and
+		// readyWhen failure are distinct TeardownBlocked causes — operators
+		// need to tell them apart to pick the right remediation.
 		var targetFinalizerKeys []string // keys from THIS target's finalization only
 		nodeID := keyToNodeID[key]
 		if finDAG, finalizerNodeIDs := findFinalizers(nodeID); finDAG != nil {
-			ready, fKeys, err := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, finDAG, eval, watcher)
+			ready, fKeys, err := r.runFinalization(ctx, graph, obj, nodeID, finalizerNodeIDs, finDAG, eval, watcher)
 			targetFinalizerKeys = fKeys
 			if err != nil {
 				logger.Error(err, "finalization failed", "key", key)
+				blockedReasons = append(blockedReasons, fmt.Sprintf(
+					"TeardownBlocked: %s (finalizer creation failed: %s)", key, err))
+				deferredKeys = append(deferredKeys, key)
 				continue // block deletion — TeardownBlocked
 			}
 			if !ready {
 				logger.Info("finalization in progress — deletion deferred",
 					"key", key, "finalizers", finalizerNodeIDs)
+				blockedReasons = append(blockedReasons, fmt.Sprintf(
+					"TeardownBlocked: %s (finalizer not ready: %s)",
+					key, strings.Join(finalizerNodeIDs, ", ")))
 				deferredKeys = append(deferredKeys, key)
 				continue // block deletion until all finalizers ready
 			}
@@ -919,7 +912,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 		if err := r.Client.Delete(ctx, obj); err != nil {
 			if client.IgnoreNotFound(err) != nil {
-				return deferredKeys, notes, fmt.Errorf("pruning %s: %w", key, err)
+				return deferredKeys, blockedReasons, notes, fmt.Errorf("pruning %s: %w", key, err)
 			}
 		} else {
 			logger.Info("pruned resource", "key", key)
@@ -955,7 +948,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		}
 	}
 
-	return deferredKeys, notes, nil
+	return deferredKeys, blockedReasons, notes, nil
 }
 
 // findManagedResourceKeys discovers dynamically-named resources (forEach, CEL

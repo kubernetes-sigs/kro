@@ -658,8 +658,9 @@ func TestEvictUnresolved(t *testing.T) {
 		assert.Equal(t, 2, compiledCount)
 		assert.Equal(t, 2, instanceCount)
 
-		// Evict unresolved.
-		affected := caches.evictUnresolved()
+		// Evict for the GVR that matches the unresolved GVK.
+		fooGVR := gvkToGVR(schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Foo"})
+		affected := caches.evictUnresolved(fooGVR)
 
 		// The unresolved compiledGraph is removed from the compiled cache.
 		// The instanceState stays in instances with compiled == nil.
@@ -691,11 +692,53 @@ func TestEvictUnresolved(t *testing.T) {
 		resolvedCompiled := &compiledGraph{specHash: "hash-resolved"}
 		caches.set("default/graph-g00001", &instanceState{compiled: resolvedCompiled})
 
-		affected := caches.evictUnresolved()
+		// No unresolved compilations → no-op regardless of GVR.
+		affected := caches.evictUnresolved(gvkToGVR(schema.GroupVersionKind{
+			Group: "example.com", Version: "v1", Kind: "Widget",
+		}))
 		assert.Empty(t, affected)
 
 		compiledCount, _ := caches.CacheSizes()
 		assert.Equal(t, 1, compiledCount)
+	})
+
+	// Regression: before the fix, evictUnresolved ignored the incoming GVR and
+	// evicted every compiled graph with any unresolved GVK. Installing one CRD
+	// could thunder-herd-recompile Graphs still waiting on a different CRD.
+	// The filtered version only evicts compiled graphs whose unresolved set
+	// includes the GVR that just became watchable.
+	t.Run("RegressionGVRFilter_onlyEvictsMatchingGVR", func(t *testing.T) {
+		caches := newGraphCaches()
+
+		fooCompiled := &compiledGraph{
+			specHash: "hash-foo",
+			unresolvedGVKs: []schema.GroupVersionKind{
+				{Group: "example.com", Version: "v1", Kind: "Foo"},
+			},
+		}
+		caches.set("default/foo-graph-g00001", &instanceState{compiled: fooCompiled})
+
+		barCompiled := &compiledGraph{
+			specHash: "hash-bar",
+			unresolvedGVKs: []schema.GroupVersionKind{
+				{Group: "example.com", Version: "v1", Kind: "Bar"},
+			},
+		}
+		caches.set("default/bar-graph-g00001", &instanceState{compiled: barCompiled})
+
+		// Foo becomes available — only the foo graph should be evicted.
+		fooGVR := gvkToGVR(schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Foo"})
+		affected := caches.evictUnresolved(fooGVR)
+		require.Len(t, affected, 1)
+		assert.Equal(t, "foo-graph", affected[0].Name)
+
+		// Bar's compiledGraph must still be cached — it's waiting on Bar, not Foo.
+		assert.NotNil(t, caches.getCompiled("hash-bar"))
+		assert.Nil(t, caches.getCompiled("hash-foo"))
+
+		barState := caches.get("default/bar-graph-g00001")
+		require.NotNil(t, barState)
+		assert.NotNil(t, barState.compiled, "bar graph's compiled pointer must be intact")
 	})
 }
 

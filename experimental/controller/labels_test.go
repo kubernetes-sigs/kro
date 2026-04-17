@@ -144,6 +144,23 @@ func TestHasOtherGraphIdentityLabel(t *testing.T) {
 	assert.False(t, found)
 }
 
+// Regression: externally-authored identity labels with mixed case (e.g., a
+// human adding a label through kubectl edit, or a label that survived an
+// upgrade from a pre-lowercase-normalized version) must still trigger the
+// conflict check. isGraphIdentityLabel and isIdentityLabel both lowercase
+// before compare; hasOtherGraphIdentityLabel must match that invariant.
+func TestHasOtherGraphIdentityLabel_RegressionMixedCase(t *testing.T) {
+	mixedCase := map[string]string{
+		// Identity label key with uppercase characters — would never be
+		// stamped by the controller (stamping enforces lowercase), but
+		// could be present from an edit or older stamping.
+		"Deploy.Other-App.Default.internal.kro.run/reference": "own",
+	}
+	otherGraph, found := hasOtherGraphIdentityLabel(mixedCase, "my-app", "default")
+	assert.True(t, found, "mixed-case identity label from another graph must be detected")
+	assert.Equal(t, "other-app", otherGraph, "graph name should be lowercased in the returned value")
+}
+
 func TestSetIdentityLabels(t *testing.T) {
 	labels := setIdentityLabels(nil, "deploy", "my-app", "default", "3", ResolvedReferenceOwn)
 	assert.Equal(t, "own", labels["deploy.my-app.default.internal.kro.run/reference"])

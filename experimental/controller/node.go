@@ -126,12 +126,33 @@ func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructu
 //
 // Decision tree:
 //   - Resource absent → Own (we'll create it)
-//   - Resource exists with this Graph's contribute label → Contribute
-//   - Resource exists with this Graph's own label → Own (we created it previously)
+//   - Resource exists with this Graph's `reference=contribute` label → Contribute
+//     (re-adopt an earlier Contribute — label value is authoritative)
+//   - Resource exists with this Graph's `reference=own` label → Own
+//     (re-adopt a resource we created on a previous reconcile; survives
+//     controller restart and revision rollover — the label proves provenance)
 //   - Resource exists without any of this Graph's labels → Contribute
+//     (another actor created it; we may only contribute fields)
 //
-// Returns a non-nil error only for transient failures (network, server error).
-// NotFound is not an error — it maps to Own.
+// Re-adoption by label is the structural complement to first-time
+// classification: the applied set is derived from identity labels, so a
+// resource stamped by this Graph in a previous life MUST classify back to
+// the same reference. Ignoring the label on re-adoption would flip Own
+// resources into Contribute after every restart. Per 003-ownership.md §
+// Identity Labels.
+//
+// Error contract:
+//   - NotFound → Own, nil error (the common first-reconcile path)
+//   - Transient error (network, 5xx) → Unresolved, non-nil error
+//     (retry on next reconcile; the caller turns this into NodePending or
+//     NodeSystemError)
+//   - Any other unexpected GET failure → Unresolved, non-nil error
+//
+// Before the fix, transient errors returned ReferenceOwn — which caused the
+// caller to proceed with Own semantics (SSA apply, identity-label stamping)
+// against a resource whose current state was unknown. On a 5xx transient,
+// this could race with another actor's creation and trip the identity-label
+// conflict check on the next successful read.
 func (r *GraphReconciler) classifyReference(ctx context.Context, graph *unstructured.Unstructured, gvk schema.GroupVersionKind, namespace, name string) (Reference, error) {
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(gvk)
@@ -140,7 +161,7 @@ func (r *GraphReconciler) classifyReference(ctx context.Context, graph *unstruct
 		if apierrors.IsNotFound(err) {
 			return ReferenceOwn, nil
 		}
-		return ReferenceOwn, err
+		return ReferenceUnresolved, err
 	}
 
 	// Resource exists. Check if this Graph created it (identity label match).
@@ -440,7 +461,7 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 		return "", fmt.Errorf("%s %s: %w", ref, node.ID, err)
 	}
 
-	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, ref, driftCorrection)
+	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, ref, eval.effectiveGeneration, driftCorrection)
 	if err != nil {
 		return "", err
 	}

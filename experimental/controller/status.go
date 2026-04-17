@@ -39,8 +39,19 @@ type reconcileState struct {
 	compiledErr error // non-nil when compiled=false
 
 	PlanSummary
-	nodeErrors []string // "nodeID: reason" for status message
-	nodeCount  int
+	// nodeErrors carries error messages ("nodeID: reason") surfaced when any
+	// of the HasX flags fire. These are the reason text for NotReady/Error/
+	// Blocked conditions.
+	nodeErrors []string
+	// nodeNotes carries informational messages that don't gate Ready — e.g.,
+	// FinalizerSkipped emitted during prune when the target resource was
+	// already absent. Notes appear in the Ready condition message when the
+	// graph is otherwise healthy, so operators see the event without being
+	// misled by an Unknown/False status. Per 004-graph-reconciliation.md §
+	// Finalization: "FinalizerSkipped is not an error — finalization was
+	// bypassed because there was nothing to finalize."
+	nodeNotes []string
+	nodeCount int
 }
 
 // deriveCompiledCondition computes the Compiled condition.
@@ -121,8 +132,13 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	// constitute errors but are operationally useful. Per 004-graph-reconciliation.md
 	// § Finalization: "The Graph's status surfaces this: FinalizerSkipped
 	// with a message naming the resource."
-	if len(s.nodeErrors) > 0 {
-		msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
+	//
+	// Notes are kept separate from errors (reconcileState.nodeErrors) so that
+	// a healthy graph with an informational note doesn't have its message
+	// parenthesized with error text — the parens are reserved for actionable
+	// problems. Callers route errors to nodeErrors and info to nodeNotes.
+	if len(s.nodeNotes) > 0 {
+		msg += " (" + strings.Join(s.nodeNotes, "; ") + ")"
 	}
 	return ConditionTrue, "Ready", msg
 }

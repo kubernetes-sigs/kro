@@ -120,6 +120,30 @@ spec:
           #   Do not "simplify" by folding .ready() calls into the template and
           #   dropping this gate — the DAG bug survives until upstream fixes it.
           #   Tracking: https://github.com/kubernetes-sigs/kro/issues/1256
+          #
+          # Instance GVK labels (kro.run/instance-*):
+          #   Upstream kro stamps these on every managed child resource (see
+          #   pkg/metadata/labels.go NewInstanceLabeler). They make managed
+          #   resources selectable by parent instance — e.g. a user querying
+          #   "all resources belonging to instance foo" uses these labels.
+          #   The Graph controller is instance-agnostic, so the RGD stdlib
+          #   injects them at render time by deep-merging into each resource's
+          #   template.metadata.labels. The .merge() CEL function is shallow,
+          #   hence the nested merge expression.
+          #
+          # Force-apply annotation (kro.run/apply: Force):
+          #   RGD semantics are "declared state is the source of truth." When
+          #   an external actor mutates a managed field, the next reconcile
+          #   must stomp that mutation back to declared state. Upstream kro
+          #   implements this by using Force on every SSA apply (see
+          #   pkg/controller/instance/applyset/applyset.go). The Graph
+          #   controller exposes Force as per-resource opt-in via the
+          #   kro.run/apply: Force annotation; the RGD stdlib opts in on every
+          #   managed child to match upstream's always-force RGD contract.
+          #   Consequence: manually-edited managed fields revert on the next
+          #   reconcile. This is correct for RGD users — they chose the RGD
+          #   abstraction to delegate lifecycle. Users who want cooperative
+          #   field ownership should use Kind directly, not RGD.
           nodes: >-
             ${
               [{"id": "schema", "template": {
@@ -130,7 +154,24 @@ spec:
                   "namespace": instance.metadata.namespace
                 }
               }}]
-              + schema.spec.resources.map(r, r.merge({"propagateWhen": has(r.readyWhen) ? r.readyWhen : ["true"]}))
+              + schema.spec.resources.map(r, r.merge({
+                "propagateWhen": has(r.readyWhen) ? r.readyWhen : ["true"],
+                "template": r.template.merge({
+                  "metadata": (has(r.template.metadata) ? r.template.metadata : {}).merge({
+                    "labels": (has(r.template.metadata) && has(r.template.metadata.labels) ? r.template.metadata.labels : {}).merge({
+                      "kro.run/instance-id": string(instance.metadata.uid),
+                      "kro.run/instance-name": instance.metadata.name,
+                      "kro.run/instance-namespace": instance.metadata.namespace,
+                      "kro.run/instance-group": schema.spec.schema.group,
+                      "kro.run/instance-version": schema.spec.schema.apiVersion,
+                      "kro.run/instance-kind": schema.spec.schema.kind
+                    }),
+                    "annotations": (has(r.template.metadata) && has(r.template.metadata.annotations) ? r.template.metadata.annotations : {}).merge({
+                      "kro.run/apply": "Force"
+                    })
+                  })
+                })
+              }))
               + [{"id": "rgdInstanceStatus",
                  "readyWhen": (schema.spec.resources.size() == 0 ? ["${true}"] : schema.spec.resources.map(r, "${" + r.id + ".ready()}")),
                  "template": {

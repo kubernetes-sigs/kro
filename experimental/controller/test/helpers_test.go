@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -278,23 +279,95 @@ func waitForAbsence(ctx context.Context, c client.Client, gvk schema.GroupVersio
 	}
 }
 
+// referenceLabelValue returns the identity label value stamped on obj for
+// the named Graph — "own" or "contribute" — or ("", false) if no identity
+// label is present for that Graph.
+//
+// The identity label key encodes the stamping Graph's name and namespace,
+// so a resource touched by multiple Graphs has one label per Graph; this
+// helper finds the one for graphName.
+func referenceLabelValue(obj *unstructured.Unstructured, graphName string) (string, bool) {
+	suffix := "." + graphName + "." + obj.GetNamespace() + ".internal.kro.run/reference"
+	for key, val := range obj.GetLabels() {
+		if strings.HasSuffix(key, suffix) {
+			return val, true
+		}
+	}
+	return "", false
+}
+
 // assertManagedBy checks that a resource has identity labels indicating it's
 // managed by the named Graph. Uses the DNS subdomain identity label scheme.
 func assertManagedBy(t *testing.T, obj *unstructured.Unstructured, graphName string) {
 	t.Helper()
-	labels := obj.GetLabels()
-	// Check that at least one identity label exists for this graph.
-	found := false
-	for key, val := range labels {
-		if strings.HasSuffix(key, "."+graphName+"."+obj.GetNamespace()+".internal.kro.run/reference") {
-			found = true
-			assert.Contains(t, []string{"own", "contribute"}, val,
-				"%s should have valid role label for Graph %s", obj.GetName(), graphName)
-			break
-		}
+	val, ok := referenceLabelValue(obj, graphName)
+	if !assert.True(t, ok,
+		"%s should be managed by Graph %s (no identity label found)", obj.GetName(), graphName) {
+		return
 	}
-	assert.True(t, found,
-		"%s should be managed by Graph %s (no identity label found)", obj.GetName(), graphName)
+	assert.Contains(t, []string{"own", "contribute"}, val,
+		"%s should have valid role label for Graph %s", obj.GetName(), graphName)
+}
+
+// assertReferenceClassification asserts that a resource's identity label for
+// the named Graph matches want ("own" or "contribute"). Use this to pin the
+// classification a Graph has arrived at — e.g., to verify a Contribute→Own
+// transition has completed.
+func assertReferenceClassification(t *testing.T, obj *unstructured.Unstructured, graphName, want string) {
+	t.Helper()
+	val, ok := referenceLabelValue(obj, graphName)
+	if !assert.True(t, ok,
+		"%s should carry an identity label for Graph %s", obj.GetName(), graphName) {
+		return
+	}
+	assert.Equal(t, want, val,
+		"%s identity label for Graph %s should be %q, got %q", obj.GetName(), graphName, want, val)
+}
+
+// waitForReferenceClassification polls until a resource's identity label for
+// the named Graph matches want, or the context expires. Used when a
+// classification flip is in flight — the reconciler updates the label
+// asynchronously after a re-resolution event (e.g., Contribute→Own when the
+// target's original owner is torn down).
+//
+// This helper only confirms the final state, not that a transition occurred.
+// When verifying a transition, book-end the wait with a pre-state assertion
+// (e.g., assertReferenceClassification(..., "contribute") before the
+// triggering action) so that an unexpectedly-already-terminal label fails the
+// test loudly rather than passing silently.
+//
+// Returns nil on success, or a descriptive error (wrapping
+// context.DeadlineExceeded when the classification never reaches want).
+func waitForReferenceClassification(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, key types.NamespacedName, graphName, want string, timeout ...time.Duration) error {
+	t := 30 * time.Second
+	if len(timeout) > 0 {
+		t = timeout[0]
+	}
+	var lastSeen string
+	err := wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, t, true,
+		func(ctx context.Context) (bool, error) {
+			obj := &unstructured.Unstructured{}
+			obj.SetGroupVersionKind(gvk)
+			if err := c.Get(ctx, key, obj); err != nil {
+				if apierrors.IsNotFound(err) {
+					lastSeen = "(absent)"
+					return false, nil
+				}
+				return false, err
+			}
+			val, ok := referenceLabelValue(obj, graphName)
+			if !ok {
+				lastSeen = "(no label)"
+				return false, nil
+			}
+			lastSeen = val
+			return val == want, nil
+		})
+	if err != nil {
+		return fmt.Errorf("waiting for %s/%s classification by %s to be %q (last seen %q): %w",
+			key.Namespace, key.Name, graphName, want, lastSeen, err)
+	}
+	return nil
 }
 
 // uniqueGroup returns a unique API group for test CRD isolation. CRDs are

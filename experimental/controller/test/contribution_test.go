@@ -324,17 +324,10 @@ func TestContribution(t *testing.T) {
 	assert.Equal(t, "3", data["replicas"],
 		"contribution should preserve existing data fields")
 
-	// THE KEY ASSERTION: The external object should NOT have an Own identity
-	// label from our Graph. Contributions are partial — they set a "contribute"
-	// role, not "own".
-	extLabels := updatedExternal.GetLabels()
-	// Check that no identity label for this graph has role "own"
-	for key, val := range extLabels {
-		if strings.HasSuffix(key, ".test-contribution."+ns+".internal.kro.run/reference") {
-			assert.NotEqual(t, "own", val,
-				"contribution should NOT set 'own' role label on external object")
-		}
-	}
+	// THE KEY ASSERTION: the external object carries a "contribute" identity
+	// label from our Graph, not "own". Contributions are partial writes —
+	// they must never claim full ownership of a resource they didn't create.
+	assertReferenceClassification(t, updatedExternal, "test-contribution", "contribute")
 
 	t.Logf("Contribution applied: webapp-instance now has deployment-name=%s, deployment-uid=%s",
 		annotations["kro.run/deployment-name"], annotations["kro.run/deployment-uid"])

@@ -1,15 +1,15 @@
 # Singleton — declare a resource that should exist exactly once.
 #
 # A Kind whose per-instance Graph watches all Singletons and
-# self-determines if it is the winner. Only the winner creates the
-# target resource (via includeWhen gate).
+# self-determines if it is the claim holder. Only the holder creates
+# the target resource (via includeWhen gate).
 #
-# Priority resolution: highest spec.priority wins. Ties broken by
-# lexicographically lowest metadata.name.
+# Priority resolution: highest spec.priority holds the claim. Ties
+# broken by lexicographically lowest metadata.name.
 #
-# Failover: when the winning Singleton is deleted, its per-instance
+# Failover: when the holding Singleton is deleted, its per-instance
 # Graph is torn down (target resource deleted). The remaining
-# per-instance Graphs re-evaluate, and the new winner creates the
+# per-instance Graphs re-evaluate, and the next holder creates the
 # resource.
 #
 # Complexity: each per-instance Graph watches all Singletons (O(N²)
@@ -22,8 +22,8 @@
 #   - identities:  flatten each singleton to {name, priority, identity}
 #   - identity:    this Singleton's target identity
 #   - peers:       singletons targeting the same resource
-#   - winner:      highest priority peer (stable sort, take first)
-#   - target:      the actual resource, only created if this Singleton won
+#   - holder:      highest priority peer (stable sort, take first)
+#   - target:      the actual resource, only created if this Singleton holds
 # ─────────────────────────────────────────────────────────────────────
 apiVersion: experimental.kro.run/v1alpha1
 kind: Kind
@@ -43,10 +43,6 @@ spec:
     - name: Active
       type: boolean
       jsonPath: .status.active
-    - name: ApiVersion
-      type: string
-      priority: 1
-      jsonPath: .spec.template.apiVersion
     - name: Age
       type: date
       jsonPath: .metadata.creationTimestamp
@@ -91,22 +87,23 @@ spec:
         name: ${peer.name}
         priority: ${peer.priority}
 
-    # The winner — sort by name (tiebreaker), then by priority descending.
-    # Stable sort preserves name order within same priority. Take first.
-    - id: winner
+    # The claim holder — sort by name (tiebreaker), then by priority
+    # descending. Stable sort preserves name order within same
+    # priority. Take first.
+    - id: holder
       def:
         name: ${peers.sortBy(p, p.name).sortBy(p, -p.priority)[0].name}
 
     - id: target
       includeWhen:
-        - ${winner.name == schema.metadata.name}
+        - ${holder.name == schema.metadata.name}
       template: "${schema.spec.template}"
 
     # Reflect Active + Claim onto the Singleton instance. Active ==
-    # this Singleton is currently creating the target resource. Claim
-    # is a human-readable identifier for the target, format
-    # "<apiVersion>/<kind> <namespace>/<name>" for namespaced targets,
-    # or "<apiVersion>/<kind> <name>" for cluster-scoped.
+    # this Singleton currently holds the claim (is creating the target
+    # resource). Claim is a human-readable identifier for the target,
+    # format "<apiVersion>/<kind> <namespace>/<name>" for namespaced
+    # targets, or "<apiVersion>/<kind> <name>" for cluster-scoped.
     - id: singletonStatus
       patch:
         apiVersion: ${schema.apiVersion}
@@ -115,7 +112,7 @@ spec:
           name: ${schema.metadata.name}
           namespace: ${schema.metadata.namespace}
         status:
-          active: ${winner.name == schema.metadata.name}
+          active: ${holder.name == schema.metadata.name}
           claim: >-
             ${schema.spec.template.apiVersion + "/" + schema.spec.template.kind + " "
               + (has(schema.spec.template.metadata.namespace) && schema.spec.template.metadata.namespace != ""

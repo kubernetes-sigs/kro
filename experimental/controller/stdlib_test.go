@@ -482,7 +482,7 @@ func TestStdlibKindEscapeLevels(t *testing.T) {
 //
 // The Singleton is implemented as Kind + Decorator. The Decorator watches
 // all Singletons and creates a sub-Graph per item. Each sub-Graph has a
-// peers Watch and an includeWhen gate that self-determines the winner.
+// peers Watch and an includeWhen gate that self-determines the claim holder.
 //
 // The includeWhen expression is tested directly by compiling it from the
 // YAML and evaluating against mock peer data.
@@ -549,8 +549,8 @@ func TestStdlibSingletonResolution(t *testing.T) {
 	}
 
 	// Helper: build the full definition chain and evaluate whether
-	// a given Singleton is the winner among all singletons.
-	isWinner := func(schema map[string]any, singletons []any) bool {
+	// a given Singleton is the claim holder among all singletons.
+	isHolder := func(schema map[string]any, singletons []any) bool {
 		t.Helper()
 
 		// Build identities list (simulates the forEach definition).
@@ -577,13 +577,13 @@ func TestStdlibSingletonResolution(t *testing.T) {
 			}
 		}
 
-		// Evaluate winner.name.
+		// Evaluate holder.name.
 		scope := map[string]any{"peers": peers}
-		winnerName, err := compiled.eval(expr(nodesByID["winner"].Def["name"].(string)), scope)
+		holderName, err := compiled.eval(expr(nodesByID["holder"].Def["name"].(string)), scope)
 		require.NoError(t, err)
 
 		// Evaluate includeWhen.
-		scope["winner"] = map[string]any{"name": winnerName}
+		scope["holder"] = map[string]any{"name": holderName}
 		scope["schema"] = schema
 		result, err := compiled.eval(expr(nodesByID["target"].IncludeWhen[0]), scope)
 		require.NoError(t, err)
@@ -596,32 +596,32 @@ func TestStdlibSingletonResolution(t *testing.T) {
 	different := singleton("other", 50, "v1", "Secret", "default", "other-res")
 
 	t.Run("single Singleton always wins", func(t *testing.T) {
-		assert.True(t, isWinner(teamA, []any{teamA}))
+		assert.True(t, isHolder(teamA, []any{teamA}))
 	})
 
 	t.Run("higher priority wins", func(t *testing.T) {
 		peers := []any{teamA, teamB}
-		assert.False(t, isWinner(teamA, peers), "team-a (10) should lose to team-b (100)")
-		assert.True(t, isWinner(teamB, peers), "team-b (100) should win")
+		assert.False(t, isHolder(teamA, peers), "team-a (10) should lose to team-b (100)")
+		assert.True(t, isHolder(teamB, peers), "team-b (100) should win")
 	})
 
 	t.Run("same priority tie broken by name", func(t *testing.T) {
 		peers := []any{teamB, teamC}
-		assert.True(t, isWinner(teamB, peers), "team-b should win (lexicographically lower)")
-		assert.False(t, isWinner(teamC, peers), "team-c should lose")
+		assert.True(t, isHolder(teamB, peers), "team-b should win (lexicographically lower)")
+		assert.False(t, isHolder(teamC, peers), "team-c should lose")
 	})
 
 	t.Run("different target not conflicting", func(t *testing.T) {
 		peers := []any{teamA, different}
-		assert.True(t, isWinner(teamA, peers), "team-a should win for its target")
-		assert.True(t, isWinner(different, peers), "different target should also win")
+		assert.True(t, isHolder(teamA, peers), "team-a should win for its target")
+		assert.True(t, isHolder(different, peers), "different target should also win")
 	})
 
 	t.Run("three-way conflict highest wins", func(t *testing.T) {
 		peers := []any{teamA, teamB, teamC}
-		assert.False(t, isWinner(teamA, peers))
-		assert.True(t, isWinner(teamB, peers), "team-b (100, lowest name) should win")
-		assert.False(t, isWinner(teamC, peers))
+		assert.False(t, isHolder(teamA, peers))
+		assert.True(t, isHolder(teamB, peers), "team-b (100, lowest name) should win")
+		assert.False(t, isHolder(teamC, peers))
 	})
 }
 

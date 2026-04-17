@@ -118,8 +118,8 @@ through normal Kubernetes ownership.
 
 A Singleton declares a single resource that should exist exactly once. When multiple Singletons
 target the same resource (same GVK + namespace + name in their template), priority resolution
-determines the winner. Same-priority Singletons targeting the same resource must have identical
-templates — divergent templates at the same priority is a user error.
+determines the claim holder. Same-priority Singletons targeting the same resource must have
+identical templates — divergent templates at the same priority is a user error.
 
 ```yaml
 apiVersion: experimental.kro.run/v1alpha1

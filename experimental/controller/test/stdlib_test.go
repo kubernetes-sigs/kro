@@ -245,11 +245,11 @@ func TestStdlibDecorator(t *testing.T) {
 //
 // Implemented as Kind + Decorator. The Decorator watches all Singletons
 // and creates a sub-Graph per item. Each sub-Graph self-determines if
-// it's the winner via includeWhen. The target node uses TemplateExpr
+// it's the claim holder via includeWhen. The target node uses TemplateExpr
 // (template: "${item.spec.template}") to forward the full resource spec.
 //
 // Pipeline: Singleton → Decorator sub-Graph → peers Watch →
-// includeWhen gate → target resource (if winner)
+// includeWhen gate → target resource (if holder)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 func TestStdlibSingleton(t *testing.T) {

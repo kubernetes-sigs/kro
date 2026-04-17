@@ -145,10 +145,14 @@ A node's type is the keyword it declares. Five types exist:
 
 #### forEach
 
-Expands a node once per item in an array. Each iteration binds the item to a named variable
-available during evaluation. The forEach node is a logical parent — it expands into one child node
-per item. Each child is a real node that manages one resource. Child identity is derived from the
-parent's ID combined with the rendered resource key (GVK + namespace + name).
+Expands a node once per item in an array. The forEach declaration is a template for children —
+everything on it (template, readyWhen, propagateWhen, CEL functions) applies per-child. The forEach
+node is a logical parent that aggregates child outputs. Each child is a real node that manages one
+resource. Child identity is derived from the parent's ID combined with the rendered resource key
+(GVK + namespace + name).
+
+`.ready()` and `.updated()` on the parent aggregate with `.all()` — true when every child satisfies
+the condition.
 
 For `def:` nodes, forEach produces an array of values instead of managed resources — no children
 are created.
@@ -214,26 +218,10 @@ conditions check is performed. This is the default behavior when readyWhen is ab
 readyWhen overrides this default with explicit CEL conditions. All expressions must evaluate to
 `true` for the node to be considered ready. readyWhen is a health signal — it feeds the Graph's
 aggregated status and tells operators whether the system has converged. It does not gate downstream
-execution. Dependents proceed as soon as the node is applied and its data is in scope, regardless of
-readyWhen. If a downstream CEL expression references a field that does not yet exist on the
-resource, the expression fails to evaluate and the dependent is not applied — data availability is
-an implicit gate. propagateWhen (below) is for the case where the field exists but is not yet valid.
+execution.
 
-Any object in scope exposes a `.ready()` CEL function that returns the graph controller's readiness
-assessment for that node. `.ready()` returns true when the node is applied and its readyWhen
-conditions pass (or the node has no readyWhen). This is the graph's own readiness model, not a
-Kubernetes conditions check.
-
-For forEach nodes, readyWhen is evaluated per-child — each child checks readyWhen independently
-using the standard per-node mechanism. `.ready()` on a forEach parent returns true when all children
-are ready. A `watch:` node's `.ready()` returns true when the node's readyWhen conditions pass
-(evaluated once against the whole array, not per-item) — including when the collection is empty,
-where `.ready()` still reflects the readyWhen verdict rather than collapsing to vacuously-true.
-
-`.ready()` is not transitive across the DAG — it reflects only the node's own readiness, not its
-dependencies'. Most dependencies are partial (you depend on `dep.spec.something`, not full
-convergence of the dependency subgraph). If you want to assert transitive readiness, do so
-explicitly:
+Each node exposes a `.ready()` CEL function. `.ready()` is not transitive — if you want to assert
+dependency readiness, do so explicitly:
 
 ```yaml
 - id: deployment
@@ -241,7 +229,7 @@ explicitly:
     - ${deployment.status.availableReplicas > 0}
   template: ...
 
-# .ready() in propagateWhen — gate data flow until dependency converges
+# .ready() in propagateWhen — gate inputs until dependency converges
 - id: consumer
   propagateWhen:
     - ${deployment.ready()}
@@ -257,22 +245,49 @@ explicitly:
 
 #### propagateWhen
 
-A list of CEL expressions. All must evaluate to `true` for the node's updated data to flow to
-dependents. During transitions (e.g., a rolling update), dependents skip evaluation while
-propagateWhen is unsatisfied — they retain their last-applied state. When propagateWhen passes,
-dependents evaluate against the now-stable data.
-
-readyWhen and propagateWhen are complementary: readyWhen is a health signal (feeds Graph status),
-propagateWhen is a data flow gate (controls when dependents see new values). A node without
-propagateWhen propagates immediately — dependents evaluate on every reconcile. A common pattern is
-`propagateWhen: [${node.ready()}]` — gate data flow on the node's own readiness assessment.
+A list of CEL expressions. All must evaluate to `true` for the node to evaluate. When unsatisfied,
+the node skips evaluation — it retains its last-applied state and is not re-applied. When satisfied,
+the node evaluates normally. A common pattern is
+`propagateWhen: [${dep.ready()}]` — gate on a dependency's readiness.
 
 ```yaml
 - id: deployment
   readyWhen:
     - ${deployment.status.availableReplicas > 0}
+  template: ...
+
+- id: service
   propagateWhen:
-    - ${deployment.status.updatedReplicas == deployment.spec.replicas}
+    - ${deployment.ready()}
+  template:
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: ${deployment.metadata.name}-svc
+    spec:
+      selector: ${deployment.spec.selector.matchLabels}
+```
+
+With forEach, `.ready()` and `.updated()` can control how quickly changes propagate — the
+expression references the parent collection to gate evaluation.
+
+```yaml
+# Exponential rollout — budget doubles each wave
+- id: deploys
+  forEach:
+    app: ${apps}
+  propagateWhen:
+    - >-
+      ${deploys.filter(d, d.updated() && !d.ready()).size()
+       < max(1, deploys.filter(d, d.updated() && d.ready()).size())}
+  template: ...
+
+# Linear rollout — 2 at a time
+- id: deploys
+  forEach:
+    app: ${apps}
+  propagateWhen:
+    - ${deploys.filter(d, d.updated() && !d.ready()).size() < 2}
   template: ...
 ```
 
@@ -304,6 +319,13 @@ includeWhen toggle, or forEach scale-down.
 Dependencies are inferred from CEL expression references. If node B's template contains
 `${A.metadata.name}`, B depends on A. The dependency graph must be acyclic — cycles are rejected at
 compile time. Nodes with no dependency relationship are independent and are processed in parallel.
+
+## CEL Functions
+
+Any object in scope exposes functions maintained by the graph controller.
+
+- **`.ready()`** — true when the node is applied and its readyWhen conditions pass.
+- **`.updated()`** — true when the node is on the latest graph generation.
 
 ## Nested Graphs
 

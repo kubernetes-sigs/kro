@@ -75,6 +75,78 @@ spec:
 to the instance's `.spec.image` field. Status expressions may reference other nodes and are
 contributed back to the instance.
 
+A Kind may declare `readyWhen` and `propagateWhen` at the spec level. Both are per-instance — they
+evaluate in the same scope as the Kind's nodes.
+
+- **`readyWhen`** defines when each instance is considered healthy. Produces `.ready()` per-instance.
+  The Kind's overall readiness rolls up: all instances `.ready()` → Kind Ready.
+- **`propagateWhen`** controls rollout pace across instances. It is a per-instance input gate with
+  sibling visibility — the expression references the instances collection and uses `.ready()` and
+  `.updated()` per-item. Semantics are identical to forEach propagateWhen.
+
+Both are optional. Without them, all instances receive updates simultaneously and readiness rolls up
+from node states. Exponential rollout is opt-in:
+
+```yaml
+apiVersion: experimental.kro.run/v1alpha1
+kind: Kind
+metadata:
+  name: webapp
+spec:
+  kind: WebApp
+  group: experimental.kro.run
+  # Exponential rollout — budget doubles each wave
+  propagateWhen:
+    - >-
+      ${instances.filter(i, i.updated() && !i.ready()).size()
+       < max(1, instances.filter(i, i.updated() && i.ready()).size())}
+  readyWhen:
+    - ${deployment.ready() && service.ready()}
+  versions:
+    - name: v1alpha1
+      schema:
+        spec:
+          image: string | default=nginx
+          replicas: integer | default=1
+        status:
+          deploymentReady: ${deployment.status.availableReplicas == deployment.spec.replicas}
+  nodes:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.metadata.name}
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app: ${schema.metadata.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.metadata.name}
+            spec:
+              containers:
+                - name: app
+                  image: ${schema.spec.image}
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.metadata.name}-svc
+        spec:
+          selector:
+            app: ${schema.metadata.name}
+          ports:
+            - port: ${schema.spec.port}
+```
+
+The mirroring is structural: Kind's implicit forEach over instances uses the same
+propagateWhen/readyWhen machinery as any explicit forEach. Same CEL functions, same evaluation
+model, same Ready-first ordering.
+
 The Kind controller (`kind.yaml`) is a raw Graph — the bootstrap root. See implementation for
 details.
 

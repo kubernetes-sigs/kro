@@ -124,8 +124,8 @@ At each frontier node:
    - Precedence: Excluded > Blocked > Pending. Excluded is definitive — the dependency is
      intentionally absent, so the node cannot evaluate regardless of other dependencies' states.
 
-2. **Propagation allowed**
-   - any dep's propagateWhen unsatisfied → skip. Previous evaluation and state retained. If never
+2. **propagateWhen**
+   - The node's propagateWhen unsatisfied → skip. Previous evaluation and state retained. If never
      evaluated, the node remains Pending — its output is genuinely unavailable, not stale.
    - Takes precedence even on spec changes where changed nodes enter the frontier
 
@@ -325,14 +325,42 @@ The parent's state is derived from its children:
 - **Pending** — any child has not yet been dispatched or is awaiting its first result
 - **Ready** — all children Ready
 - **NotReady** — any child NotReady, none in error states
-
-The parent's propagateWhen is satisfied when all children's propagateWhen are satisfied.
-
 - **Error/Conflict/SystemError** — any child in an error state. Error states take precedence over
   Pending — a child that attempted apply and got a Conflict is in Conflict state, not Pending.
   Deterministic errors (Error) take precedence over transient errors (SystemError, Conflict) — if
   any child's failure is deterministic, retrying cannot resolve the parent. Per-child detail
   surfaces in Graph status.
+
+### Propagation Control
+
+When a forEach node declares propagateWhen, it gates each child's evaluation. ForEach children are
+normally independent — no dependency edges between them, dispatched concurrently. But when
+propagateWhen references the parent collection, each child's gate depends on sibling state. This is
+a lateral dependency the DAG does not model. The forEach loop handles it: the parent iterates
+children sequentially, evaluating propagateWhen and updating the parent aggregate after each
+dispatch.
+
+Each child has one of four states relative to the latest generation:
+
+| `updated()` | `ready()` | State        | Meaning                                       |
+| ----------- | --------- | ------------ | --------------------------------------------- |
+| true        | true      | **Current**  | On latest version and healthy                 |
+| true        | false     | **Updating** | On latest version, not yet converged          |
+| false       | true      | **Pending**  | Healthy on old version, good update candidate |
+| false       | false     | **Stuck**    | Broken before rollout, bad update candidate   |
+
+**Dispatch loop.** The parent iterates all children in order. For each child:
+
+1. Input-hash match → skip. Already on the latest generation.
+2. propagateWhen satisfied → dispatch, update parent aggregate.
+3. propagateWhen unsatisfied → skip, retain previous state.
+
+The loop always completes. Children whose propagateWhen is unsatisfied are skipped — the loop
+continues to the next child.
+
+**Ordering.** Ready before NotReady, before error states. Within a readiness class, random. This
+avoids baking in a policy for which children go first — the propagateWhen expression controls
+what happens, ordering just determines who is evaluated next.
 
 ### Collection Ordering
 
@@ -446,3 +474,19 @@ fields (namespace, name) change.
 **forEach as a subgraph stamper.** forEach expands into a subgraph of multiple resources per item.
 Sibling forEach blocks and nested Graphs already compose for multi-resource-per-item cases — one
 template per forEach keeps the primitive simple.
+
+**Explicit sort-by for forEach rollout ordering.** User-specified sort expressions for controlling
+which children are dispatched first during rollouts. Ready-first with random tiebreaker avoids
+baking in a policy. Different use cases want different orderings (oldest-first for patching,
+newest-unhealthy-first for bug fixes). Random within readiness class is neutral — the propagateWhen
+expression controls the rollout, not the ordering.
+
+**Source-side propagateWhen.** propagateWhen declared on the source node, controlling outflow to all
+dependents. Conflates the health signal (which belongs in readyWhen) with the gating decision (which
+belongs at the consumer). Each consumer has different input tolerance — a blanket gate on the source
+removes that flexibility. readyWhen produces the signal, propagateWhen on the consumer consumes it.
+
+**Concurrent propagateWhen evaluation for forEach children.** The propagateWhen expression references
+the parent collection, which includes sibling state. Concurrent evaluation against a static snapshot
+produces incorrect budget enforcement — all children see the same state and all dispatch. Sequential
+evaluation with aggregate updates after each dispatch is required.

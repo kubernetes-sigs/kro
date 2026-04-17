@@ -167,7 +167,7 @@ func hashNodeInputs(node *Node, scope map[string]any) (string, error) {
 		}
 		depMap, ok := depData.(map[string]any)
 		if !ok {
-			// Non-map dependency (e.g., WatchKind array) — hash the whole thing.
+			// Non-map dependency (e.g., Watch array) — hash the whole thing.
 			data, err := json.Marshal(depData)
 			if err != nil {
 				return "", fmt.Errorf("hashing dependency %q: %w", depID, err)

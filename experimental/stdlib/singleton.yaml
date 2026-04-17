@@ -40,7 +40,7 @@ spec:
       template: object
   nodes:
     - id: singletons
-      template:
+      watch:
         apiVersion: experimental.kro.run/v1alpha1
         kind: Singleton
         selector: {}
@@ -50,7 +50,7 @@ spec:
     - id: identities
       forEach:
         - s: ${singletons}
-      template:
+      def:
         name: ${s.metadata.name}
         priority: ${s.spec.priority}
         identity: >-
@@ -59,7 +59,7 @@ spec:
 
     # This Singleton's target identity — same formula as identities.
     - id: identity
-      template:
+      def:
         value: >-
           ${schema.spec.template.apiVersion + "/" + schema.spec.template.kind + "/"
             + schema.spec.template.metadata.namespace + "/" + schema.spec.template.metadata.name}
@@ -68,14 +68,14 @@ spec:
     - id: peers
       forEach:
         - peer: ${identities.filter(i, i.identity == identity.value)}
-      template:
+      def:
         name: ${peer.name}
         priority: ${peer.priority}
 
     # The winner — sort by name (tiebreaker), then by priority descending.
     # Stable sort preserves name order within same priority. Take first.
     - id: winner
-      template:
+      def:
         name: ${peers.sortBy(p, p.name).sortBy(p, -p.priority)[0].name}
 
     - id: target

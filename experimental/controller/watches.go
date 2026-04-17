@@ -239,7 +239,7 @@ func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]
 					Version: gvr.Version,
 					Kind:    gvrKindFromInformer(gvr, item),
 				}
-				ref, ok := ReferenceFromLabelValue(labelValue)
+				ref, ok := NodeTypeFromLabelValue(labelValue)
 				if !ok {
 					m.log.V(1).Info("skipping resource with unrecognized reference label value",
 						"resource", accessor.GetNamespace()+"/"+accessor.GetName(),
@@ -250,9 +250,9 @@ func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]
 					gvk.Group, gvk.Version, gvk.Kind,
 					accessor.GetNamespace(), accessor.GetName())
 				result[key] = appliedEntry{
-					NodeID:    nodeID,
-					Reference: ref,
-					Key:       key,
+					NodeID:   nodeID,
+					NodeType: ref,
+					Key:      key,
 				}
 				break // one identity label match per resource is sufficient
 			}
@@ -370,7 +370,7 @@ type watchRequest struct {
 	gvr       schema.GroupVersionResource
 	name      string
 	namespace string
-	selector  labels.Selector // non-nil for WatchKind
+	selector  labels.Selector // non-nil for Watch
 }
 
 func (r *watchRequest) isCollection() bool { return r.selector != nil }
@@ -410,10 +410,10 @@ type WatchCoordinator struct {
 	triggerMu       sync.Mutex
 	pendingTriggers map[graphKey]map[string]bool // graph → set of triggering node IDs
 
-	// collectionChanges buffers changed resource keys for WatchKind nodes.
+	// collectionChanges buffers changed resource keys for Watch nodes.
 	// When a collection-matched watch event fires, the specific resource
 	// (namespace/name + event type) is recorded alongside the node ID trigger.
-	// This enables reconcileWatchKind to GET only changed items instead of
+	// This enables reconcileWatch to GET only changed items instead of
 	// re-listing the entire collection — O(changed) per reconcile, not
 	// O(matching). Per 004-graph-reconciliation.md § Propagation: "When a single
 	// resource changes, update the cached list incrementally rather than
@@ -423,7 +423,7 @@ type WatchCoordinator struct {
 	collectionChanges map[graphKey]map[string][]CollectionChange // graph → nodeID → changes
 }
 
-// CollectionChange records a specific resource change within a WatchKind collection.
+// CollectionChange records a specific resource change within a Watch collection.
 type CollectionChange struct {
 	Namespace string
 	Name      string
@@ -477,9 +477,10 @@ func (gw *graphWatcher) watchScalar(nodeID string, gvr schema.GroupVersionResour
 	gw.mu.Unlock()
 }
 
-// watchKind buffers a WatchKind watch request (label selector).
-// The request is flushed to the coordinator's indexes in done(true).
-func (gw *graphWatcher) watchKind(nodeID string, gvr schema.GroupVersionResource, namespace string, sel labels.Selector) {
+// watchCollection buffers a selector-scoped kind-level watch request
+// for a watch: node. The request is flushed to the coordinator's
+// indexes in done(true).
+func (gw *graphWatcher) watchCollection(nodeID string, gvr schema.GroupVersionResource, namespace string, sel labels.Selector) {
 	gw.mu.Lock()
 	gw.pending = append(gw.pending, watchRequest{
 		nodeID:    nodeID,
@@ -530,8 +531,8 @@ func (gw *graphWatcher) drainTriggers() map[string]bool {
 }
 
 // drainCollectionChanges atomically drains and returns the buffered
-// collection changes for this Graph's WatchKind nodes. Returns nil if
-// no collection changes were buffered. Used by reconcileWatchKind to
+// collection changes for this Graph's Watch nodes. Returns nil if
+// no collection changes were buffered. Used by reconcileWatch to
 // GET only changed items instead of re-listing the entire collection.
 func (gw *graphWatcher) drainCollectionChanges() map[string][]CollectionChange {
 	gw.coord.triggerMu.Lock()
@@ -635,7 +636,7 @@ func (c *WatchCoordinator) doneGraph(graph graphKey, pending []watchRequest) {
 	// GVRs already running just bumps the owner set.
 	//
 	// Timing: ensureWatch runs here (post-reconcile) rather than
-	// during watchScalar/watchKind. For a brand-new GVR, the
+	// during watchScalar/watchCollection. For a brand-new GVR, the
 	// informer won't be running during its first reconcile cycle.
 	// This is safe: getResourceVersion returns "" which triggers a
 	// fallback GET in applySSA. On subsequent
@@ -688,7 +689,7 @@ func (c *WatchCoordinator) routeEvent(event watchEvent) {
 	c.mu.RLock()
 	// matched maps graph → set of triggering node IDs
 	matched := make(map[graphKey]map[string]bool)
-	// collectionMatched tracks which matches came from collection (WatchKind)
+	// collectionMatched tracks which matches came from collection (Watch)
 	// entries, so the changed resource key can be buffered for incremental cache.
 	collectionMatched := make(map[graphKey]map[string]bool)
 
@@ -744,8 +745,8 @@ func (c *WatchCoordinator) routeEvent(event watchEvent) {
 				c.pendingTriggers[graph][nodeID] = true
 			}
 		}
-		// Buffer collection changes for WatchKind incremental cache.
-		// The changed resource key is recorded per node so reconcileWatchKind
+		// Buffer collection changes for Watch incremental cache.
+		// The changed resource key is recorded per node so reconcileWatch
 		// can GET only the changed items instead of re-listing.
 		for graph, nodeIDs := range collectionMatched {
 			if c.collectionChanges[graph] == nil {

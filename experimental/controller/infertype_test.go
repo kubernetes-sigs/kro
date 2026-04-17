@@ -13,6 +13,22 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 
+// ownNode builds an Own-classified Node from a template map. Test-only helper;
+// production code sets the classification via parseNodeList.
+func ownNode(id string, tmpl map[string]any) Node {
+	return Node{ID: id, Template: tmpl, ref: NodeTypeOwn}
+}
+
+// defNode builds a Definition-classified Node from a map of values.
+func defNode(id string, body map[string]any) Node {
+	return Node{ID: id, Def: body, ref: NodeTypeDef}
+}
+
+// watchNode builds a Watch-classified Node (collection) from a body.
+func watchNode(id string, body map[string]any) Node {
+	return Node{ID: id, Watch: body, ref: NodeTypeWatch}
+}
+
 // ---------------------------------------------------------------------------
 // inferFieldType unit tests
 // ---------------------------------------------------------------------------
@@ -150,7 +166,7 @@ func TestInferObjectType(t *testing.T) {
 func TestResolveNodeTypes(t *testing.T) {
 	t.Run("definition nodes are typed", func(t *testing.T) {
 		nodes := []Node{
-			{ID: "naming", Template: map[string]any{"prefix": "myapp"}},
+			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, ref: NodeTypeDef},
 		}
 		ts := resolveNodeTypes(nodes, nil)
 
@@ -165,7 +181,7 @@ func TestResolveNodeTypes(t *testing.T) {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "test"},
-			}},
+			}, ref: NodeTypeOwn},
 		}
 		ts := resolveNodeTypes(nodes, nil)
 
@@ -176,10 +192,10 @@ func TestResolveNodeTypes(t *testing.T) {
 	t.Run("forEach iterator variables are untyped", func(t *testing.T) {
 		nodes := []Node{
 			{
-				ID:       "items",
-				ForEach:  map[string]string{"item": "${spec.items}"},
-				Template: map[string]any{"name": "${item}"},
-			},
+				ID:      "items",
+				ForEach: map[string]string{"item": "${spec.items}"},
+				Def:     map[string]any{"name": "${item}"},
+				ref:     NodeTypeDef},
 		}
 		ts := resolveNodeTypes(nodes, nil)
 
@@ -190,12 +206,12 @@ func TestResolveNodeTypes(t *testing.T) {
 
 	t.Run("mixed definitions and resources", func(t *testing.T) {
 		nodes := []Node{
-			{ID: "naming", Template: map[string]any{"prefix": "app"}},
+			{ID: "naming", Def: map[string]any{"prefix": "app"}, ref: NodeTypeDef},
 			{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.prefix}"},
-			}},
+			}, ref: NodeTypeOwn},
 		}
 		ts := resolveNodeTypes(nodes, nil)
 
@@ -212,12 +228,12 @@ func TestResolveNodeTypes(t *testing.T) {
 func TestDefinitionFieldValidation(t *testing.T) {
 	t.Run("valid field access compiles", func(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "naming", Template: map[string]any{"prefix": "myapp"}},
+			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, ref: NodeTypeDef},
 			{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.prefix + '-deploy'}"},
-			}},
+			}, ref: NodeTypeOwn},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -225,12 +241,12 @@ func TestDefinitionFieldValidation(t *testing.T) {
 
 	t.Run("wrong field on definition fails compilation", func(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "naming", Template: map[string]any{"prefix": "myapp"}},
+			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, ref: NodeTypeDef},
 			{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.typo}"},
-			}},
+			}, ref: NodeTypeOwn},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.Error(t, err)
@@ -239,17 +255,17 @@ func TestDefinitionFieldValidation(t *testing.T) {
 
 	t.Run("nested field access compiles", func(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "cfg", Template: map[string]any{
+			{ID: "cfg", Def: map[string]any{
 				"metadata": map[string]any{
 					"env":    "prod",
 					"region": "us-west-2",
 				},
-			}},
+			}, ref: NodeTypeDef},
 			{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${cfg.metadata.env + '-deploy'}"},
-			}},
+			}, ref: NodeTypeOwn},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -257,16 +273,16 @@ func TestDefinitionFieldValidation(t *testing.T) {
 
 	t.Run("wrong nested field fails compilation", func(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "cfg", Template: map[string]any{
+			{ID: "cfg", Def: map[string]any{
 				"metadata": map[string]any{
 					"env": "prod",
 				},
-			}},
+			}, ref: NodeTypeDef},
 			{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${cfg.metadata.typo}"},
-			}},
+			}, ref: NodeTypeOwn},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.Error(t, err)
@@ -281,15 +297,15 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
-			}},
-			{ID: "derived", Template: map[string]any{
+			}, ref: NodeTypeOwn},
+			{ID: "derived", Def: map[string]any{
 				"data": "${upstream.data}",
-			}},
+			}, ref: NodeTypeDef},
 			{ID: "consumer", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "${derived.data.someKey}"},
-			}},
+			}, ref: NodeTypeOwn},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -298,13 +314,13 @@ func TestDefinitionFieldValidation(t *testing.T) {
 	t.Run("cross-definition validation", func(t *testing.T) {
 		// Definition A → Definition B → resource node.
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "a", Template: map[string]any{"prefix": "app"}},
-			{ID: "b", Template: map[string]any{"full": "${a.prefix + '-svc'}"}},
+			{ID: "a", Def: map[string]any{"prefix": "app"}, ref: NodeTypeDef},
+			{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}, ref: NodeTypeDef},
 			{ID: "svc", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${b.full}"},
-			}},
+			}, ref: NodeTypeOwn},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -312,8 +328,8 @@ func TestDefinitionFieldValidation(t *testing.T) {
 
 	t.Run("cross-definition wrong field fails", func(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "a", Template: map[string]any{"prefix": "app"}},
-			{ID: "b", Template: map[string]any{"full": "${a.typo}"}},
+			{ID: "a", Def: map[string]any{"prefix": "app"}, ref: NodeTypeDef},
+			{ID: "b", Def: map[string]any{"full": "${a.typo}"}, ref: NodeTypeDef},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.Error(t, err)
@@ -324,9 +340,9 @@ func TestDefinitionFieldValidation(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
 			{
 				ID:        "cfg",
-				Template:  map[string]any{"count": "3"},
+				Def:       map[string]any{"count": "3"},
 				ReadyWhen: []string{"${cfg.count == '3'}"},
-			},
+				ref:       NodeTypeDef},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -338,12 +354,12 @@ func TestDefinitionFieldValidation(t *testing.T) {
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"data":       map[string]any{"items": "a,b,c"},
-			}},
+			}, ref: NodeTypeOwn},
 			{
-				ID:       "items",
-				ForEach:  map[string]string{"item": "${upstream.data.items}"},
-				Template: map[string]any{"name": "${item}", "port": int64(80)},
-			},
+				ID:      "items",
+				ForEach: map[string]string{"item": "${upstream.data.items}"},
+				Def:     map[string]any{"name": "${item}", "port": int64(80)},
+				ref:     NodeTypeDef},
 		}}
 		_, err := compileGraphSpec(spec, nil)
 		require.NoError(t, err)
@@ -433,12 +449,12 @@ func TestPathBasedNamingPreventsCollisions(t *testing.T) {
 	// Two definitions with different nested structures should produce
 	// distinct types that don't shadow each other.
 	ts := resolveNodeTypes([]Node{
-		{ID: "alpha", Template: map[string]any{
+		{ID: "alpha", Def: map[string]any{
 			"nested": map[string]any{"x": "hello"},
-		}},
-		{ID: "beta", Template: map[string]any{
+		}, ref: NodeTypeDef},
+		{ID: "beta", Def: map[string]any{
 			"nested": map[string]any{"y": int64(42)},
-		}},
+		}, ref: NodeTypeDef},
 	}, nil)
 
 	alphaDT := ts.definitionTypes["alpha"]
@@ -473,13 +489,13 @@ func TestDefinitionTypingRuntimeCompat(t *testing.T) {
 	ctx := t.Context()
 
 	spec := &GraphSpec{Nodes: []Node{
-		{ID: "cfg", Template: map[string]any{
+		{ID: "cfg", Def: map[string]any{
 			"region": "us-west-2",
 			"count":  int64(3),
-		}},
-		{ID: "derived", Template: map[string]any{
+		}, ref: NodeTypeDef},
+		{ID: "derived", Def: map[string]any{
 			"name": "${cfg.region + '-app'}",
-		}},
+		}, ref: NodeTypeDef},
 	}}
 
 	compiled, err := compileGraphSpec(spec, nil)
@@ -576,7 +592,7 @@ func TestSchemaResolutionIntegration(t *testing.T) {
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "test"},
 				"data":       map[string]any{"key": "value"},
-			}},
+			}, ref: NodeTypeOwn},
 		}
 		ts := resolveNodeTypes(nodes, resolver)
 
@@ -593,16 +609,16 @@ func TestSchemaResolutionIntegration(t *testing.T) {
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "test"},
 				"data":       map[string]any{"key": "value"},
-			}},
-			{ID: "naming", Template: map[string]any{
+			}, ref: NodeTypeOwn},
+			{ID: "naming", Def: map[string]any{
 				"prefix": "myapp",
-			}},
+			}, ref: NodeTypeDef},
 			{ID: "consumer", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "${naming.prefix + '-cfg'}"},
 				"data":       map[string]any{"ref": "${cm.data}"},
-			}},
+			}, ref: NodeTypeOwn},
 		}}
 		typeInfo := resolveNodeTypes(graphSpec.Nodes, resolver)
 		_, err := compileGraphSpec(graphSpec, typeInfo)
@@ -615,7 +631,7 @@ func TestSchemaResolutionIntegration(t *testing.T) {
 				"apiVersion": "custom.example.com/v1",
 				"kind":       "Widget",
 				"metadata":   map[string]any{"name": "test"},
-			}},
+			}, ref: NodeTypeOwn},
 		}
 		ts := resolveNodeTypes(nodes, resolver)
 
@@ -783,12 +799,12 @@ func TestRecompilationOnSchemaChange(t *testing.T) {
 			"apiVersion": "example.com/v1",
 			"kind":       "Widget",
 			"metadata":   map[string]any{"name": "test"},
-		}},
+		}, ref: NodeTypeOwn},
 		// Consumer is a definition — no GVK to resolve, so the only
 		// unresolved GVK is Widget.
-		{ID: "consumer", Template: map[string]any{
+		{ID: "consumer", Def: map[string]any{
 			"name": "${widget.status.typo}",
-		}},
+		}, ref: NodeTypeDef},
 	}}
 
 	// Phase 1: compile with empty resolver — Widget falls back to dyn.

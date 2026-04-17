@@ -63,7 +63,7 @@ func TestMixedNodeStatesInWideDag(t *testing.T) {
 					// Watch control (always exists).
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "mixed-control"},
@@ -168,7 +168,7 @@ func TestConflictToExcludedTransition(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "ce-control"},
@@ -702,7 +702,7 @@ func TestGraphWithZeroOwnsNodes(t *testing.T) {
 					// Watch node (identity-only).
 					map[string]any{
 						"id": "watched",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "zero-owns-watch"},
@@ -711,7 +711,7 @@ func TestGraphWithZeroOwnsNodes(t *testing.T) {
 					// Contribute node (writes to pre-existing resource).
 					map[string]any{
 						"id": "contrib",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -798,7 +798,7 @@ func TestDiamondStatePrecedence_RegressionExcludedOverBlocked(t *testing.T) {
 					// Root: Watch over externally-managed ConfigMap
 					map[string]any{
 						"id": "root",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "diamond-root"},
@@ -818,7 +818,7 @@ func TestDiamondStatePrecedence_RegressionExcludedOverBlocked(t *testing.T) {
 					// Parent B: Watch targeting an absent resource → Pending
 					map[string]any{
 						"id": "parentB",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "diamond-parent-b-absent"},
@@ -911,7 +911,7 @@ func TestPendingPropagatesAsPending_RegressionNotBlocked(t *testing.T) {
 					// Watch: target doesn't exist → Pending
 					map[string]any{
 						"id": "upstream",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "absent-upstream"},
 						},

@@ -344,7 +344,7 @@ func TestFinalizesReadyWhenGatesTargetRemoval(t *testing.T) {
 					},
 					map[string]any{
 						"id": "gatewatch",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "fin-rw-gate"},
@@ -405,7 +405,7 @@ func TestFinalizesReadyWhenGatesTargetRemoval(t *testing.T) {
 			unstructured.SetNestedSlice(obj.Object, []any{
 				map[string]any{
 					"id": "gatewatch",
-					"template": map[string]any{
+					"ref": map[string]any{
 						"apiVersion": "v1",
 						"kind":       "ConfigMap",
 						"metadata":   map[string]any{"name": "fin-rw-gate"},
@@ -613,7 +613,7 @@ func TestSupersededRevisionFinalizesGovernsPrompt(t *testing.T) {
 					},
 					map[string]any{
 						"id": "gatewatch",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "sup-fin-gate"},
@@ -662,7 +662,7 @@ func TestSupersededRevisionFinalizesGovernsPrompt(t *testing.T) {
 			unstructured.SetNestedSlice(obj.Object, []any{
 				map[string]any{
 					"id": "gatewatch",
-					"template": map[string]any{
+					"ref": map[string]any{
 						"apiVersion": "v1",
 						"kind":       "ConfigMap",
 						"metadata":   map[string]any{"name": "sup-fin-gate"},

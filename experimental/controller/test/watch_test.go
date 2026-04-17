@@ -49,7 +49,7 @@ func TestDynamicWatchExternalRefChange(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "config",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "watched-config"},
@@ -140,7 +140,7 @@ func TestDynamicWatchCollectionMembershipChange(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "items",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"selector":   map[string]any{"collection": "watched"},
@@ -188,7 +188,7 @@ func TestDynamicWatchCollectionMembershipChange(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, newItem))
 	t.Log("Added item-c to collection (Graph object NOT touched)")
 
-	// THE PROOF: item-c-copy should appear, triggered by the dynamic WatchKind
+	// THE PROOF: item-c-copy should appear, triggered by the dynamic Watch
 	newCopy := &unstructured.Unstructured{}
 	newCopy.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: "item-c-copy", Namespace: ns}, newCopy),
@@ -196,5 +196,5 @@ func TestDynamicWatchCollectionMembershipChange(t *testing.T) {
 
 	data, _, _ := unstructured.NestedStringMap(newCopy.Object, "data")
 	assert.Equal(t, "item-c", data["source"])
-	t.Log("item-c-copy created — dynamic WatchKind triggered reconciliation")
+	t.Log("item-c-copy created — dynamic Watch triggered reconciliation")
 }

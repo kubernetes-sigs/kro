@@ -141,14 +141,14 @@ type compiledGraph struct {
 	spec           *GraphSpec                        // parsed spec (immutable)
 	dag            *DAG                              // dependency graph (immutable after BuildDAG)
 	unresolvedGVKs []schema.GroupVersionKind         // GVKs that fell back to dyn (triggers recompilation on CRD install)
-	// watchKindIDs captures the set of WatchKind node IDs in this spec.
+	// collectionIDs captures the set of Watch node IDs in this spec.
 	// Used by the dynamic-compile fallback to apply the same
 	// `<wk_id>.ready()` AST rewrite that the eager-compile path does —
 	// expressions that reach the dynamic path (cross-revision
 	// finalization, forEach-finalizer synthesis, ad-hoc test evals)
-	// must honor the same rewrite, otherwise empty-WatchKind `.ready()`
+	// must honor the same rewrite, otherwise empty-Watch `.ready()`
 	// reverts to vacuously-true on that path.
-	watchKindIDs map[string]bool
+	collectionIDs map[string]bool
 }
 
 // eval evaluates a CEL expression against the given scope.
@@ -186,12 +186,12 @@ func (c *compiledGraph) eval(expr string, scope map[string]any) (any, error) {
 		// forEach-finalizer synthesized expressions, and test-harness
 		// eval calls that reference unregistered expressions) would
 		// keep the original `.ready()` behavior — vacuously-true on
-		// empty WatchKind collections.
+		// empty Watch collections.
 		parsed, issues := compileEnv.Parse(expr)
 		if issues != nil && issues.Err() != nil {
 			return nil, fmt.Errorf("expression %q not in cache, dynamic parse failed: %w", expr, issues.Err())
 		}
-		if len(c.watchKindIDs) > 0 {
+		if len(c.collectionIDs) > 0 {
 			nativeAst := parsed.NativeRep()
 			nextIDVal := celast.MaxID(nativeAst)
 			nextID := func() int64 {
@@ -199,7 +199,7 @@ func (c *compiledGraph) eval(expr string, scope map[string]any) (any, error) {
 				nextIDVal++
 				return id
 			}
-			rewriteWatchKindReady(nativeAst.Expr(), c.watchKindIDs, celast.NewExprFactory(), nextID)
+			rewriteCollectionReady(nativeAst.Expr(), c.collectionIDs, celast.NewExprFactory(), nextID)
 		}
 		ast, issues := compileEnv.Check(parsed)
 		if issues != nil && issues.Err() != nil {
@@ -246,17 +246,6 @@ type instanceState struct {
 	previousPropagateReady map[string]bool      // node ID → last propagateWhen result (for forEach skip path)
 	forEachItems           map[string][]any     // "nodeID/varName" → cached collection items
 
-	// resolvedReferences maps node ID to its resolved classification.
-	// Entries are present only after resolution succeeds; absence means
-	// the node is unresolved or has been reset (Excluded re-inclusion,
-	// Conflict recovery). Never contains an Unresolved sentinel — the
-	// type forbids it. Callers must use a 2-return map lookup; a
-	// present entry is always a valid ResolvedReference.
-	//
-	// Lifetime: per instanceState, which is per-revision. Reset paths
-	// delete the entry rather than writing a sentinel value.
-	resolvedReferences map[string]ResolvedReference
-
 	// Evaluation hashing state — retained across reconciles for change detection.
 	// See 004-graph-reconciliation.md § Propagation.
 	previousEvalHashes map[string]string // node ID → last dependency evaluation hash
@@ -287,27 +276,27 @@ type instanceState struct {
 	// Per 004-graph-reconciliation.md § Reconcile.
 	driftTimers map[string]time.Time
 
-	// watchKindCache holds the cached full-object list per WatchKind node.
+	// collectionCache holds the cached full-object list per Watch node.
 	// Per 004-graph-reconciliation.md § Propagation: "When a single resource
 	// changes, update the cached list incrementally rather than re-listing
 	// — O(1) per event, not O(matching)." On watch events, only the changed
 	// items are GET'd and merged. On drift timer, the cache is replaced via
 	// full List.
-	watchKindCache map[string][]any // node ID → cached collection items
+	collectionCache map[string][]any // node ID → cached collection items
 
-	// watchKindDirty tracks WatchKind nodes whose previous incremental
+	// collectionDirty tracks Watch nodes whose previous incremental
 	// reconcile failed mid-merge. When the incremental path returns an
 	// error (e.g., a transient 5xx on one of the GETs), drained
 	// CollectionChanges are lost — the next reconcile would take the
 	// incremental path with stale cache. Setting this flag forces a full
 	// re-List on the next reconcile so the cache recovers from the
 	// authoritative API server state. Cleared when the next successful
-	// evaluation writes watchKindUpdatedCache.
-	watchKindDirty map[string]bool
+	// evaluation writes collectionUpdatedCache.
+	collectionDirty map[string]bool
 
-	// nodeReady persists per-WatchKind readyWhen verdicts across
+	// nodeReady persists per-Watch readyWhen verdicts across
 	// reconciles. The AST rewrite of `<wk_id>.ready()` looks up this
-	// map via the reserved scope variable; a WatchKind that isn't
+	// map via the reserved scope variable; a Watch that isn't
 	// re-evaluated on a given reconcile must still expose its last
 	// verdict, otherwise downstream `.ready()` errors with
 	// "no such key" and the consumer incorrectly transitions out of
@@ -335,10 +324,9 @@ func newInstanceState(compiled *compiledGraph) *instanceState {
 		forEachItems:           map[string][]any{},
 		forEachItemScope:       map[string]map[string]any{},
 		forEachItemKeys:        map[string]map[string][]string{},
-		resolvedReferences:     make(map[string]ResolvedReference, len(compiled.dag.References)),
 		driftTimers:            make(map[string]time.Time),
-		watchKindCache:         make(map[string][]any),
-		watchKindDirty:         make(map[string]bool),
+		collectionCache:         make(map[string][]any),
+		collectionDirty:         make(map[string]bool),
 		nodeReady:              make(map[string]bool),
 		systemErrorBackoff:     make(map[string]time.Duration),
 	}
@@ -386,24 +374,6 @@ func (s *instanceState) nextDriftExpiry() time.Time {
 		}
 	}
 	return earliest
-}
-
-// initResolvedReferences seeds the resolved references map from the DAG's
-// compile-time references. Called once at the start of each reconcile.
-// Compile-time-classified references (Own, Watch, WatchKind, Definition)
-// are lifted to ResolvedReference and stored immediately — they do not need
-// the first-reconcile existence check. ReferenceUnresolved entries are not
-// populated; their absence signals the resolution chokepoint that they
-// still need classification.
-func (s *instanceState) initResolvedReferences() {
-	for id, ref := range s.compiled.dag.References {
-		if ref == ReferenceUnresolved {
-			continue
-		}
-		if _, ok := s.resolvedReferences[id]; !ok {
-			s.resolvedReferences[id] = mustResolve(ref)
-		}
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -603,9 +573,9 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 		krocel.WithCustomDeclarations(celPluralFunction()),
 		krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
 		krocel.WithCustomDeclarations(celReadyFunction()),
-		// __kroNodeReady carries per-WatchKind readyWhen verdicts, looked up
+		// __kroNodeReady carries per-Watch readyWhen verdicts, looked up
 		// by the AST rewrite of `<wk_id>.ready()` (see readyrewrite.go).
-		// Per 001-graph.md § readyWhen: "A WatchKind's `.ready()` returns
+		// Per 001-graph.md § readyWhen: "A Watch's `.ready()` returns
 		// true when the node's readyWhen conditions pass."
 		krocel.WithCustomDeclarations([]cel.EnvOption{
 			cel.Variable(reservedNodeReadyVar, cel.MapType(cel.StringType, cel.BoolType)),
@@ -624,11 +594,11 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 		scopeVars[id] = true
 	}
 
-	// WatchKind node IDs: AST rewrite targets. Only these IDs have their
+	// Watch node IDs: AST rewrite targets. Only these IDs have their
 	// `.ready()` calls redirected to the readiness sidecar map.
-	watchKindIDs := make(map[string]bool, len(typeInfo.listIDs))
+	collectionIDs := make(map[string]bool, len(typeInfo.listIDs))
 	for _, id := range typeInfo.listIDs {
-		watchKindIDs[id] = true
+		collectionIDs[id] = true
 	}
 	rewriteFactory := celast.NewExprFactory()
 
@@ -656,7 +626,7 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 			nextIDVal++
 			return id
 		}
-		rewriteWatchKindReady(nativeAst.Expr(), watchKindIDs, rewriteFactory, nextID)
+		rewriteCollectionReady(nativeAst.Expr(), collectionIDs, rewriteFactory, nextID)
 		ast, issues := env.Check(parsed)
 		if issues != nil && issues.Err() != nil {
 			return nil, fmt.Errorf("checking expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
@@ -703,7 +673,7 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 		spec:           spec,
 		dag:            dag,
 		unresolvedGVKs: typeInfo.unresolvedGVKs,
-		watchKindIDs:   watchKindIDs,
+		collectionIDs:   collectionIDs,
 	}, nil
 }
 
@@ -754,9 +724,14 @@ func (s *GraphSpec) Hash() string {
 		// Node ID
 		hashField([]byte(node.ID))
 
-		// Template (deterministic via json.Marshal sorted map keys)
+		// Body — Payload() covers Template/Patch/Def; Identity() covers
+		// Watch/Watch (identity-only, no Payload). Either way the
+		// body uniquely determines the node's spec.
 		if payload := node.Payload(); payload != nil {
 			data, _ := json.Marshal(payload)
+			hashField(data)
+		} else if identity := node.Identity(); identity != nil {
+			data, _ := json.Marshal(identity)
 			hashField(data)
 		} else if node.TemplateExpr != "" {
 			hashField([]byte(node.TemplateExpr))
@@ -835,7 +810,7 @@ func celPluralFunction() []cel.EnvOption {
 // have __ready == true — the collection's readiness is a function of its
 // children's readiness.
 //
-// For WatchKind nodes, `.ready()` is rewritten at compile time to a
+// For Watch nodes, `.ready()` is rewritten at compile time to a
 // scope-variable lookup (see readyrewrite.go). That redirection surfaces
 // the node's readyWhen verdict directly — independent of the collection
 // being non-empty — so `pods.ready()` returns the correct value even when

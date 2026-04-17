@@ -21,8 +21,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // reconcileNode dispatches to the appropriate handler based on node reference type.
-// The reference must be resolved before calling this function — Unresolved
-// references are resolved by the coordinator before dispatching to workers.
+// NodeType is a parse-time property of the node; no runtime resolution.
 //
 // driftCorrection is true when the node was triggered by the drift timer.
 // Per 004-graph-reconciliation.md § Reconcile: drift-triggered nodes bypass the
@@ -30,32 +29,32 @@ import (
 //
 // After dispatch, reconcileNode evaluates readyWhen as a post-dispatch step
 // for node types that don't handle their own per-item readiness (Definition,
-// Watch, Own, Contribute). WatchKind and ForEach return early — they
+// Watch, Own, Contribute). Watch and ForEach return early — they
 // handle readiness internally (per-item for ForEach, per-collection for
-// WatchKind).
+// Watch).
 //
 // All paths return (keys, error) with a uniform error contract:
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, ref ResolvedReference, eval *evaluator, watcher *graphWatcher, driftCorrection bool) ([]string, error) {
+func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, ref NodeType, eval *evaluator, watcher *graphWatcher, driftCorrection bool) ([]string, error) {
 	if node.ForEach != nil {
 		return r.reconcileForEach(ctx, graph, node, eval, watcher, driftCorrection)
 	}
 
 	switch ref {
-	case ResolvedReferenceDefinition:
+	case NodeTypeDef:
 		if err := r.reconcileDefinition(ctx, node, eval); err != nil {
 			return nil, err
 		}
-	case ResolvedReferenceWatchKind:
-		err := r.reconcileWatchKind(ctx, graph, node, eval, watcher)
-		return nil, err // WatchKind handles its own readiness
-	case ResolvedReferenceWatch:
-		if err := r.reconcileWatch(ctx, graph, node, eval, watcher); err != nil {
+	case NodeTypeWatch:
+		err := r.reconcileWatch(ctx, graph, node, eval, watcher)
+		return nil, err // Watch handles its own readiness
+	case NodeTypeRef:
+		if err := r.reconcileRef(ctx, graph, node, eval, watcher); err != nil {
 			return nil, err
 		}
-	default: // ResolvedReferenceOwn, ResolvedReferenceContribute
+	default: // NodeTypeOwn, NodeTypeContribute
 		key, err := r.reconcileApply(ctx, graph, node, ref, eval, watcher, driftCorrection)
 		if err != nil {
 			if key != "" {
@@ -83,115 +82,15 @@ func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node Node, ev
 	return nil
 }
 
-// resolveReference determines Own vs Contribute for an Unresolved node by
-// checking whether the target resource exists. Absent → Own, exists → check
-// the kro label. If the resource has this Graph's label, it's Own (we created
-// it on a previous revision). If it has no kro label or another Graph's label,
-// it's Contribute. Force annotation always resolves to Own.
-//
-// On error, the returned ResolvedReference is zero-valued and must not be
-// used — standard Go convention for paired (value, error) returns. On
-// success, the value is authoritatively Own or Contribute.
-func (r *GraphReconciler) resolveReference(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator) (ResolvedReference, error) {
-	logger := log.FromContext(ctx)
-
-	evalMap, err := eval.toMapNode(node)
-	if err != nil {
-		// Template can't evaluate yet — expressions unresolvable.
-		return 0, fmt.Errorf("resolving reference for %s: %w", node.ID, err)
-	}
-
-	obj := &unstructured.Unstructured{Object: evalMap}
-	if isForceApply(obj) {
-		logger.V(1).Info("reference resolved: Own (Force annotation)", "node", node.ID)
-		return ResolvedReferenceOwn, nil
-	}
-
-	if obj.GetNamespace() == "" {
-		obj.SetNamespace(graph.GetNamespace())
-	}
-
-	ref, err := r.classifyReference(ctx, graph, obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName())
-	if err != nil {
-		return 0, fmt.Errorf("checking resource existence for reference detection %s: %w", node.ID, err)
-	}
-	logger.V(1).Info("reference resolved", "node", node.ID, "ref", ref)
-	return mustResolve(ref), nil
-}
-
-// classifyReference determines Own vs Contribute for a resource by checking
-// whether it exists and examining its identity labels. This is the shared
-// classification logic used by both resolveReference (single nodes) and
-// resolveForEachChildReference (forEach children).
-//
-// Decision tree:
-//   - Resource absent → Own (we'll create it)
-//   - Resource exists with this Graph's `reference=contribute` label → Contribute
-//     (re-adopt an earlier Contribute — label value is authoritative)
-//   - Resource exists with this Graph's `reference=own` label → Own
-//     (re-adopt a resource we created on a previous reconcile; survives
-//     controller restart and revision rollover — the label proves provenance)
-//   - Resource exists without any of this Graph's labels → Contribute
-//     (another actor created it; we may only contribute fields)
-//
-// Re-adoption by label is the structural complement to first-time
-// classification: the applied set is derived from identity labels, so a
-// resource stamped by this Graph in a previous life MUST classify back to
-// the same reference. Ignoring the label on re-adoption would flip Own
-// resources into Contribute after every restart. Per 003-ownership.md §
-// Identity Labels.
-//
-// Error contract:
-//   - NotFound → Own, nil error (the common first-reconcile path)
-//   - Transient error (network, 5xx) → Unresolved, non-nil error
-//     (retry on next reconcile; the caller turns this into NodePending or
-//     NodeSystemError)
-//   - Any other unexpected GET failure → Unresolved, non-nil error
-//
-// Before the fix, transient errors returned ReferenceOwn — which caused the
-// caller to proceed with Own semantics (SSA apply, identity-label stamping)
-// against a resource whose current state was unknown. On a 5xx transient,
-// this could race with another actor's creation and trip the identity-label
-// conflict check on the next successful read.
-func (r *GraphReconciler) classifyReference(ctx context.Context, graph *unstructured.Unstructured, gvk schema.GroupVersionKind, namespace, name string) (Reference, error) {
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(gvk)
-	err := r.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, existing)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return ReferenceOwn, nil
-		}
-		return ReferenceUnresolved, err
-	}
-
-	// Resource exists. Check if this Graph created it (identity label match).
-	// Per 003-ownership.md: Contribute templates also stamp identity labels
-	// (with reference=contribute) so the applied set can find them on restart.
-	// We must check the REFERENCE VALUE — not just label presence — to
-	// distinguish Contribute (reference=contribute) from Own (reference=own).
-	// Without this check, a Contribute node misidentifies as Own on the second
-	// reconcile, triggering the kro label conflict check against co-contributing
-	// Graphs.
-	existingLabels := existing.GetLabels()
-	for key, val := range existingLabels {
-		if isGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
-			if val == ReferenceContribute.String() {
-				return ReferenceContribute, nil
-			}
-			return ReferenceOwn, nil
-		}
-	}
-
-	return ReferenceContribute, nil
-}
-
-// reconcileWatch reads a single existing object from the API server into scope.
-func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
+// reconcileRef reads a single existing object from the API server into
+// scope. Serves a ref: node — a named dereference into the shared
+// kind-scoped informer.
+func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
 
 	tmpl, err := eval.toMapNode(node)
 	if err != nil {
-		return fmt.Errorf("watch %s: %w", node.ID, err)
+		return fmt.Errorf("ref %s: %w", node.ID, err)
 	}
 
 	apiVersion, _ := tmpl["apiVersion"].(string)
@@ -214,18 +113,18 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 	obj.SetGroupVersionKind(gvk)
 	if err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("watch %s: resource %s/%s %s/%s not found: %w", node.ID, apiVersion, kind, namespace, name, ErrPending)
+			return fmt.Errorf("ref %s: resource %s/%s %s/%s not found: %w", node.ID, apiVersion, kind, namespace, name, ErrPending)
 		}
 		return fmt.Errorf("reading %s/%s %s/%s: %w", apiVersion, kind, namespace, name, err)
 	}
 
 	eval.scope[node.ID] = normalizeTypes(obj.Object)
-	logger.V(1).Info("resolved watch", "node", node.ID, "gvk", gvk, "name", obj.GetName())
+	logger.V(1).Info("resolved ref", "node", node.ID, "gvk", gvk, "name", obj.GetName())
 
 	return nil
 }
 
-// reconcileWatchKind reads a collection of resources matching a selector into scope.
+// reconcileWatch reads a collection of resources matching a selector into scope.
 //
 // Per 004-graph-reconciliation.md § Propagation: "When a single resource changes,
 // update the cached list incrementally rather than re-listing — O(1) per
@@ -233,12 +132,12 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 // collection changes from the coordinator. On incremental path, only changed
 // items are GET'd and merged. On drift or first reconcile, a full List is
 // performed and the cache is replaced.
-func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
+func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
 
 	tmpl, err := eval.toMapNode(node)
 	if err != nil {
-		return fmt.Errorf("watchKind %s: %w", node.ID, err)
+		return fmt.Errorf("watch %s: %w", node.ID, err)
 	}
 
 	apiVersion, _ := tmpl["apiVersion"].(string)
@@ -271,11 +170,11 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 		labelSelector = labels.Everything()
 	}
 
-	// WatchKind namespace follows k8s list/watch semantics: absent
+	// Watch namespace follows k8s list/watch semantics: absent
 	// metadata.namespace means all namespaces, matching ListOptions,
 	// informer caches, and every client library. An explicit namespace
 	// narrows the watch to one namespace. The Graph's own namespace is
-	// never used as a default — a WatchKind's scope is its targets, not
+	// never used as a default — a Watch's scope is its targets, not
 	// where the Graph object lives.
 	watchNamespace := ""
 	if md, ok := tmpl["metadata"].(map[string]any); ok {
@@ -287,24 +186,24 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 	}
 
 	if watcher != nil {
-		watcher.watchKind(node.ID, gvkToGVR(gvk), watchNamespace, labelSelector)
+		watcher.watchCollection(node.ID, gvkToGVR(gvk), watchNamespace, labelSelector)
 	}
 
 	var items []any
 
 	// Incremental path: cached list exists and collection changes are available.
 	// GET only the changed items and merge into the cached list.
-	if eval.watchKindCachedList != nil && !eval.watchKindDriftOrFull {
-		items = make([]any, len(eval.watchKindCachedList))
-		copy(items, eval.watchKindCachedList)
+	if eval.collectionCachedList != nil && !eval.collectionDriftOrFull {
+		items = make([]any, len(eval.collectionCachedList))
+		copy(items, eval.collectionCachedList)
 
-		if len(eval.watchKindChanges) > 0 {
+		if len(eval.collectionChanges) > 0 {
 			// Deduplicate changes by namespace/name — only the latest event
 			// for each resource matters. Multiple events between reconciles
 			// collapse into one GET.
 			type changeKey struct{ namespace, name string }
 			dedupedChanges := make(map[changeKey]CollectionChange)
-			for _, change := range eval.watchKindChanges {
+			for _, change := range eval.collectionChanges {
 				dedupedChanges[changeKey{change.Namespace, change.Name}] = change
 			}
 
@@ -351,7 +250,7 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 						items = filtered
 						continue
 					}
-					return fmt.Errorf("watchKind %s: getting changed resource %s/%s: %w", node.ID, ck.namespace, ck.name, err)
+					return fmt.Errorf("watch %s: getting changed resource %s/%s: %w", node.ID, ck.namespace, ck.name, err)
 				}
 
 				normalized := normalizeTypes(obj.Object)
@@ -376,8 +275,8 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 			}
 		}
 
-		logger.V(1).Info("resolved watchKind (incremental)", "node", node.ID, "gvk", gvk,
-			"cachedCount", len(eval.watchKindCachedList), "changes", len(eval.watchKindChanges),
+		logger.V(1).Info("resolved watch (incremental)", "node", node.ID, "gvk", gvk,
+			"cachedCount", len(eval.collectionCachedList), "changes", len(eval.collectionChanges),
 			"resultCount", len(items))
 	} else {
 		// Full list path: first reconcile, drift timer, or no cache.
@@ -398,18 +297,18 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 			items[i] = normalizeTypes(item.Object)
 		}
 		// Mark that this worker took the full-List path. The coordinator
-		// uses this to clear the watchKindDirty flag — only a successful
+		// uses this to clear the collectionDirty flag — only a successful
 		// full re-List recovers from a lost incremental merge.
-		eval.watchKindDidFullList = true
-		logger.V(1).Info("resolved watchKind (full list)", "node", node.ID, "gvk", gvk, "count", len(items))
+		eval.collectionDidFullList = true
+		logger.V(1).Info("resolved watch (full list)", "node", node.ID, "gvk", gvk, "count", len(items))
 	}
 
 	// Store the updated cache for the coordinator to persist.
-	eval.watchKindUpdatedCache = items
+	eval.collectionUpdatedCache = items
 
 	eval.scope[node.ID] = items
 
-	// Per 001-graph.md: "A WatchKind's .ready() returns true when the
+	// Per 001-graph.md: "A Watch's .ready() returns true when the
 	// node's readyWhen conditions pass (evaluated once against the whole
 	// array, not per-item)." The verdict is stored in eval.nodeReady so
 	// the AST rewrite of `<wk_id>.ready()` can surface it — including
@@ -453,7 +352,7 @@ func (r *GraphReconciler) reconcileWatchKind(ctx context.Context, graph *unstruc
 // Contribute keys use contributeKey (prune → release apply to release fields).
 // See applySSA for the full ref-dependent behavior.
 // driftCorrection bypasses the apply-hash check in applySSA.
-func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, ref ResolvedReference, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
+func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, ref NodeType, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMapNode(node)
@@ -470,7 +369,7 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 	logger.V(1).Info("applied resource", "node", node.ID, "ref", ref,
 		"gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
-	if ref == ResolvedReferenceContribute {
+	if ref == NodeTypeContribute {
 		// Track the contribution in the applied set with a "contribute:" prefix.
 		// This lets prune and teardown distinguish Contribute keys (release apply
 		// to release fields) from Own keys (delete).

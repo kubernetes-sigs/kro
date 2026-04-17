@@ -128,18 +128,18 @@ type nodeResult struct {
 	forEachUpdates map[string]map[string][]string // nodeID → itemID → keys
 	forEachScopes  map[string]map[string]any      // nodeID → itemID → scope
 	forEachItems   map[string][]any               // cache key → collection items
-	// WatchKind cache update — returned by WatchKind workers for the
+	// Watch cache update — returned by Watch workers for the
 	// coordinator to merge back into the instance state.
-	watchKindCacheUpdate map[string][]any // node ID → updated cached list
-	// watchKindDidFullList is true when the WatchKind worker took the
+	collectionCacheUpdate map[string][]any // node ID → updated cached list
+	// collectionDidFullList is true when the Watch worker took the
 	// full-List path (full re-List from API server), as opposed to
 	// incremental merge. Coordinator uses this to clear the dirty flag
 	// only after an authoritative refresh.
-	watchKindDidFullList bool
+	collectionDidFullList bool
 	// nodeReadyUpdate carries the node's readyWhen verdict from worker
 	// back to the coordinator. Used by the AST-rewritten `.ready()`
-	// lookup for WatchKind nodes (see readyrewrite.go). nil if the
-	// worker did not evaluate readiness (e.g., non-WatchKind or
+	// lookup for Watch nodes (see readyrewrite.go). nil if the
+	// worker did not evaluate readiness (e.g., non-Watch or
 	// early-exit path).
 	nodeReadyUpdate *bool
 	// forEach propagateWhen aggregate — true if all items satisfy
@@ -165,7 +165,7 @@ type walkState struct {
 	driftTriggered       map[string]bool
 	propagationTriggered map[string]bool
 
-	// WatchKind incremental cache — drained once at walk start.
+	// Watch incremental cache — drained once at walk start.
 	// Per 004-graph-reconciliation.md § Propagation.
 	collectionChanges map[string][]CollectionChange // nodeID → changes
 
@@ -337,8 +337,8 @@ func (w *walkState) tryDispatch(idx int) {
 	}
 
 	// Step 4: Evaluation check — section-scoped evaluation hashing.
-	nodeRef := node.Reference()
-	canHashSkip := nodeRef != ReferenceWatch && nodeRef != ReferenceWatchKind && !w.driftTriggered[node.ID]
+	nodeRef := node.Type()
+	canHashSkip := nodeRef != NodeTypeRef && nodeRef != NodeTypeWatch && !w.driftTriggered[node.ID]
 	if canHashSkip {
 		if _, hasPrevHash := w.state.previousEvalHashes[node.ID]; hasPrevHash {
 			evalHash, hashErr := hashNodeInputs(node, w.eval.scope)
@@ -491,25 +491,16 @@ func (w *walkState) tryDispatch(idx int) {
 			w.notifyDependents(node.ID)
 			return
 		}
-		// Transitioning from Excluded to included: re-resolve the reference.
-		// The previous classification may be stale (e.g., a resource that
-		// existed when we first resolved may have been deleted by the
-		// previous owner's teardown). Deleting the map entry signals the
-		// resolution chokepoint that the node needs classification again —
-		// absent = needs resolution, present = already a ResolvedReference.
-		if prev, ok := w.state.previousPlanStates[node.ID]; ok && prev == NodeExcluded {
-			delete(w.state.resolvedReferences, node.ID)
-		}
 	}
 
 	// Build snapshot evaluator for the worker.
 	workerEval := w.eval.snapshotFor(node, w.state)
 
-	// WatchKind incremental cache: pass cached list and collection changes
-	// to the worker so reconcileWatchKind can GET only changed items.
-	if node.Reference() == ReferenceWatchKind {
-		workerEval.watchKindNodeID = node.ID
-		cached, hasCached := w.state.watchKindCache[node.ID]
+	// Watch incremental cache: pass cached list and collection changes
+	// to the worker so reconcileWatch can GET only changed items.
+	if node.Type() == NodeTypeWatch {
+		workerEval.collectionNodeID = node.ID
+		cached, hasCached := w.state.collectionCache[node.ID]
 		// dirty: a previous incremental reconcile errored mid-merge,
 		// so the drained CollectionChanges were lost. Force a full
 		// re-List from the API server to recover authoritative state.
@@ -517,61 +508,26 @@ func (w *walkState) tryDispatch(idx int) {
 		// updates must not allow the cache to serve stale data beyond
 		// the drift interval when a recoverable error interrupted a
 		// merge.
-		dirty := w.state.watchKindDirty[node.ID]
+		dirty := w.state.collectionDirty[node.ID]
 		if hasCached && !w.driftTriggered[node.ID] && !dirty {
-			workerEval.watchKindCachedList = cached
-			workerEval.watchKindChanges = w.collectionChanges[node.ID]
+			workerEval.collectionCachedList = cached
+			workerEval.collectionChanges = w.collectionChanges[node.ID]
 		} else {
 			// First reconcile, drift, or previous incremental error:
 			// force full list.
-			workerEval.watchKindDriftOrFull = true
+			workerEval.collectionDriftOrFull = true
 		}
 	}
 
-	// Resolve Unresolved references in the coordinator. The map entry's
-	// presence or absence is authoritative — absent means the node has
-	// not been resolved yet (either first reconcile or a post-Excluded/
-	// Conflict reset), present means the ResolvedReference is ready to
-	// dispatch. Compile-time-classified references (Own/Watch/WatchKind/
-	// Definition) were populated by initResolvedReferences; only
-	// Unresolved nodes reach this block with an absent entry.
-	resolvedRef, haveResolved := w.state.resolvedReferences[node.ID]
-	if !haveResolved && node.ForEach == nil {
-		resolved, err := w.r.resolveReference(w.ctx, w.graph, *node, workerEval)
-		if err != nil {
-			nodeState := NodePending
-			if !errors.Is(err, ErrPending) {
-				info := classifyAPIError(err)
-				nodeState = info.state
-				// Store deterministic errors in previousPlanStates so the
-				// state survives the skip path on subsequent reconciles.
-				// Without this, the error is overwritten with Ready on the
-				// next reconcile (plan.States stays nodeUnvisited → Summary
-				// ignores the node). Pending errors are NOT stored — the
-				// data may become available on the next reconcile.
-				w.state.previousPlanStates[node.ID] = nodeState
-				w.nodeErrors = append(w.nodeErrors, fmt.Sprintf("%s: %s", node.ID, err))
-				logger.V(0).Info("error resolving reference", "node", node.ID, "state", nodeState, "error", err)
-			}
-			// Retain previous applied keys — the resource may still exist
-			// from a prior successful apply. Without this, the resource
-			// would be a prune candidate. The prune gate independently
-			// blocks on error states, but key retention makes the error
-			// path self-contained rather than relying on a distant safety
-			// net.
-			w.carryForwardKeys(node.ID)
-			w.plan.SetState(w.dag, node.ID, nodeState)
-			w.notifyDependents(node.ID)
-			return
-		}
-		resolvedRef = resolved
-		w.state.resolvedReferences[node.ID] = resolvedRef
-	}
+	// Classification is a parse-time property of the declared keyword —
+	// no runtime resolution. node.Type() is authoritative and
+	// invariant across reconciles within a revision.
+	resolvedRef := node.Type()
 
 	// Dispatch to worker goroutine.
 	w.dispatched[idx] = true
 	isDrift := w.driftTriggered[node.ID]
-	go func(n Node, we *evaluator, ref ResolvedReference, driftCorrection bool) {
+	go func(n Node, we *evaluator, ref NodeType, driftCorrection bool) {
 		evalStart := time.Now()
 		keys, err := w.r.reconcileNode(w.ctx, w.graph, n, ref, we, w.watcher, driftCorrection)
 		evalDuration := time.Since(evalStart)
@@ -594,10 +550,10 @@ func (w *walkState) tryDispatch(idx int) {
 				state = NodeError
 			}
 		}
-		// Extract the worker's node-readiness verdict (WatchKind-only).
+		// Extract the worker's node-readiness verdict (Watch-only).
 		// The worker wrote its verdict into its local nodeReady copy;
 		// the coordinator merges the value back into the shared map
-		// once the result is received. Non-WatchKind workers do not
+		// once the result is received. Non-Watch workers do not
 		// write to nodeReady, so the lookup returns (false, false).
 		var nodeReadyUpdate *bool
 		if we.nodeReady != nil {
@@ -616,8 +572,8 @@ func (w *walkState) tryDispatch(idx int) {
 			forEachUpdates:                we.forEachNewKeys,
 			forEachScopes:                 we.forEachNewScope,
 			forEachItems:                  we.forEachNewItems,
-			watchKindCacheUpdate:          we.watchKindCacheUpdate(),
-			watchKindDidFullList:          we.watchKindDidFullList,
+			collectionCacheUpdate:          we.collectionCacheUpdate(),
+			collectionDidFullList:          we.collectionDidFullList,
 			forEachAllItemsPropagateReady: we.forEachAllItemsPropagateReady,
 			nodeReadyUpdate:               nodeReadyUpdate,
 		}
@@ -760,7 +716,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	eval := newEvaluator(state)
 	eval.effectiveGeneration = effectiveGeneration
 	dag := state.compiled.dag
-	state.initResolvedReferences()
 	plan := NewPlanState(dag)
 
 	// Determine which nodes are triggered this reconcile.
@@ -774,7 +729,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// because the question is "does live state match desired state?" not
 	// "did inputs change?" — different questions with different cache semantics.
 	driftTriggered := make(map[string]bool, len(dag.Nodes))
-	var collectionChanges map[string][]CollectionChange // WatchKind incremental cache
+	var collectionChanges map[string][]CollectionChange // Watch incremental cache
 	isRevisionTransition := len(supersededRevisions) > 0
 	isFirstReconcile := len(state.previousPlanStates) == 0
 	if isFirstReconcile || isRevisionTransition {
@@ -835,9 +790,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 							if v, ok := oldState.previousKeys[node.ID]; ok {
 								state.previousKeys[node.ID] = v
 							}
-							if v, ok := oldState.resolvedReferences[node.ID]; ok {
-								state.resolvedReferences[node.ID] = v
-							}
 						}
 					}
 				}
@@ -871,7 +823,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		for nodeID := range watchTriggers {
 			triggered[nodeID] = true
 		}
-		// WatchKind collection changes: buffered resource keys for
+		// Watch collection changes: buffered resource keys for
 		// incremental cache updates. Drained alongside triggers so the
 		// coordinator knows which specific items changed.
 		collectionChanges = watcher.drainCollectionChanges()
@@ -988,16 +940,16 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			)).Observe(res.evalDuration.Seconds())
 		}
 
-		// WatchKind incremental-cache integrity: if the worker errored
+		// Watch incremental-cache integrity: if the worker errored
 		// AND did not persist a cache update, the drained
 		// CollectionChanges are lost. Mark the node dirty so the next
 		// reconcile takes the full-list path to recover authoritative
 		// state from the API server. Without this, stale cache can
 		// persist for up to the drift interval (default 30m). Per
 		// 004-graph-reconciliation.md § Propagation.
-		if res.err != nil && node.Reference() == ReferenceWatchKind &&
-			len(res.watchKindCacheUpdate) == 0 {
-			state.watchKindDirty[node.ID] = true
+		if res.err != nil && node.Type() == NodeTypeWatch &&
+			len(res.collectionCacheUpdate) == 0 {
+			state.collectionDirty[node.ID] = true
 		}
 
 		// Error handling: block dependents, continue independent branches.
@@ -1036,14 +988,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 		if res.state == NodePending {
 			plan.SetState(dag, node.ID, NodePending)
-			// Reset Contribute reference when a conflicted target disappears.
-			// Deleting the map entry signals the resolution chokepoint that
-			// the node needs classification again on the next reconcile.
-			if state.resolvedReferences[node.ID] == ResolvedReferenceContribute &&
-				state.previousPlanStates[node.ID] == NodeConflict {
-				delete(state.resolvedReferences, node.ID)
-				delete(state.previousEvalHashes, node.ID)
-			}
+			// Under declared-keyword classification, Contribute→Own is an
+			// authoring event (patch: → template: spec edit) handled by
+			// revision supersession. No runtime reclassification reset.
 			state.previousPlanStates[node.ID] = NodePending
 			state.previousScope[node.ID] = res.scopeValue
 			state.previousKeys[node.ID] = res.keys
@@ -1060,7 +1007,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			eval.scope[res.scopeKey] = res.scopeValue
 		}
 
-		// Merge node-readiness verdict (WatchKind workers). Writing
+		// Merge node-readiness verdict (Watch workers). Writing
 		// here makes the verdict visible to every subsequent node's
 		// CEL evaluations via the AST-rewritten `<wk_id>.ready()`
 		// lookup — including dependents that fan out after this node
@@ -1080,16 +1027,16 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.forEachItemKeys[nodeID] = itemKeys
 		}
 
-		// Merge WatchKind cache updates into the shared instance state.
+		// Merge Watch cache updates into the shared instance state.
 		// Dirty is cleared only when the worker took the full-List path
 		// — that's the only thing that recovers from a lost incremental
 		// merge. An incremental success against an already-stale cache
 		// does not address the staleness. Per 004-graph-reconciliation.md
 		// § Propagation.
-		for nodeID, cached := range res.watchKindCacheUpdate {
-			state.watchKindCache[nodeID] = cached
-			if res.watchKindDidFullList {
-				delete(state.watchKindDirty, nodeID)
+		for nodeID, cached := range res.collectionCacheUpdate {
+			state.collectionCache[nodeID] = cached
+			if res.collectionDidFullList {
+				delete(state.collectionDirty, nodeID)
 			}
 		}
 
@@ -1140,13 +1087,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			if observed := eval.scope[node.ID]; observed != nil {
 				propagateHash, err := hashSelfPaths(node, observed)
 				if err == nil && propagateHash == "" {
-					// No SelfPaths (WatchKind, bare reference) —
+					// No SelfPaths (Watch, bare reference) —
 					// fall back to hashing the full output. Without this,
 					// collection changes would never propagate to forEach.
 					if m, ok := observed.(map[string]any); ok {
 						propagateHash, err = hashDesiredState(m)
 					} else {
-						// Array output (WatchKind, forEach) — use JSON hash.
+						// Array output (Watch, forEach) — use JSON hash.
 						data, jsonErr := json.Marshal(observed)
 						if jsonErr == nil {
 							h := fnv.New64a()
@@ -1563,7 +1510,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if corrected, ok := normalizedToStatic[strings.ToLower(key)]; ok {
 				key = corrected
 			}
-			if entry.Reference == ResolvedReferenceContribute {
+			if entry.NodeType == NodeTypeContribute {
 				// For contribute keys, encode hasStatus from revision spec scan.
 				cKey := contributeKeyPrefix + key
 				if contributeStatusMap[key] {
@@ -1591,9 +1538,9 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if node.Identity() == nil {
 				continue
 			}
-			// Skip Watch, WatchKind (read-only).
-			ref := node.Reference()
-			if ref == ReferenceWatch || ref == ReferenceWatchKind {
+			// Skip Watch, Watch (read-only).
+			ref := node.Type()
+			if ref == NodeTypeRef || ref == NodeTypeWatch {
 				continue
 			}
 			// Skip finalizer nodes — dormant during normal operation.

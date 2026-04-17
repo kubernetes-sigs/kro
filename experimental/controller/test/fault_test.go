@@ -64,7 +64,7 @@ func TestWatchedResourceDeletedMidReconcile(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "source",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "fault-watch-source"},
@@ -415,8 +415,12 @@ func TestConflictThenSpecChangeResolvesConflict(t *testing.T) {
 // produce SystemError (no API calls). CEL evaluation failures are Error.
 //
 // Two bugs were found:
-//  1. resolveReference error path didn't store previousPlanStates — the
-//     Error state was lost on the next reconcile, overwritten with Ready.
+//  1. The (now-deleted) resolveReference error path didn't store
+//     previousPlanStates — the Error state was lost on the next reconcile,
+//     overwritten with Ready. Under the declared-keyword schema the
+//     classification is parse-time and there is no resolution error path;
+//     the same storage bug is covered for the remaining error paths
+//     (includeWhen, readyWhen, per-node apply errors).
 //  2. NodeError had no drift timer case — the node was never re-evaluated
 //     when upstream data was stable.
 func TestErrorClassification_RegressionCELRuntime(t *testing.T) {
@@ -446,7 +450,7 @@ func TestErrorClassification_RegressionCELRuntime(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "source",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "cel-error-source"},
 						},
@@ -525,7 +529,7 @@ func TestStatusSubresourceSplitApplyRevertOnFailure(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "target",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "test.kro.run/v1alpha1",
 							"kind":       "StrictStatus",
 							"metadata": map[string]any{
@@ -569,7 +573,7 @@ func TestStatusSubresourceSplitApplyRevertOnFailure(t *testing.T) {
 			unstructured.SetNestedSlice(obj.Object, []any{
 				map[string]any{
 					"id": "target",
-					"template": map[string]any{
+					"patch": map[string]any{
 						"apiVersion": "test.kro.run/v1alpha1",
 						"kind":       "StrictStatus",
 						"metadata": map[string]any{
@@ -620,7 +624,7 @@ func TestStatusSubresourceSplitApplyRevertOnFailure(t *testing.T) {
 			unstructured.SetNestedSlice(obj.Object, []any{
 				map[string]any{
 					"id": "target",
-					"template": map[string]any{
+					"patch": map[string]any{
 						"apiVersion": "test.kro.run/v1alpha1",
 						"kind":       "StrictStatus",
 						"metadata": map[string]any{

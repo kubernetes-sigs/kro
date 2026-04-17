@@ -66,7 +66,7 @@ func TestMultiGraphFieldCoexistence(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "contribute",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -96,7 +96,7 @@ func TestMultiGraphFieldCoexistence(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "contribute",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -156,7 +156,7 @@ func TestMultiGraphFieldCoexistence(t *testing.T) {
 			unstructured.SetNestedSlice(obj.Object, []any{
 				map[string]any{
 					"id": "contribute",
-					"template": map[string]any{
+					"patch": map[string]any{
 						"apiVersion": "v1",
 						"kind":       "ConfigMap",
 						"metadata": map[string]any{
@@ -238,7 +238,7 @@ func TestContribution(t *testing.T) {
 					// Read the external object into scope
 					map[string]any{
 						"id": "schema",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -266,7 +266,7 @@ func TestContribution(t *testing.T) {
 					// kind, and metadata keys (no spec/data fields).
 					map[string]any{
 						"id": "status",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -426,7 +426,7 @@ func TestResourcePruning(t *testing.T) {
 // shape — behavioral consequence: the resource is NOT deleted when the
 // template is removed from the Graph spec. Own shape would delete it.
 //
-// Design 003-ownership § Reference Types: "Own — Creates the resource if
+// Design 003-ownership § NodeType Types: "Own — Creates the resource if
 // absent. Deletes on prune." vs "Contribute — Writes fields on a resource
 // the Graph does not create. Releases fields on prune, never deletes."
 //
@@ -469,7 +469,7 @@ func TestContributeReferenceDetectedByExistence(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "target",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -592,7 +592,7 @@ func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "statusContrib",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "test.kro.run/v1alpha1",
 							"kind":       "SimpleApp",
 							"metadata":   map[string]any{"name": "status-target"},
@@ -730,7 +730,7 @@ func TestContributeMetadataAndStatus(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "contrib",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "test.kro.run/v1alpha1",
 							"kind":       "SimpleApp",
 							"metadata": map[string]any{
@@ -929,7 +929,7 @@ func TestContributeMapFieldOwnership(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "contrib",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{

@@ -345,11 +345,12 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 		graphNodes := []Node{
 			{
 				ID: "item",
-				Template: map[string]any{
+				Ref: map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Namespace",
 					"metadata":   map[string]any{"name": "test-ns"},
 				},
+				ref: NodeTypeRef,
 			},
 			{
 				ID: "policy",
@@ -359,6 +360,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 					"metadata":   map[string]any{"name": "default-deny", "namespace": "${item.metadata.name}"},
 					"spec":       map[string]any{"podSelector": map[string]any{}},
 				},
+				ref: NodeTypeOwn,
 			},
 		}
 		graph := &GraphSpec{Nodes: graphNodes}
@@ -366,7 +368,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 		require.NoError(t, err, "sub-Graph should compile")
 
 		// item is a Watch node (has metadata.name, no selector).
-		assert.Equal(t, ReferenceWatch, compiled.dag.References["item"])
+		assert.Equal(t, NodeTypeRef, compiled.dag.References["item"])
 
 		// policy depends on item.
 		policyDeps := compiled.dag.Nodes[compiled.dag.Index["policy"]].Dependencies
@@ -377,11 +379,12 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 		graphNodes := []Node{
 			{
 				ID: "item",
-				Template: map[string]any{
+				Ref: map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Namespace",
 					"metadata":   map[string]any{"name": "test-ns"},
 				},
+				ref: NodeTypeRef,
 			},
 			{
 				ID: "quota",
@@ -391,6 +394,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 					"metadata":   map[string]any{"name": "default", "namespace": "${item.metadata.name}"},
 					"spec":       map[string]any{"hard": map[string]any{"pods": "10"}},
 				},
+				ref: NodeTypeOwn,
 			},
 			{
 				ID: "policy",
@@ -400,6 +404,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 					"metadata":   map[string]any{"name": "${quota.metadata.name}-deny", "namespace": "${item.metadata.name}"},
 					"spec":       map[string]any{"podSelector": map[string]any{}},
 				},
+				ref: NodeTypeOwn,
 			},
 		}
 		graph := &GraphSpec{Nodes: graphNodes}
@@ -458,7 +463,7 @@ func TestStdlibKindEscapeLevels(t *testing.T) {
 		assert.NotContains(t, expr, "k.spec.group", "escaped expression leaked into L0")
 	}
 
-	// L0 should compile: watchKinds (WatchKind), k.metadata.* (forEach variable).
+	// L0 should compile: watchKinds (Watch), k.metadata.* (forEach variable).
 	foundWatchKinds, foundKMeta := false, false
 	for expr := range compiled.programs {
 		if expr == "watchKinds" {
@@ -477,7 +482,7 @@ func TestStdlibKindEscapeLevels(t *testing.T) {
 //
 // The Singleton is implemented as Kind + Decorator. The Decorator watches
 // all Singletons and creates a sub-Graph per item. Each sub-Graph has a
-// peers WatchKind and an includeWhen gate that self-determines the winner.
+// peers Watch and an includeWhen gate that self-determines the winner.
 //
 // The includeWhen expression is tested directly by compiling it from the
 // YAML and evaluating against mock peer data.
@@ -574,7 +579,7 @@ func TestStdlibSingletonResolution(t *testing.T) {
 
 		// Evaluate winner.name.
 		scope := map[string]any{"peers": peers}
-		winnerName, err := compiled.eval(expr(nodesByID["winner"].Template["name"].(string)), scope)
+		winnerName, err := compiled.eval(expr(nodesByID["winner"].Def["name"].(string)), scope)
 		require.NoError(t, err)
 
 		// Evaluate includeWhen.
@@ -663,11 +668,12 @@ func TestStdlibSizeGuard(t *testing.T) {
 		Nodes: []Node{
 			{
 				ID: "webapps",
-				Template: map[string]any{
+				Watch: map[string]any{
 					"apiVersion": "experimental.kro.run/v1alpha1",
 					"kind":       "WebApp",
 					"selector":   map[string]any{},
 				},
+				ref: NodeTypeWatch,
 			},
 			{
 				ID:          "dashboard",
@@ -678,6 +684,7 @@ func TestStdlibSizeGuard(t *testing.T) {
 					"metadata":   map[string]any{"name": "webapp-dashboard", "namespace": "monitoring"},
 					"data":       map[string]any{},
 				},
+				ref: NodeTypeOwn,
 			},
 		},
 	}
@@ -697,11 +704,12 @@ func TestStdlibDistinctCEL(t *testing.T) {
 		Nodes: []Node{
 			{
 				ID: "items",
-				Template: map[string]any{
+				Watch: map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
 					"selector":   map[string]any{"app": "monitoring"},
 				},
+				ref: NodeTypeWatch,
 			},
 			{
 				ID:      "sa",
@@ -711,6 +719,7 @@ func TestStdlibDistinctCEL(t *testing.T) {
 					"kind":       "ServiceAccount",
 					"metadata":   map[string]any{"name": "monitoring", "namespace": "${ns}"},
 				},
+				ref: NodeTypeOwn,
 			},
 		},
 	}

@@ -541,29 +541,32 @@ func TestFinalizesTargetMustBeResource(t *testing.T) {
 		{
 			name: "Definition target rejected",
 			target: Node{
-				ID:       "naming",
-				Template: map[string]any{"prefix": "app"},
+				ID:  "naming",
+				Def: map[string]any{"prefix": "app"},
+				ref: NodeTypeDef,
 			},
 		},
 		{
 			name: "Watch target rejected",
 			target: Node{
 				ID: "config",
-				Template: map[string]any{
+				Ref: map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
 					"metadata":   map[string]any{"name": "config"},
 				},
+				ref: NodeTypeRef,
 			},
 		},
 		{
-			name: "WatchKind target rejected",
+			name: "Watch target rejected",
 			target: Node{
 				ID: "namespaces",
-				Template: map[string]any{
+				Watch: map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Namespace",
 				},
+				ref: NodeTypeWatch,
 			},
 		},
 	}
@@ -574,7 +577,7 @@ func TestFinalizesTargetMustBeResource(t *testing.T) {
 				tc.target,
 				{ID: "snapshot", Finalizes: tc.target.ID, Template: map[string]any{
 					"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "snap"},
-				}},
+				}, ref: NodeTypeOwn},
 			}
 			_, err := BuildDAG(nodes, nil)
 			require.Error(t, err)
@@ -635,7 +638,7 @@ func TestForEachChildIdentityLabelKey(t *testing.T) {
 		"mygraph", "default",
 	)
 	assert.Equal(t,
-		"policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/reference",
+		"policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/type",
 		key,
 	)
 }
@@ -649,7 +652,7 @@ func TestForEachChildIdentityLabelKeyNoGroup(t *testing.T) {
 		"mygraph", "default",
 	)
 	assert.Equal(t,
-		"configs.my-cm.default.configmap.mygraph.default.internal.kro.run/reference",
+		"configs.my-cm.default.configmap.mygraph.default.internal.kro.run/type",
 		key,
 	)
 }
@@ -659,15 +662,15 @@ func TestForEachChildIdentityLabelKeyNoGroup(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestWatchKindReadyWhenFailure_RegressionReadyFlag proves that when a
-// WatchKind's readyWhen fails, .ready() returns false. Per 001-graph.md:
-// "A WatchKind's .ready() returns true when the node's readyWhen
+// Watch's readyWhen fails, .ready() returns false. Per 001-graph.md:
+// "A Watch's .ready() returns true when the node's readyWhen
 // conditions pass (evaluated once against the whole array, not per-item)."
 //
 // Before the fix, items were stamped with __ready=true before readyWhen
 // evaluation. If readyWhen failed, the items retained __ready=true and
 // .ready() on the collection returned true even though the node was NotReady.
 func TestWatchKindReadyWhenFailure_RegressionReadyFlag(t *testing.T) {
-	// Simulate the WatchKind pattern: items with __ready set,
+	// Simulate the Watch pattern: items with __ready set,
 	// then readyWhen fails. .ready() on the array must return false.
 	items := []any{
 		map[string]any{
@@ -720,7 +723,7 @@ func TestWatchKindNoReadyWhen_ItemsReady(t *testing.T) {
 	for _, item := range items {
 		m, _ := item.(map[string]any)
 		ready, _ := m["__ready"].(bool)
-		assert.True(t, ready, "WatchKind items without readyWhen should be ready")
+		assert.True(t, ready, "Watch items without readyWhen should be ready")
 	}
 }
 
@@ -1388,7 +1391,7 @@ func TestReadinessStateIncludedInPropagationHash(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// WatchKind incremental cache tests
+// Watch incremental cache tests
 // ---------------------------------------------------------------------------
 
 // TestCollectionChangeDedup verifies that multiple events for the same
@@ -1414,7 +1417,7 @@ func TestCollectionChangeDedup(t *testing.T) {
 		"pod-2 should have its only event (add)")
 }
 
-// TestWatchKindCacheLifecycle verifies the WatchKind cache in instanceState.
+// TestWatchKindCacheLifecycle verifies the Watch cache in instanceState.
 func TestWatchKindCacheLifecycle(t *testing.T) {
 	spec := buildBenchSpec(3)
 	compiled, err := compileGraphSpec(spec, nil)
@@ -1423,23 +1426,23 @@ func TestWatchKindCacheLifecycle(t *testing.T) {
 	state := newInstanceState(compiled)
 
 	// Initially empty.
-	assert.Empty(t, state.watchKindCache)
+	assert.Empty(t, state.collectionCache)
 
 	// Store a cached list.
 	items := []any{
 		map[string]any{"metadata": map[string]any{"name": "pod-1"}},
 		map[string]any{"metadata": map[string]any{"name": "pod-2"}},
 	}
-	state.watchKindCache["myWatchKind"] = items
+	state.collectionCache["myWatchKind"] = items
 
 	// Retrieve.
-	cached, ok := state.watchKindCache["myWatchKind"]
+	cached, ok := state.collectionCache["myWatchKind"]
 	assert.True(t, ok)
 	assert.Equal(t, 2, len(cached))
 }
 
 // TestWatchKindEmptyReadyWhenPropagates_Regression proves that `.ready()`
-// on a WatchKind with an empty collection reflects the node's readyWhen
+// on a Watch with an empty collection reflects the node's readyWhen
 // verdict — not a vacuous true. The AST rewrite in readyrewrite.go
 // redirects `<wk_id>.ready()` to a scope-variable lookup populated from
 // the node's readyWhen evaluation, independent of collection size.
@@ -1448,7 +1451,7 @@ func TestWatchKindCacheLifecycle(t *testing.T) {
 // because the per-item `__ready` stamping had no items to attach to and
 // `.ready()` on an empty list defaulted to "vacuously true."
 //
-// Per 001-graph.md § readyWhen: "A WatchKind's `.ready()` returns true
+// Per 001-graph.md § readyWhen: "A Watch's `.ready()` returns true
 // when the node's readyWhen conditions pass (evaluated once against the
 // whole array, not per-item) — including when the collection is empty."
 func TestWatchKindEmptyReadyWhenPropagates_Regression(t *testing.T) {
@@ -1456,11 +1459,12 @@ func TestWatchKindEmptyReadyWhenPropagates_Regression(t *testing.T) {
 		Nodes: []Node{
 			{
 				ID: "pods",
-				Template: map[string]any{
+				Watch: map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
 					"selector":   map[string]any{"app": "nope"},
 				},
+				ref: NodeTypeWatch,
 			},
 		},
 	}
@@ -1471,28 +1475,28 @@ func TestWatchKindEmptyReadyWhenPropagates_Regression(t *testing.T) {
 		state := newInstanceState(compiled)
 		eval := newEvaluator(state)
 		eval.scope["pods"] = []any{}
-		// Simulate reconcileWatchKind setting the verdict after a failed
+		// Simulate reconcileWatch setting the verdict after a failed
 		// readyWhen evaluation on an empty collection.
 		eval.nodeReady["pods"] = false
 
 		out, err := compiled.eval("pods.ready()", eval.scope)
 		require.NoError(t, err)
 		assert.Equal(t, false, out,
-			"empty WatchKind with failing readyWhen must report .ready() = false")
+			"empty Watch with failing readyWhen must report .ready() = false")
 	})
 
 	t.Run("empty collection with no readyWhen → .ready() true", func(t *testing.T) {
 		state := newInstanceState(compiled)
 		eval := newEvaluator(state)
 		eval.scope["pods"] = []any{}
-		// reconcileWatchKind sets verdict = true when no readyWhen is
+		// reconcileWatch sets verdict = true when no readyWhen is
 		// specified — a collection is ready by virtue of being observed.
 		eval.nodeReady["pods"] = true
 
 		out, err := compiled.eval("pods.ready()", eval.scope)
 		require.NoError(t, err)
 		assert.Equal(t, true, out,
-			"empty WatchKind without readyWhen must report .ready() = true")
+			"empty Watch without readyWhen must report .ready() = true")
 	})
 
 	t.Run("non-empty collection respects readyWhen verdict", func(t *testing.T) {
@@ -1507,7 +1511,7 @@ func TestWatchKindEmptyReadyWhenPropagates_Regression(t *testing.T) {
 		out, err := compiled.eval("pods.ready()", eval.scope)
 		require.NoError(t, err)
 		assert.Equal(t, false, out,
-			"non-empty WatchKind with failing readyWhen must also report .ready() = false")
+			"non-empty Watch with failing readyWhen must also report .ready() = false")
 	})
 }
 
@@ -1529,17 +1533,17 @@ func TestWatchKindCacheDirty_Regression(t *testing.T) {
 	require.NoError(t, err)
 
 	state := newInstanceState(compiled)
-	require.NotNil(t, state.watchKindDirty, "instanceState must initialize watchKindDirty map")
+	require.NotNil(t, state.collectionDirty, "instanceState must initialize collectionDirty map")
 
-	// Coordinator marks a node dirty after a WatchKind worker errors
-	// without producing a watchKindCacheUpdate.
-	state.watchKindDirty["pods"] = true
-	assert.True(t, state.watchKindDirty["pods"],
+	// Coordinator marks a node dirty after a Watch worker errors
+	// without producing a collectionCacheUpdate.
+	state.collectionDirty["pods"] = true
+	assert.True(t, state.collectionDirty["pods"],
 		"dirty flag must persist until next successful merge")
 
 	// After a successful merge the coordinator clears the flag.
-	delete(state.watchKindDirty, "pods")
-	assert.False(t, state.watchKindDirty["pods"],
+	delete(state.collectionDirty, "pods")
+	assert.False(t, state.collectionDirty["pods"],
 		"dirty flag cleared on successful merge")
 }
 

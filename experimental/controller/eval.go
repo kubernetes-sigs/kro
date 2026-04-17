@@ -30,7 +30,7 @@ type evaluator struct {
 	// and the graph object isn't mutated as a side channel.
 	effectiveGeneration int64
 
-	// nodeReady carries per-WatchKind readyWhen verdicts. AST-rewritten
+	// nodeReady carries per-Watch readyWhen verdicts. AST-rewritten
 	// `<wk_id>.ready()` expressions look up this map via the reserved
 	// scope key (see readyrewrite.go). Scalar/forEach readiness continues
 	// to flow through the per-item __ready stamping — those are unaffected
@@ -48,19 +48,19 @@ type evaluator struct {
 	forEachNewScope  map[string]map[string]any      // nodeID → itemID → updated scope data (output)
 	forEachNewKeys   map[string]map[string][]string // nodeID → itemID → updated keys (output)
 
-	// WatchKind incremental cache state — populated by the coordinator
-	// before dispatching a WatchKind worker (cached list + collection
+	// Watch incremental cache state — populated by the coordinator
+	// before dispatching a Watch worker (cached list + collection
 	// changes). The worker merges changes into the cached list and returns
-	// the updated list via watchKindUpdatedCache.
+	// the updated list via collectionUpdatedCache.
 	// Per 004-graph-reconciliation.md § Propagation: "When a single resource
 	// changes, update the cached list incrementally rather than re-listing
 	// — O(1) per event, not O(matching)."
-	watchKindNodeID       string             // node ID for cache key (set by coordinator)
-	watchKindCachedList   []any              // previous cached list (nil = no cache, full list needed)
-	watchKindChanges      []CollectionChange // buffered changes since last reconcile
-	watchKindUpdatedCache []any              // output: updated list for coordinator to store
-	watchKindDriftOrFull  bool               // true = bypass cache, do full list (drift or first reconcile)
-	// watchKindDidFullList is set true by reconcileWatchKind when the
+	collectionNodeID       string             // node ID for cache key (set by coordinator)
+	collectionCachedList   []any              // previous cached list (nil = no cache, full list needed)
+	collectionChanges      []CollectionChange // buffered changes since last reconcile
+	collectionUpdatedCache []any              // output: updated list for coordinator to store
+	collectionDriftOrFull  bool               // true = bypass cache, do full list (drift or first reconcile)
+	// collectionDidFullList is set true by reconcileWatch when the
 	// worker took the full-List path (as opposed to incremental merge).
 	// Used by the coordinator to tighten dirty-flag clearing: dirty is
 	// cleared only when a full re-List has successfully completed,
@@ -68,7 +68,7 @@ type evaluator struct {
 	// is suspect." An incremental-merge success with an already-stale
 	// cache does not address the staleness. Per 004-graph-reconciliation.md
 	// § Propagation.
-	watchKindDidFullList bool
+	collectionDidFullList bool
 
 	// forEach propagateWhen aggregate — set by reconcileForEach when the
 	// node has propagateWhen expressions. The worker evaluates propagateWhen
@@ -80,8 +80,8 @@ type evaluator struct {
 
 // newEvaluator creates an evaluator for a reconcile cycle.
 func newEvaluator(state *instanceState) *evaluator {
-	// nodeReady carries per-WatchKind readyWhen verdicts. It lives on
-	// instanceState so verdicts persist across reconciles — a WatchKind
+	// nodeReady carries per-Watch readyWhen verdicts. It lives on
+	// instanceState so verdicts persist across reconciles — a Watch
 	// that isn't re-evaluated on a given reconcile must still expose its
 	// last verdict to downstream `<wk_id>.ready()` lookups. Scope
 	// reference is stable — later writes to the map are observable by
@@ -113,15 +113,15 @@ func (e *evaluator) withScope(scope map[string]any) *evaluator {
 	return &evaluator{compiled: e.compiled, scope: scope, nodeReady: e.nodeReady, effectiveGeneration: e.effectiveGeneration}
 }
 
-// watchKindCacheUpdate returns a map of WatchKind cache updates if the
-// evaluator's watchKindUpdatedCache is set. Returns nil if no cache
-// update was produced (the worker was not a WatchKind node, or the
-// reconcileWatchKind call failed before producing a cache update).
-func (e *evaluator) watchKindCacheUpdate() map[string][]any {
-	if e.watchKindUpdatedCache == nil || e.watchKindNodeID == "" {
+// collectionCacheUpdate returns a map of Watch cache updates if the
+// evaluator's collectionUpdatedCache is set. Returns nil if no cache
+// update was produced (the worker was not a Watch node, or the
+// reconcileWatch call failed before producing a cache update).
+func (e *evaluator) collectionCacheUpdate() map[string][]any {
+	if e.collectionUpdatedCache == nil || e.collectionNodeID == "" {
 		return nil
 	}
-	return map[string][]any{e.watchKindNodeID: e.watchKindUpdatedCache}
+	return map[string][]any{e.collectionNodeID: e.collectionUpdatedCache}
 }
 
 // evalBoolCondition evaluates a CEL expression and coerces the result to bool.
@@ -243,26 +243,37 @@ func (e *evaluator) toMap(tmpl map[string]any) (map[string]any, error) {
 	return result, nil
 }
 
-// toMapNode evaluates a node's template — either a static Template map or
-// a TemplateExpr CEL expression that produces the entire map at runtime.
+// toMapNode evaluates a node's body — either a static map (Template/Patch/
+// Watch/Watch/Def) or a CEL expression string under template/patch/def
+// that yields the body map at runtime. For Watch/Watch (identity-only)
+// the identity map is evaluated — its fields may still contain CEL
+// expressions.
 func (e *evaluator) toMapNode(node Node) (map[string]any, error) {
 	if node.TemplateExpr != "" {
-		// TemplateExpr is a standalone ${...} expression. Use evalString
+		// Body came in as a CEL expression under the classification
+		// keyword (template/patch/def as a string). Use evalString
 		// which handles ${...} extraction and type coercion.
 		raw, err := e.evalString(node.TemplateExpr)
 		if err != nil {
 			if isPending(err) {
 				return nil, ErrPending
 			}
-			return nil, fmt.Errorf("%w: templateExpr %q: %w", ErrEvaluation, node.TemplateExpr, err)
+			return nil, fmt.Errorf("%w: %s expression %q: %w", ErrEvaluation, node.ExprKeyword, node.TemplateExpr, err)
 		}
 		result, ok := raw.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("%w: templateExpr evaluated to %T, want map", ErrEvaluation, raw)
+			return nil, fmt.Errorf("%w: %s expression evaluated to %T, want map", ErrEvaluation, node.ExprKeyword, raw)
 		}
 		return result, nil
 	}
-	return e.toMap(node.Payload())
+	// Payload() returns the body map for Template/Patch/Def. For
+	// Watch/Watch (identity-only) Payload returns nil; identity
+	// fields still need to be evaluated (name/namespace may be CEL).
+	body := node.Payload()
+	if body == nil {
+		body = node.Identity()
+	}
+	return e.toMap(body)
 }
 
 // template walks a value tree and evaluates/strips ${...} expressions.
@@ -522,9 +533,17 @@ func extractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 		}
 	}
 
-	// Process template + includeWhen + forEach expressions → depPaths
+	// Process body + includeWhen + forEach expressions → depPaths.
+	// Walk every possible body map — Template/Patch/Def (Payload) plus
+	// Watch/Watch (Identity) — because identity fields on Watch and
+	// Watch may still carry CEL expressions (e.g., a dynamic name
+	// from an upstream node).
 	var templateStrs []string
-	collectStrings(node.Payload(), &templateStrs)
+	for _, body := range []map[string]any{node.Template, node.Patch, node.Ref, node.Watch, node.Def} {
+		if body != nil {
+			collectStrings(body, &templateStrs)
+		}
+	}
 	if node.TemplateExpr != "" {
 		templateStrs = append(templateStrs, node.TemplateExpr)
 	}

@@ -93,7 +93,7 @@ func TestForEachBasic(t *testing.T) {
 }
 
 // TestForEachWithExternalRefSelector proves the full pattern:
-// WatchKind reads a collection from the cluster,
+// Watch reads a collection from the cluster,
 // forEach iterates it and stamps one resource per item.
 // This is the core mechanism for "one child Graph per instance" in the RGD model.
 func TestForEachWithExternalRefSelector(t *testing.T) {
@@ -135,7 +135,7 @@ func TestForEachWithExternalRefSelector(t *testing.T) {
 					// watch with selector: reads all ConfigMaps with label app=my-kind
 					map[string]any{
 						"id": "instances",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"selector": map[string]any{
@@ -238,7 +238,7 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 					// Read all WebApp instances
 					map[string]any{
 						"id": "webapps",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"selector": map[string]any{
@@ -264,7 +264,7 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 									// Child reads its specific instance by name
 									map[string]any{
 										"id": "schema",
-										"template": map[string]any{
+										"ref": map[string]any{
 											"apiVersion": "v1",
 											"kind":       "ConfigMap",
 											"metadata": map[string]any{
@@ -393,7 +393,7 @@ func TestForEachReadyWhenDoesNotGateDownstream(t *testing.T) {
 								"name": "worker-summary",
 							},
 							"data": map[string]any{
-								// Reference workers[0] so the DAG sees the dependency
+								// NodeType workers[0] so the DAG sees the dependency
 								// (extractFirstIdentifier needs the resource ID as the first token)
 								"firstWorker": "${workers[0].data.item}",
 							},
@@ -627,7 +627,7 @@ func TestForEachChildIdentityStableUnderReordering(t *testing.T) {
 	}
 	t.Log("2 worker ConfigMaps created: b, c")
 
-	// 2. Create Graph: WatchKind on the workers + forEach stamping children.
+	// 2. Create Graph: Watch on the workers + forEach stamping children.
 	// Each child's name is derived from the item's metadata.name, so the mapping
 	// is identity-based: worker-b → child-worker-b, etc.
 	graph := &unstructured.Unstructured{
@@ -642,7 +642,7 @@ func TestForEachChildIdentityStableUnderReordering(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "workers",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"selector": map[string]any{
@@ -798,10 +798,10 @@ func TestForEachPropagateWhenMultiChildAggregation(t *testing.T) {
 			},
 			"spec": map[string]any{
 				"nodes": []any{
-					// WatchKind: read all 3 sources.
+					// Watch: read all 3 sources.
 					map[string]any{
 						"id": "sources",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"selector":   map[string]any{"group": "pw-foreach"},
@@ -961,7 +961,7 @@ func TestForEachPartialFailureDoesNotPrune(t *testing.T) {
 		require.NoError(t, k8sClient.Create(ctx, cm))
 	}
 
-	// Graph: WatchKind discovers sources, forEach stamps one child per source.
+	// Graph: Watch discovers sources, forEach stamps one child per source.
 	// Each child's data.origin field references ${item.data.ref}.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
@@ -975,7 +975,7 @@ func TestForEachPartialFailureDoesNotPrune(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "sources",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"selector":   map[string]any{"group": "partial-sources"},
@@ -1134,7 +1134,7 @@ func TestForEach_RegressionDuplicateKeySilentOverwrite(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "sources",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"selector":   map[string]any{"group": "dup-sources"},
@@ -1431,7 +1431,7 @@ func TestForEachArrayFormatDuplicateVariable(t *testing.T) {
 							map[string]any{"x": "${['a']}"},
 							map[string]any{"x": "${['b']}"},
 						},
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "dup-${x}"},
@@ -1472,7 +1472,7 @@ func TestForEachEmptyDimensions(t *testing.T) {
 					map[string]any{
 						"id":      "items",
 						"forEach": map[string]any{},
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "empty"},
@@ -1514,7 +1514,7 @@ func TestForEachInvalidType(t *testing.T) {
 					map[string]any{
 						"id":      "items",
 						"forEach": "not-a-map-or-array",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "bad"},

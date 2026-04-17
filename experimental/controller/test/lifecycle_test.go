@@ -298,7 +298,7 @@ func TestParallelIndependence(t *testing.T) {
 					// Chain A: watch (not ready) → dependent-a
 					map[string]any{
 						"id": "extA",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "source-a"},
 						},
@@ -464,7 +464,7 @@ func TestPendingChain(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "source",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "chain-source"},
 						},
@@ -518,7 +518,7 @@ func TestPendingChain(t *testing.T) {
 	t.Log("Full chain resolved: source → middle → tail")
 }
 
-// TestForEachCollectionScaleUpDown proves forEach with WatchKind: adding
+// TestForEachCollectionScaleUpDown proves forEach with Watch: adding
 // or removing collection members creates or prunes stamped resources
 // (design 004-graph-reconciliation § forEach).
 func TestForEachCollectionScaleUpDown(t *testing.T) {
@@ -554,7 +554,7 @@ func TestForEachCollectionScaleUpDown(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "sources",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"selector":   map[string]any{"group": "scale-test"},
@@ -667,7 +667,7 @@ func TestIncludeWhenToggle(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "toggle-control"},

@@ -184,7 +184,7 @@ func TestGraphIncludeWhen(t *testing.T) {
 					},
 					map[string]any{
 						"id": "excluded",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -360,7 +360,7 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 									// Child resource 1: watch reads the ConfigMap into child scope
 									map[string]any{
 										"id": "input",
-										"template": map[string]any{
+										"ref": map[string]any{
 											"apiVersion": "v1",
 											"kind":       "ConfigMap",
 											"metadata": map[string]any{
@@ -515,7 +515,7 @@ func TestIdenticalGraphsConvergeIndependently(t *testing.T) {
 					"nodes": []any{
 						map[string]any{
 							"id": "input",
-							"template": map[string]any{
+							"ref": map[string]any{
 								"apiVersion": "v1",
 								"kind":       "ConfigMap",
 								"metadata": map[string]any{

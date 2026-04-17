@@ -51,8 +51,8 @@ func TestRecoveryPartialForEachExpansion(t *testing.T) {
 					"labels": map[string]any{
 						// Stamp an identity label as if the controller created this.
 						// The exact label format is:
-						// <nodeID>.<graphName>.<ns>.internal.kro.run/reference: own
-						fmt.Sprintf("items.%s.%s.internal.kro.run/reference", graphName, ns): "own",
+						// <nodeID>.<graphName>.<ns>.internal.kro.run/type: own
+						fmt.Sprintf("items.%s.%s.internal.kro.run/type", graphName, ns): "own",
 					},
 				},
 				"data": map[string]any{
@@ -317,7 +317,7 @@ func TestRecoveryContributeFieldsPreserved(t *testing.T) {
 				"namespace": ns,
 				"labels": map[string]any{
 					// Identity label from a previous controller incarnation.
-					fmt.Sprintf("contrib.%s.%s.internal.kro.run/reference", graphName, ns): "contribute",
+					fmt.Sprintf("contrib.%s.%s.internal.kro.run/type", graphName, ns): "contribute",
 				},
 				"annotations": map[string]any{
 					"kro.run/managed": "true",
@@ -344,7 +344,7 @@ func TestRecoveryContributeFieldsPreserved(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "contrib",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{

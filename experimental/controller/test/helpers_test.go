@@ -90,10 +90,10 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 				"nodes": []any{
 					map[string]any{
 						"id": "rgds",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "test.kro.run/v1alpha1",
 							"kind":       "ResourceGraphDefinition",
-							// WatchKind namespace follows k8s list/watch semantics:
+							// Watch namespace follows k8s list/watch semantics:
 							// absent = all namespaces. Tests pin to their own
 							// namespace to keep parallel runs isolated.
 							"metadata": map[string]any{"namespace": namespace},
@@ -113,7 +113,7 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 							},
 							"spec": map[string]any{
 								"nodes": `${[
-									{"id": "rgd", "template": {
+									{"id": "rgd", "ref": {
 										"apiVersion": "test.kro.run/v1alpha1",
 										"kind": "ResourceGraphDefinition",
 										"metadata": {"name": rgd.metadata.name, "namespace": rgd.metadata.namespace}
@@ -142,7 +142,7 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 											}]
 										}
 									}},
-									{"id": "instances", "template": {
+									{"id": "instances", "watch": {
 										"apiVersion": "${rgd.spec.schema.group}/${rgd.spec.schema.apiVersion}",
 										"kind": "${rgd.spec.schema.kind}",
 										"metadata": {"namespace": rgd.metadata.namespace},
@@ -155,13 +155,13 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 										"metadata": {"name": "${instance.metadata.name}-${rgd.spec.schema.kind.lowerAscii()}"},
 										"spec": {
 											"nodes": "${" +
-												"[{\"id\": \"schema\", \"template\": {" +
+												"[{\"id\": \"schema\", \"ref\": {" +
 												"\"apiVersion\": rgd.spec.schema.group + \"/\" + rgd.spec.schema.apiVersion," +
 												"\"kind\": rgd.spec.schema.kind," +
 												"\"metadata\": {\"name\": instance.metadata.name, \"namespace\": instance.metadata.namespace}" +
 												"}}]" +
 												" + rgd.spec.nodes" +
-												" + [{\"id\": \"statusContrib\", \"template\": {" +
+												" + [{\"id\": \"statusContrib\", \"patch\": {" +
 												"\"apiVersion\": rgd.spec.schema.group + \"/\" + rgd.spec.schema.apiVersion," +
 												"\"kind\": rgd.spec.schema.kind," +
 												"\"metadata\": {\"name\": instance.metadata.name, \"namespace\": instance.metadata.namespace}," +
@@ -287,7 +287,7 @@ func waitForAbsence(ctx context.Context, c client.Client, gvk schema.GroupVersio
 // so a resource touched by multiple Graphs has one label per Graph; this
 // helper finds the one for graphName.
 func referenceLabelValue(obj *unstructured.Unstructured, graphName string) (string, bool) {
-	suffix := "." + graphName + "." + obj.GetNamespace() + ".internal.kro.run/reference"
+	suffix := "." + graphName + "." + obj.GetNamespace() + ".internal.kro.run/type"
 	for key, val := range obj.GetLabels() {
 		if strings.HasSuffix(key, suffix) {
 			return val, true

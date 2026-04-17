@@ -26,7 +26,11 @@ spec:
         metadata: ExternalRefMetadata
       Resource:
         id: string | required=true
-        template: object
+        template: any
+        patch: any
+        ref: any
+        watch: any
+        def: any
         externalRef: ExternalRef
         readyWhen: "[]string"
         includeWhen: "[]string"
@@ -69,7 +73,7 @@ spec:
         - ${has(crd.status) && has(crd.status.conditions) && crd.status.conditions != null && crd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
       # No metadata.namespace: watch custom resource instances across all
       # namespaces (k8s list/watch semantics — absent namespace = all).
-      template:
+      watch:
         apiVersion: ${schema.spec.schema.group}/${schema.spec.schema.apiVersion}
         kind: ${schema.spec.schema.kind}
         metadata:
@@ -146,7 +150,7 @@ spec:
           #   field ownership should use Kind directly, not RGD.
           nodes: >-
             ${
-              [{"id": "schema", "template": {
+              [{"id": "schema", "ref": {
                 "apiVersion": schema.spec.schema.group + "/" + schema.spec.schema.apiVersion,
                 "kind": schema.spec.schema.kind,
                 "metadata": {
@@ -174,7 +178,7 @@ spec:
               }))
               + [{"id": "rgdInstanceStatus",
                  "readyWhen": (schema.spec.resources.size() == 0 ? ["${true}"] : schema.spec.resources.map(r, "${" + r.id + ".ready()}")),
-                 "template": {
+                 "patch": {
                 "apiVersion": schema.spec.schema.group + "/" + schema.spec.schema.apiVersion,
                 "kind": schema.spec.schema.kind,
                 "metadata": {
@@ -199,7 +203,7 @@ spec:
     - id: rgdStatus
       propagateWhen:
         - ${crd.ready()}
-      template:
+      patch:
         apiVersion: kro.run/v1alpha1
         kind: ResourceGraphDefinition
         metadata:

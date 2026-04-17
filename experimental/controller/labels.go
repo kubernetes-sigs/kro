@@ -3,7 +3,7 @@
 // Each managed resource carries two labels per Graph-node pair. The label
 // key is a DNS subdomain that encodes the node ID, graph name, and namespace:
 //
-//	<nodeID>.<graphName>.<namespace>.internal.kro.run/reference  → "own" | "contribute"
+//	<nodeID>.<graphName>.<namespace>.internal.kro.run/type  → "own" | "contribute"
 //	<nodeID>.<graphName>.<namespace>.internal.kro.run/generation → graph.metadata.generation
 //
 // The identity label key is unique per node-graph-namespace triple. Multiple
@@ -48,8 +48,8 @@ func labelSafeGraphName(name string) string {
 
 const (
 	// identityLabelSuffix is the fixed suffix for all identity labels.
-	// The full key is: <nodeID>.<graphName>.<namespace>.internal.kro.run/reference
-	identityLabelSuffix = ".internal.kro.run/reference"
+	// The full key is: <nodeID>.<graphName>.<namespace>.internal.kro.run/type
+	identityLabelSuffix = ".internal.kro.run/type"
 
 	// generationLabelSuffix is the fixed suffix for generation labels.
 	generationLabelSuffix = ".internal.kro.run/generation"
@@ -69,7 +69,7 @@ func nodeLabelPrefix(nodeID, graphName, namespace string) string {
 }
 
 // identityLabelKey returns the identity label key for a node in a graph.
-// Format: <nodeID>.<graphName>.<namespace>.internal.kro.run/reference
+// Format: <nodeID>.<graphName>.<namespace>.internal.kro.run/type
 // All segments are lowercased to satisfy the RFC 1123 subdomain requirement
 // for Kubernetes label key prefixes.
 func identityLabelKey(nodeID, graphName, namespace string) string {
@@ -107,9 +107,9 @@ func graphLabelSuffix(graphName, namespace string) string {
 }
 
 // parseNodeIDFromLabel extracts the leading node ID segment from an identity
-// label key. For non-forEach nodes (nodeID.graphName.namespace.internal.kro.run/reference),
+// label key. For non-forEach nodes (nodeID.graphName.namespace.internal.kro.run/type),
 // the node ID is the first dot-separated segment. For forEach children
-// (parentID.name.namespace.kind.group.graphName.graphNamespace.internal.kro.run/reference),
+// (parentID.name.namespace.kind.group.graphName.graphNamespace.internal.kro.run/type),
 // the first segment is the parent ID — which is the correct routing target.
 //
 // This function intentionally does NOT return graphName or namespace because
@@ -186,7 +186,7 @@ func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 		// This is an identity label. Check if it belongs to a different graph.
 		if !strings.HasSuffix(lowerKey, mySuffix) {
 			// Different graph. Extract graph name for the error message.
-			if val == ReferenceOwn.String() || val == ReferenceContribute.String() {
+			if val == NodeTypeOwn.String() || val == NodeTypeContribute.String() {
 				return graphNameFromLabel(lowerKey), true
 			}
 		}
@@ -197,9 +197,9 @@ func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 // setIdentityLabels stamps identity and generation labels onto a resource's
 // metadata labels map. Called during apply for Own and Contribute references.
 // Panics if ref does not have a label value — this is an invariant violation,
-// as all call sites pass ResolvedReferenceOwn or ResolvedReferenceContribute
+// as all call sites pass NodeTypeOwn or NodeTypeContribute
 // directly.
-func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, generation string, ref ResolvedReference) map[string]string {
+func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, generation string, ref NodeType) map[string]string {
 	lv, ok := ref.LabelValue()
 	if !ok {
 		panic(fmt.Sprintf("setIdentityLabels called with non-writable reference %s", ref))
@@ -232,7 +232,7 @@ func forEachChildLabelPrefix(parentID, resName, resNamespace, kind, group, graph
 // forEachChildIdentityLabelKey returns the identity label key for a forEach child.
 // Per 004-graph-reconciliation.md § Child Identity:
 //
-//	<parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/reference
+//	<parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/type
 //
 // This encodes the full resource key as DNS subdomain labels within the label key,
 // making each child uniquely identifiable in the applied set.
@@ -247,9 +247,9 @@ func forEachChildGenerationLabelKey(parentID, resName, resNamespace, kind, group
 
 // setForEachChildIdentityLabels stamps forEach child identity and generation labels.
 // Panics if ref does not have a label value — this is an invariant violation,
-// as all call sites pass ResolvedReferenceOwn or ResolvedReferenceContribute
+// as all call sites pass NodeTypeOwn or NodeTypeContribute
 // directly.
-func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation string, ref ResolvedReference) map[string]string {
+func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation string, ref NodeType) map[string]string {
 	lv, ok := ref.LabelValue()
 	if !ok {
 		panic(fmt.Sprintf("setForEachChildIdentityLabels called with non-writable reference %s", ref))
@@ -266,6 +266,6 @@ func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, 
 // watch cache by scanning identity labels.
 type appliedEntry struct {
 	NodeID    string
-	Reference ResolvedReference // ResolvedReferenceOwn or ResolvedReferenceContribute
+	NodeType NodeType // NodeTypeOwn or NodeTypeContribute
 	Key       string            // resource key (group/version/Kind/namespace/name)
 }

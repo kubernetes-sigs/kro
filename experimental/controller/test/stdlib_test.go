@@ -141,11 +141,11 @@ func TestStdlibKind(t *testing.T) {
 // Each sub-Graph gets an auto-prepended "item" Watch node. User nodes
 // reference ${item.*} to derive child resources from the watched object.
 //
-// Pipeline: Decorator → controller Graph → items (WatchKind) → sub-Graph per item → child resources
+// Pipeline: Decorator → controller Graph → items (Watch) → sub-Graph per item → child resources
 // ═══════════════════════════════════════════════════════════════════════════════
 
 func TestStdlibDecorator(t *testing.T) {
-	// Intentionally serial: this Decorator's items WatchKind uses an
+	// Intentionally serial: this Decorator's items Watch uses an
 	// empty selector and no namespace, so it picks up every ConfigMap
 	// cluster-wide — including those created by TestStdlibKind when
 	// running concurrently. Parallel execution is safe but stamps extra
@@ -157,7 +157,7 @@ func TestStdlibDecorator(t *testing.T) {
 	// Phase 1: Create a Decorator that watches ConfigMaps and creates
 	// a companion ConfigMap per item with derived data.
 	//
-	// The Decorator lives in kro-system. Its WatchKind omits
+	// The Decorator lives in kro-system. Its Watch omits
 	// metadata.namespace, so it watches ConfigMaps across all namespaces
 	// (k8s list/watch semantics). The test places the source ConfigMap
 	// in kro-system for convenience — any namespace would work.
@@ -197,7 +197,7 @@ func TestStdlibDecorator(t *testing.T) {
 	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), decorator) })
 
 	// Phase 2: Create a ConfigMap in kro-system with the matching label.
-	// The Decorator's WatchKind is cluster-wide; kro-system is just where
+	// The Decorator's Watch is cluster-wide; kro-system is just where
 	// this test places the source.
 	t.Log("creating watched ConfigMap in kro-system")
 	source := &unstructured.Unstructured{Object: map[string]any{
@@ -214,7 +214,7 @@ func TestStdlibDecorator(t *testing.T) {
 	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), source) })
 
 	// Phase 3: Verify the companion ConfigMap appears in kro-system.
-	// Chain: Decorator → controller Graph → WatchKind picks up my-config →
+	// Chain: Decorator → controller Graph → Watch picks up my-config →
 	// sub-Graph → companion ConfigMap.
 	t.Log("waiting for companion ConfigMap...")
 	companion := &unstructured.Unstructured{}
@@ -233,7 +233,7 @@ func TestStdlibDecorator(t *testing.T) {
 	data, _, _ := unstructured.NestedStringMap(companion.Object, "data")
 	assert.Equal(t, "my-config", data["source"],
 		"companion should reference the source ConfigMap's name")
-	t.Log("Decorator pipeline works: Decorator → WatchKind → sub-Graph → companion ConfigMap")
+	t.Log("Decorator pipeline works: Decorator → Watch → sub-Graph → companion ConfigMap")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -248,7 +248,7 @@ func TestStdlibDecorator(t *testing.T) {
 // it's the winner via includeWhen. The target node uses TemplateExpr
 // (template: "${item.spec.template}") to forward the full resource spec.
 //
-// Pipeline: Singleton → Decorator sub-Graph → peers WatchKind →
+// Pipeline: Singleton → Decorator sub-Graph → peers Watch →
 // includeWhen gate → target resource (if winner)
 // ═══════════════════════════════════════════════════════════════════════════════
 

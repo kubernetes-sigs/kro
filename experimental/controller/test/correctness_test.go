@@ -68,7 +68,7 @@ func TestPropagateWhenGatesDataFlow(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "deploy",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -211,7 +211,7 @@ func TestPropagateWhenDoesNotBlockIndependentBranches(t *testing.T) {
 					// Branch A: watch with unsatisfied propagateWhen
 					map[string]any{
 						"id": "watched",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -394,7 +394,7 @@ func TestWatchAbsentResourceIsPending(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "watched",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -486,16 +486,17 @@ func TestWatchAbsentResourceIsPending(t *testing.T) {
 	t.Log("Watch absent → Pending → resource appears → chain resolves")
 }
 
-// TestAbsentResourceIsOwnedByDefault proves that when a node's target resource
-// does not exist, the Graph creates it (Own). With existence-based shape
-// detection, absent → Own — the Graph always creates resources it doesn't find.
+// TestAbsentResourceIsOwnedByDefault proves that a `template:` node creates
+// the target resource when it does not exist. Under the declared-keyword
+// schema this is tautological — `template:` is Own, full stop — but the
+// test remains useful as an end-to-end smoke check that Own-creates-when-
+// absent converges to Ready with the identity label stamped.
 func TestAbsentResourceIsOwnedByDefault(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Graph: target a non-existent ConfigMap with only metadata fields.
-	// Under the old heuristic, this was Contribute (key subset check).
-	// Under existence-based detection, this is Own (resource absent).
+	// Graph: target a non-existent ConfigMap via template:. Declaration is
+	// authoritative — `template:` always classifies as Own.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "experimental.kro.run/v1alpha1",
@@ -577,7 +578,7 @@ func TestMultipleIncludeWhenConditionsAreANDed(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "source",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -652,7 +653,7 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 				"name":      "contested-resource",
 				"namespace": ns,
 				"labels": map[string]any{
-					"somenode.other-graph." + ns + ".internal.kro.run/reference": "own",
+					"somenode.other-graph." + ns + ".internal.kro.run/type": "own",
 				},
 			},
 			"data": map[string]any{
@@ -720,7 +721,7 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 		"resource should retain original owner's data")
 	labels := existing.GetLabels()
 	// With the new identity label scheme, the original graph's label should still be present
-	assert.Equal(t, "own", labels["somenode.other-graph."+ns+".internal.kro.run/reference"],
+	assert.Equal(t, "own", labels["somenode.other-graph."+ns+".internal.kro.run/type"],
 		"resource should retain original graph's identity label")
 	t.Log("Cross-Graph ownership conflict correctly detected and blocked")
 }
@@ -747,7 +748,7 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 				"name":      "force-target",
 				"namespace": ns,
 				"labels": map[string]any{
-					"somenode.other-graph." + ns + ".internal.kro.run/reference": "own",
+					"somenode.other-graph." + ns + ".internal.kro.run/type": "own",
 				},
 			},
 			"data": map[string]any{
@@ -807,7 +808,7 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 
 	resultLabels := result.GetLabels()
 	// The new graph's identity label should exist
-	newLabelKey := "imported.test-force-apply." + ns + ".internal.kro.run/reference"
+	newLabelKey := "imported.test-force-apply." + ns + ".internal.kro.run/type"
 	t.Logf("Looking for label key: %s", newLabelKey)
 	t.Logf("All labels on resource: %v", resultLabels)
 	assert.Equal(t, "own", resultLabels[newLabelKey],
@@ -904,7 +905,7 @@ func TestDeclarationErrorDuplicateNodeID(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "mynode",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -914,7 +915,7 @@ func TestDeclarationErrorDuplicateNodeID(t *testing.T) {
 					},
 					map[string]any{
 						"id": "mynode", // duplicate
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -1096,7 +1097,7 @@ func TestIdentityLabelsOnManagedResources(t *testing.T) {
 
 		// Verify DNS subdomain identity labels
 		labels := cm.GetLabels()
-		roleKey := tc.nodeID + ".test-identity-labels." + ns + ".internal.kro.run/reference"
+		roleKey := tc.nodeID + ".test-identity-labels." + ns + ".internal.kro.run/type"
 		genKey := tc.nodeID + ".test-identity-labels." + ns + ".internal.kro.run/generation"
 
 		assert.Equal(t, "own", labels[roleKey],
@@ -1316,7 +1317,7 @@ func TestReadyFunctionReflectsNodeState(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "watched",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -1393,7 +1394,7 @@ func TestReadyFunctionReflectsNodeState(t *testing.T) {
 }
 
 // TestEmptyCollectionReadyIsVacuouslyTrue proves that .ready() on an empty
-// collection returns true. An empty WatchKind has no items to be
+// collection returns true. An empty Watch has no items to be
 // not-ready, so the collection is vacuously ready. This prevents empty
 // collections from blocking graphs that use collection.ready() in
 // propagateWhen or readyWhen.
@@ -1401,7 +1402,7 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Graph: WatchKind with a label selector matching nothing,
+	// Graph: Watch with a label selector matching nothing,
 	// downstream uses readyWhen: workers.ready(). Should reach Active
 	// because empty collection is vacuously ready.
 	graph := &unstructured.Unstructured{
@@ -1416,7 +1417,7 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "workers",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"selector": map[string]any{
@@ -1465,7 +1466,7 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 	t.Log("Empty collection .ready() is vacuously true — Graph reached Ready")
 }
 
-// TestWatchKindEmptyReadyWhenPropagates proves that a WatchKind with a
+// TestWatchKindEmptyReadyWhenPropagates proves that a Watch with a
 // failing readyWhen on an EMPTY collection propagates .ready() = false to
 // consumers, transitioning the consuming Graph out of Ready.
 //
@@ -1474,14 +1475,14 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 // at compile time to consult a sidecar readiness map populated from the
 // node's readyWhen evaluation, independent of collection size.
 //
-// Per 001-graph.md § readyWhen: "A WatchKind's .ready() returns true when
+// Per 001-graph.md § readyWhen: "A Watch's .ready() returns true when
 // the node's readyWhen conditions pass (evaluated once against the whole
 // array, not per-item) — including when the collection is empty."
 func TestWatchKindEmptyReadyWhenPropagates(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Graph: WatchKind with a readyWhen requiring at least one match, and
+	// Graph: Watch with a readyWhen requiring at least one match, and
 	// a selector that matches nothing. readyWhen fails → .ready() must be
 	// false. Consumer's readyWhen depends on .ready() and must stay
 	// unsatisfied until matching resources are added.
@@ -1497,7 +1498,7 @@ func TestWatchKindEmptyReadyWhenPropagates(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "workers",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"selector": map[string]any{
@@ -1551,7 +1552,7 @@ func TestWatchKindEmptyReadyWhenPropagates(t *testing.T) {
 			}
 			return !graphReady(g), nil
 		}))
-	t.Log("Graph NOT Ready — empty WatchKind with failing readyWhen propagated .ready()=false")
+	t.Log("Graph NOT Ready — empty Watch with failing readyWhen propagated .ready()=false")
 
 	// Add a matching ConfigMap. workers.size() > 0 now passes;
 	// workers.ready() becomes true; summary's readyWhen passes; Graph
@@ -1880,7 +1881,7 @@ func TestCrossNodeReadyWhen(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "dep",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -2103,7 +2104,7 @@ func TestPropagateWhenOnForEach(t *testing.T) {
 					// Aggregator reads control and has propagateWhen
 					map[string]any{
 						"id": "gate",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "prop-foreach-control"},
@@ -2241,7 +2242,7 @@ func TestStandaloneVsEmbeddedCELTypePreservation(t *testing.T) {
 					// Read the source into scope (Watch shape: identity-only template).
 					map[string]any{
 						"id": "src",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "cel-type-source"},
@@ -2405,7 +2406,7 @@ func TestPropagateWhenGateOpenTriggersDownstream(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "src",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -2518,7 +2519,7 @@ func TestDeclarationError_HyphenInNodeID(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "my-app",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "cm"},
 						},
@@ -2554,14 +2555,14 @@ func TestDeclarationError_CaseCollision(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "Deploy",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "a"},
 						},
 					},
 					map[string]any{
 						"id": "deploy",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "b"},
 						},
@@ -2598,7 +2599,7 @@ func TestDeclarationError_FinalizesTargetMissing(t *testing.T) {
 					map[string]any{
 						"id":        "snapshot",
 						"finalizes": "nonexistent",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "snap"},
 						},
@@ -2633,14 +2634,14 @@ func TestDeclarationError_ForEachVariableCollision(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "items",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1", "kind": "Namespace",
 						},
 					},
 					map[string]any{
 						"id":      "policy",
 						"forEach": map[string]any{"items": "${items}"},
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "cm"},
 						},
@@ -2705,7 +2706,7 @@ func TestAbsentToPresentFieldTriggersPropagation(t *testing.T) {
 					// Watch the source.
 					map[string]any{
 						"id": "source",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "absent-present-source"},

@@ -35,7 +35,7 @@ type DAG struct {
 	// topological level.
 	TopologicalOrder []int
 	// References maps node ID to its detected reference type.
-	References map[string]Reference
+	References map[string]NodeType
 	// Levels groups node indices by topological level. Nodes within
 	// the same level are independent and can be processed in parallel.
 	// Level 0 has no dependencies, level 1 depends only on level 0, etc.
@@ -62,7 +62,7 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 	dag := &DAG{
 		Nodes:      make([]Node, len(nodes)),
 		Index:      make(map[string]int, len(nodes)),
-		References: make(map[string]Reference),
+		References: make(map[string]NodeType),
 		Dependents: make(map[string][]int),
 		Finalizers: make(map[string][]string),
 	}
@@ -71,7 +71,7 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 		node.Dependencies, node.DepPaths, node.SelfPaths, node.ReadinessDeps = extractReferencedPathsFromNode(node, exprPaths)
 		dag.Nodes[i] = node
 		dag.Index[node.ID] = i
-		dag.References[node.ID] = node.Reference()
+		dag.References[node.ID] = node.Type()
 	}
 
 	// Build finalizer map: target node ID → list of finalizer node IDs.
@@ -83,17 +83,17 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 				return nil, fmt.Errorf("node %q declares finalizes %q, but no node with that ID exists", node.ID, node.Finalizes)
 			}
 			// Finalization only applies to resource-managing nodes (Own,
-			// Contribute, Unresolved). Definition, Watch, and WatchKind
+			// Contribute, Unresolved). Definition, Watch, and Watch
 			// nodes never produce managed resources and never become prune
 			// candidates — finalizing them is nonsensical.
 			targetRef := dag.References[dag.Nodes[targetIdx].ID]
 			switch targetRef {
-			case ReferenceDefinition:
+			case NodeTypeDef:
 				return nil, fmt.Errorf("node %q cannot finalize %q: Definition nodes do not manage resources", node.ID, node.Finalizes)
-			case ReferenceWatch:
+			case NodeTypeRef:
 				return nil, fmt.Errorf("node %q cannot finalize %q: Watch nodes are read-only", node.ID, node.Finalizes)
-			case ReferenceWatchKind:
-				return nil, fmt.Errorf("node %q cannot finalize %q: WatchKind nodes are read-only", node.ID, node.Finalizes)
+			case NodeTypeWatch:
+				return nil, fmt.Errorf("node %q cannot finalize %q: Watch nodes are read-only", node.ID, node.Finalizes)
 			}
 			dag.Finalizers[node.Finalizes] = append(dag.Finalizers[node.Finalizes], node.ID)
 		}

@@ -184,7 +184,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 			// Definition forEach: evaluate the template per item, collect
 			// values into []any. No resource is created or tracked.
-			if node.Reference() == ReferenceDefinition {
+			if node.Type() == NodeTypeDef {
 				evalMap, err := innerEval.toMapNode(node)
 				if err != nil {
 					childErrors = append(childErrors, fmt.Errorf("forEach defines %s item: %w", node.ID, err))
@@ -204,7 +204,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 			// Stamp forEach child identity labels per 004-graph-reconciliation.md § Child Identity.
 			// Each child's label key encodes the full resource key:
-			//   <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/reference
+			//   <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/type
 			childObj := &unstructured.Unstructured{Object: evalMap}
 			if childObj.GetNamespace() == "" {
 				childObj.SetNamespace(graph.GetNamespace())
@@ -226,17 +226,11 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			gv, _ := schema.ParseGroupVersion(childObj.GetAPIVersion())
 			generation := fmt.Sprintf("%d", eval.effectiveGeneration)
 
-			// Resolve Own vs Contribute per child. Each child targets a
-			// different resource, so the reference type is item-specific.
-			childRef, refErr := r.resolveForEachChildReference(ctx, graph, childObj)
-			if refErr != nil {
-				childErrors = append(childErrors, fmt.Errorf("forEach %s item: resolving reference for %s: %w", node.ID, childObj.GetName(), refErr))
-				logger.V(1).Info("forEach child reference resolution failed", "node", node.ID, "item", id, "error", refErr)
-				if prevKeys, ok := prevItemKeys[id]; ok {
-					keys = append(keys, prevKeys...)
-				}
-				continue
-			}
+			// forEach child classification is inherited from the parent's
+			// declared keyword. template: → Own per child; patch: →
+			// Contribute per child. Declaration is authoritative — no
+			// per-child runtime resolution.
+			childRef := node.Type()
 
 			lbls := childObj.GetLabels()
 			if lbls == nil {
@@ -253,10 +247,10 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			evalMap = childObj.Object
 
 			var applied *unstructured.Unstructured
-			if childRef == ResolvedReferenceContribute {
-				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ResolvedReferenceContribute, eval.effectiveGeneration, driftCorrection)
+			if childRef == NodeTypeContribute {
+				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeContribute, eval.effectiveGeneration, driftCorrection)
 			} else {
-				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, ResolvedReferenceOwn, eval.effectiveGeneration, driftCorrection)
+				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeOwn, eval.effectiveGeneration, driftCorrection)
 			}
 			if err != nil {
 				// Per 004-graph-reconciliation.md § Parent State: track per-child errors
@@ -271,7 +265,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			}
 			allApplied = append(allApplied, applied.Object)
 			var itemKeys []string
-			if childRef == ResolvedReferenceContribute {
+			if childRef == NodeTypeContribute {
 				hasStatus := evalMap["status"] != nil
 				itemKeys = []string{contributeKey(applied, hasStatus)}
 			} else {
@@ -422,25 +416,6 @@ func forEachItemUnchanged(prev, current any) bool {
 		return prevHash == currHash
 	}
 	return fmt.Sprintf("%v", prev) == fmt.Sprintf("%v", current)
-}
-
-// resolveForEachChildReference determines whether a forEach child targets a
-// pre-existing resource (Contribute) or creates a new one (Own). Each forEach
-// child targets a different resource, so the reference type is item-specific.
-//
-// Force annotation → Own. Otherwise delegates to classifyReference.
-// Transient errors (network, server) are propagated — the caller should
-// treat this as a per-child error rather than silently claiming ownership.
-func (r *GraphReconciler) resolveForEachChildReference(ctx context.Context, graph *unstructured.Unstructured, child *unstructured.Unstructured) (ResolvedReference, error) {
-	if isForceApply(child) {
-		return ResolvedReferenceOwn, nil
-	}
-
-	ref, err := r.classifyReference(ctx, graph, child.GroupVersionKind(), child.GetNamespace(), child.GetName())
-	if err != nil {
-		return 0, err
-	}
-	return mustResolve(ref), nil
 }
 
 // highestPriorityChildError returns the highest-priority error from a list

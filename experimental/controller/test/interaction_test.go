@@ -68,7 +68,7 @@ func TestForEachIncludeWhenToggle(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "foreach-include-control"},
@@ -171,7 +171,7 @@ func TestForEachIncludeWhenDataPendingPreservesChildren(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "foreach-dp-control"},
@@ -286,7 +286,7 @@ func TestIncludeWhenPropagateWhenPrecedence(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "inc-prop-control"},
@@ -421,7 +421,7 @@ func TestPropagateWhenContribute(t *testing.T) {
 					// Watch the control CM (changes don't trigger revision transition).
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "prop-contrib-control"},
@@ -443,7 +443,7 @@ func TestPropagateWhenContribute(t *testing.T) {
 					// Contribute: writes upstream's value to the external resource.
 					map[string]any{
 						"id": "contrib",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -561,7 +561,7 @@ func TestIncludeWhenContributeReleaseFields(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "inc-contrib-control"},
@@ -570,7 +570,7 @@ func TestIncludeWhenContributeReleaseFields(t *testing.T) {
 					map[string]any{
 						"id":          "contrib",
 						"includeWhen": []any{"${control.data.toggle == 'true'}"},
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -670,7 +670,7 @@ func TestForEachContributeScaleDown(t *testing.T) {
 						"forEach": map[string]any{
 							"name": "${['fe-contrib-a', 'fe-contrib-b', 'fe-contrib-c']}",
 						},
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -713,7 +713,7 @@ func TestForEachContributeScaleDown(t *testing.T) {
 			types.NamespacedName{Name: name, Namespace: ns}, check))
 		labels := check.GetLabels()
 		for key, val := range labels {
-			if strings.HasSuffix(key, ".internal.kro.run/reference") {
+			if strings.HasSuffix(key, ".internal.kro.run/type") {
 				assert.Equal(t, "contribute", val,
 					"%s should have 'contribute' role label (pre-existing target)", name)
 			}
@@ -729,7 +729,7 @@ func TestForEachContributeScaleDown(t *testing.T) {
 					"forEach": map[string]any{
 						"name": "${['fe-contrib-a', 'fe-contrib-b']}",
 					},
-					"template": map[string]any{
+					"patch": map[string]any{
 						"apiVersion": "v1",
 						"kind":       "ConfigMap",
 						"metadata": map[string]any{
@@ -895,7 +895,7 @@ func TestReadyWhenIncludeWhenStatusTransition(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "rw-inc-control"},
@@ -1081,7 +1081,7 @@ func TestNestedGraphIncludeWhen(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "nested-inc-control"},
@@ -1468,7 +1468,7 @@ func TestIncludeWhenFinalizesNeverCreatedTarget(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "inc-fin-control"},
@@ -1545,7 +1545,7 @@ func TestContributeIdentityLabelsPerGraph(t *testing.T) {
 					"nodes": []any{
 						map[string]any{
 							"id": "contrib",
-							"template": map[string]any{
+							"patch": map[string]any{
 								"apiVersion": "v1",
 								"kind":       "ConfigMap",
 								"metadata": map[string]any{
@@ -1574,11 +1574,11 @@ func TestContributeIdentityLabelsPerGraph(t *testing.T) {
 	labels := result.GetLabels()
 	foundA, foundB := false, false
 	for key, val := range labels {
-		if strings.Contains(key, ".test-labels-a.") && strings.HasSuffix(key, ".internal.kro.run/reference") {
+		if strings.Contains(key, ".test-labels-a.") && strings.HasSuffix(key, ".internal.kro.run/type") {
 			assert.Equal(t, "contribute", val)
 			foundA = true
 		}
-		if strings.Contains(key, ".test-labels-b.") && strings.HasSuffix(key, ".internal.kro.run/reference") {
+		if strings.Contains(key, ".test-labels-b.") && strings.HasSuffix(key, ".internal.kro.run/type") {
 			assert.Equal(t, "contribute", val)
 			foundB = true
 		}
@@ -1707,7 +1707,7 @@ func TestPropagateWhenRespectsResyncGate(t *testing.T) {
 					// Watch the control CM.
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "resync-gate-control"},

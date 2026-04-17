@@ -9,7 +9,7 @@ import (
 
 func TestIdentityLabelKey(t *testing.T) {
 	key := identityLabelKey("deploy", "my-app", "default")
-	assert.Equal(t, "deploy.my-app.default.internal.kro.run/reference", key)
+	assert.Equal(t, "deploy.my-app.default.internal.kro.run/type", key)
 }
 
 func TestGenerationLabelKey(t *testing.T) {
@@ -26,13 +26,13 @@ func TestParseNodeIDFromLabel(t *testing.T) {
 	}{
 		{
 			name:     "regular node identity label",
-			key:      "deploy.my-app.default.internal.kro.run/reference",
+			key:      "deploy.my-app.default.internal.kro.run/type",
 			wantNode: "deploy",
 			wantOK:   true,
 		},
 		{
 			name:     "forEach child identity label",
-			key:      "policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/reference",
+			key:      "policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/type",
 			wantNode: "policies",
 			wantOK:   true,
 		},
@@ -48,7 +48,7 @@ func TestParseNodeIDFromLabel(t *testing.T) {
 		},
 		{
 			name:   "empty node ID (leading dot)",
-			key:    ".my-app.default.internal.kro.run/reference",
+			key:    ".my-app.default.internal.kro.run/type",
 			wantOK: false,
 		},
 	}
@@ -72,17 +72,17 @@ func TestGraphNameFromLabel(t *testing.T) {
 	}{
 		{
 			name:      "regular node identity label",
-			key:       "deploy.my-app.default.internal.kro.run/reference",
+			key:       "deploy.my-app.default.internal.kro.run/type",
 			wantGraph: "my-app",
 		},
 		{
 			name:      "forEach child identity label",
-			key:       "policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/reference",
+			key:       "policies.default-deny.ns-a.networkpolicy.networking.k8s.io.mygraph.default.internal.kro.run/type",
 			wantGraph: "mygraph",
 		},
 		{
 			name:      "forEach child without group",
-			key:       "configs.my-cm.default.configmap.mygraph.default.internal.kro.run/reference",
+			key:       "configs.my-cm.default.configmap.mygraph.default.internal.kro.run/type",
 			wantGraph: "mygraph",
 		},
 		{
@@ -102,11 +102,11 @@ func TestGraphNameFromLabel(t *testing.T) {
 
 func TestIsGraphIdentityLabel(t *testing.T) {
 	assert.True(t, isGraphIdentityLabel(
-		"deploy.my-app.default.internal.kro.run/reference", "my-app", "default"))
+		"deploy.my-app.default.internal.kro.run/type", "my-app", "default"))
 	assert.False(t, isGraphIdentityLabel(
-		"deploy.other-app.default.internal.kro.run/reference", "my-app", "default"))
+		"deploy.other-app.default.internal.kro.run/type", "my-app", "default"))
 	assert.False(t, isGraphIdentityLabel(
-		"deploy.my-app.other-ns.internal.kro.run/reference", "my-app", "default"))
+		"deploy.my-app.other-ns.internal.kro.run/type", "my-app", "default"))
 	assert.False(t, isGraphIdentityLabel(
 		"app.kubernetes.io/name", "my-app", "default"))
 }
@@ -114,14 +114,14 @@ func TestIsGraphIdentityLabel(t *testing.T) {
 func TestHasOtherGraphIdentityLabel(t *testing.T) {
 	// Resource with our label only — no conflict
 	labels1 := map[string]string{
-		"deploy.my-app.default.internal.kro.run/reference": "own",
+		"deploy.my-app.default.internal.kro.run/type": "own",
 	}
 	_, found := hasOtherGraphIdentityLabel(labels1, "my-app", "default")
 	assert.False(t, found)
 
 	// Resource with another graph's label — conflict
 	labels2 := map[string]string{
-		"deploy.other-app.default.internal.kro.run/reference": "own",
+		"deploy.other-app.default.internal.kro.run/type": "own",
 	}
 	otherGraph, found := hasOtherGraphIdentityLabel(labels2, "my-app", "default")
 	assert.True(t, found)
@@ -129,8 +129,8 @@ func TestHasOtherGraphIdentityLabel(t *testing.T) {
 
 	// Resource with both our label and another graph's label — conflict
 	labels3 := map[string]string{
-		"deploy.my-app.default.internal.kro.run/reference":    "own",
-		"deploy.other-app.default.internal.kro.run/reference": "contribute",
+		"deploy.my-app.default.internal.kro.run/type":    "own",
+		"deploy.other-app.default.internal.kro.run/type": "contribute",
 	}
 	otherGraph, found = hasOtherGraphIdentityLabel(labels3, "my-app", "default")
 	assert.True(t, found)
@@ -154,7 +154,7 @@ func TestHasOtherGraphIdentityLabel_RegressionMixedCase(t *testing.T) {
 		// Identity label key with uppercase characters — would never be
 		// stamped by the controller (stamping enforces lowercase), but
 		// could be present from an edit or older stamping.
-		"Deploy.Other-App.Default.internal.kro.run/reference": "own",
+		"Deploy.Other-App.Default.internal.kro.run/type": "own",
 	}
 	otherGraph, found := hasOtherGraphIdentityLabel(mixedCase, "my-app", "default")
 	assert.True(t, found, "mixed-case identity label from another graph must be detected")
@@ -162,8 +162,8 @@ func TestHasOtherGraphIdentityLabel_RegressionMixedCase(t *testing.T) {
 }
 
 func TestSetIdentityLabels(t *testing.T) {
-	labels := setIdentityLabels(nil, "deploy", "my-app", "default", "3", ResolvedReferenceOwn)
-	assert.Equal(t, "own", labels["deploy.my-app.default.internal.kro.run/reference"])
+	labels := setIdentityLabels(nil, "deploy", "my-app", "default", "3", NodeTypeOwn)
+	assert.Equal(t, "own", labels["deploy.my-app.default.internal.kro.run/type"])
 	assert.Equal(t, "3", labels["deploy.my-app.default.internal.kro.run/generation"])
 }
 

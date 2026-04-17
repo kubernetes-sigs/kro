@@ -71,7 +71,7 @@ func TestPruneSafetyPendingBlocksPrune(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "control",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "prune-safety-control"},

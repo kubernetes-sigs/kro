@@ -34,7 +34,7 @@ func TestDefinesBasic(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "naming",
-						"template": map[string]any{
+						"def": map[string]any{
 							"prefix":  "myapp",
 							"version": "v1",
 						},
@@ -105,7 +105,7 @@ func TestDefinesForEach(t *testing.T) {
 						"forEach": map[string]any{
 							"w": "${['alpha', 'beta', 'gamma']}",
 						},
-						"template": map[string]any{
+						"def": map[string]any{
 							"name": "${w}",
 							"tag":  "${w + '-worker'}",
 						},

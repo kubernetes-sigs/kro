@@ -19,7 +19,11 @@ spec:
     types:
       Node:
         id: string | required=true
-        template: object
+        template: any
+        patch: any
+        ref: any
+        watch: any
+        def: any
         forEach: "[]map[string]string"
         finalizes: string
         includeWhen: "[]string"
@@ -42,7 +46,7 @@ spec:
           nodes:
             # Watch the Decorator to access its spec at L1.
             - id: decorator
-              template:
+              ref:
                 apiVersion: experimental.kro.run/v1alpha1
                 kind: Decorator
                 metadata:
@@ -51,7 +55,7 @@ spec:
 
             # Watch the kind specified by the Decorator.
             - id: items
-              template:
+              watch:
                 apiVersion: $${decorator.spec.watch.apiVersion}
                 kind: $${decorator.spec.watch.kind}
                 selector: {}
@@ -69,7 +73,7 @@ spec:
                 spec:
                   nodes: >-
                     $${
-                      [{"id": "item", "template": {
+                      [{"id": "item", "ref": {
                         "apiVersion": decorator.spec.watch.apiVersion,
                         "kind": decorator.spec.watch.kind,
                         "metadata": {

@@ -111,15 +111,51 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 
 // snapshotNode copies a node's declaration into the revision spec.
 // No labels or hashes are injected — the revision is a pure spec snapshot.
+// Writes the keyword-specific key (template / patch / ref / watch /
+// def); the value may be a map (static body) or a string (CEL expression
+// for the body-producing classifications). Ref/Watch are always maps.
+// The revision re-parses with the same classification.
 func snapshotNode(node Node) map[string]any {
 	entry := map[string]any{
 		"id": node.ID,
 	}
 
-	if payload := node.Payload(); payload != nil {
-		entry["template"] = deepCopyMap(payload)
-	} else if node.TemplateExpr != "" {
-		entry["template"] = node.TemplateExpr
+	if node.TemplateExpr != "" {
+		// CEL-as-whole-body: the value under the classification keyword
+		// is a string. ExprKeyword tells us which keyword to use.
+		switch node.ExprKeyword {
+		case NodeTypeOwn:
+			entry["template"] = node.TemplateExpr
+		case NodeTypeContribute:
+			entry["patch"] = node.TemplateExpr
+		case NodeTypeDef:
+			entry["def"] = node.TemplateExpr
+		default:
+			entry["template"] = node.TemplateExpr // fallback
+		}
+	} else {
+		switch node.Type() {
+		case NodeTypeOwn:
+			if node.Template != nil {
+				entry["template"] = deepCopyMap(node.Template)
+			}
+		case NodeTypeContribute:
+			if node.Patch != nil {
+				entry["patch"] = deepCopyMap(node.Patch)
+			}
+		case NodeTypeRef:
+			if node.Ref != nil {
+				entry["ref"] = deepCopyMap(node.Ref)
+			}
+		case NodeTypeWatch:
+			if node.Watch != nil {
+				entry["watch"] = deepCopyMap(node.Watch)
+			}
+		case NodeTypeDef:
+			if node.Def != nil {
+				entry["def"] = deepCopyMap(node.Def)
+			}
+		}
 	}
 	if node.ForEach != nil {
 		fe := make(map[string]any, len(node.ForEach))
@@ -622,8 +658,8 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 		existing.forEachItems = map[string][]any{}
 		existing.forEachItemScope = map[string]map[string]any{}
 		existing.forEachItemKeys = map[string]map[string][]string{}
-		existing.watchKindCache = make(map[string][]any)
-		existing.watchKindDirty = make(map[string]bool)
+		existing.collectionCache = make(map[string][]any)
+		existing.collectionDirty = make(map[string]bool)
 		existing.nodeReady = make(map[string]bool)
 		existing.systemErrorBackoff = make(map[string]time.Duration)
 		existing.deferredPruneKeys = nil

@@ -36,7 +36,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 					// Watch all SimpleApp instances in this namespace
 					map[string]any{
 						"id": "instances",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "test.kro.run/v1alpha1",
 							"kind":       "SimpleApp",
 							"selector":   map[string]any{},
@@ -59,7 +59,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 									// L2: Read the specific instance by name (baked in by L1)
 									map[string]any{
 										"id": "schema",
-										"template": map[string]any{
+										"ref": map[string]any{
 											"apiVersion": "test.kro.run/v1alpha1",
 											"kind":       "SimpleApp",
 											"metadata": map[string]any{
@@ -90,7 +90,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 									// apiVersion, kind, metadata, and status (no spec).
 									map[string]any{
 										"id": "statusContrib",
-										"template": map[string]any{
+										"patch": map[string]any{
 											"apiVersion": "test.kro.run/v1alpha1",
 											"kind":       "SimpleApp",
 											"metadata": map[string]any{

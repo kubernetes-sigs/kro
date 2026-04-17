@@ -12,268 +12,114 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// Reference is the reference type of a Graph node — it classifies how the node
-// relates to its target Kubernetes resource: what it does at reconcile time and
-// what it owes on cleanup. Think of it like pointer types in a PL's ownership
-// model: owned, borrowed mutably, borrowed immutably, or not yet resolved.
-// Watch and WatchKind are determined by template structure at compile time.
-// Own and Contribute are determined by resource existence at first reconcile.
-// Definition is determined by the absence of apiVersion and kind in the template.
-// See 003-ownership.md § References and 001-graph.md § template.
-type Reference int
+// NodeType classifies a Graph node by what it does at reconcile time and
+// what it owes on cleanup. Every kind-informed node is backed by a watch at
+// the transport layer — the NodeType names the user's intent on top of that
+// shared machinery, not the transport itself.
+//
+// NodeType is set at parse time by the declared keyword:
+//
+//	template:   → Own
+//	patch:      → Contribute
+//	ref:        → Ref          (dereference a named object)
+//	watch:      → Watch        (observe a collection by selector)
+//	def:        → Definition
+//
+// The value under template/patch/def may be either a static map or a CEL
+// expression string that yields the body at runtime — the shape is
+// disambiguated at parse time. Ref/Watch accept only maps; they are
+// identity-only classifications and have no CEL-as-whole-body form.
+//
+// There is no "unresolved" value. Classification is a property of the spec,
+// not of cluster state, so it cannot drift between reconciles within a
+// revision.
+type NodeType int
 
 const (
-	// ReferenceOwn — the Graph creates the resource. Applied via SSA. Tracked
+	// NodeTypeOwn — the Graph creates the resource. Applied via SSA. Tracked
 	// for cleanup. Deleted on prune.
-	ReferenceOwn Reference = iota
-	// ReferenceWatch — identity-only template (apiVersion, kind, metadata.name,
-	// optionally metadata.namespace). Read-only GET. Not tracked.
-	ReferenceWatch
-	// ReferenceWatchKind — apiVersion + kind with optional selector, no
-	// metadata.name. Read-only List of all resources of that kind. Not tracked.
-	ReferenceWatchKind
-	// ReferenceContribute — writes fields on a resource the Graph does not
+	NodeTypeOwn NodeType = iota
+	// NodeTypeContribute — writes fields on a resource the Graph does not
 	// create. Applied via SSA. Tracked for cleanup. Releases fields on prune.
-	ReferenceContribute
-	// ReferenceDefinition — template has no apiVersion and no kind. Puts
-	// values in scope as map[string]any — literals, CEL expressions, or both.
-	// No Kubernetes resource created or managed. No drift timer, no
-	// applied-set entry, nothing to clean up.
-	// See 001-graph.md § template.
-	ReferenceDefinition
-	// ReferenceUnresolved — template has fields beyond identity but Own vs
-	// Contribute cannot be determined from the template alone. Resolved at
-	// first reconcile by checking whether the target resource exists (absent →
-	// Own, present → Contribute). Should never appear in dag.References after
-	// the first reconcile of a revision.
-	ReferenceUnresolved
+	NodeTypeContribute
+	// NodeTypeRef — dereference a named object into scope. Identity is
+	// apiVersion + kind + metadata.name (+namespace optional). Read-only;
+	// the node pulls a single object's current state from the shared
+	// kind-scoped informer. Not tracked for cleanup.
+	NodeTypeRef
+	// NodeTypeWatch — observe a collection of objects by selector.
+	// Identity is apiVersion + kind (+ optional selector). No metadata.name.
+	// Read-only List+Watch via informer; membership changes drive reactive
+	// dispatch. Not tracked for cleanup.
+	NodeTypeWatch
+	// NodeTypeDef — a computed value expressed as a map of key-value
+	// pairs (literals, CEL expressions, or both). The node produces no
+	// Kubernetes resource — it defines values and enters the result into
+	// scope as map[string]any. No drift timer, no applied-set entry,
+	// nothing to clean up.
+	NodeTypeDef
 )
 
-// String returns the human-readable name of the Reference for logging and display.
-func (r Reference) String() string {
+// String returns the human-readable name of the NodeType for logging and display.
+func (r NodeType) String() string {
 	switch r {
-	case ReferenceOwn:
+	case NodeTypeOwn:
 		return "own"
-	case ReferenceWatch:
-		return "watch"
-	case ReferenceWatchKind:
-		return "watchKind"
-	case ReferenceContribute:
+	case NodeTypeContribute:
 		return "contribute"
-	case ReferenceDefinition:
-		return "definition"
-	case ReferenceUnresolved:
-		return "unresolved"
-	default:
-		return fmt.Sprintf("Reference(%d)", int(r))
-	}
-}
-
-// LabelValue is not defined on Reference — label stamping is a
-// post-resolution concern and lives on ResolvedReference. A caller who
-// reaches for a label value from a Reference has not yet run resolution
-// and should do so first.
-
-// ReferenceFromLabelValue parses an identity label value back to a
-// ResolvedReference. Returns (0, false) if the value is not a recognized
-// label value. Labels only carry resolved classifications (Own or
-// Contribute) by construction, so the return type excludes Unresolved.
-func ReferenceFromLabelValue(s string) (ResolvedReference, bool) {
-	switch s {
-	case "own":
-		return ResolvedReferenceOwn, true
-	case "contribute":
-		return ResolvedReferenceContribute, true
-	default:
-		return 0, false
-	}
-}
-
-// ResolvedReference is the post-resolution classification of a node. It
-// carries the same information as Reference but excludes ReferenceUnresolved
-// — the sentinel that represents "first-reconcile existence check has not
-// yet run." Post-resolution code (reconcileNode, reconcileApply, applySSA,
-// label stamping, the resolvedReferences map) takes ResolvedReference so
-// the type system refuses to accept an unresolved value.
-//
-// The two types are nominally distinct: the compiler blocks implicit
-// conversion. Lifting a Reference into a ResolvedReference goes through
-// mustResolve, the single chokepoint where the Unresolved case is handled.
-// Lowering a ResolvedReference to a Reference is always safe — a resolved
-// value is a valid Reference — and goes through the Reference() method.
-//
-// When the explicit-keyword schema lands (template/patch/watch/watchKind/
-// def), ReferenceUnresolved goes away and Reference and ResolvedReference
-// collapse back into a single type. Until then, this split encodes the
-// phase boundary in the type system.
-type ResolvedReference int
-
-const (
-	// ResolvedReferenceOwn — the Graph creates the resource.
-	ResolvedReferenceOwn ResolvedReference = iota
-	// ResolvedReferenceWatch — read-only GET of a single resource.
-	ResolvedReferenceWatch
-	// ResolvedReferenceWatchKind — read-only List of resources of a kind.
-	ResolvedReferenceWatchKind
-	// ResolvedReferenceContribute — writes fields on a resource created by
-	// another actor.
-	ResolvedReferenceContribute
-	// ResolvedReferenceDefinition — values in scope, no Kubernetes resource.
-	ResolvedReferenceDefinition
-)
-
-// String returns the human-readable name for logging and display.
-func (r ResolvedReference) String() string {
-	switch r {
-	case ResolvedReferenceOwn:
-		return "own"
-	case ResolvedReferenceWatch:
+	case NodeTypeRef:
+		return "ref"
+	case NodeTypeWatch:
 		return "watch"
-	case ResolvedReferenceWatchKind:
-		return "watchKind"
-	case ResolvedReferenceContribute:
-		return "contribute"
-	case ResolvedReferenceDefinition:
-		return "definition"
+	case NodeTypeDef:
+		return "def"
 	default:
-		return fmt.Sprintf("ResolvedReference(%d)", int(r))
+		return fmt.Sprintf("NodeType(%d)", int(r))
 	}
 }
 
-// LabelValue returns the identity label value. Returns ("", false) for
-// read-only classifications (Watch, WatchKind) and Definition, which are
-// never stamped with an identity label.
-func (r ResolvedReference) LabelValue() (string, bool) {
+// LabelValue returns the identity label value for this node type. Returns
+// ("", false) for classifications that do not stamp an identity label
+// (Ref, Watch, Definition). Own and Contribute are the only label-bearing
+// classifications — they are the two that apply via SSA and must be
+// discoverable by the applied-set scan on restart.
+func (r NodeType) LabelValue() (string, bool) {
 	switch r {
-	case ResolvedReferenceOwn:
+	case NodeTypeOwn:
 		return "own", true
-	case ResolvedReferenceContribute:
+	case NodeTypeContribute:
 		return "contribute", true
 	default:
 		return "", false
 	}
 }
 
-// Reference lowers a ResolvedReference to its Reference counterpart. Always
-// safe — a resolved classification is a valid Reference value. The inverse
-// direction goes through mustResolve.
-func (r ResolvedReference) Reference() Reference {
-	switch r {
-	case ResolvedReferenceOwn:
-		return ReferenceOwn
-	case ResolvedReferenceWatch:
-		return ReferenceWatch
-	case ResolvedReferenceWatchKind:
-		return ReferenceWatchKind
-	case ResolvedReferenceContribute:
-		return ReferenceContribute
-	case ResolvedReferenceDefinition:
-		return ReferenceDefinition
+// NodeTypeFromLabelValue parses an identity label value back to a NodeType.
+// Returns (0, false) if the value is not a recognized label value. Labels
+// only carry Own or Contribute by construction.
+func NodeTypeFromLabelValue(s string) (NodeType, bool) {
+	switch s {
+	case "own":
+		return NodeTypeOwn, true
+	case "contribute":
+		return NodeTypeContribute, true
 	default:
-		// Unreachable for valid ResolvedReference values — the type's
-		// constants cover all cases. A new ResolvedReference value added
-		// without updating this switch would fall through here.
-		panic(fmt.Sprintf("unknown ResolvedReference %d", int(r)))
+		return 0, false
 	}
-}
-
-// mustResolve lifts a Reference into a ResolvedReference. Panics on
-// ReferenceUnresolved — the invariant at the single call site (the
-// resolution chokepoint in the reconciler) is that resolution has already
-// completed and produced a resolved value. Panic is correct here: if
-// resolution failed, the caller should have returned an error and never
-// reached this function.
-func mustResolve(r Reference) ResolvedReference {
-	switch r {
-	case ReferenceOwn:
-		return ResolvedReferenceOwn
-	case ReferenceWatch:
-		return ResolvedReferenceWatch
-	case ReferenceWatchKind:
-		return ResolvedReferenceWatchKind
-	case ReferenceContribute:
-		return ResolvedReferenceContribute
-	case ReferenceDefinition:
-		return ResolvedReferenceDefinition
-	case ReferenceUnresolved:
-		panic("mustResolve called with ReferenceUnresolved; caller must verify resolution succeeded before calling")
-	default:
-		panic(fmt.Sprintf("mustResolve: unknown Reference %d", int(r)))
-	}
-}
-
-// detectReference returns the Reference type of a node's template map.
-//
-// Detection order (from 003-ownership.md):
-//  1. Definition — non-empty template with no apiVersion and no kind
-//  2. WatchKind — apiVersion + kind, no metadata.name
-//  3. Watch — only identity fields (apiVersion, kind, metadata.name/namespace)
-//  4. Unresolved — has fields beyond identity; Own vs Contribute determined
-//     at reconcile time by resource existence
-//
-// Internal to the Node derivation path — callers should use node.Reference().
-func detectReference(tmpl map[string]any) Reference {
-	if len(tmpl) == 0 {
-		return ReferenceUnresolved
-	}
-
-	_, hasAPIVersion := tmpl["apiVersion"]
-	_, hasKind := tmpl["kind"]
-
-	// 1. Definition: no apiVersion and no kind — values defined in scope.
-	if !hasAPIVersion && !hasKind {
-		return ReferenceDefinition
-	}
-
-	md, _ := tmpl["metadata"].(map[string]any)
-	_, hasName := md["name"]
-
-	// 2. WatchKind: no metadata.name
-	if !hasName {
-		return ReferenceWatchKind
-	}
-
-	// 3. Watch: only identity fields
-	if isIdentityOnly(tmpl) {
-		return ReferenceWatch
-	}
-
-	// 4. Unresolved: has fields beyond identity. Own vs Contribute resolved
-	//    at first reconcile by checking resource existence.
-	return ReferenceUnresolved
-}
-
-// isIdentityOnly returns true if the template contains only identity fields:
-// apiVersion, kind, and metadata with only name and/or namespace.
-func isIdentityOnly(tmpl map[string]any) bool {
-	for key := range tmpl {
-		switch key {
-		case "apiVersion", "kind", "metadata":
-			continue
-		default:
-			return false
-		}
-	}
-	md, _ := tmpl["metadata"].(map[string]any)
-	if md == nil {
-		return true
-	}
-	for key := range md {
-		switch key {
-		case "name", "namespace":
-			continue
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // Node is a parsed Graph node entry — a user's declaration of intent about
 // a Kubernetes resource (or collection of resources via forEach). Definition
-// nodes (no apiVersion/kind) put values into scope without creating resources.
-// It is the unit of the dependency graph: each node has an identity, a template,
+// nodes (declared via def:) put values into scope without creating resources.
+// It is the unit of the dependency graph: each node has an identity, a body,
 // and computed dependency edges populated by BuildDAG.
+//
+// Exactly one of the five body fields (Template/Patch/Watch/Watch/Def) is
+// populated when the body is a static map. When a body-producing keyword
+// (template/patch/def) supplies a CEL expression string instead of a map,
+// TemplateExpr holds the expression and ExprKeyword records which
+// classification it belongs to. The parser enforces mutual exclusivity at
+// parse time — see parseNodeList.
 //
 // "Node" (not "Resource") because a node is a graph-theory concept — it
 // occupies a position in the DAG, has edges, and may produce zero, one, or
@@ -282,9 +128,34 @@ func isIdentityOnly(tmpl map[string]any) bool {
 // boundary between the user's declaration and the Kubernetes objects it
 // produces.
 type Node struct {
-	ID            string
-	Template      map[string]any // static template — keys are literal, values may contain ${...}
-	TemplateExpr  string         // CEL expression evaluating to the entire template map at runtime
+	ID string
+
+	// Body fields — exactly one is non-nil when the body is a static map.
+	// Parser validates mutual exclusivity across all five.
+	Template map[string]any // Own — Graph creates and manages this resource
+	Patch    map[string]any // Contribute — Graph writes fields on another actor's resource
+	Ref      map[string]any // single-object reference (apiVersion + kind + metadata.name)
+	Watch    map[string]any // collection observation (apiVersion + kind + optional selector)
+	Def      map[string]any // Definition — computed values into scope, no K8s resource
+
+	// TemplateExpr — CEL expression string that evaluates to the whole body
+	// map at runtime. Set when a body-producing keyword (template / patch /
+	// def) supplies a string value instead of a map. ExprKeyword records
+	// which classification the expression belongs to (Own / Contribute /
+	// Definition). Never set for Ref/Watch — those classifications
+	// are identity-only and have no CEL-as-whole-body form.
+	TemplateExpr string
+	ExprKeyword  NodeType
+
+	// ref is the parse-time classification. Read via Type().
+	ref NodeType
+
+	// hasStatusSubresource is true when a Contribute node's body declares a
+	// non-nil status field. Used by the teardown path to decide whether
+	// release-apply must also release the status subresource.
+	// Per 003-ownership.md § Status Subresource.
+	hasStatusSubresource bool
+
 	ForEach       map[string]string
 	Finalizes     string // target node ID — resource created only during prune/teardown
 	IncludeWhen   []string
@@ -296,118 +167,76 @@ type Node struct {
 	Dependencies map[string]bool
 
 	// DepPaths maps each dependency to the field paths this node's CEL
-	// expressions reference. For example, if this node's template contains
-	// ${deploy.status.availableReplicas}, DepPaths["deploy"] contains
-	// ["status", "availableReplicas"]. Used for field-path-scoped evaluation
-	// hashing — only hash the specific paths the node actually reads.
-	// Per 004-graph-reconciliation.md § Hash Mechanics.
-	// Populated by BuildDAG; nil before that.
+	// expressions reference. Populated by BuildDAG; nil before that.
 	DepPaths map[string][]FieldPath
 
 	// SelfPaths is the set of field paths into this node's own observed
 	// resource that readyWhen, propagateWhen, and downstream expressions
-	// reference. When only self paths changed (e.g., a Deployment's
-	// status.availableReplicas updated but spec didn't), the template is
-	// unchanged — skip template evaluation and apply, re-evaluate only
-	// the gate conditions. Also used for propagation hashing — the
-	// propagation hash covers only these paths.
-	// Populated by BuildDAG; nil before that.
+	// reference. Populated by BuildDAG; nil before that.
 	SelfPaths []FieldPath
 
 	// ReadinessDeps is the set of upstream node IDs whose readiness state
-	// must be checked even when the evaluation hash matches. These are nodes
-	// referenced via .ready() in readyWhen or propagateWhen — a runtime
-	// property that doesn't map to any field path. When any ReadinessDep's
-	// plan state changes between reconcile cycles, the node re-evaluates
-	// its gate conditions instead of skipping entirely.
-	// Populated by BuildDAG; nil before that.
+	// must be checked even when the evaluation hash matches. Populated by
+	// BuildDAG; nil before that.
 	ReadinessDeps map[string]bool
 }
 
-// Reference returns the Reference type of this node.
-//
-// Today this derives from Template shape on every call — cheap and
-// stateless. When the explicit-keyword schema lands, this becomes a
-// direct read of the declared keyword; call sites already route through
-// here so the change is local to Node.
-//
-// Tradeoff in the current derivation: identity-only templates with
-// management signals (readyWhen, propagateWhen, includeWhen) upgrade
-// from Watch to Unresolved because those signals imply ownership
-// intent. This forecloses "watch a resource I don't own but gate on
-// its readiness"; if that use case arises, the discriminator needs
-// refinement (e.g., an explicit watch-only annotation).
-func (n *Node) Reference() Reference {
-	return deriveReference(n)
-}
-
-// deriveReference classifies a node's reference type from its template
-// shape and management signals. Single source of truth — invoked only
-// from Reference().
-//
-// TODO: when the explicit keyword schema lands (template/patch/watch/
-// watchKind/def), this reads the declared keyword and the
-// ReferenceUnresolved branch goes away — ReferenceUnresolved exists
-// only to defer Watch-vs-Own disambiguation that the current shape-
-// sniffing can't settle at parse time.
-func deriveReference(n *Node) Reference {
-	ref := detectReference(n.Template)
-	if ref == ReferenceWatch && (len(n.ReadyWhen) > 0 || len(n.PropagateWhen) > 0 || len(n.IncludeWhen) > 0) {
-		return ReferenceUnresolved
-	}
-	return ref
-}
-
-// HasBody returns true if the node has an evaluable body — either a
-// static map or a CEL expression that yields a map at runtime.
-//
-// "Body" is the keyword-neutral term for "whatever the node's template/
-// patch/def keyword supplied." When the explicit-keyword schema lands,
-// this covers any of template/patch/def (but not watch/watchKind, which
-// have identity only).
-//
-// Current semantics: returns true whenever n.Template or n.TemplateExpr
-// is populated — which includes Watch and WatchKind nodes (their
-// Template holds identity fields). Post-split this flips: Watch and
-// WatchKind return false (no body-producing keyword declared). The
-// single caller (foreach.go's per-item body check) only runs for
-// forEach nodes, which must have a body to expand — so the semantic
-// flip does not change observable behavior. Audited 2026-04-16.
-func (n *Node) HasBody() bool {
-	return n.Template != nil || n.TemplateExpr != ""
+// NodeType returns the parse-time classification of this node.
+func (n *Node) Type() NodeType {
+	return n.ref
 }
 
 // Identity returns the static identity view of this node's target — the
 // map containing apiVersion, kind, and metadata (name/namespace) used
 // to build the applied-set key, resolve GVK, and look up the target
-// resource. Returns nil for Definition nodes, which have no Kubernetes
-// identity, and for nodes whose body comes from TemplateExpr (the map
-// isn't available until evaluation).
-//
-// Today this returns n.Template (which carries identity fields for all
-// reference types that have them). When the explicit-keyword schema
-// lands, this returns the identity-view of whichever keyword was
-// declared — template for Own, patch for Contribute, watch for Watch,
-// watchKind for WatchKind. Call sites don't move.
+// resource. Returns nil for Definition nodes (no Kubernetes identity)
+// and for nodes whose body comes from TemplateExpr (the map isn't
+// available until evaluation).
 func (n *Node) Identity() map[string]any {
-	if n.Reference() == ReferenceDefinition {
+	switch n.ref {
+	case NodeTypeOwn:
+		return n.Template
+	case NodeTypeContribute:
+		return n.Patch
+	case NodeTypeRef:
+		return n.Ref
+	case NodeTypeWatch:
+		return n.Watch
+	default:
 		return nil
 	}
-	return n.Template
 }
 
 // Payload returns the evaluable body of this node — the map fed to CEL
-// evaluation, expression walking, and structural inspection. Returns
-// nil when the body is supplied as a CEL expression (TemplateExpr)
-// rather than a static map — callers that need both paths should
-// handle TemplateExpr separately (see eval.toMapNode).
-//
-// Today this returns n.Template. When the explicit-keyword schema
-// lands, this returns the body of whichever body-producing keyword
-// was declared (template, patch, or def). Watch and WatchKind have
-// identity only and get their map through Identity().
+// evaluation, expression walking, and structural inspection. Returns nil
+// for Watch/Watch (identity-only, no body) and for nodes whose body
+// comes from TemplateExpr (callers that need both paths should handle
+// TemplateExpr separately — see eval.toMapNode).
 func (n *Node) Payload() map[string]any {
-	return n.Template
+	switch n.ref {
+	case NodeTypeOwn:
+		return n.Template
+	case NodeTypeContribute:
+		return n.Patch
+	case NodeTypeDef:
+		return n.Def
+	default:
+		return nil
+	}
+}
+
+// HasBody returns true if the node has an evaluable body — either a
+// static map or a CEL expression that yields a map at runtime. Returns
+// false for Watch/Watch (identity-only).
+func (n *Node) HasBody() bool {
+	return n.Payload() != nil || n.TemplateExpr != ""
+}
+
+// HasStatusSubresource returns true when a Contribute node declares a
+// non-nil status field in its body. Used by releaseApply during teardown
+// to decide whether the status subresource must also be released.
+func (n *Node) HasStatusSubresource() bool {
+	return n.hasStatusSubresource
 }
 
 // Note: there is no IdentityKey method because computing the applied-set
@@ -475,7 +304,14 @@ func (s *GraphSpec) AllExpressions() []string {
 	// Collect expressions from each node
 	for _, node := range s.Nodes { // Template expressions
 		var templateStrings []string
-		collectStrings(node.Payload(), &templateStrings)
+		// Walk all body maps that may carry CEL expressions. Watch/Watch
+		// bodies (identity-only) also contain ${...} in metadata.name,
+		// metadata.namespace, selector values — they must be compiled too.
+		for _, body := range []map[string]any{node.Template, node.Patch, node.Ref, node.Watch, node.Def} {
+			if body != nil {
+				collectStrings(body, &templateStrings)
+			}
+		}
 		if node.TemplateExpr != "" {
 			templateStrings = append(templateStrings, node.TemplateExpr)
 		}
@@ -513,8 +349,18 @@ func extractGraphSpec(graphObj map[string]any) (*GraphSpec, error) {
 	return &GraphSpec{Nodes: nodes}, nil
 }
 
+// bodyKeywords enumerates the five mutually-exclusive classification keywords.
+// Exactly one must be set per node. The value shape disambiguates map-vs-expr:
+//   - map[string]any → static body
+//   - string         → CEL expression evaluating to the body at runtime
+//
+// Ref and Watch accept only maps — they are identity-only classifications
+// and have no CEL-as-whole-body form.
+var bodyKeywords = []string{"template", "patch", "ref", "watch", "def"}
+
 // parseNodeList converts a raw node list into Nodes.
-// Returns an error if any node is missing an ID or has a duplicate ID.
+// Returns an error on the first invalid node: missing ID, duplicate ID,
+// invalid keyword combinations, or per-keyword shape violations.
 func parseNodeList(raw any) ([]Node, error) {
 	list, ok := raw.([]any)
 	if !ok {
@@ -560,11 +406,28 @@ func parseNodeList(raw any) ([]Node, error) {
 		seen[id] = true
 		seenLower[lower] = id
 		node.ID = id
-		if tmpl, ok := m["template"].(map[string]any); ok {
-			node.Template = tmpl
-		} else if tmplExpr, ok := m["template"].(string); ok {
-			node.TemplateExpr = tmplExpr
+
+		// Collect which of the five mutually-exclusive classification
+		// keywords are present. Exactly one must be set.
+		var present []string
+		for _, kw := range bodyKeywords {
+			if _, ok := m[kw]; ok {
+				present = append(present, kw)
+			}
 		}
+		if len(present) == 0 {
+			return nil, fmt.Errorf("node[%d] %q: exactly one of %s must be set, got none", i, id, strings.Join(bodyKeywords, "/"))
+		}
+		if len(present) > 1 {
+			return nil, fmt.Errorf("node[%d] %q: exactly one of %s must be set, got {%s}", i, id, strings.Join(bodyKeywords, "/"), strings.Join(present, ", "))
+		}
+
+		kw := present[0]
+		rawBody := m[kw]
+		if err := setNodeKeyword(&node, kw, rawBody); err != nil {
+			return nil, fmt.Errorf("node[%d] %q: %w", i, id, err)
+		}
+
 		if fin, ok := m["finalizes"].(string); ok {
 			node.Finalizes = fin
 		}
@@ -615,17 +478,16 @@ func parseNodeList(raw any) ([]Node, error) {
 		// Static-name finalizers are looked up by key during prune; forEach
 		// finalizers use label-based discovery for cleanup.
 		// NOTE: This check must run after forEach is parsed above.
-		// TODO: this currently does not reject `finalizes` on Definition
-		// nodes — the metadata lookup below silently no-ops because
-		// Definitions have no metadata key. Pre-existing gap; fix when the
-		// explicit keyword schema lands (at which point Definition vs
-		// Own/Contribute is declared, not inferred, and the check can gate
-		// on reference type cleanly).
-		if node.Finalizes != "" && node.ForEach == nil && node.Template != nil {
-			if md, ok := node.Template["metadata"].(map[string]any); ok {
-				if name, ok := md["name"].(string); ok && strings.Contains(name, "${") {
-					return nil, fmt.Errorf("node[%d] %q: finalizes nodes must not have CEL-evaluated names (found expression in metadata.name); use forEach for per-item finalizers", i, id)
+		if node.Finalizes != "" && node.ForEach == nil {
+			if body := node.Identity(); body != nil {
+				if md, ok := body["metadata"].(map[string]any); ok {
+					if name, ok := md["name"].(string); ok && strings.Contains(name, "${") {
+						return nil, fmt.Errorf("node[%d] %q: finalizes nodes must not have CEL-evaluated names (found expression in metadata.name); use forEach for per-item finalizers", i, id)
+					}
 				}
+			}
+			if node.Type() == NodeTypeDef {
+				return nil, fmt.Errorf("node[%d] %q: finalizes is not valid on def nodes (no Kubernetes resource to finalize)", i, id)
 			}
 		}
 		if iw, ok := m["includeWhen"].([]any); ok {
@@ -652,6 +514,217 @@ func parseNodeList(raw any) ([]Node, error) {
 		nodes = append(nodes, node)
 	}
 	return nodes, nil
+}
+
+// setNodeKeyword populates the Node's classification-bearing fields from the
+// single declared keyword. Each body-producing keyword (template / patch /
+// def) accepts either a static map or a CEL expression string that yields
+// the body at runtime. Ref and Watch accept only maps — they are
+// identity-only classifications and have no CEL-as-whole-body form.
+//
+// Per-keyword shape is validated here and the parse-time NodeType is
+// recorded. The caller has already verified exactly one keyword is set.
+func setNodeKeyword(node *Node, kw string, raw any) error {
+	switch kw {
+	case "template":
+		node.ref = NodeTypeOwn
+		switch v := raw.(type) {
+		case map[string]any:
+			if err := validateTemplate(v); err != nil {
+				return err
+			}
+			node.Template = v
+		case string:
+			if v == "" {
+				return fmt.Errorf("template: empty string (expected CEL expression or non-empty map)")
+			}
+			node.TemplateExpr = v
+			node.ExprKeyword = NodeTypeOwn
+		default:
+			return fmt.Errorf("template: expected map or string (CEL expression), got %T", raw)
+		}
+	case "patch":
+		node.ref = NodeTypeContribute
+		switch v := raw.(type) {
+		case map[string]any:
+			if err := validatePatch(v); err != nil {
+				return err
+			}
+			node.Patch = v
+			if status, ok := v["status"]; ok && status != nil {
+				node.hasStatusSubresource = true
+			}
+		case string:
+			if v == "" {
+				return fmt.Errorf("patch: empty string (expected CEL expression or non-empty map)")
+			}
+			node.TemplateExpr = v
+			node.ExprKeyword = NodeTypeContribute
+		default:
+			return fmt.Errorf("patch: expected map or string (CEL expression), got %T", raw)
+		}
+	case "ref":
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("ref: expected map, got %T (ref is identity-only and has no CEL-as-whole-body form)", raw)
+		}
+		if err := validateRef(m); err != nil {
+			return err
+		}
+		node.Ref = m
+		node.ref = NodeTypeRef
+	case "watch":
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("watch: expected map, got %T (watch is identity-only and has no CEL-as-whole-body form)", raw)
+		}
+		if err := validateWatch(m); err != nil {
+			return err
+		}
+		node.Watch = m
+		node.ref = NodeTypeWatch
+	case "def":
+		node.ref = NodeTypeDef
+		switch v := raw.(type) {
+		case map[string]any:
+			if err := validateDef(v); err != nil {
+				return err
+			}
+			node.Def = v
+		case string:
+			if v == "" {
+				return fmt.Errorf("def: empty string (expected CEL expression or non-empty map)")
+			}
+			node.TemplateExpr = v
+			node.ExprKeyword = NodeTypeDef
+		default:
+			return fmt.Errorf("def: expected map or string (CEL expression), got %T", raw)
+		}
+	default:
+		return fmt.Errorf("unknown keyword %q", kw) // unreachable — caller already filtered
+	}
+	return nil
+}
+
+// validateTemplate enforces shape rules for template: (Own) bodies.
+//
+// An Own body must declare identity (apiVersion + kind) — the graph needs to
+// know what it is creating. metadata.name is not strictly required at parse
+// time because it may come from a CEL expression that is resolved at runtime,
+// but apiVersion and kind must be literal or ${...}-interpolated strings
+// (i.e., present as string values in the map).
+func validateTemplate(tmpl map[string]any) error {
+	if _, ok := tmpl["apiVersion"]; !ok {
+		return fmt.Errorf("template: missing apiVersion (use def: for computed values without a Kubernetes resource)")
+	}
+	if _, ok := tmpl["kind"]; !ok {
+		return fmt.Errorf("template: missing kind")
+	}
+	return nil
+}
+
+// validatePatch enforces shape rules for patch: (Contribute) bodies.
+//
+// A Contribute body must carry full identity (apiVersion + kind +
+// metadata.name) — the graph writes fields to a specific existing object.
+// Identity-only patches are nonsensical (use ref: for read-only
+// single-object observation). Force adoption is not valid on patch: — that
+// path belongs to template:.
+func validatePatch(tmpl map[string]any) error {
+	if _, ok := tmpl["apiVersion"]; !ok {
+		return fmt.Errorf("patch: missing apiVersion")
+	}
+	if _, ok := tmpl["kind"]; !ok {
+		return fmt.Errorf("patch: missing kind")
+	}
+	md, _ := tmpl["metadata"].(map[string]any)
+	if _, ok := md["name"]; !ok {
+		return fmt.Errorf("patch: missing metadata.name (a patch targets a named existing resource; omit metadata.name for watch:)")
+	}
+	if isForceApplyMap(tmpl) {
+		return fmt.Errorf("patch: kro.run/apply: Force is only valid on template: (adoption path); use template: to take ownership")
+	}
+	return nil
+}
+
+// validateRef enforces shape rules for ref: (single-object dereference)
+// bodies. A ref body is identity-only: apiVersion, kind, and metadata
+// with only name and namespace. Any other field is a parse error — the
+// keyword names an existing object to pull into scope, not a body to apply.
+func validateRef(tmpl map[string]any) error {
+	if _, ok := tmpl["apiVersion"]; !ok {
+		return fmt.Errorf("ref: missing apiVersion")
+	}
+	if _, ok := tmpl["kind"]; !ok {
+		return fmt.Errorf("ref: missing kind")
+	}
+	md, _ := tmpl["metadata"].(map[string]any)
+	if _, ok := md["name"]; !ok {
+		return fmt.Errorf("ref: missing metadata.name (for collection observation use watch:)")
+	}
+	for key := range tmpl {
+		switch key {
+		case "apiVersion", "kind", "metadata":
+			continue
+		default:
+			return fmt.Errorf("ref: unexpected field %q (ref is identity-only — use template: or patch: to apply fields)", key)
+		}
+	}
+	for key := range md {
+		switch key {
+		case "name", "namespace":
+			continue
+		default:
+			return fmt.Errorf("ref: unexpected metadata field %q (ref is identity-only)", key)
+		}
+	}
+	if isForceApplyMap(tmpl) {
+		return fmt.Errorf("ref: kro.run/apply: Force is only valid on template:")
+	}
+	return nil
+}
+
+// validateWatch enforces shape rules for watch: (collection observation)
+// bodies. Must declare apiVersion + kind, must NOT declare metadata.name
+// (name implies single-object — use ref:). May declare a selector.
+func validateWatch(tmpl map[string]any) error {
+	if _, ok := tmpl["apiVersion"]; !ok {
+		return fmt.Errorf("watch: missing apiVersion")
+	}
+	if _, ok := tmpl["kind"]; !ok {
+		return fmt.Errorf("watch: missing kind")
+	}
+	md, _ := tmpl["metadata"].(map[string]any)
+	if _, ok := md["name"]; ok {
+		return fmt.Errorf("watch: metadata.name is not valid (name implies single-object; use ref:)")
+	}
+	if isForceApplyMap(tmpl) {
+		return fmt.Errorf("watch: kro.run/apply: Force is only valid on template:")
+	}
+	return nil
+}
+
+// validateDef enforces shape rules for def: bodies. Must NOT carry
+// apiVersion or kind — a def node produces no Kubernetes resource, only
+// values into scope.
+func validateDef(tmpl map[string]any) error {
+	if _, ok := tmpl["apiVersion"]; ok {
+		return fmt.Errorf("def: apiVersion is not valid (def produces values into scope, not a Kubernetes resource; use template:/patch:/ref:/watch: for a resource)")
+	}
+	if _, ok := tmpl["kind"]; ok {
+		return fmt.Errorf("def: kind is not valid (def produces values into scope, not a Kubernetes resource)")
+	}
+	return nil
+}
+
+// isForceApplyMap checks for the kro.run/apply: Force annotation on a body
+// map. Defined here rather than importing from apply.go to keep the parser
+// free of apply-time dependencies.
+func isForceApplyMap(tmpl map[string]any) bool {
+	md, _ := tmpl["metadata"].(map[string]any)
+	anns, _ := md["annotations"].(map[string]any)
+	v, _ := anns["kro.run/apply"].(string)
+	return v == "Force"
 }
 
 // parseForEachMap parses a flat forEach map (map[string]any → map[string]string).

@@ -27,22 +27,6 @@ import (
 )
 
 // typeSource holds all resolved type information for building the CEL environment.
-
-// isWatchKindTemplate returns true when a template has a `selector` field,
-// indicating it watches a collection. This is stricter than detectReference's
-// WatchKind classification (which uses "no metadata.name") because unnamed
-// Own resources also lack metadata.name but are not collections. The selector
-// field is the user-facing signal for "watch all instances of this kind" and
-// is present on all WatchKind templates in practice.
-//
-// TODO: remove when the explicit keyword schema lands. At that point
-// Reference() == ReferenceWatchKind is authoritative — no selector sniffing
-// needed — and callers of this function migrate to node.Reference().
-func isWatchKindTemplate(tmpl map[string]any) bool {
-	_, hasSelector := tmpl["selector"]
-	return hasSelector
-}
-
 // Populated during compilation phases 1 (schema resolution) and 2 (definition inference).
 type typeSource struct {
 	// resourceSchemas maps node ID → OpenAPI schema for nodes with resolved GVKs.
@@ -53,7 +37,7 @@ type typeSource struct {
 	forEachDefinitions map[string]bool
 	// untypedIDs are node/variable identifiers declared as dyn.
 	untypedIDs []string
-	// listIDs are WatchKind node identifiers declared as list(dyn).
+	// listIDs are Watch node identifiers declared as list(dyn).
 	// Comprehension macros (.map(), .filter(), .exists()) require list typing.
 	listIDs []string
 	// unresolvedGVKs are GVKs that had literal apiVersion/kind but whose schema
@@ -78,9 +62,9 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 	for _, node := range nodes {
 		seen[node.ID] = true
 
-		ref := node.Reference()
+		ref := node.Type()
 		switch {
-		case ref == ReferenceDefinition:
+		case ref == NodeTypeDef:
 			// Phase 2: infer type from template structure.
 			typeName := krocel.TypeNamePrefix + node.ID
 			dt := inferObjectType(typeName, node.Payload())
@@ -89,14 +73,14 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 				ts.forEachDefinitions[node.ID] = true
 			}
 
-		case schemaResolver != nil && ref != ReferenceDefinition:
+		case schemaResolver != nil && ref != NodeTypeDef:
 			// Phase 1: resolve schema for resource nodes with literal GVK.
 			gvk := extractLiteralGVK(node.Identity())
 			if gvk != nil {
 				s, err := schemaResolver.ResolveSchema(*gvk)
 				if err == nil && s != nil {
 					ts.resourceSchemas[node.ID] = s
-					if isWatchKindTemplate(node.Template) {
+					if ref == NodeTypeWatch {
 						ts.listIDs = append(ts.listIDs, node.ID)
 					}
 					continue
@@ -104,14 +88,14 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 				// Resolution failed — track as unresolved, fall through to dyn.
 				ts.unresolvedGVKs = append(ts.unresolvedGVKs, *gvk)
 			}
-			if isWatchKindTemplate(node.Template) {
+			if ref == NodeTypeWatch {
 				ts.listIDs = append(ts.listIDs, node.ID)
 			} else {
 				ts.untypedIDs = append(ts.untypedIDs, node.ID)
 			}
 
 		default:
-			if isWatchKindTemplate(node.Template) {
+			if ref == NodeTypeWatch {
 				ts.listIDs = append(ts.listIDs, node.ID)
 			} else {
 				ts.untypedIDs = append(ts.untypedIDs, node.ID)

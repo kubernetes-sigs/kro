@@ -61,7 +61,7 @@ func TestReadyWhenDoesNotGateDownstream(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "source",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -267,7 +267,7 @@ func TestPendingRequeues(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "source",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -376,7 +376,7 @@ func TestReadyWhenNotReadyThenReady(t *testing.T) {
 					// Watch the infra resource, gate on phase == "Running"
 					map[string]any{
 						"id": "infra",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{

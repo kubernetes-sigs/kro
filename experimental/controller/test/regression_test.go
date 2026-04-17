@@ -260,14 +260,14 @@ func TestContributeCleanupOnPrune(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "target",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "contribute-target"},
 						},
 					},
 					map[string]any{
 						"id": "contrib",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{
 								"name": "contribute-target",
@@ -305,7 +305,7 @@ func TestContributeCleanupOnPrune(t *testing.T) {
 			unstructured.SetNestedSlice(obj.Object, []any{
 				map[string]any{
 					"id": "target",
-					"template": map[string]any{
+					"ref": map[string]any{
 						"apiVersion": "v1", "kind": "ConfigMap",
 						"metadata": map[string]any{"name": "contribute-target"},
 					},
@@ -375,14 +375,14 @@ func TestContributeCleanupOnTeardown(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "ext",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "teardown-target"},
 						},
 					},
 					map[string]any{
 						"id": "contrib",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{
 								"name": "teardown-target",
@@ -494,7 +494,7 @@ func TestContributionUpdatesWhenDependencyChanges(t *testing.T) {
 					// Watch the source — changes here trigger reconciliation.
 					map[string]any{
 						"id": "source",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "contrib-source"},
@@ -518,7 +518,7 @@ func TestContributionUpdatesWhenDependencyChanges(t *testing.T) {
 					// that should push .data into owned's SelfSections.
 					map[string]any{
 						"id": "contrib",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -570,7 +570,7 @@ func TestContributionUpdatesWhenDependencyChanges(t *testing.T) {
 	t.Log("Contribution updated to version=v2 — downstream status propagation works")
 }
 
-// TestWatchKindClusterScopedResource proves that a WatchKind on
+// TestWatchKindClusterScopedResource proves that a Watch on
 // cluster-scoped resources (e.g., Namespaces) triggers reconciliation when
 // new resources are created, even when the Graph is in a specific namespace.
 //
@@ -611,7 +611,7 @@ func TestWatchKindClusterScopedResource(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "namespaces",
-						"template": map[string]any{
+						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "Namespace",
 							"selector":   map[string]any{"test-collection": ns},
@@ -660,7 +660,7 @@ func TestWatchKindClusterScopedResource(t *testing.T) {
 	t.Log("Added new cluster-scoped Namespace (Graph NOT touched)")
 
 	// THE PROOF: a new ConfigMap should appear for the new Namespace,
-	// triggered by the WatchKind on the cluster-scoped resource.
+	// triggered by the Watch on the cluster-scoped resource.
 	newCM := &unstructured.Unstructured{}
 	newCM.SetGroupVersionKind(regressionCMGVK)
 	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: ns + "-watched-b-marker", Namespace: ns}, newCM),
@@ -718,7 +718,7 @@ func TestBlockedDependencyRecoveryReconverges(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "source",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "recovery-source"},
@@ -845,7 +845,7 @@ func TestContributeReadyWhenGatesGraphReadiness(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "target",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "contrib-ready-target"},
@@ -853,7 +853,7 @@ func TestContributeReadyWhenGatesGraphReadiness(t *testing.T) {
 					},
 					map[string]any{
 						"id": "contrib",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -954,14 +954,14 @@ func TestContributeIdentityLabels(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "ext",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "contrib-label-target"},
 						},
 					},
 					map[string]any{
 						"id": "contrib",
-						"template": map[string]any{
+						"patch": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{
 								"name": "contrib-label-target",
@@ -997,7 +997,7 @@ func TestContributeIdentityLabels(t *testing.T) {
 	// with role "contribute" for our graph. This makes it discoverable by
 	// deriveAppliedSet() after controller restart.
 	resultLabels := result.GetLabels()
-	labelSuffix := "." + graphName + "." + ns + ".internal.kro.run/reference"
+	labelSuffix := "." + graphName + "." + ns + ".internal.kro.run/type"
 	foundContribLabel := false
 	for key, val := range resultLabels {
 		if strings.HasSuffix(key, labelSuffix) {
@@ -1197,7 +1197,7 @@ func TestPropagateWhenCrossNodeRef(t *testing.T) {
 					// upstream: watches source, ready when status == "active"
 					map[string]any{
 						"id": "upstream",
-						"template": map[string]any{
+						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "propagate-source"},

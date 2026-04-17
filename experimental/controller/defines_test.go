@@ -15,25 +15,16 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestDefinesReference(t *testing.T) {
-	t.Run("no apiVersion no kind returns ReferenceDefinition", func(t *testing.T) {
+	t.Run("def keyword yields NodeTypeDef", func(t *testing.T) {
 		n := Node{
-			ID:       "naming",
-			Template: map[string]any{"prefix": "${spec.name}"},
+			ID:  "naming",
+			Def: map[string]any{"prefix": "${spec.name}"},
+			ref: NodeTypeDef,
 		}
-		assert.Equal(t, ReferenceDefinition, n.Reference())
+		assert.Equal(t, NodeTypeDef, n.Type())
 	})
 
-	t.Run("empty template returns ReferenceUnresolved", func(t *testing.T) {
-		n := Node{ID: "empty", Template: map[string]any{}}
-		assert.Equal(t, ReferenceUnresolved, n.Reference())
-	})
-
-	t.Run("nil template returns ReferenceUnresolved", func(t *testing.T) {
-		n := Node{ID: "nil"}
-		assert.Equal(t, ReferenceUnresolved, n.Reference())
-	})
-
-	t.Run("with apiVersion and kind returns non-Definition", func(t *testing.T) {
+	t.Run("template with apiVersion/kind yields NodeTypeOwn", func(t *testing.T) {
 		n := Node{
 			ID: "cfg",
 			Template: map[string]any{
@@ -42,13 +33,14 @@ func TestDefinesReference(t *testing.T) {
 				"metadata":   map[string]any{"name": "cfg"},
 				"data":       map[string]any{"k": "v"},
 			},
+			ref: NodeTypeOwn,
 		}
-		assert.NotEqual(t, ReferenceDefinition, n.Reference())
+		assert.Equal(t, NodeTypeOwn, n.Type())
 	})
 }
 
 func TestDefinesReferenceString(t *testing.T) {
-	assert.Equal(t, "definition", ReferenceDefinition.String())
+	assert.Equal(t, "def", NodeTypeDef.String())
 }
 
 func TestDefinesDAGDependencies(t *testing.T) {
@@ -61,12 +53,14 @@ func TestDefinesDAGDependencies(t *testing.T) {
 				"metadata":   map[string]any{"name": "my-app"},
 				"spec":       map[string]any{"replicas": 1},
 			},
+			ref: NodeTypeOwn,
 		},
 		{
 			ID: "naming",
-			Template: map[string]any{
+			Def: map[string]any{
 				"fullName": "${deploy.metadata.name + '-' + spec.env}",
 			},
+			ref: NodeTypeDef,
 		},
 		{
 			ID: "svc",
@@ -75,6 +69,7 @@ func TestDefinesDAGDependencies(t *testing.T) {
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${naming.fullName + '-svc'}"},
 			},
+			ref: NodeTypeOwn,
 		},
 	}
 	dag, err := BuildDAG(nodes, nil)
@@ -95,8 +90,9 @@ func TestDefinesDAGDependencies(t *testing.T) {
 func TestDefinesCycleDetection(t *testing.T) {
 	nodes := []Node{
 		{
-			ID:       "naming",
-			Template: map[string]any{"prefix": "${svc.metadata.name}"},
+			ID:  "naming",
+			Def: map[string]any{"prefix": "${svc.metadata.name}"},
+			ref: NodeTypeDef,
 		},
 		{
 			ID: "svc",
@@ -105,6 +101,7 @@ func TestDefinesCycleDetection(t *testing.T) {
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${naming.prefix + '-svc'}"},
 			},
+			ref: NodeTypeOwn,
 		},
 	}
 	_, err := BuildDAG(nodes, nil)
@@ -115,12 +112,14 @@ func TestDefinesCycleDetection(t *testing.T) {
 func TestDefinesChain(t *testing.T) {
 	nodes := []Node{
 		{
-			ID:       "a",
-			Template: map[string]any{"prefix": "app"},
+			ID:  "a",
+			Def: map[string]any{"prefix": "app"},
+			ref: NodeTypeDef,
 		},
 		{
-			ID:       "b",
-			Template: map[string]any{"fullName": "${a.prefix + '-service'}"},
+			ID:  "b",
+			Def: map[string]any{"fullName": "${a.prefix + '-service'}"},
+			ref: NodeTypeDef,
 		},
 		{
 			ID: "c",
@@ -129,6 +128,7 @@ func TestDefinesChain(t *testing.T) {
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${b.fullName}"},
 			},
+			ref: NodeTypeOwn,
 		},
 	}
 	dag, err := BuildDAG(nodes, nil)
@@ -164,7 +164,7 @@ func TestDefinesReconcile(t *testing.T) {
 
 	t.Run("literals enter scope", func(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "cfg", Template: map[string]any{"region": "us-west-2", "env": "prod"}},
+			{ID: "cfg", Def: map[string]any{"region": "us-west-2", "env": "prod"}, ref: NodeTypeDef},
 		}}
 		eval := compileDefinesSpec(t, spec)
 
@@ -179,8 +179,8 @@ func TestDefinesReconcile(t *testing.T) {
 
 	t.Run("CEL expressions evaluate against scope", func(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
-			{ID: "upstream", Template: map[string]any{"name": "myapp"}},
-			{ID: "derived", Template: map[string]any{"full": "${upstream.name + '-svc'}"}},
+			{ID: "upstream", Def: map[string]any{"name": "myapp"}, ref: NodeTypeDef},
+			{ID: "derived", Def: map[string]any{"full": "${upstream.name + '-svc'}"}, ref: NodeTypeDef},
 		}}
 		eval := compileDefinesSpec(t, spec)
 
@@ -199,13 +199,14 @@ func TestDefinesReconcile(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
 			{
 				ID:        "cfg",
-				Template:  map[string]any{"count": "3"},
+				Def:       map[string]any{"count": "3"},
+				ref:       NodeTypeDef,
 				ReadyWhen: []string{"${cfg.count == '3'}"},
 			},
 		}}
 		eval := compileDefinesSpec(t, spec)
 
-		_, err := r.reconcileNode(ctx, nil, spec.Nodes[0], ResolvedReferenceDefinition, eval, nil, false)
+		_, err := r.reconcileNode(ctx, nil, spec.Nodes[0], NodeTypeDef, eval, nil, false)
 		require.NoError(t, err)
 
 		result, ok := eval.scope["cfg"].(map[string]any)
@@ -217,13 +218,14 @@ func TestDefinesReconcile(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
 			{
 				ID:        "cfg",
-				Template:  map[string]any{"count": "0"},
+				Def:       map[string]any{"count": "0"},
+				ref:       NodeTypeDef,
 				ReadyWhen: []string{"${cfg.count == '3'}"},
 			},
 		}}
 		eval := compileDefinesSpec(t, spec)
 
-		_, err := r.reconcileNode(ctx, nil, spec.Nodes[0], ResolvedReferenceDefinition, eval, nil, false)
+		_, err := r.reconcileNode(ctx, nil, spec.Nodes[0], NodeTypeDef, eval, nil, false)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, ErrWaitingForReadiness))
 
@@ -233,15 +235,15 @@ func TestDefinesReconcile(t *testing.T) {
 	})
 
 	t.Run("CEL eval failure returns error", func(t *testing.T) {
-		// Reference a declared node that isn't in scope — triggers runtime
+		// NodeType a declared node that isn't in scope — triggers runtime
 		// eval failure (not compile failure).
 		spec := &GraphSpec{Nodes: []Node{
 			{ID: "upstream", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
-			}},
-			{ID: "bad", Template: map[string]any{"val": "${upstream.data.key}"}},
+			}, ref: NodeTypeOwn},
+			{ID: "bad", Def: map[string]any{"val": "${upstream.data.key}"}, ref: NodeTypeDef},
 		}}
 		eval := compileDefinesSpec(t, spec)
 		// upstream is declared but NOT populated in scope — eval fails at runtime.
@@ -264,11 +266,12 @@ func TestDefinesForEachReconcile(t *testing.T) {
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
-			}},
+			}, ref: NodeTypeOwn},
 			{
-				ID:       "items",
-				ForEach:  map[string]string{"w": "${['a', 'b']}"},
-				Template: map[string]any{"val": "${upstream.data.key}"},
+				ID:      "items",
+				ForEach: map[string]string{"w": "${['a', 'b']}"},
+				Def:     map[string]any{"val": "${upstream.data.key}"},
+				ref:     NodeTypeDef,
 			},
 		}}
 		compiled, err := compileGraphSpec(spec, nil)
@@ -309,11 +312,12 @@ func TestDefinesForEachReconcile(t *testing.T) {
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
 				// data.key is absent — ${upstream.data.key} fails
-			}},
+			}, ref: NodeTypeOwn},
 			{
-				ID:       "items",
-				ForEach:  map[string]string{"w": "${['a', 'b']}"},
-				Template: map[string]any{"val": "${upstream.data.key}"},
+				ID:      "items",
+				ForEach: map[string]string{"w": "${['a', 'b']}"},
+				Def:     map[string]any{"val": "${upstream.data.key}"},
+				ref:     NodeTypeDef,
 			},
 		}}
 		compiled, err := compileGraphSpec(spec, nil)

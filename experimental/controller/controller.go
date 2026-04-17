@@ -1946,10 +1946,10 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchMan
 			if node.Finalizes != "" {
 				continue // finalizer node — dormant during normal operation
 			}
-			id := node.Identity()
-			if id == nil {
-				continue
+			if node.HasDynamicGVR() {
+				continue // GVR contains CEL — resolved at reconcile time, not startup
 			}
+			id := node.Identity()
 			apiVersion, _ := id["apiVersion"].(string)
 			kind, _ := id["kind"].(string)
 			if apiVersion == "" || kind == "" {

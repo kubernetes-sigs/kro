@@ -13,7 +13,6 @@ package graphcontroller
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -236,11 +235,11 @@ func extractLiteralGVK(tmpl map[string]any) *runtimeschema.GroupVersionKind {
 		return nil
 	}
 	apiVersion, ok := tmpl["apiVersion"].(string)
-	if !ok || strings.Contains(apiVersion, "${") {
+	if !ok || isCELExpression(apiVersion) {
 		return nil
 	}
 	kind, ok := tmpl["kind"].(string)
-	if !ok || strings.Contains(kind, "${") {
+	if !ok || isCELExpression(kind) {
 		return nil
 	}
 	gv, err := runtimeschema.ParseGroupVersion(apiVersion)

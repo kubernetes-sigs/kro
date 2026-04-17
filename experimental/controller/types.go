@@ -207,6 +207,39 @@ func (n *Node) Identity() map[string]any {
 	}
 }
 
+// HasDynamicGVR returns true when the node's GVR cannot be determined
+// statically — either because the entire body is a CEL expression
+// (TemplateExpr, so Identity() returns nil), or because apiVersion or kind
+// contains a CEL expression that is only resolved at reconcile time
+// (e.g., apiVersion: "${k.spec.group}/${k.spec.version}").
+//
+// This predicate is scoped to GVR-level dynamism (apiVersion, kind). Dynamic
+// name/namespace do not affect GVR resolution and are not checked.
+//
+// Used by startup hydration to skip nodes whose GVR is unknowable without
+// evaluating the CEL environment. Watch nodes with dynamic GVR are safe to
+// skip because they observe resources rather than creating them — no orphan
+// risk on restart.
+func (n *Node) HasDynamicGVR() bool {
+	id := n.Identity()
+	if id == nil {
+		return true // TemplateExpr — whole body is CEL
+	}
+	for _, field := range []string{"apiVersion", "kind"} {
+		if s, ok := id[field].(string); ok && isCELExpression(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCELExpression returns true if s contains a CEL template expression
+// marker. Single source of truth for detecting CEL in identity fields —
+// used by HasDynamicGVR and extractLiteralGVK.
+func isCELExpression(s string) bool {
+	return strings.Contains(s, "${")
+}
+
 // Payload returns the evaluable body of this node — the map fed to CEL
 // evaluation, expression walking, and structural inspection. Returns nil
 // for Watch/Watch (identity-only, no body) and for nodes whose body

@@ -1861,3 +1861,323 @@ func TestForEach_PropagateWhenPerItemHaltsCreation(t *testing.T) {
 		types.NamespacedName{Name: "test-foreach-ppi", Namespace: ns}))
 	t.Log("Phase 3: All workers ready, graph Ready — per-item propagateWhen proved")
 }
+
+// TestForEach_PropagateWhenPerItemHaltsAtFirstItem proves that the per-item
+// gate can halt before ANY items are created. The gate expression is always
+// false, so the forEach loop processes zero items on every reconcile.
+func TestForEach_PropagateWhenPerItemHaltsAtFirstItem(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create 2 source CMs.
+	for _, name := range []string{"halt0-src-a", "halt0-src-b"} {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": ns,
+					"labels":    map[string]any{"group": "halt0-foreach"},
+				},
+				"data": map[string]any{"v": "1"},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+
+	// Graph: propagateWhen is always false (size < 0 is never true).
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-halt0",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "sources",
+						"watch": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"selector":   map[string]any{"group": "halt0-foreach"},
+						},
+					},
+					map[string]any{
+						"id": "workers",
+						"forEach": map[string]any{
+							"src": "${sources}",
+						},
+						"propagateWhen": []any{"${size(workers) < 0}"},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "halt0-worker-${src.metadata.name}"},
+							"data":       map[string]any{"v": "${src.data.v}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Let the controller settle, then verify zero workers exist.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-halt0", Namespace: ns}))
+	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "halt0-worker-halt0-src-a", Namespace: ns}, 3*time.Second),
+		"worker A must be absent — gate halts before first item")
+	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "halt0-worker-halt0-src-b", Namespace: ns}, 1*time.Second),
+		"worker B must be absent — gate halts before first item")
+	t.Log("Gate halted at first item — zero workers created")
+}
+
+// TestForEach_PropagateWhenPerItemScaleDownWhileGated proves that removing a
+// source item that was gated (never created) does not leave orphaned state.
+// The gated item should simply disappear from the collection on the next
+// reconcile — no resource to prune, no stale carry-forward.
+func TestForEach_PropagateWhenPerItemScaleDownWhileGated(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create 3 source CMs.
+	for _, name := range []string{"sd-src-a", "sd-src-b", "sd-src-c"} {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": ns,
+					"labels":    map[string]any{"group": "sd-foreach"},
+				},
+				"data": map[string]any{"ready": "false"},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+
+	// Graph: gate limits to <2 inflight.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-sd",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "sources",
+						"watch": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"selector":   map[string]any{"group": "sd-foreach"},
+						},
+					},
+					map[string]any{
+						"id": "workers",
+						"forEach": map[string]any{
+							"src": "${sources}",
+						},
+						"propagateWhen": []any{"${size(workers) < 2 || workers.ready()}"},
+						"readyWhen":     []any{"${workers.data.ready == 'true'}"},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "sd-worker-${src.metadata.name}"},
+							"data": map[string]any{
+								"ready":  "${src.data.ready}",
+								"source": "${src.metadata.name}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Phase 1: Workers A,B created. Worker C gated.
+	workerA := types.NamespacedName{Name: "sd-worker-sd-src-a", Namespace: ns}
+	workerB := types.NamespacedName{Name: "sd-worker-sd-src-b", Namespace: ns}
+	workerC := types.NamespacedName{Name: "sd-worker-sd-src-c", Namespace: ns}
+
+	cmA := &unstructured.Unstructured{}
+	cmA.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerA, cmA))
+	cmB := &unstructured.Unstructured{}
+	cmB.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerB, cmB))
+
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-sd", Namespace: ns}))
+	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk, workerC, 3*time.Second))
+	t.Log("Phase 1: Workers A,B created, C gated")
+
+	// Phase 2: Delete source C (the gated item). Remove the label so the
+	// Watch selector no longer matches — this is a clean removal from the
+	// collection without deleting the CM itself.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "sd-src-c", Namespace: ns},
+		func(obj *unstructured.Unstructured) {
+			obj.SetLabels(map[string]string{})
+		}))
+	t.Log("Phase 2: Removed sd-src-c from Watch selector")
+
+	// Phase 3: Make remaining sources ready → graph should converge to Ready
+	// with only 2 workers (A,B). No orphan from the gated C.
+	for _, srcName := range []string{"sd-src-a", "sd-src-b"} {
+		src := &unstructured.Unstructured{}
+		src.SetGroupVersionKind(gvk)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: srcName, Namespace: ns}, src))
+		require.NoError(t, unstructured.SetNestedField(src.Object, "true", "data", "ready"))
+		require.NoError(t, k8sClient.Update(ctx, src))
+	}
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-foreach-sd", Namespace: ns}))
+
+	// Worker C must still be absent — it was gated and then the source was removed.
+	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk, workerC, 2*time.Second),
+		"worker C must remain absent after source removal")
+	t.Log("Phase 3: Graph Ready with 2 workers, gated item cleanly removed")
+}
+
+// TestForEach_PropagateWhenPerItemOrderingStable proves that the per-item gate
+// produces deterministic results regardless of the order items arrive from the
+// Watch. Items are sorted by identity before iteration, so the gate always
+// halts at the same logical position.
+//
+// Approach: create sources with names that sort differently from creation order.
+// Verify the gate halts at the identity-sorted position, not the creation-order
+// position. Then add a new source that sorts BEFORE existing ones and verify
+// the halt position stays consistent.
+func TestForEach_PropagateWhenPerItemOrderingStable(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+
+	// Create sources with names that sort: ord-a < ord-b < ord-c.
+	// Create in REVERSE order to mismatch creation vs sort order.
+	for _, name := range []string{"ord-c", "ord-b", "ord-a"} {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": ns,
+					"labels":    map[string]any{"group": "ord-foreach"},
+				},
+				"data": map[string]any{"ready": "false"},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+
+	// Gate: size < 2 || ready. Sorted order: ord-a, ord-b, ord-c.
+	// Items A,B should be created (first 2), C should be gated.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-ord",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "sources",
+						"watch": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"selector":   map[string]any{"group": "ord-foreach"},
+						},
+					},
+					map[string]any{
+						"id": "workers",
+						"forEach": map[string]any{
+							"src": "${sources}",
+						},
+						"propagateWhen": []any{"${size(workers) < 2 || workers.ready()}"},
+						"readyWhen":     []any{"${workers.data.ready == 'true'}"},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "ord-worker-${src.metadata.name}"},
+							"data": map[string]any{
+								"ready":  "${src.data.ready}",
+								"source": "${src.metadata.name}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	workerA := types.NamespacedName{Name: "ord-worker-ord-a", Namespace: ns}
+	workerB := types.NamespacedName{Name: "ord-worker-ord-b", Namespace: ns}
+	workerC := types.NamespacedName{Name: "ord-worker-ord-c", Namespace: ns}
+
+	// Workers A,B created (sorted first), C gated — regardless of creation order.
+	cmA := &unstructured.Unstructured{}
+	cmA.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerA, cmA),
+		"worker A (sorted first) must be created")
+	cmB := &unstructured.Unstructured{}
+	cmB.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerB, cmB),
+		"worker B (sorted second) must be created")
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-ord", Namespace: ns}))
+	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk, workerC, 3*time.Second),
+		"worker C (sorted third) must be gated")
+	t.Log("Phase 1: Sorted order A,B,C — A,B created, C gated despite reverse creation order")
+
+	// Add a new source that sorts BEFORE existing ones: ord-0 < ord-a.
+	// Sorted order is now: ord-0, ord-a, ord-b, ord-c.
+	// Gate: size < 2 → creates ord-0 and ord-a (first 2). ord-b and ord-c gated.
+	// But ord-b already exists from Phase 1 — it was carried forward.
+	cm0 := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "ord-0",
+				"namespace": ns,
+				"labels":    map[string]any{"group": "ord-foreach"},
+			},
+			"data": map[string]any{"ready": "false"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, cm0))
+	t.Log("Phase 2: Added ord-0 (sorts before ord-a)")
+
+	worker0 := types.NamespacedName{Name: "ord-worker-ord-0", Namespace: ns}
+	cm0w := &unstructured.Unstructured{}
+	cm0w.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, worker0, cm0w),
+		"worker 0 (now sorted first) must be created")
+
+	// Worker A should still exist (sorted second, within gate limit).
+	cmARefresh := &unstructured.Unstructured{}
+	cmARefresh.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx, workerA, cmARefresh),
+		"worker A must still exist")
+	t.Log("Phase 2: ord-0 created, ord-a still exists — stable ordering proved")
+}

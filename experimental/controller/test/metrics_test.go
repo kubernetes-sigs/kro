@@ -1,13 +1,16 @@
 package graphcontroller_test
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // ---------------------------------------------------------------------------
@@ -293,14 +296,17 @@ func TestMetricsSystemErrorRetries(t *testing.T) {
 	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient,
 		types.NamespacedName{Name: "test-metrics-syserr", Namespace: ns}, "SystemError"))
 
-	// The system_error_retries_total counter should have incremented.
-	val, ok := scrapeCounter(t,
-		"graph_system_error_retries_total",
-		nodeLabels("test-metrics-syserr", ns, "cm"),
-	)
-	require.True(t, ok, "system error retries counter should exist")
-	assert.Greater(t, val, float64(0),
-		"system error retries counter should be > 0 after SystemError")
+	// The system_error_retries_total counter increments on the RETRY
+	// reconcile (when previousPlanStates has SystemError), not the
+	// reconcile that first produces the error. Poll until the retry fires.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			val, ok := scrapeCounter(t,
+				"graph_system_error_retries_total",
+				nodeLabels("test-metrics-syserr", ns, "cm"),
+			)
+			return ok && val > 0, nil
+		}), "system error retries counter should be > 0 after SystemError retry")
 
 	// Remove the fault and verify recovery.
 	fw.Accept("metrics-syserr-cm")

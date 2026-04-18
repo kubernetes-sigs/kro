@@ -70,7 +70,44 @@ spec:
         additionalPrinterColumns: "[]PrinterColumn"
       resources: "[]Resource"
   nodes:
+    # Definition-time validation — pure CEL, no Go functions.
+    # Checks resource IDs, forEach iterators, template structure,
+    # and status expressions. Gates CRD creation and flips rgdStatus
+    # between Active/Inactive. Cycle detection is deferred to
+    # per-instance Graph compilation (requires graph algorithms
+    # CEL cannot express).
+    - id: checks
+      def:
+        resources: '${has(schema.spec.resources) ? schema.spec.resources : []}'
+        ids: '${(has(schema.spec.resources) ? schema.spec.resources : []).map(r, r.id)}'
+        reserved: '${["apiVersion","context","dependency","dependencies","each","externalRef","externalReference","externalRefs","externalReferences","graph","instance","item","items","kind","kro","metadata","namespace","object","resource","resourcegraphdefinition","resourceGraphDefinition","resources","root","runtime","schema","self","serviceAccountName","spec","status","this","variables","vars","version","true","false","null","in","as","break","const","continue","else","for","function","if","import","let","loop","package","return","var","void","while"]}'
+
+    - id: validation
+      def:
+        result: >-
+          ${
+            checks.resources.exists(r, checks.reserved.exists(w, r.id == w))
+            ? {"valid": false, "message": "naming convention violation: id " + checks.resources.filter(r, checks.reserved.exists(w, r.id == w))[0].id + " is a reserved keyword in KRO"}
+            : checks.resources.exists(r, !r.id.matches("^[a-z][a-zA-Z0-9]*$"))
+            ? {"valid": false, "message": "naming convention violation: id " + checks.resources.filter(r, !r.id.matches("^[a-z][a-zA-Z0-9]*$"))[0].id + " is not a valid KRO resource id: must be lower camelCase"}
+            : checks.resources.exists(r, checks.resources.filter(r2, r2.id == r.id).size() > 1)
+            ? {"valid": false, "message": "found duplicate resource IDs " + checks.resources.filter(r, checks.resources.filter(r2, r2.id == r.id).size() > 1)[0].id}
+            : checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(d, checks.reserved.exists(w, w in d)))
+            ? {"valid": false, "message": "forEach iterator is a reserved keyword"}
+            : checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(d, checks.ids.exists(id, id in d)))
+            ? {"valid": false, "message": "forEach iterator conflicts with resource ID"}
+            : checks.resources.exists(r, has(r.template) && (!has(r.template.apiVersion) || !has(r.template.kind) || !has(r.template.metadata)))
+            ? {"valid": false, "message": "invalid kubernetes object structure"}
+            : checks.resources.exists(r, has(r.template) && has(r.template.apiVersion) && !string(r.template.apiVersion).contains("${") && (string(r.template.apiVersion).split("/").size() > 2 || !(string(r.template.apiVersion).contains("/") ? string(r.template.apiVersion).split("/")[1].matches("^v[0-9]+([a-z]+[0-9]+)?$") : string(r.template.apiVersion).matches("^v[0-9]+([a-z]+[0-9]+)?$"))))
+            ? {"valid": false, "message": "invalid kubernetes object structure: invalid apiVersion"}
+            : has(schema.spec.schema.status) && schema.spec.schema.status.size() > 0 && schema.spec.schema.status.exists(k, !string(schema.spec.schema.status[k]).contains("${"))
+            ? {"valid": false, "message": "failed to build instance status schema: status fields without expressions are not supported"}
+            : {"valid": true, "message": ""}
+          }
+
     - id: crd
+      includeWhen:
+        - ${validation.result.valid}
       template:
         apiVersion: apiextensions.k8s.io/v1
         kind: CustomResourceDefinition
@@ -228,37 +265,35 @@ spec:
 
     - id: rgdStatus
       propagateWhen:
-        - ${crd.ready()}
+        # Fire when: (1) validation failed (report Inactive immediately), OR
+        # (2) validation passed AND CRD is ready (report Active).
+        # When validation passes but CRD isn't ready yet, wait.
+        - '${!validation.result.valid || crd.ready()}'
       patch:
         apiVersion: kro.run/v1alpha1
         kind: ResourceGraphDefinition
         metadata:
           name: ${schema.metadata.name}
         status:
-          state: Active
-          topologicalOrder: '${schema.spec.resources.map(r, r.id)}'
-          # Minimal condition set for upstream compat. Tests check for:
-          #   - Ready=True (root condition)
-          #   - GraphAccepted=True
-          # Exact-message checks (rgd_conditions_test) require upstream
-          # controller internals (revision counters, specific reason strings)
-          # that the stdlib cannot synthesize from CEL — those tests are out
-          # of scope for this compat layer.
+          state: '${validation.result.valid ? "Active" : "Inactive"}'
+          topologicalOrder: '${validation.result.valid ? schema.spec.resources.map(r, r.id) : []}'
           conditions:
             - type: Ready
-              status: "True"
-              reason: Ready
+              status: '${validation.result.valid ? "True" : "False"}'
+              reason: '${validation.result.valid ? "Ready" : "Invalid"}'
+              message: '${validation.result.valid ? "resource graph and schema are valid" : validation.result.message}'
               observedGeneration: ${schema.metadata.generation}
               lastTransitionTime: ${schema.metadata.creationTimestamp}
             - type: GraphAccepted
-              status: "True"
-              reason: Valid
-              message: resource graph and schema are valid
+              status: '${validation.result.valid ? "True" : "False"}'
+              reason: '${validation.result.valid ? "Valid" : "Invalid"}'
+              message: '${validation.result.valid ? "resource graph and schema are valid" : validation.result.message}'
               observedGeneration: ${schema.metadata.generation}
               lastTransitionTime: ${schema.metadata.creationTimestamp}
             - type: KindReady
-              status: "True"
-              reason: Ready
+              status: '${validation.result.valid ? "True" : "False"}'
+              reason: '${validation.result.valid ? "Ready" : "Invalid"}'
+              message: '${validation.result.valid ? "" : validation.result.message}'
               observedGeneration: ${schema.metadata.generation}
               lastTransitionTime: ${schema.metadata.creationTimestamp}
             - type: ControllerReady

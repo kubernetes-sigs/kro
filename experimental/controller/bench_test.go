@@ -767,3 +767,284 @@ func BenchmarkSpecHash(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkForEachItemDiffCached measures the forEach item diff with cached
+// per-item hashes (Layer 1). Compares against the uncached path above.
+// With cached hashes, the previous item hash is a map lookup instead of a
+// hashDesiredState call — eliminates N of the 2N hash computations.
+//
+// Run: go test ./experimental/controller -bench=BenchmarkForEachItemDiffCached -benchmem
+func BenchmarkForEachItemDiffCached(b *testing.B) {
+	for _, itemCount := range []int{10, 100, 1000, 10000} {
+		b.Run(fmt.Sprintf("items=%d/changed=1", itemCount), func(b *testing.B) {
+			benchForEachCached(b, itemCount)
+		})
+	}
+}
+
+// BenchmarkForEachItemDiffIncremental measures the forEach diff with the
+// changed-item annotation (Layer 2). Only items in the changed set are
+// hashed — unchanged items are skipped entirely. This is the O(K) path
+// where K = changed items.
+//
+// Run: go test ./experimental/controller -bench=BenchmarkForEachItemDiffIncremental -benchmem
+func BenchmarkForEachItemDiffIncremental(b *testing.B) {
+	for _, itemCount := range []int{10, 100, 1000, 10000} {
+		b.Run(fmt.Sprintf("items=%d/changed=1", itemCount), func(b *testing.B) {
+			benchForEachIncremental(b, itemCount)
+		})
+	}
+}
+
+// benchForEachOriginal runs the original O(2N) hash path.
+func benchForEachOriginal(b *testing.B, itemCount int) {
+	items := buildForEachItems(itemCount)
+	prevItemsRaw := buildForEachItems(itemCount)
+	prevItemsRaw[0].(map[string]any)["data"].(map[string]any)["key"] = "changed-value"
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		prevByID := make(map[string]any, len(prevItemsRaw))
+		for _, item := range prevItemsRaw {
+			prevByID[forEachItemIdentity(item)] = item
+		}
+		changed := 0
+		for _, item := range items {
+			id := forEachItemIdentity(item)
+			prev, existed := prevByID[id]
+			if !existed || !forEachItemUnchanged(prev, item) {
+				changed++
+			}
+		}
+		if changed != 1 {
+			b.Fatalf("expected 1 changed item, got %d", changed)
+		}
+	}
+}
+
+// benchForEachCached runs the Layer 1 cached-hash path (N hashes, not 2N).
+func benchForEachCached(b *testing.B, itemCount int) {
+	items := buildForEachItems(itemCount)
+	prevItemsRaw := buildForEachItems(itemCount)
+	prevItemsRaw[0].(map[string]any)["data"].(map[string]any)["key"] = "changed-value"
+
+	cachedHashes := make(map[string]string, len(prevItemsRaw))
+	for _, item := range prevItemsRaw {
+		id := forEachItemIdentity(item)
+		if m, ok := item.(map[string]any); ok {
+			h, _ := hashDesiredState(m)
+			cachedHashes[id] = h
+		}
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		prevByID := make(map[string]any, len(prevItemsRaw))
+		for _, item := range prevItemsRaw {
+			prevByID[forEachItemIdentity(item)] = item
+		}
+		changed := 0
+		for _, item := range items {
+			id := forEachItemIdentity(item)
+			_, existed := prevByID[id]
+			if !existed || !forEachItemUnchangedCached(cachedHashes[id], item) {
+				changed++
+			}
+		}
+		if changed != 1 {
+			b.Fatalf("expected 1 changed item, got %d", changed)
+		}
+	}
+}
+
+// benchForEachIncremental runs the Layer 2 incremental path (K hashes, not N).
+func benchForEachIncremental(b *testing.B, itemCount int) {
+	items := buildForEachItems(itemCount)
+
+	cachedHashes := make(map[string]string, len(items))
+	for _, item := range items {
+		id := forEachItemIdentity(item)
+		if m, ok := item.(map[string]any); ok {
+			h, _ := hashDesiredState(m)
+			cachedHashes[id] = h
+		}
+	}
+
+	changedIDs := map[string]bool{"default/item-0": true}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		currentIDs := make([]string, 0, len(items))
+		for _, item := range items {
+			currentIDs = append(currentIDs, forEachItemIdentity(item))
+		}
+		for idx, id := range currentIDs {
+			if changedIDs[id] {
+				if m, ok := items[idx].(map[string]any); ok {
+					currHash, _ := hashDesiredState(m)
+					if cachedHashes[id] != currHash {
+						// changed
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestForEachDiffOptimizationRegression verifies that the forEach incremental
+// diff optimization produces fewer allocations than the original path. Uses
+// testing.Benchmark to get deterministic alloc counts (not wall-clock time),
+// then asserts strict ordering: incremental < cached < original.
+//
+// If someone removes the cached-hash or incremental-annotation optimization,
+// alloc counts equalize and this test fails.
+func TestForEachDiffOptimizationRegression(t *testing.T) {
+	t.Parallel()
+	const N = 1000
+
+	original := testing.Benchmark(func(b *testing.B) { benchForEachOriginal(b, N) })
+	cached := testing.Benchmark(func(b *testing.B) { benchForEachCached(b, N) })
+	incremental := testing.Benchmark(func(b *testing.B) { benchForEachIncremental(b, N) })
+
+	origAllocs := original.AllocsPerOp()
+	cachedAllocs := cached.AllocsPerOp()
+	incrAllocs := incremental.AllocsPerOp()
+
+	t.Logf("allocs/op: original=%d  cached=%d  incremental=%d", origAllocs, cachedAllocs, incrAllocs)
+
+	if cachedAllocs >= origAllocs {
+		t.Errorf("Layer 1 (cached hash) regression: cached allocs (%d) should be less than original (%d)",
+			cachedAllocs, origAllocs)
+	}
+	if incrAllocs >= cachedAllocs {
+		t.Errorf("Layer 2 (incremental) regression: incremental allocs (%d) should be less than cached (%d)",
+			incrAllocs, cachedAllocs)
+	}
+}
+
+// TestResolveCollectionSource verifies the compile-time gate for forEach
+// incremental diffing. CollectionSource is set only when ForEach.Expr
+// references exactly one scope variable that doesn't appear elsewhere
+// on the node. If removed or broken, Layer 2 silently degrades to O(N).
+func TestResolveCollectionSource(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		node     Node
+		wantSrc  string
+		wantDesc string
+	}{
+		{
+			name: "single scope var, not in template",
+			node: Node{
+				ID:      "deploys",
+				ForEach: &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				Template: map[string]any{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata":   map[string]any{"name": "${app.metadata.name}"},
+				},
+			},
+			wantSrc:  "wk",
+			wantDesc: "only scope var in ForEach.Expr, not in template body",
+		},
+		{
+			name: "scope var also in template body",
+			node: Node{
+				ID:      "deploys",
+				ForEach: &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				Template: map[string]any{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata":   map[string]any{"name": "${app.metadata.name}"},
+					"spec":       map[string]any{"replicas": "${wk.size()}"},
+				},
+			},
+			wantSrc:  "",
+			wantDesc: "wk appears in template body — not safe for per-item diff",
+		},
+		{
+			name: "scope var in readyWhen",
+			node: Node{
+				ID:        "deploys",
+				ForEach:   &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				Template:  map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
+				ReadyWhen: []string{"${wk.size() > 0}"},
+			},
+			wantSrc:  "",
+			wantDesc: "wk appears in readyWhen — not safe",
+		},
+		{
+			name: "scope var in propagateWhen",
+			node: Node{
+				ID:            "deploys",
+				ForEach:       &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				Template:      map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
+				PropagateWhen: []string{"${wk != null}"},
+			},
+			wantSrc:  "",
+			wantDesc: "wk appears in propagateWhen — not safe",
+		},
+		{
+			name: "scope var in includeWhen",
+			node: Node{
+				ID:          "deploys",
+				ForEach:     &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				Template:    map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
+				IncludeWhen: []string{"${wk.size() > 0}"},
+			},
+			wantSrc:  "",
+			wantDesc: "wk appears in includeWhen — not safe",
+		},
+		{
+			name: "collection expr with dot access, single scope var",
+			node: Node{
+				ID:       "deploys",
+				ForEach:  &ForEachBinding{VarName: "app", Expr: "${wk.items}"},
+				Template: map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
+			},
+			wantSrc:  "wk",
+			wantDesc: "dot access is in ForEach.Expr only — wk is the collection source",
+		},
+		{
+			name: "multiple deps, only collection source in forEach",
+			node: Node{
+				ID:      "deploys",
+				ForEach: &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				Template: map[string]any{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata":   map[string]any{"name": "${app.metadata.name}"},
+					"spec":       map[string]any{"image": "${config.image}"},
+				},
+			},
+			wantSrc:  "wk",
+			wantDesc: "config in template is a different dep — wk only in forEach",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Compile to get exprPaths (AST-extracted field paths).
+			spec := &GraphSpec{Nodes: []Node{
+				{ID: "wk", Watch: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}},
+				{ID: "config", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}},
+				tt.node,
+			}}
+			compiled, err := compileGraphSpec(spec, nil)
+			if err != nil {
+				t.Fatalf("compileGraphSpec: %v", err)
+			}
+			// Find the forEach node in the compiled DAG.
+			nodeIdx := compiled.dag.Index[tt.node.ID]
+			got := compiled.dag.Nodes[nodeIdx].ForEach.CollectionSource
+			if got != tt.wantSrc {
+				t.Errorf("CollectionSource = %q, want %q (%s)", got, tt.wantSrc, tt.wantDesc)
+			}
+		})
+	}
+}

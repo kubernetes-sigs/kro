@@ -1450,6 +1450,7 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 	}
 	eval.forEachNewScope = map[string]map[string]any{}
 	eval.forEachNewKeys = map[string]map[string][]string{}
+	eval.forEachNewHashes = map[string]map[string]string{}
 	eval.forEachNewItems = map[string][]any{}
 
 	graph := &unstructured.Unstructured{Object: map[string]any{
@@ -1532,6 +1533,7 @@ func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
 	}
 	eval.forEachNewScope = map[string]map[string]any{}
 	eval.forEachNewKeys = map[string]map[string][]string{}
+	eval.forEachNewHashes = map[string]map[string]string{}
 	eval.forEachNewItems = map[string][]any{}
 
 	graph := &unstructured.Unstructured{Object: map[string]any{
@@ -1566,6 +1568,7 @@ func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
 	eval2.forEachPrevKeys = map[string]map[string][]string{"results": {"alpha": {}}}
 	eval2.forEachNewScope = map[string]map[string]any{}
 	eval2.forEachNewKeys = map[string]map[string][]string{}
+	eval2.forEachNewHashes = map[string]map[string]string{}
 	eval2.forEachNewItems = map[string][]any{}
 
 	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval2, nil, false)

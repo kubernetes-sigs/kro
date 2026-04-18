@@ -49,10 +49,12 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 		nodeReady:           workerReady,
 		forEachNewScope:     map[string]map[string]any{},
 		forEachNewKeys:      map[string]map[string][]string{},
+		forEachNewHashes:    map[string]map[string]string{},
 		forEachNewItems:     map[string][]any{},
 		forEachPrevItems:    map[string][]any{},
 		forEachPrevScope:    map[string]map[string]any{},
 		forEachPrevKeys:     map[string]map[string][]string{},
+		forEachPrevHashes:   map[string]map[string]string{},
 	}
 
 	// Copy forEach previous state from the shared instance for this node.
@@ -75,6 +77,13 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 				copied[k] = v
 			}
 			worker.forEachPrevKeys[node.ID] = copied
+		}
+		if itemHashes, ok := state.forEachItemHashes[node.ID]; ok {
+			copied := make(map[string]string, len(itemHashes))
+			for k, v := range itemHashes {
+				copied[k] = v
+			}
+			worker.forEachPrevHashes[node.ID] = copied
 		}
 	}
 
@@ -144,6 +153,10 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	sort.Strings(currentOrder)
 
 	// Build previous identity → item map from the worker's snapshot.
+	// When cached hashes are available (Layer 1), the previous identity
+	// map is still needed for items that changed — hashDesiredState(prevItem)
+	// is replaced by the cached hash lookup, but new/removed item detection
+	// still needs the identity set.
 	cacheKey := node.ID + "/" + varName
 	prevItems := make(map[string]any)
 	if prev, ok := eval.forEachPrevItems[cacheKey]; ok {
@@ -162,10 +175,15 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	if prevItemKeys == nil {
 		prevItemKeys = map[string][]string{}
 	}
+	prevItemHashes := eval.forEachPrevHashes[node.ID]
+	if prevItemHashes == nil {
+		prevItemHashes = map[string]string{}
+	}
 
 	// Prepare output maps for this node.
 	newItemScope := make(map[string]any)
 	newItemKeys := make(map[string][]string)
+	newItemHashes := make(map[string]string, len(currentItems))
 
 	// Diff: identify changed, unchanged, and removed items.
 	var allApplied []any
@@ -197,6 +215,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				allApplied = append(allApplied, prevScope)
 				newItemScope[id] = prevScope
 				newItemKeys[id] = prevItemKeys[id]
+				newItemHashes[id] = prevItemHashes[id] // carry forward hash
 				// Re-stamp __updated: carried-forward items retain their
 				// generation label from when they were last applied. Compare
 				// against effectiveGeneration to determine if this item is
@@ -214,10 +233,48 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		}
 
 		item := currentItems[id]
-		prevItem, existed := prevItems[id]
+		_, existed := prevItems[id]
+
+		// Incremental skip (Layer 2): when forEachChangedItems is set
+		// and this item is NOT in the changed set, carry forward without
+		// any hash computation. The coordinator proved that only specific
+		// collection items changed and this isn't one of them.
+		if eval.forEachChangedItems != nil && !eval.forEachChangedItems[id] && existed {
+			if prevScope, ok := prevItemScope[id]; ok {
+				if prevKeys, ok := prevItemKeys[id]; ok {
+					keys = append(keys, prevKeys...)
+				}
+				allApplied = append(allApplied, prevScope)
+				newItemScope[id] = prevScope
+				newItemKeys[id] = prevItemKeys[id]
+				newItemHashes[id] = prevItemHashes[id] // carry forward hash
+				logger.V(2).Info("forEach item not in changed set, skipping", "node", node.ID, "item", id)
+				if m, ok := prevScope.(map[string]any); ok {
+					m["__updated"] = isForEachItemUpdated(m, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration)
+				}
+				if hasPerItemGate {
+					stampSingleItemReady(eval, node.ID, prevScope, node.ReadyWhen)
+				}
+				continue
+			}
+			// No previous scope — fall through to evaluate.
+		}
 
 		// Skip unchanged items: retain previous applied state.
-		if existed && forEachItemUnchanged(prevItem, item) {
+		// Layer 1: use cached hash for prevItem when available, avoiding
+		// hashDesiredState(prevItem). Still hash current item to compare.
+		// Falls back to original forEachItemUnchanged when no cached hash.
+		itemUnchanged := false
+		if existed {
+			cachedHash := prevItemHashes[id]
+			if cachedHash != "" {
+				itemUnchanged = forEachItemUnchangedCached(cachedHash, item)
+			} else {
+				// No cached hash — fall back to hashing both items.
+				itemUnchanged = forEachItemUnchanged(prevItems[id], item)
+			}
+		}
+		if itemUnchanged {
 			if prevKeys, ok := prevItemKeys[id]; ok {
 				keys = append(keys, prevKeys...)
 			}
@@ -226,6 +283,16 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				// Carry forward to new state.
 				newItemScope[id] = prevScope
 				newItemKeys[id] = prevItemKeys[id]
+				// Cache the item's hash. If we had a cached hash, carry it
+				// forward. Otherwise compute it now so future reconciles
+				// have it (bootstrapping the cache on first unchanged hit).
+				if h := prevItemHashes[id]; h != "" {
+					newItemHashes[id] = h
+				} else if currMap, ok := item.(map[string]any); ok {
+					if h, err := hashDesiredState(currMap); err == nil {
+						newItemHashes[id] = h
+					}
+				}
 				logger.V(2).Info("forEach item unchanged, skipping", "node", node.ID, "item", id)
 				// Re-stamp __updated from generation label. Within the
 				// same generation, the label matches → true. Across a
@@ -266,6 +333,12 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			evalMap["__updated"] = true
 			allApplied = append(allApplied, evalMap)
 			newItemScope[id] = evalMap
+			// Cache content hash for the collection item.
+			if currMap, ok := item.(map[string]any); ok {
+				if h, err := hashDesiredState(currMap); err == nil {
+					newItemHashes[id] = h
+				}
+			}
 			// No keys — definition nodes have no managed resources.
 			continue
 		}
@@ -338,6 +411,16 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		newItemScope[id] = applied.Object
 		newItemKeys[id] = itemKeys
 
+		// Cache the content hash of the current collection item (not the
+		// applied object). This is the hash used for unchanged detection
+		// on the next reconcile — it reflects the collection item, not
+		// the template output.
+		if currMap, ok := item.(map[string]any); ok {
+			if h, err := hashDesiredState(currMap); err == nil {
+				newItemHashes[id] = h
+			}
+		}
+
 		// Inline readyWhen stamp: required when per-item
 		// propagateWhen is active so the gate expression sees
 		// __ready on items processed earlier in this cycle.
@@ -349,6 +432,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	// Record updated state for coordinator to merge back.
 	eval.forEachNewScope[node.ID] = newItemScope
 	eval.forEachNewKeys[node.ID] = newItemKeys
+	eval.forEachNewHashes[node.ID] = newItemHashes
 
 	// Record updated collection for next reconcile's diff.
 	eval.forEachNewItems[cacheKey] = items
@@ -523,6 +607,24 @@ func forEachItemUnchanged(prev, current any) bool {
 		return prevHash == currHash
 	}
 	return fmt.Sprintf("%v", prev) == fmt.Sprintf("%v", current)
+}
+
+// forEachItemUnchangedCached returns true if a collection item is unchanged
+// from the previous reconcile, using a cached hash for the previous item.
+// Layer 1 optimization: eliminates one of the two hashDesiredState calls per
+// unchanged item. cachedPrevHash must be non-empty (caller checks).
+func forEachItemUnchangedCached(cachedPrevHash string, current any) bool {
+	currMap, currOk := current.(map[string]any)
+	if !currOk {
+		// Scalar item — reaching here with a cached hash means the
+		// previous identity matched (identity IS content for scalars).
+		return true
+	}
+	currHash, err := hashDesiredState(currMap)
+	if err != nil {
+		return false // fail-safe: treat as changed
+	}
+	return cachedPrevHash == currHash
 }
 
 // highestPriorityChildError returns the highest-priority error from a list

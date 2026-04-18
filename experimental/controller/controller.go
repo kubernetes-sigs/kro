@@ -127,6 +127,7 @@ type nodeResult struct {
 	// coordinator to merge back into the instance state.
 	forEachUpdates map[string]map[string][]string // nodeID → itemID → keys
 	forEachScopes  map[string]map[string]any      // nodeID → itemID → scope
+	forEachHashes  map[string]map[string]string   // nodeID → itemID → content hash
 	forEachItems   map[string][]any               // cache key → collection items
 	// Watch cache update — returned by Watch workers for the
 	// coordinator to merge back into the instance state.
@@ -198,6 +199,53 @@ func (w *walkState) carryForwardKeys(nodeID string) {
 	if prevKeys, ok := w.state.previousKeys[nodeID]; ok {
 		w.appliedKeys = append(w.appliedKeys, prevKeys...)
 	}
+}
+
+// resolveForEachChangedItems determines whether a forEach dispatch can use
+// the incremental O(K) path. Returns the set of changed item identities
+// when conditions are met, nil otherwise (full O(N) rehash).
+//
+// Conditions for incremental diff:
+//  1. CollectionSource is set (compile-time: single scope var, not in template)
+//  2. Not drift-triggered or directly triggered (watch event on forEach itself)
+//  3. CollectionSource has CollectionChanges (incremental Watch path)
+//  4. Every non-CollectionSource dependency was skipped (output unchanged)
+func (w *walkState) resolveForEachChangedItems(node *Node) map[string]bool {
+	src := node.ForEach.CollectionSource
+
+	// Direct trigger (watch event) or drift → full rehash.
+	if w.driftTriggered[node.ID] || w.triggered[node.ID] {
+		return nil
+	}
+
+	// CollectionChanges are only available for the incremental Watch path.
+	changes, hasChanges := w.collectionChanges[src]
+	if !hasChanges || len(changes) == 0 {
+		return nil
+	}
+
+	// Every non-src dependency must have been skipped (outputsReady).
+	// If any was dispatched, its output might have changed and every
+	// item needs re-evaluation.
+	for depID := range node.Dependencies {
+		if depID == src {
+			continue
+		}
+		if !w.outputsReady[depID] {
+			return nil
+		}
+	}
+
+	// Translate CollectionChanges to forEach item identities.
+	changedIDs := make(map[string]bool, len(changes))
+	for _, change := range changes {
+		if change.Namespace != "" {
+			changedIDs[change.Namespace+"/"+change.Name] = true
+		} else {
+			changedIDs[change.Name] = true
+		}
+	}
+	return changedIDs
 }
 
 func (w *walkState) populateDepsMap(node *Node) {
@@ -526,6 +574,16 @@ func (w *walkState) tryDispatch(idx int) {
 	// invariant across reconciles within a revision.
 	resolvedNodeType := node.Type()
 
+	// forEach incremental diff: when a forEach node is triggered
+	// exclusively by collection-item changes from its collection source,
+	// annotate the dispatch with the changed item identities. The worker
+	// skips hash computation for items not in this set — O(K) instead of
+	// O(N). Falls back to full rehash (nil annotation) when any other
+	// dependency changed or conditions aren't met.
+	if node.ForEach != nil && node.ForEach.CollectionSource != "" {
+		workerEval.forEachChangedItems = w.resolveForEachChangedItems(node)
+	}
+
 	// Dispatch to worker goroutine.
 	w.dispatched[idx] = true
 	isDrift := w.driftTriggered[node.ID]
@@ -573,6 +631,7 @@ func (w *walkState) tryDispatch(idx int) {
 			evalDuration:          evalDuration,
 			forEachUpdates:        we.forEachNewKeys,
 			forEachScopes:         we.forEachNewScope,
+			forEachHashes:         we.forEachNewHashes,
 			forEachItems:          we.forEachNewItems,
 			collectionCacheUpdate: we.collectionCacheUpdate(),
 			collectionDidFullList: we.collectionDidFullList,
@@ -1025,6 +1084,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 		for nodeID, itemKeys := range res.forEachUpdates {
 			state.forEachItemKeys[nodeID] = itemKeys
+		}
+		for nodeID, itemHashes := range res.forEachHashes {
+			state.forEachItemHashes[nodeID] = itemHashes
 		}
 
 		// Merge Watch cache updates into the shared instance state.

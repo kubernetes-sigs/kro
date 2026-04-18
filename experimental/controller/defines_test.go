@@ -257,14 +257,16 @@ func TestDefinesForEachReconcile(t *testing.T) {
 		require.NoError(t, err)
 
 		eval := &evaluator{
-			compiled:         compiled,
-			scope:            map[string]any{},
-			forEachNewScope:  map[string]map[string]any{},
-			forEachNewKeys:   map[string]map[string][]string{},
-			forEachNewItems:  map[string][]any{},
-			forEachPrevItems: map[string][]any{},
-			forEachPrevScope: map[string]map[string]any{},
-			forEachPrevKeys:  map[string]map[string][]string{},
+			compiled:          compiled,
+			scope:             map[string]any{},
+			forEachNewScope:   map[string]map[string]any{},
+			forEachNewKeys:    map[string]map[string][]string{},
+			forEachNewHashes:  map[string]map[string]string{},
+			forEachNewItems:   map[string][]any{},
+			forEachPrevItems:  map[string][]any{},
+			forEachPrevScope:  map[string]map[string]any{},
+			forEachPrevKeys:   map[string]map[string][]string{},
+			forEachPrevHashes: map[string]map[string]string{},
 		}
 
 		graph := &unstructured.Unstructured{Object: map[string]any{
@@ -303,14 +305,16 @@ func TestDefinesForEachReconcile(t *testing.T) {
 		require.NoError(t, err)
 
 		eval := &evaluator{
-			compiled:         compiled,
-			scope:            map[string]any{},
-			forEachNewScope:  map[string]map[string]any{},
-			forEachNewKeys:   map[string]map[string][]string{},
-			forEachNewItems:  map[string][]any{},
-			forEachPrevItems: map[string][]any{},
-			forEachPrevScope: map[string]map[string]any{},
-			forEachPrevKeys:  map[string]map[string][]string{},
+			compiled:          compiled,
+			scope:             map[string]any{},
+			forEachNewScope:   map[string]map[string]any{},
+			forEachNewKeys:    map[string]map[string][]string{},
+			forEachNewHashes:  map[string]map[string]string{},
+			forEachNewItems:   map[string][]any{},
+			forEachPrevItems:  map[string][]any{},
+			forEachPrevScope:  map[string]map[string]any{},
+			forEachPrevKeys:   map[string]map[string][]string{},
+			forEachPrevHashes: map[string]map[string]string{},
 		}
 
 		graph := &unstructured.Unstructured{Object: map[string]any{

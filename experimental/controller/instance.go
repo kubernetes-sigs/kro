@@ -31,8 +31,9 @@ type instanceState struct {
 
 	// Per-node forEach item state. Outer key is node ID, inner key is item identity.
 	// Structural boundary prevents prefix collisions between node IDs.
-	forEachItemScope map[string]map[string]any      // nodeID → itemID → scope data
-	forEachItemKeys  map[string]map[string][]string // nodeID → itemID → applied keys
+	forEachItemScope  map[string]map[string]any      // nodeID → itemID → scope data
+	forEachItemKeys   map[string]map[string][]string // nodeID → itemID → applied keys
+	forEachItemHashes map[string]map[string]string   // nodeID → itemID → content hash
 
 	// Previous applied key set — used to detect intra-revision prune need.
 	// When the key set changes between reconciles (forEach scale-down,
@@ -101,6 +102,7 @@ func newInstanceState(compiled *compiledGraph) *instanceState {
 		forEachItems:       map[string][]any{},
 		forEachItemScope:   map[string]map[string]any{},
 		forEachItemKeys:    map[string]map[string][]string{},
+		forEachItemHashes:  map[string]map[string]string{},
 		driftTimers:        make(map[string]time.Time),
 		collectionCache:    make(map[string][]any),
 		collectionDirty:    make(map[string]bool),

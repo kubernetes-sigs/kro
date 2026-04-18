@@ -41,12 +41,21 @@ type evaluator struct {
 	// forEach worker, and read by reconcileForEach. Workers write to these
 	// maps (they're private to the worker's evaluator copy), and the results
 	// are returned to the coordinator for merging into the shared cache.
-	forEachPrevItems map[string][]any               // cache key → previous collection items
-	forEachPrevScope map[string]map[string]any      // nodeID → itemID → previous scope data
-	forEachPrevKeys  map[string]map[string][]string // nodeID → itemID → previous applied keys
-	forEachNewItems  map[string][]any               // cache key → updated collection items (output)
-	forEachNewScope  map[string]map[string]any      // nodeID → itemID → updated scope data (output)
-	forEachNewKeys   map[string]map[string][]string // nodeID → itemID → updated keys (output)
+	forEachPrevItems  map[string][]any               // cache key → previous collection items
+	forEachPrevScope  map[string]map[string]any      // nodeID → itemID → previous scope data
+	forEachPrevKeys   map[string]map[string][]string // nodeID → itemID → previous applied keys
+	forEachPrevHashes map[string]map[string]string   // nodeID → itemID → previous content hash
+	forEachNewItems   map[string][]any               // cache key → updated collection items (output)
+	forEachNewScope   map[string]map[string]any      // nodeID → itemID → updated scope data (output)
+	forEachNewKeys    map[string]map[string][]string // nodeID → itemID → updated keys (output)
+	forEachNewHashes  map[string]map[string]string   // nodeID → itemID → updated content hash (output)
+
+	// forEachChangedItems is set by the coordinator when a forEach dispatch
+	// is triggered exclusively by collection-item changes with stable
+	// identities. Contains the item identities (namespace/name) that changed.
+	// nil means full rehash — the coordinator absorbs ambiguity; the worker
+	// never hedges.
+	forEachChangedItems map[string]bool
 
 	// Watch incremental cache state — populated by the coordinator
 	// before dispatching a Watch worker (cached list + collection

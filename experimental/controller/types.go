@@ -111,6 +111,21 @@ func NodeTypeFromLabelValue(s string) (NodeType, bool) {
 type ForEachBinding struct {
 	VarName string // CEL scope variable name
 	Expr    string // CEL expression yielding the collection
+
+	// CollectionSource is the scope variable ID that the collection
+	// expression references. Set by BuildDAG when the expression
+	// references exactly one scope variable AND that variable is not
+	// referenced anywhere else on the node (template body, readyWhen,
+	// propagateWhen, includeWhen). Empty means the forEach is not
+	// eligible for incremental item diffing — the coordinator falls
+	// back to O(N) rehash.
+	//
+	// The invariant: when CollectionSource is set, changes exclusively
+	// to that node via CollectionChange are provably safe to handle
+	// per-item. Template expressions reference items only through the
+	// iteration variable (per-item scoped), never the collection source
+	// directly (collection-wide).
+	CollectionSource string
 }
 
 // Node is a parsed Graph node entry — a user's declaration of intent about

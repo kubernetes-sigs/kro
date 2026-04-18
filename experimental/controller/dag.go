@@ -71,6 +71,9 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 
 	for i, node := range nodes {
 		node.Dependencies, node.DepPaths, node.SelfPaths, node.ReadinessDeps = extractReferencedPathsFromNode(node, exprPaths)
+		if node.ForEach != nil && exprPaths != nil {
+			node.ForEach.CollectionSource = resolveCollectionSource(node, exprPaths)
+		}
 		dag.Nodes[i] = node
 		dag.Index[node.ID] = i
 		dag.NodeTypes[node.ID] = node.Type()
@@ -256,6 +259,84 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 	}
 
 	return dag, nil
+}
+
+// resolveCollectionSource determines whether a forEach node's collection
+// expression references exactly one scope variable that is NOT referenced
+// anywhere else on the node (template body, readyWhen, propagateWhen,
+// includeWhen). When this holds, changes to the collection source via
+// CollectionChange are safe to handle per-item — the template only
+// references items through the iteration variable, never the source directly.
+//
+// Returns the scope variable ID, or empty string if not optimizable.
+func resolveCollectionSource(node Node, exprPaths map[string]map[string][]FieldPath) string {
+	// Step 1: Extract scope variables referenced in ForEach.Expr.
+	forEachVars := extractScopeVars(node.ForEach.Expr, node.ID, exprPaths)
+	if len(forEachVars) != 1 {
+		return "" // multiple or zero scope vars — not optimizable
+	}
+	var candidate string
+	for v := range forEachVars {
+		candidate = v
+	}
+
+	// Step 2: Check if the candidate appears in any other expression on
+	// the node — template body, includeWhen, readyWhen, propagateWhen,
+	// TemplateExpr. If it does, a collection change affects every item's
+	// rendered output, not just the changed item.
+	var otherStrs []string
+	for _, body := range []map[string]any{node.Template, node.Patch, node.Ref, node.Watch, node.Def} {
+		if body != nil {
+			collectStrings(body, &otherStrs)
+		}
+	}
+	if node.TemplateExpr != "" {
+		otherStrs = append(otherStrs, node.TemplateExpr)
+	}
+	otherStrs = append(otherStrs, node.IncludeWhen...)
+	otherStrs = append(otherStrs, node.ReadyWhen...)
+	otherStrs = append(otherStrs, node.PropagateWhen...)
+
+	for _, s := range otherStrs {
+		vars := extractScopeVars(s, node.ID, exprPaths)
+		if vars[candidate] {
+			return "" // collection source used in template — not safe
+		}
+	}
+
+	return candidate
+}
+
+// extractScopeVars returns the set of scope variable IDs referenced in a
+// string that may contain ${...} CEL expressions. Self-references (nodeID)
+// are excluded.
+func extractScopeVars(s string, nodeID string, exprPaths map[string]map[string][]FieldPath) map[string]bool {
+	vars := map[string]bool{}
+	pos := 0
+	for {
+		dollars, expr, start, _ := findExpr(s, pos)
+		if start < 0 {
+			break
+		}
+		pos = start + len(dollars) + len(expr) + 2
+		if len(dollars) != 1 {
+			continue // $${...} deferred
+		}
+		if paths, ok := exprPaths[expr]; ok {
+			for scopeVar := range paths {
+				if scopeVar != nodeID {
+					vars[scopeVar] = true
+				}
+			}
+		} else {
+			// Fallback: string-based extraction
+			id := extractFirstIdentifier(expr)
+			if id != "" && id != nodeID {
+				vars[id] = true
+			}
+		}
+	}
+	return vars
 }
 
 // NodeState tracks the reconcile-time state of a single node.

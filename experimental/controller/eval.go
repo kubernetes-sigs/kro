@@ -153,6 +153,56 @@ func (e *evaluator) markReady(nodeID string, ready bool) {
 	}
 }
 
+// markUpdated injects the __updated flag into a node's scope data. This is
+// read by the .updated() CEL member function. Per 001-graph.md § CEL Functions:
+// ".updated() — true when the node is on the latest graph generation."
+//
+// Same safety model as markReady: only mutated in worker-private snapshots
+// or coordinator-serial code.
+func (e *evaluator) markUpdated(nodeID string, updated bool) {
+	if m, ok := e.scope[nodeID].(map[string]any); ok {
+		m["__updated"] = updated
+	}
+}
+
+// isForEachItemUpdated checks whether a forEach child resource was applied
+// with the current graph generation by reading its generation label.
+// Constructs the exact forEach child generation label key from the resource's
+// identity and performs a direct lookup — no scanning.
+//
+// Returns false when the label is absent — missing labels mean unknown
+// provenance, and the safe direction is "needs update" (re-apply is
+// idempotent and self-healing). Per 004-graph-reconciliation.md § Propagation
+// Control: returning true on unknown provenance would inflate the "current"
+// count in propagateWhen filters, permitting faster rollout than intended.
+//
+// This function is forEach-specific: it constructs a forEachChild label key.
+// Scalar nodes determine updated state from control flow (just-applied = true)
+// and never call this function.
+func isForEachItemUpdated(item map[string]any, parentID, graphName, graphNS string, effectiveGeneration int64) bool {
+	md, _ := item["metadata"].(map[string]any)
+	if md == nil {
+		return false
+	}
+	lbls, _ := md["labels"].(map[string]any)
+	if lbls == nil {
+		return false
+	}
+
+	name, _ := md["name"].(string)
+	namespace, _ := md["namespace"].(string)
+	gvk := gvkFromMap(item)
+	kind := gvk.Kind
+	group := gvk.Group
+
+	labelKey := forEachChildGenerationLabelKey(parentID, name, namespace, kind, group, graphName, graphNS)
+	genVal, _ := lbls[labelKey].(string)
+	if genVal == "" {
+		return false
+	}
+	return genVal == fmt.Sprintf("%d", effectiveGeneration)
+}
+
 // evalReadiness evaluates readyWhen conditions and stamps __ready in scope.
 // Returns ErrWaitingForReadiness if any condition is false or data-pending.
 // Returns ErrReadyWhenFailed wrapping the underlying error if the expression

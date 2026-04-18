@@ -314,6 +314,7 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 		krocel.WithCustomDeclarations(celPluralFunction()),
 		krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
 		krocel.WithCustomDeclarations(celReadyFunction()),
+		krocel.WithCustomDeclarations(celUpdatedFunction()),
 		krocel.WithCustomDeclarations(celDependenciesFunction()),
 		// __kroNodeReady carries per-Watch readyWhen verdicts, looked up
 		// by the AST rewrite of `<wk_id>.ready()` (see readyrewrite.go).
@@ -593,6 +594,65 @@ func celSimpleSchemaFunction() []cel.EnvOption {
 				[]*cel.Type{cel.DynType, cel.DynType},
 				cel.DynType,
 				cel.BinaryBinding(impl),
+			),
+		),
+	}
+}
+
+// celUpdatedFunction returns CEL env options for the .updated() member function.
+//
+// .updated() returns whether a node's resource is on the latest graph
+// generation. Per 001-graph.md § CEL Functions: ".updated() — true when the
+// node is on the latest graph generation." Per 004-graph-reconciliation.md
+// § Propagation Control: used in propagateWhen for forEach rollout gating.
+//
+// Three paths determine __updated:
+//  1. Managed resources just applied → true (stamped by control flow).
+//  2. Non-managed nodes (Watch, Ref, Def) → true (vacuously — external
+//     observations have no graph generation to update).
+//  3. ForEach items not applied this pass → determined by comparing the
+//     resource's generation label against effectiveGeneration.
+//
+// For collections (forEach parents), .updated() returns true when ALL items
+// have __updated == true — the collection's updated state is a function of
+// its children.
+func celUpdatedFunction() []cel.EnvOption {
+	impl := func(val ref.Val) ref.Val {
+		native, err := conversion.GoNativeType(val)
+		if err != nil {
+			return types.Bool(false)
+		}
+		switch obj := native.(type) {
+		case map[string]any:
+			// Scalar node — read __updated directly.
+			updated, _ := obj["__updated"].(bool)
+			return types.Bool(updated)
+		case []any:
+			// Collection node — all items must be updated.
+			if len(obj) == 0 {
+				return types.Bool(true) // empty collection is vacuously updated
+			}
+			for _, item := range obj {
+				m, ok := item.(map[string]any)
+				if !ok {
+					return types.Bool(false)
+				}
+				updated, _ := m["__updated"].(bool)
+				if !updated {
+					return types.Bool(false)
+				}
+			}
+			return types.Bool(true)
+		default:
+			return types.Bool(false)
+		}
+	}
+	return []cel.EnvOption{
+		cel.Function("updated",
+			cel.MemberOverload("dyn_updated",
+				[]*cel.Type{cel.DynType},
+				cel.BoolType,
+				cel.UnaryBinding(impl),
 			),
 		),
 	}

@@ -199,6 +199,15 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 					allApplied = append(allApplied, prevScope)
 					newItemScope[id] = prevScope
 					newItemKeys[id] = prevItemKeys[id]
+					// Re-stamp __updated: carried-forward items retain their
+					// generation label from when they were last applied. Compare
+					// against effectiveGeneration to determine if this item is
+					// on the latest generation. Per 004-graph-reconciliation.md
+					// § Propagation Control: gated items on an old generation
+					// show updated()=false ("Pending" or "Stuck" state).
+					if m, ok := prevScope.(map[string]any); ok {
+						m["__updated"] = isForEachItemUpdated(m, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration)
+					}
 				}
 				// If no previous scope (new item, never created), it is
 				// absent from the collection — downstream sees a growing
@@ -220,6 +229,13 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 					newItemScope[id] = prevScope
 					newItemKeys[id] = prevItemKeys[id]
 					logger.V(2).Info("forEach item unchanged, skipping", "node", node.ID, "item", id)
+					// Re-stamp __updated from generation label. Within the
+					// same generation, the label matches → true. Across a
+					// generation boundary (recompilation that preserved
+					// forEach state), the label won't match → false.
+					if m, ok := prevScope.(map[string]any); ok {
+						m["__updated"] = isForEachItemUpdated(m, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration)
+					}
 					// Inline readyWhen stamp: carried-forward items preserve
 					// their previous __ready. Re-stamp so the gate expression
 					// sees current readiness if readyWhen depends on cross-node
@@ -248,6 +264,8 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 					logger.V(1).Info("forEach definition item error", "node", node.ID, "item", id, "error", err)
 					continue
 				}
+				// Definitions are always re-evaluated — vacuously updated.
+				evalMap["__updated"] = true
 				allApplied = append(allApplied, evalMap)
 				newItemScope[id] = evalMap
 				// No keys — definition nodes have no managed resources.
@@ -307,6 +325,8 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				continue
 			}
 			allApplied = append(allApplied, applied.Object)
+			// Just applied with effectiveGeneration — child is on the latest generation.
+			applied.Object["__updated"] = true
 			var itemKeys []string
 			if childNodeType == NodeTypePatch {
 				hasStatus := evalMap["status"] != nil

@@ -76,6 +76,8 @@ func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node Node, ev
 		return fmt.Errorf("definition %s: %w", node.ID, err)
 	}
 	eval.scope[node.ID] = result
+	// Definitions are always re-evaluated — vacuously updated.
+	eval.markUpdated(node.ID, true)
 	log.FromContext(ctx).V(1).Info("evaluated definition node", "node", node.ID, "keys", len(result))
 	return nil
 }
@@ -114,6 +116,9 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 	}
 
 	eval.scope[node.ID] = normalizeTypes(obj.Object)
+	// Refs are external observations — vacuously updated. They have no
+	// graph-managed desired state to be "behind" on.
+	eval.markUpdated(node.ID, true)
 	logger.V(1).Info("resolved ref", "node", node.ID, "gvk", gvk, "name", obj.GetName())
 
 	return nil
@@ -294,6 +299,9 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 			for _, item := range items {
 				if m, ok := item.(map[string]any); ok {
 					m["__ready"] = false
+					// Watch items are external observations — vacuously
+					// updated. They have no graph-managed desired state.
+					m["__updated"] = true
 				}
 			}
 			if eval.nodeReady != nil {
@@ -305,6 +313,9 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 	for _, item := range items {
 		if m, ok := item.(map[string]any); ok {
 			m["__ready"] = ready
+			// Watch items are external observations — vacuously updated.
+			// They have no graph-managed desired state to be "behind" on.
+			m["__updated"] = true
 		}
 	}
 	if eval.nodeReady != nil {
@@ -334,6 +345,8 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 	}
 
 	eval.scope[node.ID] = normalizeTypes(applied.Object)
+	// Just applied with effectiveGeneration — resource is on the latest generation.
+	eval.markUpdated(node.ID, true)
 	// Side effects (apply, delete, create) log at V(0) so operators see
 	// which resources are being managed at default verbosity.
 	logger.Info("applied resource", "node", node.ID, "nodeType", nodeType,

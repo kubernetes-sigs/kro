@@ -1257,3 +1257,279 @@ func TestForEach_SliceScopeReadyWhenWorks(t *testing.T) {
 		assert.Equal(t, true, m["__ready"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// .updated() CEL function tests
+//
+// Per 001-graph.md § CEL Functions: ".updated() — true when the node is
+// on the latest graph generation." Per 004-graph-reconciliation.md § Propagation
+// Control: used in propagateWhen for forEach rollout gating.
+// ---------------------------------------------------------------------------
+
+// TestUpdatedFunction_ScalarNode proves that .updated() reads __updated from
+// a scalar scope object (map[string]any).
+func TestUpdatedFunction_ScalarNode(t *testing.T) {
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{ID: "deploy", Template: map[string]any{
+				"apiVersion": "apps/v1", "kind": "Deployment",
+				"metadata": map[string]any{"name": "test"},
+			}},
+			{ID: "check", Def: map[string]any{
+				"result": "${deploy.updated()}",
+			}},
+		},
+	}
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		updated any
+		want    bool
+	}{
+		{"updated=true", true, true},
+		{"updated=false", false, false},
+		{"no __updated field", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deploy := map[string]any{
+				"metadata": map[string]any{"name": "test"},
+			}
+			if tt.updated != nil {
+				deploy["__updated"] = tt.updated
+			}
+			result, err := compiled.eval("deploy.updated()", map[string]any{
+				"deploy": deploy,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, result)
+		})
+	}
+}
+
+// TestUpdatedFunction_Collection proves that .updated() on a collection
+// returns true only when ALL items have __updated == true (the aggregate
+// semantics matching .ready()). Empty collections are vacuously true.
+func TestUpdatedFunction_Collection(t *testing.T) {
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{ID: "deploys", Watch: map[string]any{
+				"apiVersion": "apps/v1", "kind": "Deployment",
+				"selector": map[string]any{},
+			}, nodeType: NodeTypeWatch},
+			{ID: "check", Def: map[string]any{
+				"result": "${deploys.updated()}",
+			}},
+		},
+	}
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		items []any
+		want  bool
+	}{
+		{"empty collection", []any{}, true},
+		{"all updated", []any{
+			map[string]any{"__updated": true, "metadata": map[string]any{"name": "a"}},
+			map[string]any{"__updated": true, "metadata": map[string]any{"name": "b"}},
+		}, true},
+		{"one not updated", []any{
+			map[string]any{"__updated": true, "metadata": map[string]any{"name": "a"}},
+			map[string]any{"__updated": false, "metadata": map[string]any{"name": "b"}},
+		}, false},
+		{"none updated", []any{
+			map[string]any{"__updated": false, "metadata": map[string]any{"name": "a"}},
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := compiled.eval("deploys.updated()", map[string]any{
+				"deploys": tt.items,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, result)
+		})
+	}
+}
+
+// TestUpdatedFunction_Filter proves that .updated() works inside
+// collection filter expressions — the primary propagateWhen pattern from
+// 004-graph-reconciliation.md § Propagation Control.
+func TestUpdatedFunction_Filter(t *testing.T) {
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{ID: "deploys", Watch: map[string]any{
+				"apiVersion": "apps/v1", "kind": "Deployment",
+				"selector": map[string]any{},
+			}, nodeType: NodeTypeWatch},
+			{ID: "check", Def: map[string]any{
+				"count": "${deploys.filter(d, d.updated()).size()}",
+			}},
+		},
+	}
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+
+	items := []any{
+		map[string]any{"__updated": true, "metadata": map[string]any{"name": "a"}},
+		map[string]any{"__updated": false, "metadata": map[string]any{"name": "b"}},
+		map[string]any{"__updated": true, "metadata": map[string]any{"name": "c"}},
+	}
+	result, err := compiled.eval("deploys.filter(d, d.updated()).size()", map[string]any{
+		"deploys": items,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), result)
+}
+
+// TestUpdatedFunction_CombinedWithReady proves the four-state matrix from
+// 004-graph-reconciliation.md § Propagation Control works in CEL:
+//
+//	updated() && ready()  → Current
+//	updated() && !ready() → Updating
+//	!updated() && ready() → Pending
+//	!updated() && !ready()→ Stuck
+func TestUpdatedFunction_CombinedWithReady(t *testing.T) {
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{ID: "items", Watch: map[string]any{
+				"apiVersion": "v1", "kind": "Pod",
+				"selector": map[string]any{},
+			}, nodeType: NodeTypeWatch},
+			{ID: "counts", Def: map[string]any{
+				"current":  "${items.filter(i, i.updated() && i.ready()).size()}",
+				"updating": "${items.filter(i, i.updated() && !i.ready()).size()}",
+				"pending":  "${items.filter(i, !i.updated() && i.ready()).size()}",
+				"stuck":    "${items.filter(i, !i.updated() && !i.ready()).size()}",
+			}},
+		},
+	}
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+
+	items := []any{
+		map[string]any{"__updated": true, "__ready": true, "metadata": map[string]any{"name": "current"}},
+		map[string]any{"__updated": true, "__ready": false, "metadata": map[string]any{"name": "updating"}},
+		map[string]any{"__updated": false, "__ready": true, "metadata": map[string]any{"name": "pending"}},
+		map[string]any{"__updated": false, "__ready": false, "metadata": map[string]any{"name": "stuck"}},
+	}
+	scope := map[string]any{"items": items}
+
+	current, err := compiled.eval("items.filter(i, i.updated() && i.ready()).size()", scope)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), current)
+
+	updating, err := compiled.eval("items.filter(i, i.updated() && !i.ready()).size()", scope)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), updating)
+
+	pending, err := compiled.eval("items.filter(i, !i.updated() && i.ready()).size()", scope)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), pending)
+
+	stuck, err := compiled.eval("items.filter(i, !i.updated() && !i.ready()).size()", scope)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), stuck)
+}
+
+// ---------------------------------------------------------------------------
+// isItemUpdated tests — generation label comparison
+// ---------------------------------------------------------------------------
+
+// TestIsForEachItemUpdated proves the generation label lookup for forEach children.
+func TestIsForEachItemUpdated(t *testing.T) {
+	parentID := "deploys"
+	graphName := "mygraph"
+	graphNS := "default"
+
+	// Build a resource with the forEach child generation label.
+	makeItem := func(name, ns, apiVersion, kind string, gen int64) map[string]any {
+		gvk := gvkFromMap(map[string]any{"apiVersion": apiVersion, "kind": kind})
+		genKey := forEachChildGenerationLabelKey(parentID, name, ns, kind, gvk.Group, graphName, graphNS)
+		return map[string]any{
+			"apiVersion": apiVersion,
+			"kind":       kind,
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": ns,
+				"labels": map[string]any{
+					genKey: fmt.Sprintf("%d", gen),
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name                string
+		item                map[string]any
+		effectiveGeneration int64
+		want                bool
+	}{
+		{
+			name:                "generation matches",
+			item:                makeItem("frontend", "default", "apps/v1", "Deployment", 5),
+			effectiveGeneration: 5,
+			want:                true,
+		},
+		{
+			name:                "generation does not match",
+			item:                makeItem("frontend", "default", "apps/v1", "Deployment", 4),
+			effectiveGeneration: 5,
+			want:                false,
+		},
+		{
+			name:                "no metadata",
+			item:                map[string]any{"kind": "Pod"},
+			effectiveGeneration: 5,
+			want:                false, // unknown provenance → needs update
+		},
+		{
+			name: "no labels",
+			item: map[string]any{
+				"apiVersion": "v1", "kind": "Pod",
+				"metadata": map[string]any{"name": "test"},
+			},
+			effectiveGeneration: 5,
+			want:                false, // no labels → needs update
+		},
+		{
+			name: "no generation label (wrong graph)",
+			item: map[string]any{
+				"apiVersion": "v1", "kind": "Pod",
+				"metadata": map[string]any{
+					"name":      "test",
+					"namespace": "default",
+					"labels":    map[string]any{"unrelated": "label"},
+				},
+			},
+			effectiveGeneration: 5,
+			want:                false, // no kro generation label → needs update
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isForEachItemUpdated(tt.item, parentID, graphName, graphNS, tt.effectiveGeneration)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestMarkUpdated proves that markUpdated stamps __updated on scope entries.
+func TestMarkUpdated(t *testing.T) {
+	eval := &evaluator{
+		scope: map[string]any{
+			"deploy": map[string]any{"metadata": map[string]any{"name": "test"}},
+		},
+	}
+
+	eval.markUpdated("deploy", true)
+	m := eval.scope["deploy"].(map[string]any)
+	assert.Equal(t, true, m["__updated"])
+
+	eval.markUpdated("deploy", false)
+	assert.Equal(t, false, m["__updated"])
+}

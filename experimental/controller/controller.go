@@ -433,7 +433,13 @@ func (w *walkState) tryDispatch(idx int) {
 				}
 				w.plan.States[node.ID] = nodeState
 				w.state.previousPlanStates[node.ID] = nodeState
+				// Mark dependents as propagation-triggered so they
+				// re-evaluate instead of hash-skipping. The scope
+				// data changed (status updated by external controller),
+				// so downstream nodes referencing this output need
+				// to see the new values.
 				for _, depIdx := range w.dag.Dependents[node.ID] {
+					w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
 					w.tryDispatch(depIdx)
 				}
 				return

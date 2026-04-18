@@ -2816,6 +2816,118 @@ func TestDeclarationError_FinalizesTargetMustBeResource(t *testing.T) {
 	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
 }
 
+// TestSelfStateChangePropagates proves that when a template node creates a
+// resource whose status is updated by an external controller (here, the Graph
+// controller compiling a child Graph), the status change propagates to
+// downstream def nodes in the parent Graph.
+//
+// This exercises Path 2 (self-state changed — refreshing scope) in the
+// coordinator's hash-skip logic. The fix ensures propagationTriggered is set
+// on dependents so they re-evaluate instead of being hash-skipped.
+//
+// Setup:
+//   - Parent Graph creates a child Graph via template. The child has cyclic
+//     dependencies → compilation fails → Compiled=False on child status.
+//   - A def node in the parent reads the child's Compiled condition.
+//   - A patch node writes the compilation result to a ConfigMap.
+//   - Assert the ConfigMap reflects the child's Compiled=False status.
+func TestSelfStateChangePropagates(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Parent Graph: creates a child Graph with a cycle, reads its status.
+	parent := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-self-state-propagation",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// Child Graph with cyclic resources — will fail compilation.
+					map[string]any{
+						"id": "child",
+						"template": map[string]any{
+							"apiVersion": "experimental.kro.run/v1alpha1",
+							"kind":       "Graph",
+							"metadata": map[string]any{
+								"name": "child-cyclic",
+							},
+							"spec": map[string]any{
+								"nodes": []any{
+									map[string]any{
+										"id": "a",
+										"template": map[string]any{
+											"apiVersion": "v1",
+											"kind":       "ConfigMap",
+											"metadata":   map[string]any{"name": "cycle-a"},
+											"data":       map[string]any{"dep": "$${b.data.val}"},
+										},
+									},
+									map[string]any{
+										"id": "b",
+										"template": map[string]any{
+											"apiVersion": "v1",
+											"kind":       "ConfigMap",
+											"metadata":   map[string]any{"name": "cycle-b"},
+											"data":       map[string]any{"dep": "$${a.data.val}"},
+										},
+									},
+								},
+							},
+						},
+					},
+					// Def node reads the child's Compiled condition.
+					map[string]any{
+						"id": "check",
+						"def": map[string]any{
+							"failed": `${has(child.status) && has(child.status.conditions) && child.status.conditions.exists(c, c.type == "Compiled" && c.status == "False")}`,
+						},
+					},
+					// Write the result to a ConfigMap so we can assert on it.
+					map[string]any{
+						"id": "result",
+						"propagateWhen": []any{
+							"${check.failed}",
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "propagation-result"},
+							"data": map[string]any{
+								"childCompileFailed": "${string(check.failed)}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, parent))
+
+	// Wait for the result ConfigMap — proves the child's Compiled=False
+	// status propagated through the def node to the template node.
+	result := &unstructured.Unstructured{}
+	result.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 1*time.Second, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			if err := k8sClient.Get(ctx, types.NamespacedName{
+				Name: "propagation-result", Namespace: ns,
+			}, result); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(result.Object, "data")
+			return data["childCompileFailed"] == "true", nil
+		}))
+
+	data, _, _ := unstructured.NestedStringMap(result.Object, "data")
+	assert.Equal(t, "true", data["childCompileFailed"],
+		"child Graph's Compiled=False should propagate through def to template")
+	t.Log("Self-state change propagation proved: child status → def → template")
+}
+
 // TestCompilationValidation is a table-driven test that verifies the
 // controller rejects invalid Graph specs at compile time with the correct
 // Compiled condition reason. Each case submits a Graph with a specific

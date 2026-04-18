@@ -558,7 +558,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	// Buffer a watch for this resource (flushed at done(true)).
 	gvr := gvkToGVR(obj.GroupVersionKind())
 	if watcher != nil {
-		watcher.watchScalar(nodeID, gvr, obj.GetName(), obj.GetNamespace())
+		watcher.watchScalar(nodeID, gvr, obj.GroupVersionKind().Kind, obj.GetName(), obj.GetNamespace())
 	}
 
 	// Content-addressed apply: hash the desired state to detect changes.
@@ -806,7 +806,10 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	// each finalizer node's direct dependencies (other than the target
 	// itself) are deferred — they must remain alive while the finalizer
 	// is running.
-	finalizerDeps := map[string]bool{}
+	// finalizerProtected: resources the finalization flow has claimed — both
+	// the finalizer resources themselves and their dependencies. Prune must
+	// not touch these.
+	finalizerProtected := map[string]bool{}
 	for key := range previousKeys {
 		if currentSet[key] {
 			continue
@@ -826,8 +829,11 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 					continue // skip the target itself
 				}
 				if dk, ok := nodeIDToKey[depID]; ok {
-					finalizerDeps[dk] = true
+					finalizerProtected[dk] = true
 				}
+			}
+			if dk, ok := nodeIDToKey[finNodeID]; ok {
+				finalizerProtected[dk] = true
 			}
 		}
 	}
@@ -849,8 +855,8 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	for _, key := range pruneCandidates {
 		// Defer deletion of resources that are dependencies of in-flight
 		// finalizer nodes — they must remain alive while the finalizer runs.
-		if finalizerDeps[key] {
-			logger.Info("prune deferred: resource is a dependency of an in-flight finalizer",
+		if finalizerProtected[key] {
+			logger.Info("prune deferred: resource is protected by in-flight finalization",
 				"key", key)
 			deferredKeys = append(deferredKeys, key)
 			continue

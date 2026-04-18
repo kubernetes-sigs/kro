@@ -49,6 +49,7 @@ type WatchManager struct {
 	mu        sync.RWMutex
 	watches   map[schema.GroupVersionResource]*gvrWatch
 	owners    map[schema.GroupVersionResource]map[string]struct{}
+	gvrKinds  map[schema.GroupVersionResource]string // GVR → canonical CamelCase Kind (append-only)
 	client    metadata.Interface
 	resync    time.Duration
 	onEvent   func(watchEvent)
@@ -93,6 +94,7 @@ func newWatchManager(client metadata.Interface, resync time.Duration, onEvent fu
 	wm := &WatchManager{
 		watches:      make(map[schema.GroupVersionResource]*gvrWatch),
 		owners:       make(map[schema.GroupVersionResource]map[string]struct{}),
+		gvrKinds:     make(map[schema.GroupVersionResource]string),
 		client:       client,
 		resync:       resync,
 		onEvent:      onEvent,
@@ -104,12 +106,15 @@ func newWatchManager(client metadata.Interface, resync time.Duration, onEvent fu
 	return wm
 }
 
-func (m *WatchManager) ensureWatch(gvr schema.GroupVersionResource, ownerID string) error {
+func (m *WatchManager) ensureWatch(gvr schema.GroupVersionResource, kind string, ownerID string) error {
 	m.mu.Lock()
 	if m.owners[gvr] == nil {
 		m.owners[gvr] = make(map[string]struct{})
 	}
 	m.owners[gvr][ownerID] = struct{}{}
+	if kind != "" {
+		m.gvrKinds[gvr] = kind
+	}
 
 	if _, ok := m.watches[gvr]; ok {
 		m.mu.Unlock()
@@ -198,6 +203,14 @@ func (m *WatchManager) shutdown() {
 	}
 }
 
+// KindFor returns the canonical CamelCase Kind for a GVR, or "" if unknown.
+func (m *WatchManager) KindFor(gvr schema.GroupVersionResource) string {
+	m.mu.RLock()
+	kind := m.gvrKinds[gvr]
+	m.mu.RUnlock()
+	return kind
+}
+
 // deriveAppliedSet scans all active informer caches for resources carrying
 // the specified graph's identity labels. Returns the applied set — all
 // resources this graph has written to the cluster, keyed by resource key.
@@ -211,6 +224,11 @@ func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]
 	watches := make(map[schema.GroupVersionResource]*gvrWatch, len(m.watches))
 	for gvr, w := range m.watches {
 		watches[gvr] = w
+	}
+	// Snapshot gvrKinds for canonical Kind lookup during iteration.
+	gvrKinds := make(map[schema.GroupVersionResource]string, len(m.gvrKinds))
+	for gvr, kind := range m.gvrKinds {
+		gvrKinds[gvr] = kind
 	}
 	m.mu.RUnlock()
 
@@ -234,10 +252,18 @@ func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]
 					continue
 				}
 				// Build resource key from GVR + object metadata.
+				// Prefer the gvrKinds cache for canonical CamelCase Kind.
+				// The cache is populated from compile-time GVK data, which is
+				// always correct. gvrKindFromInformer is the fallback when the
+				// cache hasn't been populated for this GVR (e.g., startup race).
+				kindForGVR := gvrKinds[gvr]
+				if kindForGVR == "" {
+					kindForGVR = gvrKindFromInformer(gvr, item)
+				}
 				gvk := schema.GroupVersionKind{
 					Group:   gvr.Group,
 					Version: gvr.Version,
-					Kind:    gvrKindFromInformer(gvr, item),
+					Kind:    kindForGVR,
 				}
 				nodeType, ok := NodeTypeFromLabelValue(labelValue)
 				if !ok {
@@ -368,6 +394,7 @@ type graphKey = types.NamespacedName
 type watchRequest struct {
 	nodeID    string
 	gvr       schema.GroupVersionResource
+	kind      string
 	name      string
 	namespace string
 	selector  labels.Selector // non-nil for Watch
@@ -466,11 +493,12 @@ func (c *WatchCoordinator) forGraph(graph graphKey) *graphWatcher {
 
 // watchScalar buffers a scalar watch request (specific name).
 // The request is flushed to the coordinator's indexes in done(true).
-func (gw *graphWatcher) watchScalar(nodeID string, gvr schema.GroupVersionResource, name, namespace string) {
+func (gw *graphWatcher) watchScalar(nodeID string, gvr schema.GroupVersionResource, kind string, name, namespace string) {
 	gw.mu.Lock()
 	gw.pending = append(gw.pending, watchRequest{
 		nodeID:    nodeID,
 		gvr:       gvr,
+		kind:      kind,
 		name:      name,
 		namespace: namespace,
 	})
@@ -480,11 +508,12 @@ func (gw *graphWatcher) watchScalar(nodeID string, gvr schema.GroupVersionResour
 // watchCollection buffers a selector-scoped kind-level watch request
 // for a watch: node. The request is flushed to the coordinator's
 // indexes in done(true).
-func (gw *graphWatcher) watchCollection(nodeID string, gvr schema.GroupVersionResource, namespace string, sel labels.Selector) {
+func (gw *graphWatcher) watchCollection(nodeID string, gvr schema.GroupVersionResource, kind string, namespace string, sel labels.Selector) {
 	gw.mu.Lock()
 	gw.pending = append(gw.pending, watchRequest{
 		nodeID:    nodeID,
 		gvr:       gvr,
+		kind:      kind,
 		namespace: namespace,
 		selector:  sel,
 	})
@@ -586,7 +615,7 @@ func (c *WatchCoordinator) doneGraph(graph graphKey, pending []watchRequest) {
 	// The backing array is pinned by these pointers until the next doneGraph
 	// swaps current→previous and reallocates current. This is correct but
 	// means the entire pending array stays live, not individual elements.
-	newGVRs := make(map[schema.GroupVersionResource]bool)
+	newGVRs := make(map[schema.GroupVersionResource]string)
 	for i := range pending {
 		req := &pending[i]
 
@@ -609,7 +638,7 @@ func (c *WatchCoordinator) doneGraph(graph graphKey, pending []watchRequest) {
 				c.addScalarLocked(graph, *req)
 			}
 		}
-		newGVRs[req.gvr] = true
+		newGVRs[req.gvr] = req.kind
 	}
 
 	// Clean stale entries from previous cycle.
@@ -642,8 +671,8 @@ func (c *WatchCoordinator) doneGraph(graph graphKey, pending []watchRequest) {
 	// fallback GET in applySSA. On subsequent
 	// reconciles the informer is already running from this call.
 	ownerID := graphOwnerID(graph)
-	for gvr := range newGVRs {
-		if err := c.watches.ensureWatch(gvr, ownerID); err != nil {
+	for gvr, kind := range newGVRs {
+		if err := c.watches.ensureWatch(gvr, kind, ownerID); err != nil {
 			c.log.Error(err, "failed to ensure watch", "gvr", gvr)
 		}
 	}

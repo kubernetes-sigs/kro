@@ -1516,6 +1516,7 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchMan
 	type hydrateKey struct {
 		graph graphKey
 		gvr   schema.GroupVersionResource
+		kind  string
 	}
 	toHydrate := make(map[hydrateKey]struct{})
 
@@ -1550,7 +1551,7 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchMan
 				continue
 			}
 			gvr := gvkToGVR(gv.WithKind(kind))
-			toHydrate[hydrateKey{graph: graph, gvr: gvr}] = struct{}{}
+			toHydrate[hydrateKey{graph: graph, gvr: gvr, kind: kind}] = struct{}{}
 		}
 	}
 
@@ -1563,15 +1564,15 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchMan
 	var wg sync.WaitGroup
 	for k := range toHydrate {
 		wg.Add(1)
-		go func(graph graphKey, gvr schema.GroupVersionResource) {
+		go func(graph graphKey, gvr schema.GroupVersionResource, kind string) {
 			defer wg.Done()
 			ownerID := graphOwnerID(graph)
-			if err := watchMgr.ensureWatch(gvr, ownerID); err != nil {
+			if err := watchMgr.ensureWatch(gvr, kind, ownerID); err != nil {
 				logger.Error(err, "failed to hydrate watch", "gvr", gvr, "graph", graph.Name)
 			} else {
 				logger.V(1).Info("hydrated watch from revision", "gvr", gvr, "graph", graph.Name)
 			}
-		}(k.graph, k.gvr)
+		}(k.graph, k.gvr, k.kind)
 	}
 	wg.Wait()
 	logger.Info("startup watch hydration complete", "watchCount", len(toHydrate))

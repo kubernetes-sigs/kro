@@ -104,7 +104,7 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 	}
 
 	if watcher != nil {
-		watcher.watchScalar(node.ID, gvkToGVR(gvk), name, namespace)
+		watcher.watchScalar(node.ID, gvkToGVR(gvk), gvk.Kind, name, namespace)
 	}
 
 	obj := &unstructured.Unstructured{}
@@ -184,7 +184,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 	}
 
 	if watcher != nil {
-		watcher.watchCollection(node.ID, gvkToGVR(gvk), watchNamespace, labelSelector)
+		watcher.watchCollection(node.ID, gvkToGVR(gvk), gvk.Kind, watchNamespace, labelSelector)
 	}
 
 	var items []any

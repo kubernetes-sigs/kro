@@ -7,9 +7,9 @@ import (
 	"net"
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -18,7 +18,7 @@ import (
 // Correctness reconciliation — regression tests
 // ---------------------------------------------------------------------------
 
-// TestGVRKindFromInformerFallback_RegressionIrregularPlurals proves that the
+// TestGVRKindFallback_RegressionIrregularPlurals proves that the
 // Kind fallback in gvrKindFromInformer handles irregular plurals correctly.
 // Before the fix, "networkpolicies" would produce "Networkpolicie" (garbage).
 // After the fix, it produces "Networkpolicy" (correct singular, lowercase).
@@ -28,7 +28,7 @@ import (
 // The primary path (PartialObjectMetadata.Kind) always provides the correct
 // CamelCase Kind. This fallback only fires when Kind is empty, which is not
 // expected in practice with metadata informers.
-func TestGVRKindFromInformerFallback_RegressionIrregularPlurals(t *testing.T) {
+func TestGVRKindFallback_RegressionIrregularPlurals(t *testing.T) {
 	tests := []struct {
 		resource string
 		want     string
@@ -52,15 +52,23 @@ func TestGVRKindFromInformerFallback_RegressionIrregularPlurals(t *testing.T) {
 	}
 }
 
-// TestGVRKindFromInformerPrimaryPath proves that when PartialObjectMetadata
-// carries the Kind (the normal case with metadata informers), the exact
-// CamelCase Kind is returned.
-func TestGVRKindFromInformerPrimaryPath(t *testing.T) {
-	accessor := &metav1.PartialObjectMetadata{}
-	accessor.Kind = "NetworkPolicy"
-	gvr := schema.GroupVersionResource{Resource: "networkpolicies"}
-	got := gvrKindFromInformer(gvr, accessor)
-	assert.Equal(t, "NetworkPolicy", got, "primary path should return exact CamelCase Kind")
+// TestWatchManagerKindFor proves that WatchManager.KindFor returns the
+// canonical CamelCase Kind previously registered via ensureWatch's kind
+// parameter, and "" for unknown GVRs.
+func TestWatchManagerKindFor(t *testing.T) {
+	wm := newWatchManager(nil, 0, func(watchEvent) {}, logr.Discard())
+
+	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
+
+	// Before setting: should return "".
+	assert.Equal(t, "", wm.KindFor(gvr), "unknown GVR should return empty string")
+
+	// Set the kind directly.
+	wm.mu.Lock()
+	wm.gvrKinds[gvr] = "ConfigMap"
+	wm.mu.Unlock()
+
+	assert.Equal(t, "ConfigMap", wm.KindFor(gvr), "KindFor should return the registered canonical Kind")
 }
 
 // TestClassifyAPIErrorNetworkErrors_RegressionRetry proves that raw network

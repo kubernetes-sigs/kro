@@ -202,20 +202,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 
 			for ck, change := range dedupedChanges {
 				if change.EventType == WatchEventDelete {
-					// Remove deleted item from cached list.
-					filtered := items[:0]
-					for _, item := range items {
-						if m, ok := item.(map[string]any); ok {
-							md, _ := m["metadata"].(map[string]any)
-							itemName, _ := md["name"].(string)
-							itemNS, _ := md["namespace"].(string)
-							if itemName == ck.name && itemNS == ck.namespace {
-								continue // remove
-							}
-						}
-						filtered = append(filtered, item)
-					}
-					items = filtered
+					items = removeFromCachedList(items, ck.namespace, ck.name)
 					continue
 				}
 
@@ -227,23 +214,23 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 					Namespace: ck.namespace,
 				}, obj); err != nil {
 					if apierrors.IsNotFound(err) {
-						// Resource was deleted between event and reconcile — remove from cache.
-						filtered := items[:0]
-						for _, item := range items {
-							if m, ok := item.(map[string]any); ok {
-								md, _ := m["metadata"].(map[string]any)
-								itemName, _ := md["name"].(string)
-								itemNS, _ := md["namespace"].(string)
-								if itemName == ck.name && itemNS == ck.namespace {
-									continue
-								}
-							}
-							filtered = append(filtered, item)
-						}
-						items = filtered
+						// Resource was deleted between event and reconcile.
+						items = removeFromCachedList(items, ck.namespace, ck.name)
 						continue
 					}
 					return fmt.Errorf("watch %s: getting changed resource %s/%s: %w", node.ID, ck.namespace, ck.name, err)
+				}
+
+				// Re-check selector membership after GET. The watch
+				// informer is broad (no server-side label filter), so
+				// events arrive for resources whose labels changed in
+				// any direction — including resources that were never
+				// in the collection. A resource that doesn't match the
+				// selector must be removed from the cached list (if
+				// present) rather than merged.
+				if !labelSelector.Matches(labels.Set(obj.GetLabels())) {
+					items = removeFromCachedList(items, ck.namespace, ck.name)
+					continue
 				}
 
 				normalized := normalizeTypes(obj.Object)
@@ -372,4 +359,25 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 		return patchKey(applied, hasStatus), nil
 	}
 	return resourceKey(applied), nil
+}
+
+// removeFromCachedList returns a new slice with the item identified by
+// namespace+name removed. Used by the incremental watch path for three
+// cases: Delete events, NotFound on GET, and selector-mismatch after GET.
+// Items that aren't maps or lack metadata are kept — if we can't identify
+// them, dropping them risks data loss.
+func removeFromCachedList(items []any, namespace, name string) []any {
+	filtered := items[:0]
+	for _, item := range items {
+		if m, ok := item.(map[string]any); ok {
+			md, _ := m["metadata"].(map[string]any)
+			itemName, _ := md["name"].(string)
+			itemNS, _ := md["namespace"].(string)
+			if itemName == name && itemNS == namespace {
+				continue
+			}
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
 }

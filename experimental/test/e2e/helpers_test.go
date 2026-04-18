@@ -818,6 +818,21 @@ func waitForMetric(ctx context.Context, t *testing.T, name string, labels map[st
 	})
 }
 
+// waitForHistogramCount polls until a histogram metric with the given labels
+// has at least minCount observations. The histogram observation may be deferred
+// relative to the status write that makes the graph Ready, so a one-shot scrape
+// after waitForGraphReady can race.
+func waitForHistogramCount(ctx context.Context, t *testing.T, name string, labels map[string]string, minCount uint64) error {
+	t.Helper()
+	return wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		count, ok := scrapeHistogramCount(t, name, labels)
+		if !ok {
+			return false, nil
+		}
+		return count >= minCount, nil
+	})
+}
+
 // labelsMatch returns true if every entry in want is present in got.
 func labelsMatch(got []*dto.LabelPair, want map[string]string) bool {
 	if len(want) == 0 {

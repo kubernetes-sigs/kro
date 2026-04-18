@@ -501,7 +501,9 @@ func TestRecoveryPartialRevisionTransition(t *testing.T) {
 	oldLabel := fmt.Sprintf("old-resource.%s.%s.internal.kro.run/type", graphName, ns)
 	partialLabel := fmt.Sprintf("partial.%s.%s.internal.kro.run/type", graphName, ns)
 
-	// Old revision resource — should be pruned.
+	// Old revision resource — should be pruned. The template-hash annotation
+	// must be present because the prune logic skips resources it never applied
+	// (apply.go § Verify ownership).
 	oldCM := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -511,6 +513,9 @@ func TestRecoveryPartialRevisionTransition(t *testing.T) {
 				"namespace": ns,
 				"labels": map[string]any{
 					oldLabel: "template",
+				},
+				"annotations": map[string]any{
+					"internal.kro.run/template-hash": "simulated-pre-crash",
 				},
 			},
 			"data": map[string]any{"rev": "old"},

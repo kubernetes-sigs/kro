@@ -130,13 +130,13 @@ func TestMetricsReconcileDurationHistogram(t *testing.T) {
 		types.NamespacedName{Name: "test-metrics-hist", Namespace: ns}))
 
 	// Reconcile duration histogram should have at least 1 observation.
-	count, ok := scrapeHistogramCount(t,
+	// Poll because the deferred Observe() can race with the status write
+	// that makes the graph Ready.
+	require.NoError(t, waitForHistogramCount(ctx, t,
 		"graph_reconcile_duration_seconds",
 		graphLabels("test-metrics-hist", ns),
-	)
-	require.True(t, ok, "reconcile duration histogram should exist")
-	assert.Greater(t, count, uint64(0),
-		"reconcile duration should have at least one observation")
+		1,
+	), "reconcile duration histogram should have at least one observation")
 }
 
 // TestMetricsNodeEvalDurationHistogram proves that graph_node_eval_duration_seconds
@@ -175,13 +175,13 @@ func TestMetricsNodeEvalDurationHistogram(t *testing.T) {
 		types.NamespacedName{Name: "test-metrics-nodeeval", Namespace: ns}))
 
 	// Per-node eval duration should have at least 1 observation.
-	count, ok := scrapeHistogramCount(t,
+	// Poll because the deferred Observe() can race with the status write
+	// that makes the graph Ready.
+	require.NoError(t, waitForHistogramCount(ctx, t,
 		"graph_node_eval_duration_seconds",
 		nodeLabels("test-metrics-nodeeval", ns, "cm"),
-	)
-	require.True(t, ok, "node eval duration histogram should exist for node 'cm'")
-	assert.Greater(t, count, uint64(0),
-		"node eval duration should have at least one observation")
+		1,
+	), "node eval duration histogram should have at least one observation for node 'cm'")
 }
 
 // TestMetricsCleanupOnGraphDelete proves that Prometheus metrics for a Graph

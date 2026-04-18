@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -185,6 +186,11 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	newItemKeys := make(map[string][]string)
 	newItemHashes := make(map[string]string, len(currentItems))
 
+	// Compute shared dependency context hash once. Included in each per-item
+	// cached hash so that when a shared dep changes but collection items are
+	// stable, all cached hashes become stale and items are re-evaluated.
+	contextHash := hashForEachContext(eval.scope, node.Dependencies)
+
 	// Diff: identify changed, unchanged, and removed items.
 	var allApplied []any
 	var childErrors []error                     // track per-child errors for state derivation
@@ -261,16 +267,14 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		}
 
 		// Skip unchanged items: retain previous applied state.
-		// Layer 1: use cached hash for prevItem when available, avoiding
-		// hashDesiredState(prevItem). Still hash current item to compare.
-		// Falls back to original forEachItemUnchanged when no cached hash.
+		// Cached hash includes context prefix — when shared deps change,
+		// no cached hash matches and all items re-evaluate.
 		itemUnchanged := false
-		if existed {
+		if existed && !driftCorrection {
 			cachedHash := prevItemHashes[id]
 			if cachedHash != "" {
-				itemUnchanged = forEachItemUnchangedCached(cachedHash, item)
+				itemUnchanged = forEachItemUnchangedCached(cachedHash, item, contextHash)
 			} else {
-				// No cached hash — fall back to hashing both items.
 				itemUnchanged = forEachItemUnchanged(prevItems[id], item)
 			}
 		}
@@ -283,14 +287,13 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				// Carry forward to new state.
 				newItemScope[id] = prevScope
 				newItemKeys[id] = prevItemKeys[id]
-				// Cache the item's hash. If we had a cached hash, carry it
-				// forward. Otherwise compute it now so future reconciles
-				// have it (bootstrapping the cache on first unchanged hit).
+				// Carry forward cached hash (already context-prefixed), or
+				// bootstrap the cache for future reconciles.
 				if h := prevItemHashes[id]; h != "" {
-					newItemHashes[id] = h
+					newItemHashes[id] = contextHash + "/" + h
 				} else if currMap, ok := item.(map[string]any); ok {
 					if h, err := hashDesiredState(currMap); err == nil {
-						newItemHashes[id] = h
+						newItemHashes[id] = contextHash + "/" + h
 					}
 				}
 				logger.V(2).Info("forEach item unchanged, skipping", "node", node.ID, "item", id)
@@ -336,7 +339,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			// Cache content hash for the collection item.
 			if currMap, ok := item.(map[string]any); ok {
 				if h, err := hashDesiredState(currMap); err == nil {
-					newItemHashes[id] = h
+					newItemHashes[id] = contextHash + "/" + h
 				}
 			}
 			// No keys — definition nodes have no managed resources.
@@ -417,7 +420,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		// the template output.
 		if currMap, ok := item.(map[string]any); ok {
 			if h, err := hashDesiredState(currMap); err == nil {
-				newItemHashes[id] = h
+				newItemHashes[id] = contextHash + "/" + h
 			}
 		}
 
@@ -611,20 +614,18 @@ func forEachItemUnchanged(prev, current any) bool {
 
 // forEachItemUnchangedCached returns true if a collection item is unchanged
 // from the previous reconcile, using a cached hash for the previous item.
-// Layer 1 optimization: eliminates one of the two hashDesiredState calls per
-// unchanged item. cachedPrevHash must be non-empty (caller checks).
-func forEachItemUnchangedCached(cachedPrevHash string, current any) bool {
+// The cached hash includes a context prefix (shared dependency scope) so
+// that when shared dependencies change, no cached hash matches.
+func forEachItemUnchangedCached(cachedPrevHash string, current any, contextHash string) bool {
 	currMap, currOk := current.(map[string]any)
 	if !currOk {
-		// Scalar item — reaching here with a cached hash means the
-		// previous identity matched (identity IS content for scalars).
-		return true
+		return strings.HasPrefix(cachedPrevHash, contextHash+"/")
 	}
 	currHash, err := hashDesiredState(currMap)
 	if err != nil {
-		return false // fail-safe: treat as changed
+		return false
 	}
-	return cachedPrevHash == currHash
+	return cachedPrevHash == contextHash+"/"+currHash
 }
 
 // highestPriorityChildError returns the highest-priority error from a list

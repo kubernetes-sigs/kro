@@ -829,12 +829,16 @@ func benchForEachCached(b *testing.B, itemCount int) {
 	prevItemsRaw := buildForEachItems(itemCount)
 	prevItemsRaw[0].(map[string]any)["data"].(map[string]any)["key"] = "changed-value"
 
+	deps := map[string]bool{"source": true}
+	scope := map[string]any{"source": map[string]any{"list": prevItemsRaw}}
+	ctxHash := hashForEachContext(scope, deps)
+
 	cachedHashes := make(map[string]string, len(prevItemsRaw))
 	for _, item := range prevItemsRaw {
 		id := forEachItemIdentity(item)
 		if m, ok := item.(map[string]any); ok {
 			h, _ := hashDesiredState(m)
-			cachedHashes[id] = h
+			cachedHashes[id] = ctxHash + "/" + h
 		}
 	}
 
@@ -849,7 +853,7 @@ func benchForEachCached(b *testing.B, itemCount int) {
 		for _, item := range items {
 			id := forEachItemIdentity(item)
 			_, existed := prevByID[id]
-			if !existed || !forEachItemUnchangedCached(cachedHashes[id], item) {
+			if !existed || !forEachItemUnchangedCached(cachedHashes[id], item, ctxHash) {
 				changed++
 			}
 		}

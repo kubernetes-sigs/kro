@@ -357,13 +357,11 @@ func hashFieldPath(hs *hashState, prefix string, fp FieldPath, obj map[string]an
 		// directly — no intermediate map copy needed.
 		if i == 0 && segment == "metadata" {
 			if md, ok := val.(map[string]any); ok && i == len(fp)-1 {
-				// Leaf is metadata itself — hash non-volatile fields in sorted order.
 				hashMetadataFiltered(hs, md)
 				return
-			} else if ok {
-				// Intermediate metadata — filter before descending.
-				val = filterVolatileMetadata(val)
 			}
+			// Non-leaf: path continues to a sub-field (e.g., metadata.name)
+			// which has no volatile keys — walk deeper without filtering.
 		}
 		if i == len(fp)-1 {
 			// Leaf — append the value using the zero-alloc path.
@@ -397,19 +395,29 @@ func hashMetadataFiltered(hs *hashState, md map[string]any) {
 	hs.buf = append(hs.buf, '}')
 }
 
-// filterVolatileMetadata returns a copy of metadata with volatile fields removed.
-func filterVolatileMetadata(metadata any) any {
-	md, ok := metadata.(map[string]any)
-	if !ok {
-		return metadata
+// hashForEachContext computes a hash of the shared dependency context for a
+// forEach node. Computed once per forEach node per reconcile, then included
+// in each per-item cached hash as a prefix. When context changes but
+// collection items are stable, the prefix differs and all cached hashes
+// become stale — forcing re-evaluation.
+func hashForEachContext(scope map[string]any, deps map[string]bool) string {
+	h := fnv.New64a()
+	depIDs := make([]string, 0, len(deps))
+	for id := range deps {
+		depIDs = append(depIDs, id)
 	}
-	filtered := make(map[string]any, len(md))
-	for k, v := range md {
-		if !volatileMetadataFields[k] {
-			filtered[k] = v
+	sort.Strings(depIDs)
+	hs := hashStatePool.Get().(*hashState)
+	for _, depID := range depIDs {
+		hs.buf = hs.buf[:0]
+		h.Write([]byte(depID))
+		if v, ok := scope[depID]; ok {
+			appendValue(hs, v)
+			h.Write(hs.buf)
 		}
 	}
-	return filtered
+	hashStatePool.Put(hs)
+	return fmt.Sprintf("%016x", h.Sum64())
 }
 
 // sortedMapKeys returns the keys of any map[string]V in sorted order.

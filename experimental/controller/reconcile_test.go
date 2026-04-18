@@ -1614,3 +1614,89 @@ func TestMergeCollectionChanges_InputNotMutated(t *testing.T) {
 	assert.Equal(t, b, cached[1].(map[string]any), "input[1] must be original 'b'")
 	assert.Equal(t, c, cached[2].(map[string]any), "input[2] must be original 'c'")
 }
+
+// TestForEach_RegressionSharedContextPropagation proves that when a shared
+// dependency changes but collection items don't, forEach items are re-evaluated
+// with the new context rather than serving stale output.
+func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
+	graphObj := map[string]any{
+		"spec": map[string]any{
+			"nodes": []any{
+				map[string]any{"id": "config", "def": map[string]any{"version": "v1"}},
+				map[string]any{"id": "source", "def": map[string]any{"names": []any{"alpha", "beta"}}},
+				map[string]any{
+					"id": "results", "forEach": map[string]any{"item": "${source.names}"},
+					"def": map[string]any{"combined": "${item}-${config.version}"},
+				},
+			},
+		},
+	}
+	spec, err := extractGraphSpec(graphObj)
+	require.NoError(t, err)
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+	resultsNode := compiled.dag.Nodes[compiled.dag.Index["results"]]
+
+	graph := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "experimental.kro.run/v1alpha1", "kind": "Graph",
+		"metadata": map[string]any{"name": "test", "namespace": "default"},
+	}}
+	r := &GraphReconciler{}
+	names := []any{"alpha", "beta"}
+
+	// Phase 1: config.version = "v1"
+	state := newInstanceState(compiled)
+	eval := newEvaluator(state)
+	eval.effectiveGeneration = 1
+	eval.scope["config"] = map[string]any{"version": "v1"}
+	eval.scope["source"] = map[string]any{"names": names}
+	eval.forEachNewScope = map[string]map[string]any{}
+	eval.forEachNewKeys = map[string]map[string][]string{}
+	eval.forEachNewItems = map[string][]any{}
+	eval.forEachNewHashes = map[string]map[string]string{}
+
+	_, err = r.reconcileForEach(context.Background(), graph, resultsNode, eval, nil, false)
+	require.NoError(t, err)
+	items1, ok := eval.scope["results"].([]any)
+	require.True(t, ok)
+	require.Len(t, items1, 2)
+	for _, item := range items1 {
+		assert.Contains(t, item.(map[string]any)["combined"].(string), "-v1")
+	}
+
+	for k, v := range eval.forEachNewScope {
+		state.forEachItemScope[k] = v
+	}
+	for k, v := range eval.forEachNewKeys {
+		state.forEachItemKeys[k] = v
+	}
+	for k, v := range eval.forEachNewHashes {
+		state.forEachItemHashes[k] = v
+	}
+	for k, v := range eval.forEachNewItems {
+		state.forEachItems[k] = v
+	}
+
+	// Phase 2: config.version = "v2", collection unchanged
+	eval2 := newEvaluator(state)
+	eval2.effectiveGeneration = 1
+	eval2.scope["config"] = map[string]any{"version": "v2"}
+	eval2.scope["source"] = map[string]any{"names": names}
+	eval2.forEachNewScope = map[string]map[string]any{}
+	eval2.forEachNewKeys = map[string]map[string][]string{}
+	eval2.forEachNewItems = map[string][]any{}
+	eval2.forEachNewHashes = map[string]map[string]string{}
+
+	_, err = r.reconcileForEach(context.Background(), graph, resultsNode, eval2, nil, false)
+	require.NoError(t, err)
+	items2, ok := eval2.scope["results"].([]any)
+	require.True(t, ok)
+	require.Len(t, items2, 2)
+	for _, item := range items2 {
+		combined := item.(map[string]any)["combined"].(string)
+		assert.Contains(t, combined, "-v2",
+			"output should reference v2, not stale v1")
+		assert.NotContains(t, combined, "-v1",
+			"stale v1 should not appear after config change")
+	}
+}

@@ -64,8 +64,19 @@ test: ## Run tests with verbose output.
 	cd $(ROOT) && go test $(TEST_FLAGS) $(TEST_PKGS) -v
 
 .PHONY: bench
-bench: ## Run benchmarks.
-	cd $(ROOT) && go test ./experimental/controller -bench=. -benchmem -count=1 -run='^$$'
+bench: ## Run benchmarks with CPU and memory profiles.
+	@mkdir -p $(ROOT)/experimental/build
+	cd $(ROOT) && go test ./experimental/controller -bench=. -benchmem -count=1 -run='^$$' \
+		-cpuprofile=$(ROOT)/experimental/build/cpu.prof \
+		-memprofile=$(ROOT)/experimental/build/mem.prof
+	@echo "Profiles written to experimental/build/{cpu,mem}.prof"
+	@echo "View with: go tool pprof -http=:8080 experimental/build/cpu.prof"
+
+# Ad-hoc comparison workflow:
+#   go test ./experimental/controller -bench=. -benchmem -count=6 | tee before.txt
+#   (make changes)
+#   go test ./experimental/controller -bench=. -benchmem -count=6 | tee after.txt
+#   benchstat before.txt after.txt
 
 ##@ Upstream compat
 #

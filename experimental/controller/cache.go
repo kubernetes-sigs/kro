@@ -11,7 +11,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"hash"
 	"hash/fnv"
 	"sort"
 	"strconv"
@@ -260,33 +259,36 @@ func hashNodeInputs(node *Node, scope map[string]any) (string, error) {
 		return "", nil
 	}
 
-	h := fnv.New64a()
+	hs := hashStatePool.Get().(*hashState)
+	hs.buf = hs.buf[:0]
+
 	// Process dependencies in sorted order for deterministic hashing.
 	depIDs := sortedMapKeys(node.DepPaths)
 	for _, depID := range depIDs {
 		paths := node.DepPaths[depID]
 		depData, ok := scope[depID]
 		if !ok {
+			hashStatePool.Put(hs)
 			return "", fmt.Errorf("dependency %q not in scope", depID)
 		}
 		depMap, ok := depData.(map[string]any)
 		if !ok {
 			// Non-map dependency (e.g., Watch array) — hash the whole thing.
-			data, err := json.Marshal(depData)
-			if err != nil {
-				return "", fmt.Errorf("hashing dependency %q: %w", depID, err)
-			}
-			h.Write([]byte(depID))
-			h.Write(data)
+			hs.buf = append(hs.buf, depID...)
+			appendValue(hs, depData)
 			continue
 		}
 
 		for _, fp := range paths {
-			hashFieldPath(h, depID, fp, depMap)
+			hashFieldPath(hs, depID, fp, depMap)
 		}
 	}
 
-	return fmt.Sprintf("%016x", h.Sum64()), nil
+	h := fnv.New64a()
+	h.Write(hs.buf)
+	result := fmt.Sprintf("%016x", h.Sum64())
+	hashStatePool.Put(hs)
+	return result, nil
 }
 
 // hashSelfPaths computes a hash of the referenced field paths of a node's own
@@ -304,33 +306,35 @@ func hashSelfPaths(node *Node, observed any) (string, error) {
 		return "", nil
 	}
 
-	h := fnv.New64a()
+	hs := hashStatePool.Get().(*hashState)
+	hs.buf = hs.buf[:0]
+
 	for _, fp := range node.SelfPaths {
-		hashFieldPath(h, "", fp, observedMap)
+		hashFieldPath(hs, "", fp, observedMap)
 	}
 
-	return fmt.Sprintf("%016x", h.Sum64()), nil
+	h := fnv.New64a()
+	h.Write(hs.buf)
+	result := fmt.Sprintf("%016x", h.Sum64())
+	hashStatePool.Put(hs)
+	return result, nil
 }
 
-// hashFieldPath walks into an object at a field path and hashes the value found.
-// If the path is nil (bare reference), the entire object is hashed.
-// If the path leads to an absent value, a sentinel is hashed.
-// Volatile metadata fields are excluded when the path enters "metadata".
-func hashFieldPath(h hash.Hash64, prefix string, fp FieldPath, obj map[string]any) {
+// hashFieldPath walks into an object at a field path and appends the value
+// to the hashState buffer. If the path is nil (bare reference), the entire
+// object is appended. If the path leads to an absent value, a sentinel is
+// appended. Volatile metadata fields are excluded when the path enters
+// "metadata". Uses the same zero-alloc appendValue path as hashDesiredState.
+func hashFieldPath(hs *hashState, prefix string, fp FieldPath, obj map[string]any) {
 	// Write the prefix (dependency ID) and path for domain separation.
-	h.Write([]byte(prefix))
+	hs.buf = append(hs.buf, prefix...)
 	for _, seg := range fp {
-		h.Write([]byte(seg))
+		hs.buf = append(hs.buf, seg...)
 	}
 
 	if len(fp) == 0 {
-		// Bare reference — hash the entire object.
-		data, err := json.Marshal(obj)
-		if err != nil {
-			h.Write([]byte("\x00__error__\x00"))
-			return
-		}
-		h.Write(data)
+		// Bare reference — append the entire object.
+		appendMap(hs, obj)
 		return
 	}
 
@@ -340,31 +344,57 @@ func hashFieldPath(h hash.Hash64, prefix string, fp FieldPath, obj map[string]an
 		m, ok := current.(map[string]any)
 		if !ok {
 			// Path expects a map but found something else — treat as absent.
-			h.Write([]byte("\x00__absent__\x00"))
+			hs.buf = append(hs.buf, "\x00__absent__\x00"...)
 			return
 		}
 		val, exists := m[segment]
 		if !exists {
 			// Per 004-graph-reconciliation.md: "Absent paths hash to a fixed sentinel."
-			h.Write([]byte("\x00__absent__\x00"))
+			hs.buf = append(hs.buf, "\x00__absent__\x00"...)
 			return
 		}
-		// At the first segment, check for metadata volatile field filtering.
+		// At the first segment, if entering metadata, hash non-volatile keys
+		// directly — no intermediate map copy needed.
 		if i == 0 && segment == "metadata" {
-			val = filterVolatileMetadata(val)
+			if md, ok := val.(map[string]any); ok && i == len(fp)-1 {
+				// Leaf is metadata itself — hash non-volatile fields in sorted order.
+				hashMetadataFiltered(hs, md)
+				return
+			} else if ok {
+				// Intermediate metadata — filter before descending.
+				val = filterVolatileMetadata(val)
+			}
 		}
 		if i == len(fp)-1 {
-			// Leaf — hash the value.
-			data, err := json.Marshal(val)
-			if err != nil {
-				h.Write([]byte("\x00__error__\x00"))
-				return
-			}
-			h.Write(data)
+			// Leaf — append the value using the zero-alloc path.
+			appendValue(hs, val)
 			return
 		}
 		current = val
 	}
+}
+
+// hashMetadataFiltered appends metadata fields to the buffer, skipping volatile
+// fields. Avoids creating an intermediate filtered map — iterates in sorted key
+// order and skips volatile keys inline.
+func hashMetadataFiltered(hs *hashState, md map[string]any) {
+	keys := make([]string, 0, len(md))
+	for k := range md {
+		if !volatileMetadataFields[k] {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	hs.buf = append(hs.buf, '{')
+	for i, k := range keys {
+		if i > 0 {
+			hs.buf = append(hs.buf, ',')
+		}
+		appendQuotedString(hs, k)
+		hs.buf = append(hs.buf, ':')
+		appendValue(hs, md[k])
+	}
+	hs.buf = append(hs.buf, '}')
 }
 
 // filterVolatileMetadata returns a copy of metadata with volatile fields removed.

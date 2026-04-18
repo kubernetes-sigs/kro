@@ -400,8 +400,24 @@ func (w *walkState) tryDispatch(idx int) {
 				}
 
 				// Path 2: self-state changed — refresh scope.
+				//
+				// Known liveness bound: the Client.Get below runs in the
+				// single-threaded coordinator. All other dispatch and result
+				// processing is blocked until the GET returns. Under mass
+				// external update (GitOps sync, operator batch), many nodes
+				// may hit Path 2 in the same reconcile, serializing API
+				// server round trips. At 100ms/GET × N nodes, the stall
+				// is O(N × RTT). This is acceptable because Path 2 is
+				// uncommon (requires eval-hash match + resourceVersion diff)
+				// and the alternative — dispatching a worker just to GET
+				// and return — adds concurrency complexity for a rare path.
+				// If profiling shows this is a bottleneck, move the GET to
+				// a lightweight worker goroutine.
 				logger.V(1).Info("self-state changed — refreshing scope",
 					"node", node.ID)
+				SelfRefreshTotal.With(graphMetricLabels(
+					w.graph.GetName(), w.graph.GetNamespace(), node.ID,
+				)).Inc()
 				if prevMap, ok := prevScope.(map[string]any); ok {
 					prevMD, _ := prevMap["metadata"].(map[string]any)
 					prevAPIVersion, _ := prevMap["apiVersion"].(string)

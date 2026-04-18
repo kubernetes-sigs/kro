@@ -69,6 +69,19 @@ var (
 		[]string{"graph_name", "graph_namespace", "node_id"},
 	)
 
+	// SelfRefreshTotal counts coordinator-synchronous scope refreshes
+	// (tryDispatch Path 2). These are blocking GETs in the single-threaded
+	// coordinator; high counts indicate the "uncommon" assumption is
+	// degrading and the GET should be moved to a worker goroutine.
+	// See controller.go tryDispatch Path 2 comment.
+	SelfRefreshTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "graph_self_refresh_total",
+			Help: "Total number of coordinator-synchronous scope refreshes (tryDispatch Path 2)",
+		},
+		[]string{"graph_name", "graph_namespace", "node_id"},
+	)
+
 	// NodeStateGauge reports the current state of each node in a Graph.
 	// Each node has exactly one state at any given time. The gauge value
 	// is 1 for the node's current state label and 0 for all others.
@@ -93,6 +106,7 @@ func RegisterMetrics(registry prometheus.Registerer) {
 		SystemErrorRetriesTotal,
 		ReconcileDurationSeconds,
 		NodeEvalDurationSeconds,
+		SelfRefreshTotal,
 		NodeStateGauge,
 	} {
 		if err := registry.Register(c); err != nil {
@@ -123,6 +137,7 @@ func deleteGraphMetricsForGraph(graphName, graphNamespace string) {
 	}
 	DriftTimerFiresTotal.DeletePartialMatch(labels)
 	SystemErrorRetriesTotal.DeletePartialMatch(labels)
+	SelfRefreshTotal.DeletePartialMatch(labels)
 	ReconcileDurationSeconds.DeletePartialMatch(labels)
 	NodeEvalDurationSeconds.DeletePartialMatch(labels)
 	NodeStateGauge.DeletePartialMatch(labels)
@@ -136,6 +151,7 @@ func deleteNodeMetrics(graphName, graphNamespace string, nodeIDs map[string]bool
 		labels := graphMetricLabels(graphName, graphNamespace, nodeID)
 		DriftTimerFiresTotal.Delete(labels)
 		SystemErrorRetriesTotal.Delete(labels)
+		SelfRefreshTotal.Delete(labels)
 		NodeEvalDurationSeconds.Delete(labels)
 		// Delete all state label variants for the node state gauge.
 		for _, state := range nodeStateLabels {

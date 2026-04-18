@@ -1580,3 +1580,34 @@ func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
 	assert.Equal(t, false, alpha2["__updated"],
 		"skipped-unchanged item with old generation (7 != 8) should NOT be updated")
 }
+
+// ---------------------------------------------------------------------------
+// mergeCollectionChanges — input isolation
+// ---------------------------------------------------------------------------
+
+// TestMergeCollectionChanges_InputNotMutated proves that mergeCollectionChanges
+// does not mutate its cached input slice. This defends the encapsulation: all
+// mutation happens on an internally-owned copy. If someone changes the
+// function to operate in-place, this test fails.
+func TestMergeCollectionChanges_InputNotMutated(t *testing.T) {
+	a := map[string]any{"metadata": map[string]any{"name": "a", "namespace": "ns"}, "data": map[string]any{"v": "1"}}
+	b := map[string]any{"metadata": map[string]any{"name": "b", "namespace": "ns"}, "data": map[string]any{"v": "2"}}
+	c := map[string]any{"metadata": map[string]any{"name": "c", "namespace": "ns"}, "data": map[string]any{"v": "3"}}
+	cached := []any{a, b, c}
+
+	// Delete the middle item. This is the path that previously used
+	// items[:0] in-place filtering and would corrupt the input.
+	result, err := mergeCollectionChanges(
+		context.Background(), nil, cached,
+		[]CollectionChange{{Namespace: "ns", Name: "b", EventType: WatchEventDelete}},
+		schema.GroupVersionKind{}, nil,
+	)
+	require.NoError(t, err)
+
+	// Result has 2 items, input still has 3 — unchanged.
+	assert.Len(t, result, 2, "result should have item removed")
+	require.Len(t, cached, 3, "input slice length must not change")
+	assert.Equal(t, a, cached[0].(map[string]any), "input[0] must be original 'a'")
+	assert.Equal(t, b, cached[1].(map[string]any), "input[1] must be original 'b'")
+	assert.Equal(t, c, cached[2].(map[string]any), "input[2] must be original 'c'")
+}

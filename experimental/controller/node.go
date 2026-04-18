@@ -1,6 +1,6 @@
-// node.go contains the per-node reconciliation handlers, one per reference
-// type. The coordinator in controller.go dispatches nodes here; these
-// handlers evaluate templates and call into apply.go for cluster mutations.
+// node.go contains the per-node reconciliation handlers, one per node type.
+// The coordinator in controller.go dispatches nodes here; these handlers
+// evaluate templates and call into apply.go for cluster mutations.
 package graphcontroller
 
 import (
@@ -19,7 +19,7 @@ import (
 // Node reconciliation methods
 // ---------------------------------------------------------------------------
 
-// reconcileNode dispatches to the appropriate handler based on node reference type.
+// reconcileNode dispatches to the appropriate handler based on node type.
 // NodeType is a parse-time property of the node; no runtime resolution.
 //
 // driftCorrection is true when the node was triggered by the drift timer.
@@ -36,12 +36,12 @@ import (
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, ref NodeType, eval *evaluator, watcher *graphWatcher, driftCorrection bool) ([]string, error) {
+func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, nodeType NodeType, eval *evaluator, watcher *graphWatcher, driftCorrection bool) ([]string, error) {
 	if node.ForEach != nil {
 		return r.reconcileForEach(ctx, graph, node, eval, watcher, driftCorrection)
 	}
 
-	switch ref {
+	switch nodeType {
 	case NodeTypeDef:
 		if err := r.reconcileDefinition(ctx, node, eval); err != nil {
 			return nil, err
@@ -54,7 +54,7 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 			return nil, err
 		}
 	default: // NodeTypeTemplate, NodeTypePatch
-		key, err := r.reconcileApply(ctx, graph, node, ref, eval, watcher, driftCorrection)
+		key, err := r.reconcileApply(ctx, graph, node, nodeType, eval, watcher, driftCorrection)
 		if err != nil {
 			if key != "" {
 				return []string{key}, err
@@ -236,20 +236,9 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 				normalized := normalizeTypes(obj.Object)
 
 				// Check if item already exists in the list (update) or is new (add).
-				found := false
-				for i, item := range items {
-					if m, ok := item.(map[string]any); ok {
-						md, _ := m["metadata"].(map[string]any)
-						itemName, _ := md["name"].(string)
-						itemNS, _ := md["namespace"].(string)
-						if itemName == ck.name && itemNS == ck.namespace {
-							items[i] = normalized
-							found = true
-							break
-						}
-					}
-				}
-				if !found {
+				if idx := findCollectionItemIndex(items, ck.namespace, ck.name); idx >= 0 {
+					items[idx] = normalized
+				} else {
 					items = append(items, normalized)
 				}
 			}
@@ -327,20 +316,20 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 }
 
 // reconcileApply evaluates and applies a Template or Patch node.
-// The ref parameter controls SSA behavior (identity labels, pre-apply checks)
-// and applied set key format: Template keys use resourceKey (prune → delete),
-// Patch keys use patchKey (prune → release apply to release fields).
-// See applySSA for the full ref-dependent behavior.
+// The nodeType parameter controls SSA behavior (identity labels, pre-apply
+// checks) and applied set key format: Template keys use resourceKey
+// (prune → delete), Patch keys use patchKey (prune → release apply to
+// release fields). See applySSA for the full type-dependent behavior.
 // driftCorrection bypasses the apply-hash check in applySSA.
-func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, ref NodeType, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
+func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, nodeType NodeType, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMapNode(node)
 	if err != nil {
-		return "", fmt.Errorf("%s %s: %w", ref, node.ID, err)
+		return "", fmt.Errorf("%s %s: %w", nodeType, node.ID, err)
 	}
 
-	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, ref, eval.effectiveGeneration, driftCorrection)
+	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, nodeType, eval.effectiveGeneration, driftCorrection)
 	if err != nil {
 		return "", err
 	}
@@ -348,17 +337,38 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 	eval.scope[node.ID] = normalizeTypes(applied.Object)
 	// Side effects (apply, delete, create) log at V(0) so operators see
 	// which resources are being managed at default verbosity.
-	logger.Info("applied resource", "node", node.ID, "ref", ref,
+	logger.Info("applied resource", "node", node.ID, "nodeType", nodeType,
 		"gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
-	if ref == NodeTypePatch {
+	if nodeType == NodeTypePatch {
 		// Track the patch in the applied set with a "patch:" prefix.
-		// This lets prune and teardown distinguish Contribute keys (release apply
-		// to release fields) from Own keys (delete).
+		// This lets prune and teardown distinguish Patch keys (release apply
+		// to release fields) from Template keys (delete).
 		hasStatus := evalMap["status"] != nil
 		return patchKey(applied, hasStatus), nil
 	}
 	return resourceKey(applied), nil
+}
+
+// ---------------------------------------------------------------------------
+// Collection item helpers for incremental Watch cache updates
+// ---------------------------------------------------------------------------
+
+// findCollectionItemIndex returns the index of an item in a []any collection
+// matching the given namespace and name via metadata extraction. Returns -1
+// if no match is found.
+func findCollectionItemIndex(items []any, namespace, name string) int {
+	for i, item := range items {
+		if m, ok := item.(map[string]any); ok {
+			md, _ := m["metadata"].(map[string]any)
+			itemName, _ := md["name"].(string)
+			itemNS, _ := md["namespace"].(string)
+			if itemName == name && itemNS == namespace {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // removeFromCachedList returns a new slice with the item identified by

@@ -35,8 +35,9 @@ type DAG struct {
 	// index. Stable with respect to spec.nodes ordering within each
 	// topological level.
 	TopologicalOrder []int
-	// References maps node ID to its detected reference type.
-	References map[string]NodeType
+	// NodeTypes maps node ID to its declared node type (template, patch,
+	// ref, watch, def). Set at compile time from the node's keyword.
+	NodeTypes map[string]NodeType
 	// Levels groups node indices by topological level. Nodes within
 	// the same level are independent and can be processed in parallel.
 	// Level 0 has no dependencies, level 1 depends only on level 0, etc.
@@ -63,7 +64,7 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 	dag := &DAG{
 		Nodes:      make([]Node, len(nodes)),
 		Index:      make(map[string]int, len(nodes)),
-		References: make(map[string]NodeType),
+		NodeTypes:  make(map[string]NodeType),
 		Dependents: make(map[string][]int),
 		Finalizers: make(map[string][]string),
 	}
@@ -72,7 +73,7 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 		node.Dependencies, node.DepPaths, node.SelfPaths, node.ReadinessDeps = extractReferencedPathsFromNode(node, exprPaths)
 		dag.Nodes[i] = node
 		dag.Index[node.ID] = i
-		dag.References[node.ID] = node.Type()
+		dag.NodeTypes[node.ID] = node.Type()
 	}
 
 	// Build finalizer map: target node ID → list of finalizer node IDs.
@@ -87,7 +88,7 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 			// Patch). Definition, Ref, and Watch nodes never produce managed
 			// resources and never become prune candidates — finalizing them
 			// is nonsensical.
-			targetRef := dag.References[dag.Nodes[targetIdx].ID]
+			targetRef := dag.NodeTypes[dag.Nodes[targetIdx].ID]
 			switch targetRef {
 			case NodeTypeDef:
 				return nil, fmt.Errorf("node %q cannot finalize %q: Definition nodes do not manage resources", node.ID, node.Finalizes)

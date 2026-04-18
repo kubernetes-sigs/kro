@@ -96,6 +96,27 @@ func isAPIServerManager(manager string) bool {
 // Finalization
 // ---------------------------------------------------------------------------
 
+// deleteByKeys deletes resources identified by applied-set keys. Logs each
+// attempt. Ignores NotFound (resource already gone). Used by both prune and
+// teardown to clean up finalizer resources after a target is deleted.
+func (r *GraphReconciler) deleteByKeys(ctx context.Context, keys []string) {
+	logger := log.FromContext(ctx)
+	for _, fk := range keys {
+		finDel, _, ok := unstructuredFromKey(fk)
+		if !ok {
+			continue
+		}
+		if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
+			if client.IgnoreNotFound(delErr) != nil {
+				logger.V(1).Info("finalizer resource cleanup failed", "key", fk, "error", delErr)
+			}
+		} else {
+			logger.V(1).Info("cleaned up finalizer resource", "key", fk)
+			r.Resources.remove(fk)
+		}
+	}
+}
+
 // runFinalization executes the finalization sequence for a prune candidate.
 // Returns (true, nil) when all finalizer resources are ready and the target
 // can be deleted. Returns (false, nil) when finalizers are in progress.
@@ -484,7 +505,7 @@ func templateHasStatus(tmpl map[string]any) bool {
 // ---------------------------------------------------------------------------
 
 // applySSA applies a template via server-side apply (SSA). Handles both
-// Template and Patch references — the ref parameter controls:
+// Template and Patch node types — the nodeType parameter controls:
 //   - Identity labels: Template skips if present (forEach children stamp their own),
 //     Patch always stamps.
 //   - Pre-apply check: Template does a kro label check (cross-Graph ownership guard),
@@ -492,10 +513,6 @@ func templateHasStatus(tmpl map[string]any) bool {
 //   - Cache miss on NotFound: Template clears cache + returns ErrPending,
 //     Patch falls through to apply.
 //   - Apply hash annotation: Template only (Patch targets are owned by others).
-//
-// applySSA applies a template via server-side apply (SSA). Handles both
-// Template and Patch references — the ref parameter gates identity-label stamping,
-// SSA fieldOwner, and the kro-label conflict check (Template only).
 //
 // generation is the value to stamp on the identity-generation label. Normally
 // matches graph.GetGeneration(); callers pass the reconcile-scoped effective
@@ -509,7 +526,7 @@ func templateHasStatus(tmpl map[string]any) bool {
 // defaulters and mutating webhooks can change fields without changing
 // the desired state hash. SSA is idempotent; the apply corrects drift
 // as a side effect."
-func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, ref NodeType, generation int64, driftCorrection bool) (*unstructured.Unstructured, error) {
+func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, nodeType NodeType, generation int64, driftCorrection bool) (*unstructured.Unstructured, error) {
 	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
@@ -523,7 +540,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	if lbls == nil {
 		lbls = map[string]string{}
 	}
-	if ref == NodeTypeTemplate {
+	if nodeType == NodeTypeTemplate {
 		// Template: skip stamping if identity labels are already present (e.g., forEach
 		// children stamp their own child-scoped labels before calling applySSA).
 		if !hasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
@@ -567,7 +584,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 				if !apierrors.IsNotFound(err) {
 					return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
 				}
-				if ref == NodeTypeTemplate {
+				if nodeType == NodeTypeTemplate {
 					// Template: externally deleted. Clear cache + ErrPending.
 					r.Resources.remove(cacheKey)
 					return nil, fmt.Errorf("resource %s externally deleted: %w", obj.GetName(), ErrPending)
@@ -585,7 +602,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	} // !driftCorrection
 
 	// Template: set the apply hash annotation for future comparisons.
-	if ref == NodeTypeTemplate {
+	if nodeType == NodeTypeTemplate {
 		annotations := obj.GetAnnotations()
 		if annotations == nil {
 			annotations = map[string]string{}
@@ -596,8 +613,8 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 
 	forceApply := isForceApply(obj)
 
-	// Pre-apply check differs by reference type.
-	if ref == NodeTypeTemplate {
+	// Pre-apply check differs by node type.
+	if nodeType == NodeTypeTemplate {
 		// kro label check: if the existing resource has a different Graph's identity
 		// label, require Force to proceed. Prevents accidental cross-Graph ownership.
 		existing := &unstructured.Unstructured{}
@@ -957,20 +974,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	// successfully deleted above. Per 004-graph-reconciliation.md §
 	// Finalization: "The finalizer resources are in the applied set but
 	// not in the desired state — they are prune candidates."
-	for _, fk := range deferredDeletes {
-		finDel, _, ok := unstructuredFromKey(fk)
-		if !ok {
-			continue
-		}
-		if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
-			if client.IgnoreNotFound(delErr) != nil {
-				logger.Error(delErr, "deferred finalizer cleanup failed", "key", fk)
-			}
-		} else {
-			logger.Info("cleaned up finalizer resource", "key", fk)
-			r.Resources.remove(fk)
-		}
-	}
+	r.deleteByKeys(ctx, deferredDeletes)
 
 	return deferredKeys, blockedReasons, notes, nil
 }

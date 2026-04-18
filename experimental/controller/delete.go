@@ -323,37 +323,21 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if teardownDAG != nil {
 				nodeID := keyToNodeID[key]
 				if finalizerNodeIDs, ok := teardownDAG.Finalizers[nodeID]; ok {
-					// First, clean up static-name finalizer resources.
+					// Collect static-name finalizer keys for cleanup.
+					var staticFinKeys []string
 					for _, finNodeID := range finalizerNodeIDs {
 						if finIdx, ok2 := teardownDAG.Index[finNodeID]; ok2 {
 							finNode := &teardownDAG.Nodes[finIdx]
 							if finNode.Identity() != nil && finNode.ForEach == nil {
 								if fk := staticResourceKey(finNode.Identity(), graph.GetNamespace(), r.Scope); fk != "" {
-									finDel, _, ok := unstructuredFromKey(fk)
-									if !ok {
-										continue
-									}
-									if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
-										logger.V(1).Info("finalizer resource cleanup", "key", fk, "error", delErr)
-									} else {
-										logger.V(1).Info("cleaned up finalizer resource", "key", fk)
-									}
+									staticFinKeys = append(staticFinKeys, fk)
 								}
 							}
 						}
 					}
-					// Second, clean up forEach finalizer children via their tracked keys.
-					for _, fk := range finKeys {
-						finDel, _, ok := unstructuredFromKey(fk)
-						if !ok {
-							continue
-						}
-						if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
-							logger.V(1).Info("forEach finalizer child cleanup", "key", fk, "error", delErr)
-						} else {
-							logger.V(1).Info("cleaned up forEach finalizer child", "key", fk)
-						}
-					}
+					r.deleteByKeys(ctx, staticFinKeys)
+					// Clean up forEach finalizer children via their tracked keys.
+					r.deleteByKeys(ctx, finKeys)
 				}
 			}
 		}

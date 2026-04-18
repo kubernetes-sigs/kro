@@ -131,7 +131,9 @@ func snapshotNode(node Node) map[string]any {
 		case NodeTypeDef:
 			entry["def"] = node.TemplateExpr
 		default:
-			entry["template"] = node.TemplateExpr // fallback
+			// Parser constrains ExprKeyword to exactly {Template, Patch, Def}
+			// when TemplateExpr is set. Reaching here means an invariant violation.
+			panic(fmt.Sprintf("snapshotNode: unexpected ExprKeyword %d for node %q", node.ExprKeyword, node.ID))
 		}
 	} else {
 		switch node.Type() {

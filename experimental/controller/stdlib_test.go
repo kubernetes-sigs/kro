@@ -368,7 +368,7 @@ func TestStdlibDecoratorSubGraph(t *testing.T) {
 		require.NoError(t, err, "sub-Graph should compile")
 
 		// item is a Watch node (has metadata.name, no selector).
-		assert.Equal(t, NodeTypeRef, compiled.dag.References["item"])
+		assert.Equal(t, NodeTypeRef, compiled.dag.NodeTypes["item"])
 
 		// policy depends on item.
 		policyDeps := compiled.dag.Nodes[compiled.dag.Index["policy"]].Dependencies
@@ -446,7 +446,7 @@ func TestStdlibKindController(t *testing.T) {
 
 	t.Logf("Kind controller: %d nodes, %d levels", len(dag.Nodes), len(dag.Levels))
 	for _, node := range dag.Nodes {
-		t.Logf("  %s: %s", node.ID, dag.References[node.ID])
+		t.Logf("  %s: %s", node.ID, dag.NodeTypes[node.ID])
 	}
 }
 
@@ -748,7 +748,7 @@ func TestStdlibKindGraphCompiles(t *testing.T) {
 	assert.NotEmpty(t, dag.TopologicalOrder, "kind graph should have nodes")
 	t.Logf("kind graph: %d nodes, %d levels", len(dag.Nodes), len(dag.Levels))
 	for _, node := range dag.Nodes {
-		t.Logf("  %s: %s", node.ID, dag.References[node.ID])
+		t.Logf("  %s: %s", node.ID, dag.NodeTypes[node.ID])
 	}
 }
 

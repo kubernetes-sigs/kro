@@ -223,16 +223,16 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			seenResourceKeys[childResKey] = id
 
 			// forEach child classification is inherited from the parent's
-			// declared keyword. template: → Own per child; patch: →
-			// Contribute per child. Declaration is authoritative — no
-			// per-child runtime resolution.
-			childRef := node.Type()
+			// declared keyword. template: → Template per child; patch: →
+			// Patch per child. Declaration is authoritative — no per-child
+			// runtime resolution.
+			childNodeType := node.Type()
 
-			stampForEachChildLabels(childObj, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, childRef)
+			stampForEachChildLabels(childObj, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, childNodeType)
 			evalMap = childObj.Object
 
 			var applied *unstructured.Unstructured
-			if childRef == NodeTypePatch {
+			if childNodeType == NodeTypePatch {
 				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypePatch, eval.effectiveGeneration, driftCorrection)
 			} else {
 				applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeTemplate, eval.effectiveGeneration, driftCorrection)
@@ -250,7 +250,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			}
 			allApplied = append(allApplied, applied.Object)
 			var itemKeys []string
-			if childRef == NodeTypePatch {
+			if childNodeType == NodeTypePatch {
 				hasStatus := evalMap["status"] != nil
 				itemKeys = []string{patchKey(applied, hasStatus)}
 			} else {

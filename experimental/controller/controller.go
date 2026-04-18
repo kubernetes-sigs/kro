@@ -347,8 +347,8 @@ func (w *walkState) tryDispatch(idx int) {
 	}
 
 	// Step 4: Evaluation check — section-scoped evaluation hashing.
-	nodeRef := node.Type()
-	canHashSkip := nodeRef != NodeTypeRef && nodeRef != NodeTypeWatch && !w.driftTriggered[node.ID]
+	declaredNodeType := node.Type()
+	canHashSkip := declaredNodeType != NodeTypeRef && declaredNodeType != NodeTypeWatch && !w.driftTriggered[node.ID]
 	if canHashSkip {
 		if _, hasPrevHash := w.state.previousEvalHashes[node.ID]; hasPrevHash {
 			evalHash, hashErr := hashNodeInputs(node, w.eval.scope)
@@ -498,14 +498,14 @@ func (w *walkState) tryDispatch(idx int) {
 	// Classification is a parse-time property of the declared keyword —
 	// no runtime resolution. node.Type() is authoritative and
 	// invariant across reconciles within a revision.
-	resolvedRef := node.Type()
+	resolvedNodeType := node.Type()
 
 	// Dispatch to worker goroutine.
 	w.dispatched[idx] = true
 	isDrift := w.driftTriggered[node.ID]
-	go func(n Node, we *evaluator, ref NodeType, driftCorrection bool) {
+	go func(n Node, we *evaluator, nodeType NodeType, driftCorrection bool) {
 		evalStart := time.Now()
-		keys, err := w.r.reconcileNode(w.ctx, w.graph, n, ref, we, w.watcher, driftCorrection)
+		keys, err := w.r.reconcileNode(w.ctx, w.graph, n, nodeType, we, w.watcher, driftCorrection)
 		evalDuration := time.Since(evalStart)
 		state := NodeReady
 		if err != nil {
@@ -552,7 +552,7 @@ func (w *walkState) tryDispatch(idx int) {
 			collectionDidFullList: we.collectionDidFullList,
 			nodeReadyUpdate:       nodeReadyUpdate,
 		}
-	}(*node, workerEval, resolvedRef, isDrift)
+	}(*node, workerEval, resolvedNodeType, isDrift)
 	w.inflight++
 }
 

@@ -197,14 +197,14 @@ func hasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 }
 
 // setIdentityLabels stamps identity and generation labels onto a resource's
-// metadata labels map. Called during apply for Template and Patch references.
-// Panics if ref does not have a label value — this is an invariant violation,
-// as all call sites pass NodeTypeTemplate or NodeTypePatch
+// metadata labels map. Called during apply for Template and Patch node types.
+// Panics if nodeType does not have a label value — this is an invariant
+// violation, as all call sites pass NodeTypeTemplate or NodeTypePatch
 // directly.
-func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, generation string, ref NodeType) map[string]string {
-	lv, ok := ref.LabelValue()
+func setIdentityLabels(labels map[string]string, nodeID, graphName, namespace, generation string, nodeType NodeType) map[string]string {
+	lv, ok := nodeType.LabelValue()
 	if !ok {
-		panic(fmt.Sprintf("setIdentityLabels called with non-writable reference %s", ref))
+		panic(fmt.Sprintf("setIdentityLabels called with non-writable node type %s", nodeType))
 	}
 	if labels == nil {
 		labels = make(map[string]string)
@@ -248,13 +248,13 @@ func forEachChildGenerationLabelKey(parentID, resName, resNamespace, kind, group
 }
 
 // setForEachChildIdentityLabels stamps forEach child identity and generation labels.
-// Panics if ref does not have a label value — this is an invariant violation,
-// as all call sites pass NodeTypeTemplate or NodeTypePatch
+// Panics if nodeType does not have a label value — this is an invariant
+// violation, as all call sites pass NodeTypeTemplate or NodeTypePatch
 // directly.
-func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation string, ref NodeType) map[string]string {
-	lv, ok := ref.LabelValue()
+func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation string, nodeType NodeType) map[string]string {
+	lv, ok := nodeType.LabelValue()
 	if !ok {
-		panic(fmt.Sprintf("setForEachChildIdentityLabels called with non-writable reference %s", ref))
+		panic(fmt.Sprintf("setForEachChildIdentityLabels called with non-writable node type %s", nodeType))
 	}
 	if labels == nil {
 		labels = make(map[string]string)
@@ -274,7 +274,7 @@ type appliedEntry struct {
 
 // stampForEachChildLabels stamps identity labels on a forEach child object.
 // Handles nil label maps, GVK extraction, and generation formatting.
-func stampForEachChildLabels(childObj *unstructured.Unstructured, parentID, graphName, graphNamespace string, generation int64, ref NodeType) {
+func stampForEachChildLabels(childObj *unstructured.Unstructured, parentID, graphName, graphNamespace string, generation int64, nodeType NodeType) {
 	gvk := childObj.GroupVersionKind()
 	gv, _ := schema.ParseGroupVersion(childObj.GetAPIVersion())
 	lbls := childObj.GetLabels()
@@ -286,7 +286,7 @@ func stampForEachChildLabels(childObj *unstructured.Unstructured, parentID, grap
 		childObj.GetName(), childObj.GetNamespace(),
 		gvk.Kind, gv.Group,
 		graphName, graphNamespace,
-		fmt.Sprintf("%d", generation), ref,
+		fmt.Sprintf("%d", generation), nodeType,
 	)
 	childObj.SetLabels(lbls)
 }

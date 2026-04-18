@@ -6,9 +6,10 @@ import "github.com/prometheus/client_golang/prometheus"
 // .Inc() / .With() even when the metrics endpoint is disabled — the
 // endpoint flag controls serving, not collector existence.
 //
-// TODO: series for graphs in a deleted namespace persist until process
-// restart. A namespace-deletion watch or controller shutdown hook would
-// prevent this slow leak in long-lived controllers.
+// Namespace deletion does not leak metric series. The namespace lifecycle
+// controller sets deletionTimestamp on all resources in the namespace; the
+// Graph's finalizer holds the object until reconcileDelete runs and calls
+// deleteGraphMetricsForGraph. On controller restart the registry is fresh.
 
 var (
 	// DriftTimerFiresTotal counts drift timer expirations that trigger an

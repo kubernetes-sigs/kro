@@ -34,7 +34,7 @@ spec:
               storage: true
               schema:
                 openAPIV3Schema: >-
-                  ${simpleSchema.toOpenAPI({"types": {"Node": {"id": "string", "template": "any", "patch": "any", "ref": "any", "watch": "any", "def": "any", "forEach": "[]map[string]string", "finalizes": "string", "includeWhen": "[]string", "readyWhen": "[]string", "propagateWhen": "[]string"}, "PrinterColumn": {"name": "string | required=true", "type": "string | required=true", "jsonPath": "string | required=true", "description": "string", "format": "string", "priority": "integer"}}, "spec": {"kind": "string", "group": "string", "version": "string", "scope": "string | default=Namespaced", "schema": {"spec": "object", "status": "object", "types": "object"}, "nodes": "[]Node", "additionalPrinterColumns": "[]PrinterColumn"}, "status": {"ready": "boolean", "items": "integer"}}, [])}
+                  ${simpleSchema.toOpenAPI({"types": {"Node": {"id": "string", "template": "any", "patch": "any", "ref": "any", "watch": "any", "def": "any", "forEach": "[]map[string]string", "finalizes": "string", "includeWhen": "[]string", "readyWhen": "[]string", "propagateWhen": "[]string"}, "PrinterColumn": {"name": "string | required=true", "type": "string | required=true", "jsonPath": "string | required=true", "description": "string", "format": "string", "priority": "integer"}}, "spec": {"kind": "string", "group": "string", "version": "string", "scope": "string | default=Namespaced", "schema": {"spec": "object", "status": "object", "types": "object"}, "propagateWhen": "[]string", "nodes": "[]Node", "additionalPrinterColumns": "[]PrinterColumn"}, "status": {"ready": "boolean", "items": "integer"}}, [])}
               subresources:
                 status: {}
               additionalPrinterColumns:
@@ -122,6 +122,11 @@ spec:
             - id: instances
               forEach:
                 - instance: $${watchInstances}
+              readyWhen:
+                - >-
+                  $${instances.status.conditions.exists(c,
+                  c.type == 'Ready' && c.status == 'True')}
+              propagateWhen: "${has(k.spec.propagateWhen) ? k.spec.propagateWhen : []}"
               template:
                 apiVersion: experimental.kro.run/v1alpha1
                 kind: Graph

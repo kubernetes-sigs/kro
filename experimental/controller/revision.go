@@ -160,11 +160,7 @@ func snapshotNode(node Node) map[string]any {
 		}
 	}
 	if node.ForEach != nil {
-		fe := make(map[string]any, len(node.ForEach))
-		for k, v := range node.ForEach {
-			fe[k] = v
-		}
-		entry["forEach"] = fe
+		entry["forEach"] = map[string]any{node.ForEach.VarName: node.ForEach.Expr}
 	}
 	if node.Finalizes != "" {
 		entry["finalizes"] = node.Finalizes

@@ -51,7 +51,6 @@ type reconcileState struct {
 	// Finalization: "FinalizerSkipped is not an error — finalization was
 	// bypassed because there was nothing to finalize."
 	nodeNotes []string
-	nodeCount int
 }
 
 // deriveCompiledCondition computes the Compiled condition.

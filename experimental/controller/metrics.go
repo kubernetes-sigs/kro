@@ -1,6 +1,10 @@
 package graphcontroller
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"fmt"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 // Graph controller metrics. Registered via RegisterMetrics; safe to call
 // .Inc() / .With() even when the metrics endpoint is disabled — the
@@ -146,10 +150,21 @@ func deleteNodeMetrics(graphName, graphNamespace string, nodeIDs map[string]bool
 }
 
 // nodeStateLabels is the complete set of state labels for the node state
-// gauge. Kept in sync with NodeState constants in dag.go.
+// gauge. Must match the exported NodeState constants in dag.go (excluding
+// nodeUnvisited which is unexported walk-internal machinery).
+// The init assertion below panics at startup if a new state is added to
+// the iota without updating this slice.
 var nodeStateLabels = []string{
 	"Ready", "NotReady", "Pending", "Excluded", "Blocked",
 	"Error", "Conflict", "SystemError",
+}
+
+func init() {
+	// _nodeStateCount includes nodeUnvisited (the zero value), so the
+	// number of exported states is _nodeStateCount - 1.
+	if expected := int(_nodeStateCount) - 1; len(nodeStateLabels) != expected {
+		panic(fmt.Sprintf("nodeStateLabels has %d entries but there are %d exported NodeState values; update nodeStateLabels in metrics.go", len(nodeStateLabels), expected))
+	}
 }
 
 // updateNodeStateMetrics sets the node state gauge for all nodes in a graph.

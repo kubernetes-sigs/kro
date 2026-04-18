@@ -457,20 +457,14 @@ func (s *GraphSpec) Hash() string {
 		// Finalizes
 		hashField([]byte(node.Finalizes))
 
-		// ForEach (sorted keys for determinism — ForEach is a map)
+		// ForEach (direct field access — single dimension)
 		if node.ForEach != nil {
-			forEachKeys := make([]string, 0, len(node.ForEach))
-			for k := range node.ForEach {
-				forEachKeys = append(forEachKeys, k)
-			}
-			sort.Strings(forEachKeys)
-			for _, k := range forEachKeys {
-				hashField([]byte(k))
-				hashField([]byte(node.ForEach[k]))
-			}
+			hashField([]byte(node.ForEach.VarName))
+			hashField([]byte(node.ForEach.Expr))
+			binary.Write(h, binary.LittleEndian, int64(1)) //nolint:errcheck
+		} else {
+			binary.Write(h, binary.LittleEndian, int64(0)) //nolint:errcheck
 		}
-		// Write forEach count to distinguish nil from empty.
-		binary.Write(h, binary.LittleEndian, int64(len(node.ForEach))) //nolint:errcheck
 
 		// Conditions — slices, order-stable from spec parsing.
 		for _, c := range node.IncludeWhen {

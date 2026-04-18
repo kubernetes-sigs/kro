@@ -310,7 +310,7 @@ func TestSpecHashCoversCompilationInputs(t *testing.T) {
 		Nodes: []Node{{
 			ID:            "deploy",
 			Template:      map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "app"}},
-			ForEach:       map[string]string{"ns": "${namespaces}"},
+			ForEach:       &ForEachBinding{VarName: "ns", Expr: "${namespaces}"},
 			Finalizes:     "pvc",
 			IncludeWhen:   []string{"${config.data.enabled == 'true'}"},
 			ReadyWhen:     []string{"${deploy.status.availableReplicas > 0}"},
@@ -335,7 +335,7 @@ func TestSpecHashCoversCompilationInputs(t *testing.T) {
 		},
 		{
 			name:   "ForEach",
-			mutate: func(n *Node) { n.ForEach = map[string]string{"pod": "${pods}"} },
+			mutate: func(n *Node) { n.ForEach = &ForEachBinding{VarName: "pod", Expr: "${pods}"} },
 		},
 		{
 			name:   "Finalizes",
@@ -356,7 +356,7 @@ func TestSpecHashCoversCompilationInputs(t *testing.T) {
 		// Edge cases: nil/empty transitions must also change the hash.
 		{
 			name:   "ForEach nil→empty",
-			mutate: func(n *Node) { n.ForEach = map[string]string{} },
+			mutate: func(n *Node) { n.ForEach = &ForEachBinding{} },
 		},
 		{
 			name:   "Template nil",
@@ -424,16 +424,13 @@ func TestSpecHashCoversCompilationInputs(t *testing.T) {
 	_ = totalNodeFields // reference to prevent the constant from being unused
 }
 
-// copyForEach returns a shallow copy of a forEach map.
-func copyForEach(m map[string]string) map[string]string {
-	if m == nil {
+// copyForEach returns a shallow copy of a ForEachBinding pointer.
+func copyForEach(d *ForEachBinding) *ForEachBinding {
+	if d == nil {
 		return nil
 	}
-	result := make(map[string]string, len(m))
-	for k, v := range m {
-		result[k] = v
-	}
-	return result
+	cp := *d
+	return &cp
 }
 
 // copyStrings returns a copy of a string slice.

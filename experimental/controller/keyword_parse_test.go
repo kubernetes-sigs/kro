@@ -528,7 +528,7 @@ func TestForEachSingleVariableAccepted(t *testing.T) {
 	nodes, err := parseNodeList(raw)
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
-	assert.Len(t, nodes[0].ForEach, 1)
+	assert.NotNil(t, nodes[0].ForEach)
 }
 
 // ---------------------------------------------------------------------------

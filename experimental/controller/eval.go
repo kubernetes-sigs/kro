@@ -615,9 +615,7 @@ func extractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 		templateStrs = append(templateStrs, s)
 	}
 	if node.ForEach != nil {
-		for _, v := range node.ForEach {
-			templateStrs = append(templateStrs, v)
-		}
+		templateStrs = append(templateStrs, node.ForEach.Expr)
 	}
 
 	for _, s := range templateStrs {

@@ -117,7 +117,8 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 		}
 
 		// forEach iterator variables are always dyn.
-		for varName := range node.ForEach {
+		if node.ForEach != nil {
+			varName := node.ForEach.VarName
 			if !seen[varName] {
 				seen[varName] = true
 				ts.untypedIDs = append(ts.untypedIDs, varName)

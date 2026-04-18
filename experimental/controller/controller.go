@@ -1283,7 +1283,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	rstate := &reconcileState{
 		compiled:    compilationErr == nil,
 		compiledErr: compilationErr,
-		nodeCount:   len(revisionSpec.Nodes),
 		PlanSummary: summary,
 		nodeErrors:  nodeErrors,
 		nodeNotes:   nodeNotes,

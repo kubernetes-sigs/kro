@@ -1584,7 +1584,7 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 					map[string]any{"metadata": map[string]any{"name": "beta"}},
 				},
 			}},
-			{ID: "workers", ForEach: map[string]string{"item": "${source.items}"},
+			{ID: "workers", ForEach: &ForEachBinding{VarName: "item", Expr: "${source.items}"},
 				// propagateWhen that immediately halts — forces ALL items
 				// through the carry-forward path.
 				PropagateWhen: []string{"${false}"},
@@ -1687,7 +1687,7 @@ func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
 					map[string]any{"metadata": map[string]any{"name": "alpha"}},
 				},
 			}},
-			{ID: "results", ForEach: map[string]string{"item": "${source.items}"},
+			{ID: "results", ForEach: &ForEachBinding{VarName: "item", Expr: "${source.items}"},
 				Def: map[string]any{"name": "${item.metadata.name}"},
 			},
 		},

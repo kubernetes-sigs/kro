@@ -104,6 +104,15 @@ func NodeTypeFromLabelValue(s string) (NodeType, bool) {
 	}
 }
 
+// ForEachBinding is a single forEach binding — one iteration variable
+// bound to one collection expression. The Node parser normalizes
+// both YAML input shapes (flat map and array-of-maps) into this
+// struct after validating exactly-one-variable cardinality.
+type ForEachBinding struct {
+	VarName string // CEL scope variable name
+	Expr    string // CEL expression yielding the collection
+}
+
 // Node is a parsed Graph node entry — a user's declaration of intent about
 // a Kubernetes resource (or collection of resources via forEach). Definition
 // nodes (declared via def:) put values into scope without creating resources.
@@ -152,7 +161,13 @@ type Node struct {
 	// Per 003-ownership.md § Status Subresource.
 	hasStatusSubresource bool
 
-	ForEach       map[string]string
+	// ForEach holds the single forEach dimension for this node. Per
+	// 001-graph.md: "multi-variable cross-product expansion is not
+	// supported." The struct encodes this single-dimension constraint
+	// at the type level — callers access VarName and Expr directly
+	// instead of iterating a map that always has exactly one entry.
+	// nil means no forEach on this node.
+	ForEach       *ForEachBinding
 	Finalizes     string // target node ID — resource created only during prune/teardown
 	IncludeWhen   []string
 	ReadyWhen     []string // CEL conditions; all must be true for the node to be "ready"
@@ -287,8 +302,8 @@ func (s *GraphSpec) AllIdentifiers() []string {
 	}
 	for _, node := range s.Nodes {
 		add(node.ID)
-		for varName := range node.ForEach {
-			add(varName)
+		if node.ForEach != nil {
+			add(node.ForEach.VarName)
 		}
 	}
 	return ids
@@ -340,8 +355,8 @@ func (s *GraphSpec) AllExpressions() []string {
 		add(templateStrings)
 
 		// ForEach collection expressions
-		for _, v := range node.ForEach {
-			add([]string{v})
+		if node.ForEach != nil {
+			add([]string{node.ForEach.Expr})
 		}
 
 		// Condition expressions (includeWhen, readyWhen, propagateWhen)
@@ -468,39 +483,50 @@ func parseNodeList(raw any) ([]Node, error) {
 		}
 		if fe, ok := m["forEach"].(map[string]any); ok {
 			// Flat map format (Graph templates): forEach: {region: "${...}"}
-			parsed, err := parseForEachMap(fe)
-			if err != nil {
-				return nil, fmt.Errorf("node[%d] %q: %w", i, id, err)
+			if len(fe) == 0 {
+				return nil, fmt.Errorf("node[%d] %q: forEach must have at least one dimension", i, id)
 			}
-			node.ForEach = parsed
+			if len(fe) > 1 {
+				return nil, fmt.Errorf("node[%d] %q: forEach must have exactly one variable (got %d); multi-variable cross-product expansion is not supported", i, id, len(fe))
+			}
+			for k, v := range fe {
+				vs, ok := v.(string)
+				if !ok {
+					return nil, fmt.Errorf("node[%d] %q: forEach variable %q value must be a string, got %T", i, id, k, v)
+				}
+				node.ForEach = &ForEachBinding{VarName: k, Expr: vs}
+			}
 		} else if feArr, ok := m["forEach"].([]any); ok {
-			// Array format (upstream kro API): forEach: [{region: "${...}"}, {tier: "${...}"}]
-			// Each element is a map of variable bindings. Flatten to map[string]string.
-			node.ForEach = make(map[string]string)
+			// Array format (upstream kro API): forEach: [{region: "${...}"}]
+			// Each element is a map of variable bindings. Validate exactly one variable total.
+			parsed := make(map[string]string)
 			for j, dim := range feArr {
 				dimMap, ok := dim.(map[string]any)
 				if !ok {
 					return nil, fmt.Errorf("node[%d] %q: forEach[%d] must be a map, got %T", i, id, j, dim)
 				}
 				for k, v := range dimMap {
-					if _, exists := node.ForEach[k]; exists {
+					if _, exists := parsed[k]; exists {
 						return nil, fmt.Errorf("node[%d] %q: forEach has duplicate variable %q", i, id, k)
 					}
 					vs, ok := v.(string)
 					if !ok {
 						return nil, fmt.Errorf("node[%d] %q: forEach[%d] variable %q value must be a string, got %T", i, id, j, k, v)
 					}
-					node.ForEach[k] = vs
+					parsed[k] = vs
 				}
+			}
+			if len(parsed) == 0 {
+				return nil, fmt.Errorf("node[%d] %q: forEach must have at least one dimension", i, id)
+			}
+			if len(parsed) > 1 {
+				return nil, fmt.Errorf("node[%d] %q: forEach must have exactly one variable (got %d); multi-variable cross-product expansion is not supported", i, id, len(parsed))
+			}
+			for k, vs := range parsed {
+				node.ForEach = &ForEachBinding{VarName: k, Expr: vs}
 			}
 		} else if _, hasForEach := m["forEach"]; hasForEach && m["forEach"] != nil {
 			return nil, fmt.Errorf("node[%d] %q: forEach must be a map or array, got %T", i, id, m["forEach"])
-		}
-		if node.ForEach != nil && len(node.ForEach) == 0 {
-			return nil, fmt.Errorf("node[%d] %q: forEach must have at least one dimension", i, id)
-		}
-		if len(node.ForEach) > 1 {
-			return nil, fmt.Errorf("node[%d] %q: forEach must have exactly one variable (got %d); multi-variable cross-product expansion is not supported", i, id, len(node.ForEach))
 		}
 		if node.ForEach != nil {
 			// Validate: forEach iterator variable names must not collide
@@ -508,11 +534,9 @@ func parseNodeList(raw any) ([]Node, error) {
 			// same CEL scope, so a collision would shadow the node. The check
 			// uses allNodeIDs (collected in the first pass above) rather than
 			// `seen` to catch collisions with nodes declared later in the list.
-			for varName := range node.ForEach {
-				varLower := strings.ToLower(varName)
-				if collidingID, exists := allNodeIDsLower[varLower]; exists {
-					return nil, fmt.Errorf("node[%d] %q: forEach variable %q collides with node ID %q (both enter CEL scope)", i, id, varName, collidingID)
-				}
+			varLower := strings.ToLower(node.ForEach.VarName)
+			if collidingID, exists := allNodeIDsLower[varLower]; exists {
+				return nil, fmt.Errorf("node[%d] %q: forEach variable %q collides with node ID %q (both enter CEL scope)", i, id, node.ForEach.VarName, collidingID)
 			}
 		}
 		// Validate: finalizes nodes must not have CEL-evaluated names unless
@@ -761,20 +785,6 @@ func isForceApplyMap(tmpl map[string]any) bool {
 	anns, _ := md["annotations"].(map[string]any)
 	v, _ := anns["kro.run/apply"].(string)
 	return v == "Force"
-}
-
-// parseForEachMap parses a flat forEach map (map[string]any → map[string]string).
-// Returns an error if any value is not a string — silent drops are data loss.
-func parseForEachMap(m map[string]any) (map[string]string, error) {
-	result := make(map[string]string, len(m))
-	for k, v := range m {
-		vs, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("forEach variable %q value must be a string, got %T", k, v)
-		}
-		result[k] = vs
-	}
-	return result, nil
 }
 
 // parseStringList extracts a validated []string from a map key that holds []any.

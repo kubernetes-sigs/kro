@@ -277,77 +277,78 @@ func (r *GraphReconciler) runForEachFinalization(
 	var createdKeys []string
 	allReady := true
 
-	for varName, collectionExpr := range finNode.ForEach {
-		collection, err := eval.evalString(collectionExpr)
+	varName := finNode.ForEach.VarName
+	collectionExpr := finNode.ForEach.Expr
+
+	collection, err := eval.evalString(collectionExpr)
+	if err != nil {
+		return false, createdKeys, fmt.Errorf("forEach finalizer %s: evaluating collection %q: %w", finNode.ID, collectionExpr, err)
+	}
+
+	items, ok := collection.([]any)
+	if !ok {
+		items = []any{collection}
+	}
+	logger.Info("forEach finalization expanding", "finalizer", finNode.ID, "var", varName, "count", len(items))
+
+	for _, item := range items {
+		innerScope := copyScope(eval.scope)
+		innerScope[varName] = item
+		innerEval := eval.withScope(innerScope)
+
+		evalMap, err := innerEval.toMapNode(*finNode)
 		if err != nil {
-			return false, createdKeys, fmt.Errorf("forEach finalizer %s: evaluating collection %q: %w", finNode.ID, collectionExpr, err)
+			return false, createdKeys, fmt.Errorf("forEach finalizer %s item: %w", finNode.ID, err)
 		}
 
-		items, ok := collection.([]any)
-		if !ok {
-			items = []any{collection}
+		// Set namespace default.
+		childObj := &unstructured.Unstructured{Object: evalMap}
+		if childObj.GetNamespace() == "" {
+			childObj.SetNamespace(graph.GetNamespace())
 		}
-		logger.Info("forEach finalization expanding", "finalizer", finNode.ID, "var", varName, "count", len(items))
 
-		for _, item := range items {
-			innerScope := copyScope(eval.scope)
-			innerScope[varName] = item
-			innerEval := eval.withScope(innerScope)
+		// Stamp forEach child identity labels using the reconcile-scoped
+		// effective generation (falls back to graph generation when unset).
+		stampForEachChildLabels(childObj, finNode.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, NodeTypeTemplate)
+		evalMap = childObj.Object
 
-			evalMap, err := innerEval.toMapNode(*finNode)
-			if err != nil {
-				return false, createdKeys, fmt.Errorf("forEach finalizer %s item: %w", finNode.ID, err)
+		// Check if this child already exists.
+		existing := &unstructured.Unstructured{}
+		existing.SetGroupVersionKind(childObj.GroupVersionKind())
+		getErr := r.Client.Get(ctx, client.ObjectKey{
+			Namespace: childObj.GetNamespace(),
+			Name:      childObj.GetName(),
+		}, existing)
+
+		if getErr != nil {
+			if !apierrors.IsNotFound(getErr) {
+				return false, createdKeys, fmt.Errorf("checking forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), getErr)
 			}
-
-			// Set namespace default.
-			childObj := &unstructured.Unstructured{Object: evalMap}
-			if childObj.GetNamespace() == "" {
-				childObj.SetNamespace(graph.GetNamespace())
+			// Child doesn't exist — create it.
+			logger.Info("creating forEach finalizer child",
+				"finalizer", finNode.ID, "name", childObj.GetName())
+			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, NodeTypeTemplate, eval.effectiveGeneration, false)
+			if applyErr != nil {
+				return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
 			}
+			createdKeys = append(createdKeys, resourceKey(applied))
+			allReady = false
+			continue
+		}
 
-			// Stamp forEach child identity labels using the reconcile-scoped
-			// effective generation (falls back to graph generation when unset).
-			stampForEachChildLabels(childObj, finNode.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, NodeTypeTemplate)
-			evalMap = childObj.Object
-
-			// Check if this child already exists.
-			existing := &unstructured.Unstructured{}
-			existing.SetGroupVersionKind(childObj.GroupVersionKind())
-			getErr := r.Client.Get(ctx, client.ObjectKey{
-				Namespace: childObj.GetNamespace(),
-				Name:      childObj.GetName(),
-			}, existing)
-
-			if getErr != nil {
-				if !apierrors.IsNotFound(getErr) {
-					return false, createdKeys, fmt.Errorf("checking forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), getErr)
-				}
-				// Child doesn't exist — create it.
-				logger.Info("creating forEach finalizer child",
-					"finalizer", finNode.ID, "name", childObj.GetName())
-				applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, NodeTypeTemplate, eval.effectiveGeneration, false)
-				if applyErr != nil {
-					return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
-				}
-				createdKeys = append(createdKeys, resourceKey(applied))
+		// Child exists — check readyWhen.
+		createdKeys = append(createdKeys, resourceKey(existing))
+		if len(finNode.ReadyWhen) > 0 {
+			innerEval.scope[finNode.ID] = normalizeTypes(existing.Object)
+			if err := innerEval.checkReadiness(finNode.ReadyWhen, finNode.ID); err != nil {
+				logger.V(1).Info("forEach finalizer child not ready",
+					"finalizer", finNode.ID, "name", existing.GetName())
 				allReady = false
 				continue
 			}
-
-			// Child exists — check readyWhen.
-			createdKeys = append(createdKeys, resourceKey(existing))
-			if len(finNode.ReadyWhen) > 0 {
-				innerEval.scope[finNode.ID] = normalizeTypes(existing.Object)
-				if err := innerEval.checkReadiness(finNode.ReadyWhen, finNode.ID); err != nil {
-					logger.V(1).Info("forEach finalizer child not ready",
-						"finalizer", finNode.ID, "name", existing.GetName())
-					allReady = false
-					continue
-				}
-			}
-			logger.V(1).Info("forEach finalizer child ready",
-				"finalizer", finNode.ID, "name", existing.GetName())
 		}
+		logger.V(1).Info("forEach finalizer child ready",
+			"finalizer", finNode.ID, "name", existing.GetName())
 	}
 
 	return allReady, createdKeys, nil

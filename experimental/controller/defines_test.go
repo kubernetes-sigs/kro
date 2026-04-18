@@ -248,7 +248,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 			}, nodeType: NodeTypeTemplate},
 			{
 				ID:       "items",
-				ForEach:  map[string]string{"w": "${['a', 'b']}"},
+				ForEach:  &ForEachBinding{VarName: "w", Expr: "${['a', 'b']}"},
 				Def:      map[string]any{"val": "${upstream.data.key}"},
 				nodeType: NodeTypeDef,
 			},
@@ -294,7 +294,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 			}, nodeType: NodeTypeTemplate},
 			{
 				ID:       "items",
-				ForEach:  map[string]string{"w": "${['a', 'b']}"},
+				ForEach:  &ForEachBinding{VarName: "w", Expr: "${['a', 'b']}"},
 				Def:      map[string]any{"val": "${upstream.data.key}"},
 				nodeType: NodeTypeDef,
 			},

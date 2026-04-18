@@ -142,9 +142,9 @@ func unescapeNodeSlice(nodes []Node) []Node {
 			ReadyWhen:   unescapeStrings(n.ReadyWhen),
 		}
 		if n.ForEach != nil {
-			out[i].ForEach = make(map[string]string, len(n.ForEach))
-			for k, v := range n.ForEach {
-				out[i].ForEach[k] = unescapeOneLevel(v)
+			out[i].ForEach = &ForEachBinding{
+				VarName: n.ForEach.VarName,
+				Expr:    unescapeOneLevel(n.ForEach.Expr),
 			}
 		}
 	}
@@ -197,17 +197,17 @@ func evalForEachExpr(t *testing.T, compiled *compiledGraph, nodeID string, scope
 	t.Helper()
 	node := compiled.dag.Nodes[compiled.dag.Index[nodeID]]
 	eval := &evaluator{compiled: compiled, scope: scope}
-	for _, expr := range node.ForEach {
-		result, err := eval.evalString(expr)
-		require.NoError(t, err)
-		items, ok := result.([]any)
-		if !ok {
-			items = []any{result}
-		}
-		return items
+	if node.ForEach == nil {
+		t.Fatal("node has no forEach")
+		return nil
 	}
-	t.Fatal("node has no forEach")
-	return nil
+	result, err := eval.evalString(node.ForEach.Expr)
+	require.NoError(t, err)
+	items, ok := result.([]any)
+	if !ok {
+		items = []any{result}
+	}
+	return items
 }
 
 // evalTemplateExpr evaluates a node's template with the given scope.
@@ -276,7 +276,7 @@ func TestStdlibDecoratorEvalStringEscape(t *testing.T) {
 			},
 			{
 				ID:      "instances",
-				ForEach: map[string]string{"item": "${items}"},
+				ForEach: &ForEachBinding{VarName: "item", Expr: "${items}"},
 				Template: map[string]any{
 					"apiVersion": "experimental.kro.run/v1alpha1",
 					"kind":       "Graph",
@@ -713,7 +713,7 @@ func TestStdlibDistinctCEL(t *testing.T) {
 			},
 			{
 				ID:      "sa",
-				ForEach: map[string]string{"ns": "${items.map(i, i.metadata.namespace).distinct()}"},
+				ForEach: &ForEachBinding{VarName: "ns", Expr: "${items.map(i, i.metadata.namespace).distinct()}"},
 				Template: map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ServiceAccount",

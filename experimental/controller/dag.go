@@ -276,6 +276,12 @@ const (
 	NodeError       // Client request failed (4xx)
 	NodeConflict    // SSA 409 — field ownership taken by another actor
 	NodeSystemError // Server/infrastructure failure (5xx, timeout, network)
+
+	// _nodeStateCount is a sentinel for compile-time assertions.
+	// It must remain the last constant in this block. Adding a new
+	// NodeState without updating nodeStateLabels in metrics.go will
+	// break the build.
+	_nodeStateCount
 )
 
 // String returns the human-readable name of the NodeState.

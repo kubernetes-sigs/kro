@@ -192,7 +192,7 @@ func TestResolveNodeTypes(t *testing.T) {
 		nodes := []Node{
 			{
 				ID:       "items",
-				ForEach:  map[string]string{"item": "${spec.items}"},
+				ForEach:  &ForEachBinding{VarName: "item", Expr: "${spec.items}"},
 				Def:      map[string]any{"name": "${item}"},
 				nodeType: NodeTypeDef},
 		}
@@ -356,7 +356,7 @@ func TestDefinitionFieldValidation(t *testing.T) {
 			}, nodeType: NodeTypeTemplate},
 			{
 				ID:       "items",
-				ForEach:  map[string]string{"item": "${upstream.data.items}"},
+				ForEach:  &ForEachBinding{VarName: "item", Expr: "${upstream.data.items}"},
 				Def:      map[string]any{"name": "${item}", "port": int64(80)},
 				nodeType: NodeTypeDef},
 		}}

@@ -293,9 +293,8 @@ func TestIncludeWhenPropagateWhenPrecedence(t *testing.T) {
 						},
 					},
 					map[string]any{
-						"id":            "upstream",
-						"includeWhen":   []any{"${control.data.toggle == 'true'}"},
-						"propagateWhen": []any{"${upstream.data.ready == 'true'}"},
+						"id":          "upstream",
+						"includeWhen": []any{"${control.data.toggle == 'true'}"},
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
@@ -316,6 +315,7 @@ func TestIncludeWhenPropagateWhenPrecedence(t *testing.T) {
 								"ref": "${upstream.data.value}",
 							},
 						},
+						"propagateWhen": []any{"${upstream.data.ready == 'true'}"},
 					},
 				},
 			},
@@ -427,10 +427,9 @@ func TestPropagateWhenContribute(t *testing.T) {
 							"metadata":   map[string]any{"name": "prop-contrib-control"},
 						},
 					},
-					// Upstream: Own a resource, propagateWhen gated on control.
+					// Upstream: Own a resource, no propagateWhen.
 					map[string]any{
-						"id":            "upstream",
-						"propagateWhen": []any{"${control.data.ready == 'true'}"},
+						"id": "upstream",
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
@@ -440,9 +439,10 @@ func TestPropagateWhenContribute(t *testing.T) {
 							},
 						},
 					},
-					// Contribute: writes upstream's value to the external resource.
+					// Contribute: writes upstream's value to the external resource, input-gated.
 					map[string]any{
-						"id": "contrib",
+						"id":            "contrib",
+						"propagateWhen": []any{"${control.data.ready == 'true'}"},
 						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
@@ -1713,10 +1713,9 @@ func TestPropagateWhenRespectsResyncGate(t *testing.T) {
 							"metadata":   map[string]any{"name": "resync-gate-control"},
 						},
 					},
-					// Upstream: propagateWhen gated on control.data.ready.
+					// Upstream: no propagateWhen.
 					map[string]any{
-						"id":            "upstream",
-						"propagateWhen": []any{"${control.data.ready == 'true'}"},
+						"id": "upstream",
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
@@ -1726,9 +1725,10 @@ func TestPropagateWhenRespectsResyncGate(t *testing.T) {
 							},
 						},
 					},
-					// Gated: depends on upstream (propagateWhen blocks).
+					// Gated: depends on upstream, input-gated on control.
 					map[string]any{
-						"id": "gated",
+						"id":            "gated",
+						"propagateWhen": []any{"${control.data.ready == 'true'}"},
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",

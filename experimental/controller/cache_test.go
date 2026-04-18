@@ -314,7 +314,7 @@ func TestSpecHashCoversCompilationInputs(t *testing.T) {
 			Finalizes:     "pvc",
 			IncludeWhen:   []string{"${config.data.enabled == 'true'}"},
 			ReadyWhen:     []string{"${deploy.status.availableReplicas > 0}"},
-			PropagateWhen: []string{"${deploy.status.updatedReplicas == deploy.spec.replicas}"},
+			PropagateWhen: []string{"${config.data.enabled == 'true'}"},
 		}},
 	}
 	baselineHash := baseline.Hash()
@@ -351,7 +351,7 @@ func TestSpecHashCoversCompilationInputs(t *testing.T) {
 		},
 		{
 			name:   "PropagateWhen",
-			mutate: func(n *Node) { n.PropagateWhen = []string{"${deploy.ready()}"} },
+			mutate: func(n *Node) { n.PropagateWhen = []string{"${config.ready()}"} },
 		},
 		// Edge cases: nil/empty transitions must also change the hash.
 		{

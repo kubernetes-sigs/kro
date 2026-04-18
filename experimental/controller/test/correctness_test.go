@@ -78,9 +78,6 @@ func TestPropagateWhenGatesDataFlow(t *testing.T) {
 						"readyWhen": []any{
 							"${deploy.data.updatedReplicas == deploy.data.replicas}",
 						},
-						"propagateWhen": []any{
-							"${deploy.data.updatedReplicas == deploy.data.replicas}",
-						},
 					},
 					map[string]any{
 						"id": "service",
@@ -93,6 +90,9 @@ func TestPropagateWhenGatesDataFlow(t *testing.T) {
 							"data": map[string]any{
 								"deployImage": "${deploy.data.image}",
 							},
+						},
+						"propagateWhen": []any{
+							"${deploy.data.updatedReplicas == deploy.data.replicas}",
 						},
 					},
 				},
@@ -208,7 +208,7 @@ func TestPropagateWhenDoesNotBlockIndependentBranches(t *testing.T) {
 			},
 			"spec": map[string]any{
 				"nodes": []any{
-					// Branch A: watch with unsatisfied propagateWhen
+					// Branch A: watch source
 					map[string]any{
 						"id": "watched",
 						"ref": map[string]any{
@@ -218,11 +218,8 @@ func TestPropagateWhenDoesNotBlockIndependentBranches(t *testing.T) {
 								"name": "propagate-source",
 							},
 						},
-						"propagateWhen": []any{
-							"${watched.data.ready == 'true'}",
-						},
 					},
-					// Branch A dependent: depends on watched
+					// Branch A dependent: depends on watched, input-gated
 					map[string]any{
 						"id": "dependent",
 						"template": map[string]any{
@@ -234,6 +231,9 @@ func TestPropagateWhenDoesNotBlockIndependentBranches(t *testing.T) {
 							"data": map[string]any{
 								"fromWatched": "${watched.data.value}",
 							},
+						},
+						"propagateWhen": []any{
+							"${watched.data.ready == 'true'}",
 						},
 					},
 					// Branch B: independent — no dependency on watched
@@ -1350,13 +1350,11 @@ func TestReadyFunctionReflectsNodeState(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Wait for consumer to be created (propagateWhen doesn't gate creation,
-	// but it gates data flow on subsequent reconciles)
+	// Under input gate semantics, consumer is frozen (not created) until
+	// watched.ready() is true. Assert consumer is absent while gate is closed.
 	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
-	consumer := &unstructured.Unstructured{}
-	consumer.SetGroupVersionKind(cmGVK)
-	require.NoError(t, waitForResource(ctx, k8sClient,
-		types.NamespacedName{Name: "ready-fn-consumer", Namespace: ns}, consumer))
+	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "ready-fn-consumer", Namespace: ns}, 10*time.Second))
 
 	// Graph should be InProgress — watched.ready() is false because
 	// readyWhen (data.status == 'active') is false
@@ -1368,12 +1366,18 @@ func TestReadyFunctionReflectsNodeState(t *testing.T) {
 		}
 		return graphReadyStatus(g) == "Unknown", nil
 	}))
-	t.Log("Graph InProgress — watched.ready() is false, propagateWhen gates data")
+	t.Log("Graph InProgress — watched.ready() is false, consumer frozen by input gate")
 
 	// Now update the source to make readyWhen pass
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "ready-fn-source", Namespace: ns}, source))
 	source.Object["data"] = map[string]any{"status": "active"}
 	require.NoError(t, k8sClient.Update(ctx, source))
+
+	// Consumer should now be created
+	consumer := &unstructured.Unstructured{}
+	consumer.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "ready-fn-consumer", Namespace: ns}, consumer))
 
 	// Graph should reach Ready — watched.ready() now true
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
@@ -2101,7 +2105,7 @@ func TestPropagateWhenOnForEach(t *testing.T) {
 							},
 						},
 					},
-					// Aggregator reads control and has propagateWhen
+					// Aggregator reads control
 					map[string]any{
 						"id": "gate",
 						"ref": map[string]any{
@@ -2109,11 +2113,8 @@ func TestPropagateWhenOnForEach(t *testing.T) {
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "prop-foreach-control"},
 						},
-						"propagateWhen": []any{
-							"${gate.data.propagate == 'true'}",
-						},
 					},
-					// Consumer depends on both forEach and gate
+					// Consumer depends on both forEach and gate, input-gated
 					map[string]any{
 						"id": "consumer",
 						"template": map[string]any{
@@ -2124,6 +2125,9 @@ func TestPropagateWhenOnForEach(t *testing.T) {
 								"workerData": "${workers[0].data.item}",
 								"gateState":  "${gate.data.propagate}",
 							},
+						},
+						"propagateWhen": []any{
+							"${gate.data.propagate == 'true'}",
 						},
 					},
 				},
@@ -2413,9 +2417,6 @@ func TestPropagateWhenGateOpenTriggersDownstream(t *testing.T) {
 								"name": "gate-source",
 							},
 						},
-						"propagateWhen": []any{
-							"${src.data.ready == 'true'}",
-						},
 					},
 					map[string]any{
 						"id": "consumer",
@@ -2428,6 +2429,9 @@ func TestPropagateWhenGateOpenTriggersDownstream(t *testing.T) {
 							"data": map[string]any{
 								"fromSource": "${src.data.name}",
 							},
+						},
+						"propagateWhen": []any{
+							"${src.data.ready == 'true'}",
 						},
 					},
 				},

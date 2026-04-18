@@ -156,7 +156,7 @@ type Node struct {
 	Finalizes     string // target node ID — resource created only during prune/teardown
 	IncludeWhen   []string
 	ReadyWhen     []string // CEL conditions; all must be true for the node to be "ready"
-	PropagateWhen []string // CEL conditions; all must be true for data to flow to dependents
+	PropagateWhen []string // CEL conditions; input gate — all must be true for this node to evaluate
 
 	// Dependencies are IDs of nodes this node references in its CEL expressions.
 	// Populated by BuildDAG; nil before that.

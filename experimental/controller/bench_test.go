@@ -608,8 +608,8 @@ func BenchmarkHashSelfPaths(b *testing.B) {
 // The benchmark exercises the skip path only (no trigger, no propagation) —
 // the hot path during steady-state reconciliation where no events have fired.
 //
-// The 9 constant allocs per iteration are map creation for NewPlanState (States
-// + PropagateReady) and the scope map — pure setup, not walk-path overhead.
+// The 9 constant allocs per iteration are map creation for NewPlanState (States)
+// and the scope map — pure setup, not walk-path overhead.
 func BenchmarkWalkSkip(b *testing.B) {
 	for _, nodeCount := range []int{10, 50, 100, 500} {
 		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {

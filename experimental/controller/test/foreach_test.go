@@ -807,21 +807,13 @@ func TestForEachPropagateWhenMultiChildAggregation(t *testing.T) {
 							"selector":   map[string]any{"group": "pw-foreach"},
 						},
 					},
-					// forEach: stamp one worker per source, propagateWhen gated.
-					// readyWhen evaluates per-child: each child's __ready is set
-					// based on its own data.ready field. propagateWhen uses the
-					// aggregate .ready() function which checks ALL children.
+					// forEach: stamp one worker per source with readyWhen.
 					map[string]any{
 						"id": "workers",
 						"forEach": map[string]any{
 							"src": "${sources}",
 						},
-						// readyWhen evaluates per-child, setting __ready on each.
-						// propagateWhen uses .ready() aggregation — forEach parent
-						// scope is an array, not a map, so per-element field access
-						// like ${workers.data.ready} doesn't work here.
-						"readyWhen":     []any{"${workers.data.ready == 'true'}"},
-						"propagateWhen": []any{"${workers.ready()}"},
+						"readyWhen": []any{"${workers.data.ready == 'true'}"},
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
@@ -832,9 +824,10 @@ func TestForEachPropagateWhenMultiChildAggregation(t *testing.T) {
 							},
 						},
 					},
-					// Downstream: depends on workers.
+					// Downstream: depends on workers, input-gated on workers.ready().
 					map[string]any{
-						"id": "downstream",
+						"id":            "downstream",
+						"propagateWhen": []any{"${workers.ready()}"},
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
@@ -1230,12 +1223,13 @@ func TestForEachPropagateWhenPerItem(t *testing.T) {
 								"status": "${entry.status}",
 							},
 						},
-						"propagateWhen": []any{
+						"readyWhen": []any{
 							`${items.data.status == "ready"}`,
 						},
 					},
 					map[string]any{
-						"id": "consumer",
+						"id":            "consumer",
+						"propagateWhen": []any{"${items.ready()}"},
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
@@ -1311,12 +1305,13 @@ func TestForEachPropagateWhenBlocksWhenChildFails(t *testing.T) {
 								"status": "${entry.status}",
 							},
 						},
-						"propagateWhen": []any{
+						"readyWhen": []any{
 							`${items.data.status == "ready"}`,
 						},
 					},
 					map[string]any{
-						"id": "consumer",
+						"id":            "consumer",
+						"propagateWhen": []any{"${items.ready()}"},
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",

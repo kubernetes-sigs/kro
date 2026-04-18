@@ -142,9 +142,6 @@ type nodeResult struct {
 	// worker did not evaluate readiness (e.g., non-Watch or
 	// early-exit path).
 	nodeReadyUpdate *bool
-	// forEach propagateWhen aggregate — true if all items satisfy
-	// propagateWhen. nil if not applicable (non-forEach or no propagateWhen).
-	forEachAllItemsPropagateReady *bool
 }
 
 // walkState holds coordinator-local state for a single DAG walk.
@@ -203,25 +200,19 @@ func (w *walkState) carryForwardKeys(nodeID string) {
 	}
 }
 
-// evaluatePropagateWhen evaluates or carries forward a node's propagateWhen
-// result. For forEach nodes, carries forward the previous per-item aggregate
-// (per-item evaluation only happens in the worker). For regular nodes,
-// evaluates against the coordinator scope.
-func (w *walkState) evaluatePropagateWhen(node *Node) {
-	if len(node.PropagateWhen) == 0 {
-		return
+func (w *walkState) populateDepsMap(node *Node) {
+	depsMap, _ := w.eval.scope[reservedDepsMapVar].(map[string]any)
+	if depsMap == nil {
+		depsMap = make(map[string]any, len(w.dag.Nodes))
+		w.eval.scope[reservedDepsMapVar] = depsMap
 	}
-	if w.eval.scope[node.ID] == nil && w.state.previousScope[node.ID] == nil {
-		return
-	}
-	if node.ForEach != nil {
-		if prev, exists := w.state.previousPropagateReady[node.ID]; exists {
-			w.plan.PropagateReady[node.ID] = prev
+	depValues := make([]any, 0, len(node.Dependencies))
+	for depID := range node.Dependencies {
+		if v, ok := w.eval.scope[depID]; ok {
+			depValues = append(depValues, v)
 		}
-	} else {
-		w.plan.PropagateReady[node.ID] = w.eval.checkPropagateWhen(
-			node.PropagateWhen, node.ID)
 	}
+	depsMap[node.ID] = depValues
 }
 
 // skipNode retains a node's previous state without re-evaluation. Used when
@@ -234,11 +225,6 @@ func (w *walkState) skipNode(node *Node) {
 	w.carryForwardKeys(node.ID)
 	if w.watcher != nil {
 		w.watcher.retainWatches(node.ID)
-	}
-	if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
-		if prevState == NodeReady || prevState == NodeNotReady {
-			w.evaluatePropagateWhen(node)
-		}
 	}
 	w.outputsReady[node.ID] = true
 	for _, depIdx := range w.dag.Dependents[node.ID] {
@@ -334,23 +320,30 @@ func (w *walkState) tryDispatch(idx int) {
 		return
 	}
 
-	// Step 3: propagateWhen check
-	if blockedBy := w.plan.DependencyPropagateBlocked(node); blockedBy != "" {
-		logger.V(1).Info("propagateWhen gate — retaining previous state",
-			"node", node.ID, "blockedBy", blockedBy)
-		if prev, ok := w.state.previousScope[node.ID]; ok {
-			w.eval.scope[node.ID] = prev
+	// Step 3: propagateWhen — input gate on this node.
+	if len(node.PropagateWhen) > 0 {
+		// Populate __kroDeps for this node so that <id>.dependencies()
+		// expressions resolve correctly.
+		w.populateDepsMap(node)
+
+		if !w.eval.checkPropagateWhen(node.PropagateWhen, node.ID) {
+			unsatisfied := w.eval.firstUnsatisfiedCondition(node.PropagateWhen)
+			logger.V(1).Info("propagateWhen input gate — retaining previous state",
+				"node", node.ID, "unsatisfied", unsatisfied)
+			if prev, ok := w.state.previousScope[node.ID]; ok {
+				w.eval.scope[node.ID] = prev
+			}
+			w.carryForwardKeys(node.ID)
+			if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
+				w.plan.States[node.ID] = prevState
+			} else {
+				w.plan.States[node.ID] = NodePending
+			}
+			for _, depIdx := range w.dag.Dependents[node.ID] {
+				w.tryDispatch(depIdx)
+			}
+			return
 		}
-		w.carryForwardKeys(node.ID)
-		if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
-			w.plan.States[node.ID] = prevState
-		} else {
-			w.plan.States[node.ID] = NodePending
-		}
-		for _, depIdx := range w.dag.Dependents[node.ID] {
-			w.tryDispatch(depIdx)
-		}
-		return
 	}
 
 	// Step 4: Evaluation check — section-scoped evaluation hashing.
@@ -435,9 +428,6 @@ func (w *walkState) tryDispatch(idx int) {
 					}
 				}
 				w.plan.States[node.ID] = nodeState
-				if nodeState == NodeReady || nodeState == NodeNotReady {
-					w.evaluatePropagateWhen(node)
-				}
 				w.state.previousPlanStates[node.ID] = nodeState
 				for _, depIdx := range w.dag.Dependents[node.ID] {
 					w.tryDispatch(depIdx)
@@ -548,20 +538,19 @@ func (w *walkState) tryDispatch(idx int) {
 			}
 		}
 		w.results <- nodeResult{
-			idx:                           idx,
-			keys:                          keys,
-			state:                         state,
-			err:                           err,
-			scopeKey:                      n.ID,
-			scopeValue:                    we.scope[n.ID],
-			evalDuration:                  evalDuration,
-			forEachUpdates:                we.forEachNewKeys,
-			forEachScopes:                 we.forEachNewScope,
-			forEachItems:                  we.forEachNewItems,
-			collectionCacheUpdate:         we.collectionCacheUpdate(),
-			collectionDidFullList:         we.collectionDidFullList,
-			forEachAllItemsPropagateReady: we.forEachAllItemsPropagateReady,
-			nodeReadyUpdate:               nodeReadyUpdate,
+			idx:                   idx,
+			keys:                  keys,
+			state:                 state,
+			err:                   err,
+			scopeKey:              n.ID,
+			scopeValue:            we.scope[n.ID],
+			evalDuration:          evalDuration,
+			forEachUpdates:        we.forEachNewKeys,
+			forEachScopes:         we.forEachNewScope,
+			forEachItems:          we.forEachNewItems,
+			collectionCacheUpdate: we.collectionCacheUpdate(),
+			collectionDidFullList: we.collectionDidFullList,
+			nodeReadyUpdate:       nodeReadyUpdate,
 		}
 	}(*node, workerEval, resolvedRef, isDrift)
 	w.inflight++
@@ -763,9 +752,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 							}
 							if v, ok := oldState.previousPlanStates[node.ID]; ok {
 								state.previousPlanStates[node.ID] = v
-							}
-							if v, ok := oldState.previousPropagateReady[node.ID]; ok {
-								state.previousPropagateReady[node.ID] = v
 							}
 							if v, ok := oldState.previousEvalHashes[node.ID]; ok {
 								state.previousEvalHashes[node.ID] = v
@@ -993,13 +979,15 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			eval.scope[res.scopeKey] = res.scopeValue
 		}
 
-		// Merge node-readiness verdict (Watch workers). Writing
-		// here makes the verdict visible to every subsequent node's
-		// CEL evaluations via the AST-rewritten `<wk_id>.ready()`
-		// lookup — including dependents that fan out after this node
-		// completes.
-		if res.nodeReadyUpdate != nil && eval.nodeReady != nil {
-			eval.nodeReady[res.scopeKey] = *res.nodeReadyUpdate
+		// Merge node-readiness verdict. Watch nodes carry an explicit
+		// update from the worker; all other nodes derive readiness from
+		// the result state.
+		if eval.nodeReady != nil {
+			if res.nodeReadyUpdate != nil {
+				eval.nodeReady[res.scopeKey] = *res.nodeReadyUpdate
+			} else {
+				eval.nodeReady[res.scopeKey] = (res.state == NodeReady)
+			}
 		}
 
 		// Merge forEach state updates into the shared instance state.
@@ -1047,23 +1035,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			walk.carryForwardKeys(node.ID)
 		}
 
-		// Evaluate propagateWhen (coordinator reads from now-merged scope).
-		// For forEach nodes, the worker evaluates propagateWhen per-item and
-		// returns the aggregate result. The per-item evaluation is authoritative
-		// because the coordinator's scope has the array (not individual items),
-		// so per-field expressions wouldn't work against the aggregate.
-		if (res.state == NodeReady || res.state == NodeNotReady) &&
-			len(node.PropagateWhen) > 0 && eval.scope[node.ID] != nil {
-			if res.forEachAllItemsPropagateReady != nil {
-				// forEach node: use the worker's per-item aggregate result.
-				plan.PropagateReady[node.ID] = *res.forEachAllItemsPropagateReady
-			} else {
-				// Regular node: evaluate propagateWhen against the coordinator scope.
-				plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
-					node.PropagateWhen, node.ID)
-			}
-		}
-
 		// Step 8: Propagation check — hash the specific field paths
 		// dependents reference from this node's output, plus propagateWhen
 		// state. If the hash differs from the previous reconcile, mark
@@ -1089,18 +1060,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					}
 				}
 				if err == nil && propagateHash != "" {
-					// Per 004-graph-reconciliation.md § Propagation: the
-					// propagation hash includes propagateWhen state.
-					// When a gate transitions (false→true or true→false),
-					// the hash changes and dependents are triggered —
-					// even if the output field paths are unchanged.
-					if len(node.PropagateWhen) > 0 {
-						if plan.PropagateReady[node.ID] {
-							propagateHash += ":propagate=true"
-						} else {
-							propagateHash += ":propagate=false"
-						}
-					}
 					// Include readiness state in the propagation hash so
 					// downstream nodes that reference .ready() are
 					// triggered when readiness changes, even if output
@@ -1140,7 +1099,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		state.previousScope[node.ID] = eval.scope[node.ID]
 		state.previousKeys[node.ID] = res.keys
 		state.previousPlanStates[node.ID] = res.state
-		state.previousPropagateReady[node.ID] = plan.PropagateReady[node.ID]
 
 		// Store evaluation hash for next reconcile's change check (step 3).
 		if evalHash, err := hashNodeInputs(node, eval.scope); err == nil && evalHash != "" {

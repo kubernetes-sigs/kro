@@ -27,6 +27,12 @@ import (
 // distinguishes it from user-visible identifiers.
 const reservedNodeReadyVar = "__kroNodeReady"
 
+// reservedDepsMapVar is the CEL scope variable carrying per-node
+// dependency lists for the .dependencies() member function. Maps
+// node ID → list of dependency scope values. Populated before
+// propagateWhen evaluation. Per 001-graph.md § propagateWhen.
+const reservedDepsMapVar = "__kroDeps"
+
 // rewriteCollectionReady walks a CEL AST in place and rewrites each
 // `<wk_id>.ready()` call whose target identifier is in collectionIDs
 // into `__kroNodeReady["<wk_id>"]`. Returns true if any rewrite occurred.
@@ -78,6 +84,84 @@ func rewriteCollectionReady(expr celast.Expr, collectionIDs map[string]bool, fac
 				}
 			}
 			// Recurse into target and args.
+			if call.Target() != nil {
+				walk(call.Target())
+			}
+			for _, arg := range call.Args() {
+				walk(arg)
+			}
+
+		case celast.SelectKind:
+			walk(e.AsSelect().Operand())
+
+		case celast.ComprehensionKind:
+			comp := e.AsComprehension()
+			walk(comp.IterRange())
+			walk(comp.LoopCondition())
+			walk(comp.LoopStep())
+			walk(comp.AccuInit())
+			walk(comp.Result())
+
+		case celast.ListKind:
+			for _, elem := range e.AsList().Elements() {
+				walk(elem)
+			}
+
+		case celast.MapKind:
+			for _, entry := range e.AsMap().Entries() {
+				me := entry.AsMapEntry()
+				walk(me.Key())
+				walk(me.Value())
+			}
+
+		case celast.StructKind:
+			for _, field := range e.AsStruct().Fields() {
+				walk(field.AsStructField().Value())
+			}
+		}
+	}
+	walk(expr)
+	return changed
+}
+
+// rewriteDependencies walks a CEL AST in place and rewrites each
+// `<ident>.dependencies()` call whose target identifier is in scopeVars
+// into `__kroDeps["<ident>"]`. Returns true if any rewrite occurred.
+//
+// Structurally identical to rewriteCollectionReady but matches
+// `.dependencies()` instead of `.ready()` and uses scopeVars (all
+// node IDs) instead of collectionIDs. The rewrite replaces the member
+// call with an index operation on the reserved __kroDeps map variable.
+func rewriteDependencies(expr celast.Expr, scopeVars map[string]bool, factory celast.ExprFactory, nextID func() int64) bool {
+	if expr == nil || len(scopeVars) == 0 {
+		return false
+	}
+	changed := false
+
+	var walk func(e celast.Expr)
+	walk = func(e celast.Expr) {
+		if e == nil {
+			return
+		}
+		switch e.Kind() {
+		case celast.CallKind:
+			call := e.AsCall()
+			if call.IsMemberFunction() && call.FunctionName() == "dependencies" &&
+				len(call.Args()) == 0 && call.Target() != nil &&
+				call.Target().Kind() == celast.IdentKind {
+				ident := call.Target().AsIdent()
+				if scopeVars[ident] {
+					idxOp := factory.NewCall(
+						e.ID(),
+						operators.Index,
+						factory.NewIdent(nextID(), reservedDepsMapVar),
+						factory.NewLiteral(nextID(), types.String(ident)),
+					)
+					e.SetKindCase(idxOp)
+					changed = true
+					return
+				}
+			}
 			if call.Target() != nil {
 				walk(call.Target())
 			}

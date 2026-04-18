@@ -50,6 +50,7 @@ spec:
         externalRef: ExternalRef
         readyWhen: "[]string"
         includeWhen: "[]string"
+        propagateWhen: "[]string"
         forEach: "[]map[string]string"
       PrinterColumn:
         name: string | required=true
@@ -184,7 +185,7 @@ spec:
                 }
               }}]
               + schema.spec.resources.map(r, r.merge({
-                "propagateWhen": has(r.readyWhen) ? r.readyWhen : ["true"],
+                "propagateWhen": has(r.propagateWhen) ? r.propagateWhen : ["${" + r.id + ".dependencies().all(d, d.ready())}"],
                 "template": r.template.merge({
                   "metadata": (has(r.template.metadata) ? r.template.metadata : {}).merge({
                     "labels": (has(r.template.metadata) && has(r.template.metadata.labels) ? r.template.metadata.labels : {}).merge({

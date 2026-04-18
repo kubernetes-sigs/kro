@@ -3,6 +3,7 @@ package graphcontroller
 import (
 	"container/heap"
 	"fmt"
+	"strings"
 )
 
 // indexHeap is a min-heap of node indices for Kahn's algorithm.
@@ -122,6 +123,46 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 		for depID := range node.Dependencies {
 			if _, exists := dag.Index[depID]; exists {
 				dag.Dependents[depID] = append(dag.Dependents[depID], i)
+			}
+		}
+	}
+
+	// Validate propagateWhen: reject self-references.
+	// propagateWhen is an input gate — it runs before the node evaluates,
+	// so the node's own data is not in scope. Self-referencing expressions
+	// would deadlock (node can't evaluate to produce data its gate requires).
+	if exprPaths != nil {
+		for _, node := range dag.Nodes {
+			for _, pw := range node.PropagateWhen {
+				pos := 0
+				for {
+					dollars, expr, start, _ := findExpr(pw, pos)
+					if start < 0 {
+						break
+					}
+					pos = start + len(dollars) + len(expr) + 2
+					if len(dollars) != 1 {
+						continue
+					}
+					if paths, ok := exprPaths[expr]; ok {
+						if _, selfRef := paths[node.ID]; selfRef {
+							return nil, fmt.Errorf("node %q: propagateWhen expression %q references itself — "+
+								"propagateWhen is an input gate evaluated before the node processes, "+
+								"so the node's own data is not in scope. Use a cross-node reference "+
+								"(e.g., ${dependency.ready()}) instead", node.ID, pw)
+						}
+					}
+					// Also catch direct .ready() self-references like ${node.ready()}.
+					// This does NOT flag .ready() inside comprehensions (e.g.,
+					// ${node.dependencies().all(d, d.ready())}) because the
+					// check is for the specific pattern "<nodeID>.ready()".
+					if strings.Contains(expr, node.ID+".ready()") {
+						return nil, fmt.Errorf("node %q: propagateWhen expression %q references its own .ready() — "+
+							"propagateWhen is an input gate evaluated before the node processes, "+
+							"so the node's own readiness is not available. Use a cross-node reference "+
+							"(e.g., ${dependency.ready()}) instead", node.ID, pw)
+					}
+				}
 			}
 		}
 	}
@@ -256,40 +297,17 @@ func (s NodeState) String() string {
 // PlanState tracks the state of all nodes during a reconcile cycle.
 type PlanState struct {
 	States map[string]NodeState
-	// PropagateReady tracks whether each node's propagateWhen conditions are
-	// satisfied. Nodes without propagateWhen are always true. Used by the walk
-	// to gate data flow to dependents during transitions.
-	PropagateReady map[string]bool
 }
 
 // NewPlanState creates a fresh plan state with all nodes unvisited.
 func NewPlanState(dag *DAG) *PlanState {
 	ps := &PlanState{
-		States:         make(map[string]NodeState, len(dag.Nodes)),
-		PropagateReady: make(map[string]bool, len(dag.Nodes)),
+		States: make(map[string]NodeState, len(dag.Nodes)),
 	}
 	for _, node := range dag.Nodes {
 		ps.States[node.ID] = nodeUnvisited
-		// Nodes without propagateWhen propagate immediately.
-		ps.PropagateReady[node.ID] = len(node.PropagateWhen) == 0
 	}
 	return ps
-}
-
-// DependencyPropagateBlocked returns the ID of a dependency whose
-// propagateWhen is unsatisfied, or "" if all dependencies propagate.
-// Only checks dependencies that are actual DAG nodes (not CEL builtins).
-func (ps *PlanState) DependencyPropagateBlocked(node *Node) string {
-	for depID := range node.Dependencies {
-		propagates, exists := ps.PropagateReady[depID]
-		if !exists {
-			continue // not a DAG node (CEL builtin, forEach variable, etc.)
-		}
-		if !propagates {
-			return depID
-		}
-	}
-	return ""
 }
 
 // finalizeSkippedStates resolves node states for nodes that took the

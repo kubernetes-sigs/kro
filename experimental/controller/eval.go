@@ -69,13 +69,6 @@ type evaluator struct {
 	// cache does not address the staleness. Per 004-graph-reconciliation.md
 	// § Propagation.
 	collectionDidFullList bool
-
-	// forEach propagateWhen aggregate — set by reconcileForEach when the
-	// node has propagateWhen expressions. The worker evaluates propagateWhen
-	// per-item (like readyWhen) and sets this to true only if all items pass.
-	// nil means not evaluated (non-forEach node or no propagateWhen).
-	// The coordinator folds this into PropagateReady.
-	forEachAllItemsPropagateReady *bool
 }
 
 // newEvaluator creates an evaluator for a reconcile cycle.
@@ -210,14 +203,14 @@ func (e *evaluator) checkReadiness(conditions []string, nodeID string) error {
 }
 
 // checkPropagateWhen evaluates propagateWhen conditions against the full scope.
-// Returns true if all conditions pass (data should flow to dependents).
+// Returns true if all conditions pass (input gate is open, node should evaluate).
 // Returns false if any condition is false or errors.
 //
-// propagateWhen expressions can reference other nodes — including cross-node
-// readiness checks like ${deployment.ready()} on a consumer node. Evaluating
-// against the full scope (not a restricted single-node scope) is required for
-// these references to resolve. The DAG walk's topological order guarantees
-// that all dependency nodes are already in e.scope when this is called.
+// propagateWhen is an input gate — expressions reference upstream nodes,
+// not the node itself. Evaluating against the full scope (not a restricted
+// single-node scope) is required for cross-node references to resolve.
+// The DAG walk's topological order guarantees that all dependency nodes
+// are already in e.scope when this is called.
 func (e *evaluator) checkPropagateWhen(conditions []string, nodeID string) bool {
 	if len(conditions) == 0 {
 		return true
@@ -230,6 +223,19 @@ func (e *evaluator) checkPropagateWhen(conditions []string, nodeID string) bool 
 		}
 	}
 	return true
+}
+
+// firstUnsatisfiedCondition returns the first condition expression that
+// evaluates to false or errors. Used for diagnostic logging when
+// propagateWhen blocks a node.
+func (e *evaluator) firstUnsatisfiedCondition(conditions []string) string {
+	for _, cond := range conditions {
+		ok, err := e.evalBoolCondition(cond)
+		if err != nil || !ok {
+			return cond
+		}
+	}
+	return ""
 }
 
 // toMap evaluates a template and asserts the result is a map.

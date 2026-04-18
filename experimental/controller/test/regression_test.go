@@ -1135,7 +1135,7 @@ func TestDriftTimer_RegressionSkippedNodeReset(t *testing.T) {
 }
 
 // TestPropagateWhenCrossNodeRef proves that propagateWhen expressions can
-// reference other nodes via .ready() and correctly gate downstream data flow.
+// reference other nodes via .ready() and correctly gate node evaluation.
 //
 // Design: 001-graph.md § propagateWhen shows:
 //
@@ -1143,27 +1143,18 @@ func TestDriftTimer_RegressionSkippedNodeReset(t *testing.T) {
 //     propagateWhen:
 //   - ${deployment.ready()}   ← cross-node reference
 //
-// Bug: checkPropagateWhen previously created a restricted scope containing
-// only the evaluating node's own data. Cross-node references like
-// ${upstream.ready()} would fail to evaluate (no such attribute), causing
-// checkPropagateWhen to return false permanently — the propagation gate
-// would never open even when upstream became ready. As a result, downstream
-// could never be created (permanently blocked by PropagateReady["relay"]=false).
-//
 // Setup:
 //   - source ConfigMap: data.status = "pending"
-//   - upstream: Watch on source, readyWhen: ${upstream.data.status == 'active'}
-//   - relay: Own ConfigMap, propagateWhen: [${upstream.ready()}]
-//   - downstream: Own ConfigMap, data.relayStatus: ${relay.data.status}
+//   - upstream: Ref on source, readyWhen: ${upstream.data.status == 'active'}
+//   - relay: Own ConfigMap, data.status: ${upstream.data.status}
+//   - downstream: Own ConfigMap, propagateWhen: [${upstream.ready()}],
+//     data.relayStatus: ${relay.data.status}
 //
 // Scenario:
-//  1. Graph created — relay is created, downstream is blocked (relay.propagateWhen = false)
-//  2. source → "active": upstream.ready() becomes true, relay.propagateWhen opens
+//  1. Graph created — relay is created (no gate), downstream is frozen
+//     (input gate: upstream.ready() is false)
+//  2. source → "active": upstream.ready() becomes true, downstream input gate opens
 //  3. downstream is created with relayStatus = "active"
-//
-// With the bug: downstream is never created (propagateWhen returns false for
-// cross-node ref regardless of upstream state). Without the bug: downstream
-// appears once upstream becomes ready.
 func TestPropagateWhenCrossNodeRef(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -1206,8 +1197,7 @@ func TestPropagateWhenCrossNodeRef(t *testing.T) {
 							"${upstream.data.status == 'active'}",
 						},
 					},
-					// relay: propagateWhen references upstream.ready() — cross-node ref.
-					// Until upstream is ready, relay's data must not flow to dependents.
+					// relay: no propagateWhen, always created.
 					map[string]any{
 						"id": "relay",
 						"template": map[string]any{
@@ -1218,13 +1208,11 @@ func TestPropagateWhenCrossNodeRef(t *testing.T) {
 								"status": "${upstream.data.status}",
 							},
 						},
-						"propagateWhen": []any{
-							"${upstream.ready()}",
-						},
 					},
-					// downstream: depends on relay — created only when relay propagates.
+					// downstream: input-gated on upstream.ready().
 					map[string]any{
-						"id": "downstream",
+						"id":            "downstream",
+						"propagateWhen": []any{"${upstream.ready()}"},
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
@@ -1240,24 +1228,24 @@ func TestPropagateWhenCrossNodeRef(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Step 1: relay is always created (propagateWhen only gates its dependents).
+	// Step 1: relay is always created (no propagateWhen on relay).
 	relayGVK := regressionCMGVK
 	relay := &unstructured.Unstructured{}
 	relay.SetGroupVersionKind(relayGVK)
 	require.NoError(t, waitForResource(ctx, k8sClient,
 		types.NamespacedName{Name: "propagate-relay", Namespace: ns}, relay),
 		"relay ConfigMap should be created")
-	t.Log("Step 1: relay created; downstream is blocked (relay.propagateWhen = false)")
+	t.Log("Step 1: relay created; downstream is frozen (input gate: upstream.ready() = false)")
 
 	// downstream must NOT be created while upstream.ready() is false.
-	// relay.propagateWhen = ${upstream.ready()} is false, so downstream is blocked.
+	// downstream.propagateWhen = ${upstream.ready()} is false, so downstream is frozen.
 	require.NoError(t, waitForAbsence(ctx, k8sClient, regressionCMGVK,
 		types.NamespacedName{Name: "propagate-downstream", Namespace: ns}, 2*time.Second),
-		"downstream must not exist while relay.propagateWhen is unsatisfied")
+		"downstream must not exist while its input gate is unsatisfied")
 	t.Log("Step 1 confirmed: downstream correctly absent while upstream not ready")
 
 	// Step 2: Update source to "active" — upstream.readyWhen becomes true.
-	// relay.propagateWhen (${upstream.ready()}) must become true → downstream unblocked.
+	// downstream.propagateWhen (${upstream.ready()}) must become true → downstream created.
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "propagate-source", Namespace: ns}, source))
 	source.Object["data"] = map[string]any{"status": "active"}
 	require.NoError(t, k8sClient.Update(ctx, source))
@@ -1273,14 +1261,13 @@ func TestPropagateWhenCrossNodeRef(t *testing.T) {
 		}
 		data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
 		return data["relayStatus"] == "active", nil
-	}), "downstream should be created with relayStatus='active' once upstream.ready() becomes true; "+
-		"if this times out the propagateWhen cross-node scope bug is present")
+	}), "downstream should be created with relayStatus='active' once upstream.ready() becomes true")
 
 	finalDS := &unstructured.Unstructured{}
 	finalDS.SetGroupVersionKind(regressionCMGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "propagate-downstream", Namespace: ns}, finalDS))
 	data, _, _ := unstructured.NestedStringMap(finalDS.Object, "data")
 	assert.Equal(t, "active", data["relayStatus"],
-		"downstream should have 'active' after propagateWhen cross-node ref resolved")
-	t.Log("Step 2: propagateWhen cross-node ref correctly unblocked downstream on upstream.ready()")
+		"downstream should have 'active' after input gate opened on upstream.ready()")
+	t.Log("Step 2: propagateWhen input gate correctly opened downstream on upstream.ready()")
 }

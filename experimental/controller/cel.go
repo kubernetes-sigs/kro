@@ -203,7 +203,14 @@ func (c *compiledGraph) eval(expr string, scope map[string]any) (any, error) {
 				nextIDVal++
 				return id
 			}
-			rewriteCollectionReady(nativeAst.Expr(), c.collectionIDs, celast.NewExprFactory(), nextID)
+			factory := celast.NewExprFactory()
+			rewriteCollectionReady(nativeAst.Expr(), c.collectionIDs, factory, nextID)
+			// Build scope vars for .dependencies() rewrite in dynamic path.
+			dynScopeVars := make(map[string]bool, len(c.declaredVars))
+			for k := range c.declaredVars {
+				dynScopeVars[k] = true
+			}
+			rewriteDependencies(nativeAst.Expr(), dynScopeVars, factory, nextID)
 		}
 		ast, issues := compileEnv.Check(parsed)
 		if issues != nil && issues.Err() != nil {
@@ -307,12 +314,14 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 		krocel.WithCustomDeclarations(celPluralFunction()),
 		krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
 		krocel.WithCustomDeclarations(celReadyFunction()),
+		krocel.WithCustomDeclarations(celDependenciesFunction()),
 		// __kroNodeReady carries per-Watch readyWhen verdicts, looked up
 		// by the AST rewrite of `<wk_id>.ready()` (see readyrewrite.go).
 		// Per 001-graph.md § readyWhen: "A Watch's `.ready()` returns
 		// true when the node's readyWhen conditions pass."
 		krocel.WithCustomDeclarations([]cel.EnvOption{
 			cel.Variable(reservedNodeReadyVar, cel.MapType(cel.StringType, cel.BoolType)),
+			cel.Variable(reservedDepsMapVar, cel.MapType(cel.StringType, cel.ListType(cel.DynType))),
 		}),
 	)
 	if err != nil {
@@ -361,6 +370,7 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 			return id
 		}
 		rewriteCollectionReady(nativeAst.Expr(), collectionIDs, rewriteFactory, nextID)
+		rewriteDependencies(nativeAst.Expr(), scopeVars, rewriteFactory, nextID)
 		ast, issues := env.Check(parsed)
 		if issues != nil && issues.Err() != nil {
 			return nil, fmt.Errorf("checking expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
@@ -397,6 +407,7 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 	// fallback does not re-declare it (which produces an "overlapping
 	// identifier" error at extend time).
 	declared[reservedNodeReadyVar] = true
+	declared[reservedDepsMapVar] = true
 
 	return &compiledGraph{
 		specHash:        spec.Hash(),
@@ -582,6 +593,24 @@ func celSimpleSchemaFunction() []cel.EnvOption {
 				[]*cel.Type{cel.DynType, cel.DynType},
 				cel.DynType,
 				cel.BinaryBinding(impl),
+			),
+		),
+	}
+}
+
+// celDependenciesFunction returns CEL env options for the .dependencies()
+// member function. The actual call never runs at runtime because the AST
+// rewrite replaces it with a __kroDeps map lookup — this stub only exists
+// to make CEL type-check pass.
+func celDependenciesFunction() []cel.EnvOption {
+	return []cel.EnvOption{
+		cel.Function("dependencies",
+			cel.MemberOverload("dyn_dependencies",
+				[]*cel.Type{cel.DynType},
+				cel.ListType(cel.DynType),
+				cel.UnaryBinding(func(val ref.Val) ref.Val {
+					return types.NewDynamicList(types.DefaultTypeAdapter, []ref.Val{})
+				}),
 			),
 		),
 	}

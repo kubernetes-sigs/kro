@@ -541,8 +541,8 @@ func TestFinalizesTargetMustBeResource(t *testing.T) {
 		{
 			name: "Definition target rejected",
 			target: Node{
-				ID:  "naming",
-				Def: map[string]any{"prefix": "app"},
+				ID:       "naming",
+				Def:      map[string]any{"prefix": "app"},
 				nodeType: NodeTypeDef,
 			},
 		},
@@ -1761,17 +1761,6 @@ func TestForEach_RegressionNonSliceScopeNoReadyWhenNoPanic(t *testing.T) {
 	}
 	err := forEachStampReadyWhen(scope, "items", nil, nil)
 	assert.Error(t, err, "non-slice scope should produce an error")
-}
-
-// TestForEach_RegressionNonSliceScopePropagateWhenNoPanic proves the same
-// for the propagateWhen path.
-func TestForEach_RegressionNonSliceScopePropagateWhenNoPanic(t *testing.T) {
-	scope := map[string]any{
-		"items": map[string]any{"wrong": "type"},
-	}
-	_, err := forEachStampPropagateWhen(scope, "items", []string{"true"}, nil)
-	assert.Error(t, err, "non-slice scope should produce an error")
-	assert.Contains(t, err.Error(), "expected []any")
 }
 
 // TestForEach_SliceScopeReadyWhenWorks confirms the happy path still works.

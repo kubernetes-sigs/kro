@@ -295,18 +295,6 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		logger.V(1).Info("all forEach items ready", "node", node.ID)
 	}
 
-	// Check propagateWhen per-item: all items must pass for the parent's
-	// propagation to be satisfied.
-	if len(node.PropagateWhen) > 0 {
-		allPass, err := forEachStampPropagateWhen(eval.scope, node.ID, node.PropagateWhen, eval)
-		if err != nil {
-			return keys, err
-		}
-		eval.forEachAllItemsPropagateReady = &allPass
-		logger.V(1).Info("forEach propagateWhen per-item result",
-			"node", node.ID, "allItemsPropagateReady", allPass)
-	}
-
 	return keys, nil
 }
 
@@ -356,35 +344,6 @@ func forEachStampReadyWhen(scope map[string]any, nodeID string, readyWhen []stri
 		}
 	}
 	return nil
-}
-
-// forEachStampPropagateWhen evaluates propagateWhen per-item and returns
-// whether all items passed. Per design: "The parent's propagateWhen is
-// satisfied when all children's propagateWhen are satisfied."
-//
-// eval may be nil only if propagateWhen is empty (caller should not call
-// this function with empty propagateWhen).
-func forEachStampPropagateWhen(scope map[string]any, nodeID string, propagateWhen []string, eval *evaluator) (bool, error) {
-	scopeVal := scope[nodeID]
-	if scopeVal == nil {
-		return true, nil
-	}
-	items, ok := scopeVal.([]any)
-	if !ok {
-		return false, fmt.Errorf("forEach %s: scope value is %T, expected []any", nodeID, scopeVal)
-	}
-	allPass := true
-	for _, applied := range items {
-		saved := scope[nodeID]
-		scope[nodeID] = applied
-		ok := eval.checkPropagateWhen(propagateWhen, nodeID)
-		scope[nodeID] = saved
-		if !ok {
-			allPass = false
-			break
-		}
-	}
-	return allPass, nil
 }
 
 // forEachItemIdentity extracts a stable identity from a forEach collection item.

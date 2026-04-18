@@ -247,8 +247,8 @@ dependency readiness, do so explicitly:
 
 A list of CEL expressions. All must evaluate to `true` for the node to evaluate. When unsatisfied,
 the node skips evaluation — it retains its last-applied state and is not re-applied. When satisfied,
-the node evaluates normally. A common pattern is
-`propagateWhen: [${dep.ready()}]` — gate on a dependency's readiness.
+the node evaluates normally against dependency outputs only — the node's own data is not in scope. A
+common pattern is `propagateWhen: [${dep.ready()}]` — gate on a dependency's readiness.
 
 ```yaml
 - id: deployment
@@ -289,6 +289,12 @@ expression references the parent collection to gate evaluation.
   propagateWhen:
     - ${deploys.filter(d, d.updated() && !d.ready()).size() < 2}
   template: ...
+
+# Gate on ALL dependencies
+- id: service
+  propagateWhen:
+    - ${service.dependencies().all(d, d.ready())}
+  template: ...
 ```
 
 #### finalizes
@@ -326,6 +332,9 @@ Any object in scope exposes functions maintained by the graph controller.
 
 - **`.ready()`** — true when the node is applied and its readyWhen conditions pass.
 - **`.updated()`** — true when the node is on the latest graph generation.
+- **`.dependencies()`** — returns the scope values of all dependency nodes as a list.
+  Enables `${node.dependencies().all(d, d.ready())}` — gate until every dependency is ready without
+  naming them.
 
 ## Nested Graphs
 

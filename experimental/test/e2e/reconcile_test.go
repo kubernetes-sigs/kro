@@ -460,16 +460,16 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 	t.Logf("L1: Management chain: parent Graph → child Graph → result ConfigMap")
 }
 
-// TestIdenticalGraphsConvergeIndependently proves that multiple Graph CRs
-// with identical specs all converge correctly. This is the regression test
-// for content-addressed compiled graph sharing: internally, these graphs
-// share a single compiledGraph (CEL env, programs, DAG). The test verifies
-// that sharing doesn't cause cross-instance interference — each graph
+// TestCompiledGraphSharing_RegressionCrossInstanceInterference proves that
+// multiple Graph CRs with identical specs all converge correctly. This is the
+// regression test for content-addressed compiled graph sharing: internally,
+// these graphs share a single compiledGraph (CEL env, programs, DAG). The test
+// verifies that sharing doesn't cause cross-instance interference — each graph
 // produces its own distinct resources with the correct data.
 //
 // The proof: three graphs with the same spec but different watch targets
 // each produce a correctly-evaluated ConfigMap reading from their own source.
-func TestIdenticalGraphsConvergeIndependently(t *testing.T) {
+func TestCompiledGraphSharing_RegressionCrossInstanceInterference(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 

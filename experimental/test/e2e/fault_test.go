@@ -903,3 +903,245 @@ func TestSystemError_DependentInheritsBlocked(t *testing.T) {
 		"downstream should have v2 after SystemError recovery")
 	t.Log("Phase 3: recovered — both nodes updated to v2")
 }
+
+// TestCELRuntimeError_RegressionRecovery proves the full error→fix→recovery
+// cycle for CEL runtime errors. TestErrorClassification_RegressionCELRuntime
+// proves classification; this test closes the loop by verifying recovery.
+//
+// Scenario: a CEL expression compiles but fails at runtime (division by zero).
+// The Graph enters Error state. Fixing the upstream data (divisor 0 → 2)
+// triggers re-evaluation, the expression succeeds, and the Graph converges
+// to Ready.
+//
+// Per 004-graph-reconciliation.md § Node States: "Deterministic errors (4xx)
+// are not retried — same inputs produce the same failure." The recovery path
+// requires an input change (watch event) to trigger re-evaluation.
+func TestCELRuntimeError_RegressionRecovery(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	graphKey := types.NamespacedName{Name: "cel-recovery", Namespace: ns}
+
+	// Create source ConfigMap with divisor=0 (will cause division by zero).
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{"name": "cel-recovery-source", "namespace": ns},
+			"data":     map[string]any{"divisor": "0"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	// Graph: ref the source, compute 100/divisor.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "cel-recovery",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "source",
+						"ref": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "cel-recovery-source"},
+						},
+					},
+					map[string]any{
+						"id": "result",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "cel-recovery-output"},
+							"data":     map[string]any{"quotient": "${string(100 / int(source.data.divisor))}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Phase 1: Graph should reach Error (division by zero is deterministic).
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient, graphKey, "Error"))
+	t.Log("Phase 1: CEL runtime error (division by zero) → Error state")
+
+	// Phase 2: Fix the input — change divisor to "2".
+	require.NoError(t, updateWithRetry(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "cel-recovery-source", Namespace: ns},
+		func(obj *unstructured.Unstructured) {
+			obj.Object["data"] = map[string]any{"divisor": "2"}
+		}))
+	t.Log("Phase 2: Fixed source divisor 0 → 2")
+
+	// Phase 3: Graph should recover to Ready with correct result.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+
+	output := &unstructured.Unstructured{}
+	output.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "cel-recovery-output", Namespace: ns}, output))
+	data, _, _ := unstructured.NestedStringMap(output.Object, "data")
+	assert.Equal(t, "50", data["quotient"],
+		"100 / 2 = 50 — CEL expression should evaluate correctly after fix")
+	t.Log("Phase 3: Recovered — output ConfigMap has quotient=50")
+}
+
+// TestCRDDeletionWhileGraphManagesInstances proves that when a CRD is deleted
+// while a Graph manages custom resources of that kind, the controller reaches
+// a degraded state (Error or SystemError) but does not crash, does not
+// corrupt other resources, and can recover when the CRD is reinstalled.
+//
+// Per 004-graph-reconciliation.md § Teardown: "If the DAG is unavailable,
+// prune is blocked — never degrade to unordered deletion." CRD deletion
+// makes the Kind unresolvable; the controller must handle this gracefully.
+func TestCRDDeletion_RegressionGracefulDegradation(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	group := uniqueGroup()
+	crdName := "gadgets." + group
+	gadgetGVK := schema.GroupVersionKind{
+		Group: group, Version: "v1alpha1", Kind: "Gadget",
+	}
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	graphKey := types.NamespacedName{Name: "test-crd-delete", Namespace: ns}
+
+	// Phase 1: Install CRD + create resource + create Graph that refs it.
+	crd := buildCustomCRD(crdName, group, "Gadget", "gadgets")
+	require.NoError(t, k8sClient.Create(ctx, crd))
+	require.NoError(t, waitForCRD(ctx, k8sClient, crdName))
+	t.Log("CRD installed and Established")
+
+	gadget := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": group + "/v1alpha1",
+			"kind":       "Gadget",
+			"metadata": map[string]any{
+				"name":      "my-gadget",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"color": "red",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, gadget))
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-crd-delete",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "gadget",
+						"ref": map[string]any{
+							"apiVersion": group + "/v1alpha1",
+							"kind":       "Gadget",
+							"metadata":   map[string]any{"name": "my-gadget"},
+						},
+					},
+					map[string]any{
+						"id": "output",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "crd-delete-output"},
+							"data":       map[string]any{"color": "${gadget.spec.color}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Verify convergence.
+	output := &unstructured.Unstructured{}
+	output.SetGroupVersionKind(cmGVK)
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 60*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "crd-delete-output", Namespace: ns}, output); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(output.Object, "data")
+			return data["color"] == "red", nil
+		}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	t.Log("Phase 1: Graph converged — output has color=red")
+
+	// Phase 2: Delete the CRD. This cascades deletion of all Gadget instances
+	// and makes the Gadget GVK unresolvable.
+	require.NoError(t, k8sClient.Delete(ctx, crd))
+	t.Log("Phase 2: CRD deleted")
+
+	// The Graph should degrade — it can't resolve the ref anymore.
+	// It should reach a non-Ready state (Error, SystemError, or Pending).
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			if err := k8sClient.Get(ctx, graphKey, g); err != nil {
+				return false, nil
+			}
+			return !graphReady(g), nil
+		}), "Graph should degrade after CRD deletion")
+	t.Log("Phase 2: Graph is no longer Ready (expected)")
+
+	// The ConfigMap (output) should still exist — the controller must not
+	// tear down resources just because one node's GVK became unresolvable.
+	outputCheck := &unstructured.Unstructured{}
+	outputCheck.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "crd-delete-output", Namespace: ns}, outputCheck),
+		"output ConfigMap should survive CRD deletion — uncertain absence blocks prune")
+	t.Log("Phase 2: output ConfigMap preserved (uncertain absence blocks prune)")
+
+	// Phase 3: Reinstall the CRD and recreate the Gadget. Graph should recover.
+	crd2 := buildCustomCRD(crdName, group, "Gadget", "gadgets")
+	require.NoError(t, k8sClient.Create(ctx, crd2))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, crd2) })
+	require.NoError(t, waitForCRD(ctx, k8sClient, crdName))
+
+	gadget2 := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": group + "/v1alpha1",
+			"kind":       "Gadget",
+			"metadata": map[string]any{
+				"name":      "my-gadget",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"color": "blue",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, gadget2))
+	t.Log("Phase 3: CRD reinstalled, Gadget recreated with color=blue")
+
+	// Graph should recover and update the output.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 60*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			cm := &unstructured.Unstructured{}
+			cm.SetGroupVersionKind(cmGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "crd-delete-output", Namespace: ns}, cm); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+			return data["color"] == "blue", nil
+		}), "output should update to blue after CRD reinstall")
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	t.Log("Phase 3: Recovered — output updated to color=blue, Graph Ready")
+
+	_ = gadgetGVK // referenced to avoid unused import
+}

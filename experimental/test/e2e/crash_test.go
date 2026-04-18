@@ -473,3 +473,130 @@ func TestRecoveryPartialTeardown(t *testing.T) {
 	}
 	t.Log("All resources deleted, Graph gone — teardown recovery proved")
 }
+
+// TestRecoveryPartialRevisionTransition simulates a crash that left resources
+// from TWO different revisions on the cluster — as if the controller applied
+// part of a revision transition and then died. On restart, the controller
+// must complete the transition: create missing new-revision resources, adopt
+// pre-existing ones via idempotent SSA, and prune old-revision resources.
+//
+// This is distinct from TestRecoveryPartialForEachExpansion (single revision,
+// partial creation) and TestRecoveryIdempotentReApply (same revision, full
+// state). This test exercises the case where the cluster has resources that
+// belong to different points in time AND the new revision is incomplete.
+//
+// Per 004-graph-reconciliation.md § Prune: "The applied set is the union of
+// all identity-labeled resources in the informer store. Prune candidates =
+// applied set minus current output set."
+func TestRecoveryPartialRevisionTransition(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	graphName := "test-recovery-rev"
+
+	// Simulate mid-transition crash: the controller had started applying rev N+1
+	// (created cm-partial) but hadn't yet created cm-missing. cm-old is from
+	// rev N and should be pruned.
+	oldLabel := fmt.Sprintf("old-resource.%s.%s.internal.kro.run/type", graphName, ns)
+	partialLabel := fmt.Sprintf("partial.%s.%s.internal.kro.run/type", graphName, ns)
+
+	// Old revision resource — should be pruned.
+	oldCM := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "cm-old",
+				"namespace": ns,
+				"labels": map[string]any{
+					oldLabel: "template",
+				},
+			},
+			"data": map[string]any{"rev": "old"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, oldCM))
+
+	// Partial new-revision resource — already applied before crash, should be adopted.
+	partialCM := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "cm-partial",
+				"namespace": ns,
+				"labels": map[string]any{
+					partialLabel: "template",
+				},
+			},
+			"data": map[string]any{"rev": "new"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, partialCM))
+	// NOTE: cm-missing is NOT pre-stamped — the crash happened before it was created.
+	t.Log("Pre-stamped: cm-old (rev N), cm-partial (rev N+1). cm-missing NOT created yet.")
+
+	// Create the Graph whose desired state has BOTH cm-partial and cm-missing.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      graphName,
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "partial",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "cm-partial"},
+							"data":       map[string]any{"rev": "new"},
+						},
+					},
+					map[string]any{
+						"id": "missing",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "cm-missing"},
+							"data":       map[string]any{"rev": "new"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// cm-missing must be created (the controller completes the incomplete transition).
+	missingCM := &unstructured.Unstructured{}
+	missingCM.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "cm-missing", Namespace: ns}, missingCM),
+		"cm-missing should be created — controller completes the transition")
+
+	// cm-partial must survive (adopted via idempotent SSA).
+	partialCheck := &unstructured.Unstructured{}
+	partialCheck.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "cm-partial", Namespace: ns}, partialCheck),
+		"cm-partial should be adopted via idempotent SSA")
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: graphName, Namespace: ns}))
+
+	// cm-old should be pruned — it's in the applied set (identity label) but
+	// not in the current output set.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(gvk)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: "cm-old", Namespace: ns}, check)
+			return err != nil, nil
+		}), "cm-old should be pruned — not in current output set")
+	t.Log("Partial revision transition recovered: cm-old pruned, cm-partial adopted, cm-missing created")
+}

@@ -198,14 +198,14 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 	t.Log("Status lifecycle proved: NotReady → Ready on readyWhen satisfied")
 }
 
-// TestRevisionConditionsHaveLastTransitionTime proves that GraphRevision
+// TestRevisionCondition_RegressionLastTransitionTime proves that GraphRevision
 // conditions include lastTransitionTime, matching the Kubernetes condition
 // convention (design 001-graph § Conditions, 002-revisions § Status).
 //
 // Bug: setRevisionCondition did not set lastTransitionTime at all, producing
 // conditions without the field. This breaks kubectl wait --for=condition=...
 // timeout reasoning and any monitoring that computes "time in state."
-func TestRevisionConditionsHaveLastTransitionTime(t *testing.T) {
+func TestRevisionCondition_RegressionLastTransitionTime(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 

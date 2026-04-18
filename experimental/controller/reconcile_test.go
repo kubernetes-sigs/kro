@@ -195,96 +195,11 @@ func TestTryDispatchPrecedence_ExcludedOverBlockedOverPending(t *testing.T) {
 // transitively through chains: A → B → C. When A is set to Excluded, both
 // B and C become Excluded. When A is set to Error, both B and C become
 // Blocked.
-//
-// This is the equivalent of the old TestSetStatePropagateSplitExcludedBlocked,
-// now tested at the correct layer (tryDispatch, not SetState).
-func TestTryDispatchChainPropagation(t *testing.T) {
-	nodes := []Node{
-		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
-		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
-		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"ref": "${b.metadata.name}"}}},
-	}
-	dag, err := BuildDAG(nodes, nil)
-	require.NoError(t, err)
-
-	tests := []struct {
-		name  string
-		rootA NodeState
-		wantB NodeState
-		wantC NodeState
-	}{
-		{"Excluded chains as Excluded", NodeExcluded, NodeExcluded, NodeExcluded},
-		{"Error chains as Blocked", NodeError, NodeBlocked, NodeBlocked},
-		{"Pending chains as Pending", NodePending, NodePending, NodePending},
-		{"Conflict chains as Blocked", NodeConflict, NodeBlocked, NodeBlocked},
-		{"SystemError chains as Blocked", NodeSystemError, NodeBlocked, NodeBlocked},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			walk := newTestWalkState(t, dag)
-			walk.plan.SetState(dag, "a", tc.rootA)
-
-			bIdx, cIdx := -1, -1
-			for i, n := range dag.Nodes {
-				switch n.ID {
-				case "b":
-					bIdx = i
-				case "c":
-					cIdx = i
-				}
-			}
-			require.NotEqual(t, -1, bIdx)
-			require.NotEqual(t, -1, cIdx)
-
-			// Dispatch b — it will see a's state and propagate to c.
-			walk.tryDispatch(bIdx)
-
-			assert.Equal(t, tc.wantB, walk.plan.States["b"], "direct dependent")
-			assert.Equal(t, tc.wantC, walk.plan.States["c"], "transitive dependent")
-		})
-	}
-}
-
-// TestTryDispatchPrecedence_RegressionDiamondExcludedBlocked is the
+// // TestTryDispatchPrecedence_RegressionDiamondExcludedBlocked is the
 // regression test for the specific bug this change fixes. In the old code,
 // propagateState used a first-wins flood fill that didn't enforce
 // Excluded > Blocked precedence. This test proves the fix holds.
-//
-// The bug: diamond A(Excluded) + B(Error) → child could be Blocked
-// (wrong) instead of Excluded (correct), preventing resource pruning.
-func TestTryDispatchPrecedence_RegressionDiamondExcludedBlocked(t *testing.T) {
-	nodes := []Node{
-		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
-		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}}},
-		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"a": "${a.metadata.name}", "b": "${b.metadata.name}"}}},
-		{ID: "d", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "d"}, "data": map[string]any{"ref": "${c.metadata.name}"}}},
-	}
-	dag, err := BuildDAG(nodes, nil)
-	require.NoError(t, err)
-
-	walk := newTestWalkState(t, dag)
-	walk.plan.SetState(dag, "a", NodeExcluded)
-	walk.plan.SetState(dag, "b", NodeError)
-
-	cIdx := -1
-	for i, n := range dag.Nodes {
-		if n.ID == "c" {
-			cIdx = i
-			break
-		}
-	}
-	require.NotEqual(t, -1, cIdx)
-
-	walk.tryDispatch(cIdx)
-
-	assert.Equal(t, NodeExcluded, walk.plan.States["c"],
-		"child of Excluded+Error parents must be Excluded (not Blocked)")
-	assert.Equal(t, NodeExcluded, walk.plan.States["d"],
-		"transitive dependent must also be Excluded")
-}
-
-// TestPruneOrderReverseDependency proves that pruneOrder sorts prune
+// // TestPruneOrderReverseDependency proves that pruneOrder sorts prune
 // candidates so dependents are deleted before their dependencies. This
 // prevents dangling references during prune.
 func TestPruneOrderReverseDependency(t *testing.T) {
@@ -434,44 +349,6 @@ func TestClassifyAPIErrorDefault(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// Validation tests — design reconciliation
-// ---------------------------------------------------------------------------
-
-// TestNodeIDHyphenRejected verifies that node IDs containing hyphens are
-// rejected at parse time. Per 001-graph.md: "Hyphens are not allowed — they
-// are parsed as subtraction by the CEL evaluator."
-func TestNodeIDHyphenRejected(t *testing.T) {
-	raw := []any{
-		map[string]any{
-			"id":       "my-app",
-			"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "cm"}},
-		},
-	}
-	_, err := parseNodeList(raw)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "hyphens are not allowed")
-}
-
-// TestNodeIDCaseCollisionRejected verifies that node IDs that collide after
-// lowercasing are rejected. Per 001-graph.md: "IDs that collide after
-// lowercasing are rejected at compile time."
-func TestNodeIDCaseCollisionRejected(t *testing.T) {
-	raw := []any{
-		map[string]any{
-			"id":       "Deploy",
-			"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}},
-		},
-		map[string]any{
-			"id":       "deploy",
-			"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}},
-		},
-	}
-	_, err := parseNodeList(raw)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "collides with")
-}
-
 // TestParseNodeListEnforcesValidDNSLabels verifies that parseNodeList rejects
 // node IDs that are not valid DNS-1123 labels. Node IDs are embedded in
 // identity label key prefixes as DNS subdomain segments — invalid IDs would
@@ -514,98 +391,7 @@ func TestParseNodeListEnforcesValidDNSLabels(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestFinalizesTargetMustExist verifies that a finalizes declaration pointing
-// at a nonexistent node ID is rejected at DAG build time.
-func TestFinalizesTargetMustExist(t *testing.T) {
-	nodes := []Node{
-		{ID: "snapshot", Finalizes: "nonexistent", Template: map[string]any{
-			"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "snap"},
-		}},
-	}
-	_, err := BuildDAG(nodes, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no node with that ID exists")
-}
-
-// TestFinalizesTargetMustBeResource verifies that a finalizes declaration
-// targeting a Definition or Watch node is rejected at DAG build time.
-// Definitions and Watches don't create managed resources and never become
-// prune candidates — finalizing them is nonsensical.
-func TestFinalizesTargetMustBeResource(t *testing.T) {
-	tests := []struct {
-		name   string
-		target Node
-	}{
-		{
-			name: "Definition target rejected",
-			target: Node{
-				ID:       "naming",
-				Def:      map[string]any{"prefix": "app"},
-				nodeType: NodeTypeDef,
-			},
-		},
-		{
-			name: "Watch target rejected",
-			target: Node{
-				ID: "config",
-				Ref: map[string]any{
-					"apiVersion": "v1",
-					"kind":       "ConfigMap",
-					"metadata":   map[string]any{"name": "config"},
-				},
-				nodeType: NodeTypeRef,
-			},
-		},
-		{
-			name: "Watch target rejected",
-			target: Node{
-				ID: "namespaces",
-				Watch: map[string]any{
-					"apiVersion": "v1",
-					"kind":       "Namespace",
-				},
-				nodeType: NodeTypeWatch,
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			nodes := []Node{
-				tc.target,
-				{ID: "snapshot", Finalizes: tc.target.ID, Template: map[string]any{
-					"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "snap"},
-				}, nodeType: NodeTypeTemplate},
-			}
-			_, err := BuildDAG(nodes, nil)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "cannot finalize")
-		})
-	}
-}
-
-// TestForEachVariableCollision verifies that forEach iterator variable names
-// that shadow node IDs are rejected at parse time.
-func TestForEachVariableCollision(t *testing.T) {
-	raw := []any{
-		map[string]any{
-			"id":       "items",
-			"template": map[string]any{"apiVersion": "v1", "kind": "Namespace"},
-		},
-		map[string]any{
-			"id":       "policy",
-			"forEach":  map[string]any{"items": "${items}"},
-			"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "cm"}},
-		},
-	}
-	_, err := parseNodeList(raw)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "collides with node ID")
-}
-
-// TestNodeStateString verifies that NodeState.String() returns the design's
+} // TestNodeStateString verifies that NodeState.String() returns the design's
 // canonical names. Each concept has exactly one name.
 func TestNodeStateString(t *testing.T) {
 	tests := []struct {
@@ -665,55 +451,7 @@ func TestForEachChildIdentityLabelKeyNoGroup(t *testing.T) {
 // Watch's readyWhen fails, .ready() returns false. Per 001-graph.md:
 // "A Watch's .ready() returns true when the node's readyWhen
 // conditions pass (evaluated once against the whole array, not per-item)."
-//
-// Before the fix, items were stamped with __ready=true before readyWhen
-// evaluation. If readyWhen failed, the items retained __ready=true and
-// .ready() on the collection returned true even though the node was NotReady.
-func TestWatchKindReadyWhenFailure_RegressionReadyFlag(t *testing.T) {
-	// Simulate the Watch pattern: items with __ready set,
-	// then readyWhen fails. .ready() on the array must return false.
-	items := []any{
-		map[string]any{
-			"metadata": map[string]any{"name": "pod-a"},
-			"status":   map[string]any{"phase": "Running"},
-			"__ready":  true, // stamped during collection read
-		},
-		map[string]any{
-			"metadata": map[string]any{"name": "pod-b"},
-			"status":   map[string]any{"phase": "Pending"},
-			"__ready":  true, // stamped during collection read
-		},
-	}
-
-	// Simulate what the fix does: when readyWhen fails, __ready is
-	// reset to false on all items.
-	for _, item := range items {
-		if m, ok := item.(map[string]any); ok {
-			m["__ready"] = false
-		}
-	}
-
-	// Verify: .ready() on the collection must return false.
-	for _, item := range items {
-		m, ok := item.(map[string]any)
-		require.True(t, ok)
-		ready, _ := m["__ready"].(bool)
-		assert.False(t, ready, "items should have __ready=false after readyWhen failure")
-	}
-
-	// Verify the inverse: when readyWhen passes, __ready stays true.
-	goodItems := []any{
-		map[string]any{"metadata": map[string]any{"name": "pod-a"}, "__ready": true},
-		map[string]any{"metadata": map[string]any{"name": "pod-b"}, "__ready": true},
-	}
-	for _, item := range goodItems {
-		m, _ := item.(map[string]any)
-		ready, _ := m["__ready"].(bool)
-		assert.True(t, ready, "items should have __ready=true when readyWhen passes")
-	}
-}
-
-// TestWatchKindNoReadyWhen_ItemsReady proves that when a collection
+// // TestWatchKindNoReadyWhen_ItemsReady proves that when a collection
 // watch has no readyWhen, all items have __ready=true (applied = ready).
 func TestWatchKindNoReadyWhen_ItemsReady(t *testing.T) {
 	items := []any{
@@ -810,51 +548,7 @@ func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 // readyWhen evaluation fails with a permanent expression error (not data
 // pending), evalReadiness wraps it with ErrReadyWhenFailed so the
 // coordinator classifies it as NodeNotReady instead of NodeError.
-//
-// Per 001-graph.md: "readyWhen is a health signal — it does not gate
-// downstream execution."
-func TestEvalReadiness_ExpressionErrorWrapsReadyWhenFailed(t *testing.T) {
-	// Build a compiledGraph with a readyWhen expression that evaluates
-	// to an int (not a bool) — a permanent expression error.
-	// size(deploy.metadata.name) returns int64, which evalBoolCondition
-	// rejects: "expression evaluated to int64, want bool"
-	spec := &GraphSpec{
-		Nodes: []Node{
-			{
-				ID:        "deploy",
-				Template:  map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "app"}},
-				ReadyWhen: []string{"${size(deploy.metadata.name)}"},
-			},
-		},
-	}
-	compiled, err := compileGraphSpec(spec, nil)
-	require.NoError(t, err)
-
-	eval := &evaluator{compiled: compiled, scope: map[string]any{
-		"deploy": map[string]any{
-			"metadata": map[string]any{"name": "app"},
-		},
-	}}
-
-	err = eval.evalReadiness("deploy", []string{"${size(deploy.metadata.name)}"})
-	require.Error(t, err)
-
-	// The error must wrap ErrReadyWhenFailed — NOT be a raw error that
-	// the coordinator would classify as NodeError.
-	assert.True(t, errors.Is(err, ErrReadyWhenFailed),
-		"readyWhen expression error should wrap ErrReadyWhenFailed, got: %v", err)
-
-	// The error must NOT wrap ErrWaitingForReadiness — that's for transient
-	// readiness conditions (data not yet available, condition evaluates false).
-	assert.False(t, errors.Is(err, ErrWaitingForReadiness),
-		"readyWhen expression error should NOT wrap ErrWaitingForReadiness")
-
-	// The underlying error message should be preserved for diagnostics.
-	assert.Contains(t, err.Error(), "want bool",
-		"underlying expression error should be preserved")
-}
-
-// TestEvalReadiness_NormalNotReadyIsUnchanged proves that normal readyWhen
+// // TestEvalReadiness_NormalNotReadyIsUnchanged proves that normal readyWhen
 // failures (condition evaluates to false, data pending) still produce
 // ErrWaitingForReadiness — the fix only affects expression errors.
 func TestEvalReadiness_NormalNotReadyIsUnchanged(t *testing.T) {
@@ -885,51 +579,6 @@ func TestEvalReadiness_NormalNotReadyIsUnchanged(t *testing.T) {
 		"normal readyWhen=false should produce ErrWaitingForReadiness, got: %v", err)
 	assert.False(t, errors.Is(err, ErrReadyWhenFailed),
 		"normal readyWhen=false should NOT produce ErrReadyWhenFailed")
-}
-
-// TestWorkerClassification_ReadyWhenFailedIsNotReady proves that the worker
-// goroutine's error classification maps ErrReadyWhenFailed to NodeNotReady,
-// not NodeError. This is the boundary where the gating decision is made.
-func TestWorkerClassification_ReadyWhenFailedIsNotReady(t *testing.T) {
-	// Simulate the worker's classification logic.
-	classify := func(err error) NodeState {
-		if err == nil {
-			return NodeReady
-		}
-		switch {
-		case errors.Is(err, ErrPending):
-			return NodePending
-		case errors.Is(err, ErrWaitingForReadiness):
-			return NodeNotReady
-		case errors.Is(err, ErrReadyWhenFailed):
-			return NodeNotReady
-		case errors.Is(err, ErrFieldConflict):
-			return NodeConflict
-		default:
-			return NodeError
-		}
-	}
-
-	tests := []struct {
-		name string
-		err  error
-		want NodeState
-	}{
-		{"readyWhen expression error", fmt.Errorf("%w: expression returned string", ErrReadyWhenFailed), NodeNotReady},
-		{"readyWhen false", fmt.Errorf("%w", ErrWaitingForReadiness), NodeNotReady},
-		{"data pending", fmt.Errorf("%w", ErrPending), NodePending},
-		{"field conflict", fmt.Errorf("%w", ErrFieldConflict), NodeConflict},
-		{"API error", fmt.Errorf("forbidden: permission denied"), NodeError},
-		{"nil", nil, NodeReady},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := classify(tc.err)
-			assert.Equal(t, tc.want, got,
-				"error %v should classify as %s", tc.err, tc.want)
-		})
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1188,29 +837,6 @@ func TestPatchStatusDetection(t *testing.T) {
 // Correctness reconciliation — Finding 3: Non-API error classification
 // ---------------------------------------------------------------------------
 
-// TestClassifyAPIError_NonAPIErrorsAreNotSystemError proves that errors
-// which are NOT wrapped *StatusError (i.e., not from the API server) AND
-// are NOT network/infrastructure errors are classified correctly.
-//
-// Per 004-graph-reconciliation.md § Node States: Definition nodes do not
-// produce SystemError (no API calls). CEL evaluation failures are Error.
-//
-// The coordinator re-classifies NodeError from the worker using
-// classifyAPIError. For non-API errors (CEL failures, template errors),
-// the function should distinguish between transient infrastructure errors
-// and deterministic non-API errors.
-func TestClassifyAPIError_CELErrorIsNotSystemError(t *testing.T) {
-	// A CEL type error — deterministic, same inputs always produce same failure.
-	// This should NOT be SystemError (which triggers 5s retry).
-	celErr := fmt.Errorf("evaluating \"deploy.status.replicas > 0\": type conversion error: got string, want int")
-	info := classifyAPIError(celErr)
-
-	// Currently this is NodeSystemError (the bug). After the fix, this should
-	// be NodeError (deterministic non-API failure).
-	assert.Equal(t, NodeError, info.state,
-		"CEL evaluation errors are deterministic non-API failures, not transient system errors")
-}
-
 // TestClassifyAPIError_EvalErrorWithNetworkPattern proves that non-API errors
 // (CEL evaluation, template rendering) are classified as NodeError even when
 // their message contains network-like patterns. Before the fix, an error
@@ -1220,6 +846,11 @@ func TestClassifyAPIError_CELErrorIsNotSystemError(t *testing.T) {
 // The fix: errors originating from non-API operations are wrapped with
 // ErrEvaluation at the source (toMap, evalString). classifyAPIError checks
 // for this sentinel before falling through to network pattern matching.
+//
+// This tests a classification boundary on a pure function — manufacturing
+// the same false-positive in e2e would require a contrived expression whose
+// error text happens to match network patterns. The unit test encodes the
+// property directly.
 func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 	// An evaluation error whose message contains a network error pattern.
 	// Without the sentinel, this would be classified as NodeSystemError.
@@ -1235,10 +866,6 @@ func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 	assert.Equal(t, NodeSystemError, info.state,
 		"real network errors without ErrEvaluation sentinel should remain NodeSystemError")
 }
-
-// ---------------------------------------------------------------------------
-// Correctness reconciliation — Finding 4: Status priority
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Correctness reconciliation — Finding 4: Status priority

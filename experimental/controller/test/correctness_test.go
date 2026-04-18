@@ -2769,3 +2769,256 @@ func TestAbsentToPresentFieldTriggersPropagation(t *testing.T) {
 		types.NamespacedName{Name: "test-absent-present", Namespace: ns}))
 	t.Log("Graph Ready — absent to present field propagation proved")
 }
+
+// TestDeclarationError_FinalizesTargetMustBeResource proves that a finalizes
+// declaration targeting a non-resource node (def, ref, watch) is rejected at
+// compile time. Only template nodes produce resources that can be finalized.
+//
+// Replaces: TestFinalizesTargetMustBeResource (unit)
+func TestDeclarationError_FinalizesTargetMustBeResource(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata":   map[string]any{"name": "finalizes-not-resource", "namespace": ns},
+			"spec": map[string]any{
+				"nodes": []any{
+					// "cfg" is a def node — cannot be finalized.
+					map[string]any{
+						"id":  "cfg",
+						"def": map[string]any{"name": "test"},
+					},
+					map[string]any{
+						"id":        "snapshot",
+						"finalizes": "cfg",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "snapshot"},
+							"data":       map[string]any{"ref": "${cfg.name}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "finalizes-not-resource", Namespace: ns}, "False"))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "finalizes-not-resource", Namespace: ns}, g))
+	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
+}
+
+// TestCompilationValidation is a table-driven test that verifies the
+// controller rejects invalid Graph specs at compile time with the correct
+// Compiled condition reason. Each case submits a Graph with a specific
+// validation violation and asserts Compiled=False with the expected reason.
+//
+// This replaces unit tests in keyword_parse_test.go and reconcile_test.go
+// that called parseNodeList/BuildDAG directly. The behavior (compile-time
+// rejection) is user-observable through the Compiled status condition.
+func TestCompilationValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		nodes  []any
+		reason string // expected Compiled condition reason
+	}{
+		{
+			name: "mutual exclusion: template and patch on same node",
+			nodes: []any{map[string]any{
+				"id": "dual",
+				"template": map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "t"},
+				},
+				"patch": map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "p"},
+				},
+			}},
+			reason: "DeclarationError",
+		},
+		{
+			name: "mutual exclusion: template and ref on same node",
+			nodes: []any{map[string]any{
+				"id": "dual",
+				"template": map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "t"},
+				},
+				"ref": map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "r"},
+				},
+			}},
+			reason: "DeclarationError",
+		},
+		{
+			name: "mutual exclusion: template and def on same node",
+			nodes: []any{map[string]any{
+				"id": "dual",
+				"template": map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "t"},
+				},
+				"def": map[string]any{"key": "value"},
+			}},
+			reason: "DeclarationError",
+		},
+		{
+			name: "template missing apiVersion",
+			nodes: []any{map[string]any{
+				"id": "noversion",
+				"template": map[string]any{
+					"kind":     "ConfigMap",
+					"metadata": map[string]any{"name": "t"},
+				},
+			}},
+			reason: "DeclarationError",
+		},
+		{
+			name: "template missing kind",
+			nodes: []any{map[string]any{
+				"id": "nokind",
+				"template": map[string]any{
+					"apiVersion": "v1",
+					"metadata":   map[string]any{"name": "t"},
+				},
+			}},
+			reason: "DeclarationError",
+		},
+		{
+			name: "patch without metadata.name",
+			nodes: []any{
+				map[string]any{
+					"id": "src",
+					"template": map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						"metadata": map[string]any{"name": "src"},
+					},
+				},
+				map[string]any{
+					"id": "noname",
+					"patch": map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						// metadata.name missing — required for patch
+					},
+				},
+			},
+			reason: "DeclarationError",
+		},
+		{
+			name: "zero keywords on node",
+			nodes: []any{map[string]any{
+				"id": "empty",
+				// No template, patch, ref, watch, or def
+			}},
+			reason: "DeclarationError",
+		},
+		{
+			name: "non-string readyWhen element",
+			nodes: []any{map[string]any{
+				"id": "bad",
+				"template": map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "t"},
+				},
+				"readyWhen": []any{42},
+			}},
+			reason: "DeclarationError",
+		},
+		{
+			name: "non-string includeWhen element",
+			nodes: []any{map[string]any{
+				"id": "bad",
+				"template": map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "t"},
+				},
+				"includeWhen": []any{true},
+			}},
+			reason: "DeclarationError",
+		},
+		{
+			name: "invalid DNS label in node ID (underscore)",
+			nodes: []any{map[string]any{
+				"id": "foo_bar",
+				"template": map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "t"},
+				},
+			}},
+			reason: "DeclarationError",
+		},
+		{
+			name: "cyclic dependency between nodes",
+			nodes: []any{
+				map[string]any{
+					"id": "a",
+					"template": map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						"metadata": map[string]any{"name": "a"},
+						"data":     map[string]any{"ref": "${b.metadata.name}"},
+					},
+				},
+				map[string]any{
+					"id": "b",
+					"template": map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						"metadata": map[string]any{"name": "b"},
+						"data":     map[string]any{"ref": "${a.metadata.name}"},
+					},
+				},
+			},
+			reason: "DependencyError",
+		},
+		{
+			name: "expression references undeclared identifier",
+			nodes: []any{map[string]any{
+				"id": "bad",
+				"template": map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "t"},
+					"data":     map[string]any{"ref": "${nonexistent.field}"},
+				},
+			}},
+			reason: "ExpressionError",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ns := createNamespace(t)
+
+			graph := &unstructured.Unstructured{
+				Object: map[string]any{
+					"apiVersion": "experimental.kro.run/v1alpha1",
+					"kind":       "Graph",
+					"metadata":   map[string]any{"name": "validation-" + ns[len(ns)-5:], "namespace": ns},
+					"spec":       map[string]any{"nodes": tc.nodes},
+				},
+			}
+			require.NoError(t, k8sClient.Create(ctx, graph))
+
+			require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
+				types.NamespacedName{Name: graph.GetName(), Namespace: ns}, "False"))
+
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			require.NoError(t, k8sClient.Get(ctx,
+				types.NamespacedName{Name: graph.GetName(), Namespace: ns}, g))
+			assert.Equal(t, tc.reason, graphCompiledReason(g),
+				"Graph with %s should have Compiled reason=%s", tc.name, tc.reason)
+		})
+	}
+}

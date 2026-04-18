@@ -25,7 +25,15 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// List revisions early — needed for key extraction and finalization.
 	// Cache eviction is deferred to after finalization (which calls
 	// compileRevision and would re-add entries if evicted too early).
-	revisions, _ := listRevisions(ctx, r.Client, graph.GetName(), graph.GetNamespace())
+	// Errors are logged but do not block teardown: the watch cache
+	// (deriveAppliedSet) and live Graph spec provide fallback paths for
+	// key discovery and ordering. Blocking here would leave the Graph
+	// with a finalizer that can never clear if the list call is
+	// permanently failing.
+	revisions, listErr := listRevisions(ctx, r.Client, graph.GetName(), graph.GetNamespace())
+	if listErr != nil {
+		logger.Error(listErr, "listing revisions during teardown; proceeding with watch cache and live spec fallbacks")
+	}
 
 	// Clean up the resource cache for this Graph only.
 	r.Resources.removeForGraph(graph.GetName(), graph.GetNamespace())
@@ -146,7 +154,15 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 
 	// Also include dynamically-named resources found by label selector.
 	// This catches forEach-stamped resources that aren't in the static spec.
-	dynamicKeys, _ := r.findManagedResourceKeys(ctx, graph)
+	// Errors are logged but do not block teardown — the static keys and
+	// deriveAppliedSet already cover statically-named resources. Only
+	// dynamically-named resources (forEach children, CEL-computed names)
+	// risk being orphaned if this call fails, and the watch cache usually
+	// covers those too.
+	dynamicKeys, findErr := r.findManagedResourceKeys(ctx, graph)
+	if findErr != nil {
+		logger.Error(findErr, "finding dynamically-named resources during teardown; forEach children may be orphaned if not in watch cache")
+	}
 	for _, k := range dynamicKeys {
 		if !ownKeys[k] {
 			keys = append(keys, k)

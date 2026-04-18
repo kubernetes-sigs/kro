@@ -1689,3 +1689,175 @@ func TestForEach_RegressionMultiVariableRejected(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Per-item propagateWhen
+// ---------------------------------------------------------------------------
+
+// TestForEach_PropagateWhenPerItemHaltsCreation proves that propagateWhen on a
+// forEach node is evaluated per-item inside the expansion loop, halting
+// iteration when the condition is first false.
+//
+// Per 001-graph.md § propagateWhen: "With forEach, [...] the controller
+// evaluates propagateWhen per-item and halts when the condition is first false."
+//
+// The gate expression allows creation while size < 2 or all items are ready:
+//
+//	Phase 1: items 1,2 created (size reaches 2, not all ready) → item 3 gated
+//	Phase 2: items 1,2 made ready → gate reopens → item 3 created
+//	Phase 3: item 3 made ready → graph Ready
+func TestForEach_PropagateWhenPerItemHaltsCreation(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create 3 source CMs.
+	sources := []string{"ppi-src-a", "ppi-src-b", "ppi-src-c"}
+	for _, name := range sources {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": ns,
+					"labels":    map[string]any{"group": "ppi-foreach"},
+				},
+				"data": map[string]any{"ready": "false"},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+
+	// Graph: Watch sources → forEach stamps workers with readyWhen.
+	// propagateWhen on the forEach node limits inflight workers.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-ppi",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "sources",
+						"watch": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"selector":   map[string]any{"group": "ppi-foreach"},
+						},
+					},
+					map[string]any{
+						"id": "workers",
+						"forEach": map[string]any{
+							"src": "${sources}",
+						},
+						// Per-item propagateWhen: halt when 2+ items exist
+						// and not all are ready.
+						"propagateWhen": []any{"${size(workers) < 2 || workers.ready()}"},
+						"readyWhen":     []any{"${workers.data.ready == 'true'}"},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "ppi-worker-${src.metadata.name}"},
+							"data": map[string]any{
+								"ready":  "${src.data.ready}",
+								"source": "${src.metadata.name}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// ---------------------------------------------------------------
+	// Phase 1: Per-item gate halts at 2 inflight workers.
+	// Workers A,B are created (2 inflight). Worker C is gated.
+	// ---------------------------------------------------------------
+	workerA := types.NamespacedName{Name: "ppi-worker-ppi-src-a", Namespace: ns}
+	workerB := types.NamespacedName{Name: "ppi-worker-ppi-src-b", Namespace: ns}
+	workerC := types.NamespacedName{Name: "ppi-worker-ppi-src-c", Namespace: ns}
+
+	// Workers A and B must be created.
+	cmA := &unstructured.Unstructured{}
+	cmA.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerA, cmA),
+		"worker A must be created (inflight count < 2)")
+	cmB := &unstructured.Unstructured{}
+	cmB.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerB, cmB),
+		"worker B must be created (inflight count < 2)")
+
+	// Worker C must NOT exist — the gate halted iteration.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-ppi", Namespace: ns}))
+	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk, workerC, 3*time.Second),
+		"worker C must be absent — per-item propagateWhen halted after 2 inflight")
+	t.Log("Phase 1: 2 workers created, 3rd gated by per-item propagateWhen")
+
+	// ---------------------------------------------------------------
+	// Phase 2: Unblock the gate by making workers A and B ready.
+	// workers.ready() becomes true → gate reopens → worker C created.
+	// ---------------------------------------------------------------
+	for _, srcName := range []string{"ppi-src-a", "ppi-src-b"} {
+		src := &unstructured.Unstructured{}
+		src.SetGroupVersionKind(gvk)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: srcName, Namespace: ns}, src))
+		require.NoError(t, unstructured.SetNestedField(src.Object, "true", "data", "ready"))
+		require.NoError(t, k8sClient.Update(ctx, src))
+	}
+	t.Log("Phase 2: Set ppi-src-a and ppi-src-b ready=true")
+
+	// Wait for workers A and B to pick up the change.
+	for _, wk := range []types.NamespacedName{workerA, workerB} {
+		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+			func(ctx context.Context) (bool, error) {
+				cm := &unstructured.Unstructured{}
+				cm.SetGroupVersionKind(gvk)
+				if err := k8sClient.Get(ctx, wk, cm); err != nil {
+					return false, nil
+				}
+				data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+				return data["ready"] == "true", nil
+			}), "worker %s must update to ready=true", wk.Name)
+	}
+
+	// Worker C should now be created (gate reopened: all existing items ready).
+	cmC := &unstructured.Unstructured{}
+	cmC.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerC, cmC),
+		"worker C must be created after gate opens (workers.ready() == true)")
+	t.Log("Phase 2: Worker C created — gate opened after workers A,B became ready")
+
+	// ---------------------------------------------------------------
+	// Phase 3: Make remaining worker ready → graph Ready.
+	// ---------------------------------------------------------------
+	src := &unstructured.Unstructured{}
+	src.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "ppi-src-c", Namespace: ns}, src))
+	require.NoError(t, unstructured.SetNestedField(src.Object, "true", "data", "ready"))
+	require.NoError(t, k8sClient.Update(ctx, src))
+
+	// Wait for worker C to show ready=true.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			cm := &unstructured.Unstructured{}
+			cm.SetGroupVersionKind(gvk)
+			if err := k8sClient.Get(ctx, workerC, cm); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+			return data["ready"] == "true", nil
+		}), "worker C must update to ready=true")
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-foreach-ppi", Namespace: ns}))
+	t.Log("Phase 3: All workers ready, graph Ready — per-item propagateWhen proved")
+}

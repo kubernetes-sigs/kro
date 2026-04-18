@@ -321,7 +321,11 @@ func (w *walkState) tryDispatch(idx int) {
 	}
 
 	// Step 3: propagateWhen — input gate on this node.
-	if len(node.PropagateWhen) > 0 {
+	// For forEach nodes, propagateWhen is evaluated per-item inside the
+	// expansion loop (reconcileForEach), not here. Per 001-graph.md §
+	// propagateWhen: "With forEach, [...] the controller evaluates
+	// propagateWhen per-item and halts when the condition is first false."
+	if len(node.PropagateWhen) > 0 && node.ForEach == nil {
 		// Populate __kroDeps for this node so that <id>.dependencies()
 		// expressions resolve correctly.
 		w.populateDepsMap(node)

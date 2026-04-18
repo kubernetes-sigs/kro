@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -94,6 +95,7 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) ([]string, error) {
 	logger := log.FromContext(ctx)
 	var keys []string
+	hasPerItemGate := len(node.PropagateWhen) > 0
 
 	for varName, collectionExpr := range node.ForEach {
 		collection, err := eval.evalString(collectionExpr)
@@ -125,6 +127,11 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			currentItems[id] = item
 			currentOrder = append(currentOrder, id)
 		}
+		// Stable iteration order across reconciles. Without this,
+		// per-item propagateWhen halts at inconsistent positions when
+		// the source collection reorders (e.g., Watch list from an
+		// informer cache with non-deterministic iteration).
+		sort.Strings(currentOrder)
 
 		// Build previous identity → item map from the worker's snapshot.
 		cacheKey := node.ID + "/" + varName
@@ -150,11 +157,55 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		newItemScope := make(map[string]any)
 		newItemKeys := make(map[string][]string)
 
+		// Per-item propagateWhen gate. Per 001-graph.md § propagateWhen:
+		// "With forEach, [...] the controller evaluates propagateWhen
+		// per-item and halts when the condition is first false."
+		//
+		// The gate is evaluated before each item against the
+		// partially-built collection (eval.scope[node.ID]). Items
+		// processed so far have fresh __ready stamps so expressions
+		// like ${workers.filter(w, !w.ready()).size() < 2} reflect
+		// current readiness. Gated items carry forward their previous
+		// applied state (including __ready from the last reconcile).
+		hasPerItemGate := len(node.PropagateWhen) > 0
+
 		// Diff: identify changed, unchanged, and removed items.
 		var allApplied []any
 		var childErrors []error                     // track per-child errors for state derivation
 		seenResourceKeys := make(map[string]string) // resource key → item identity
+		halted := false
 		for _, id := range currentOrder {
+			// --- Per-item propagateWhen gate ---
+			if hasPerItemGate && !halted {
+				// Expose the partially-built collection so the gate
+				// expression can inspect already-processed items.
+				eval.scope[node.ID] = allApplied
+				if !eval.checkPropagateWhen(node.PropagateWhen, node.ID) {
+					halted = true
+					logger.V(1).Info("per-item propagateWhen halted forEach expansion",
+						"node", node.ID, "haltedAt", id, "processedCount", len(allApplied))
+				}
+			}
+			if halted {
+				// Carry forward: retain previous applied state for gated items.
+				// Note: carried-forward items retain __ready from their last
+				// processed reconcile. If readyWhen depends on cross-node state
+				// that changed, the stamp is stale until the gate opens far
+				// enough for this item to be re-processed.
+				if prevKeys, ok := prevItemKeys[id]; ok {
+					keys = append(keys, prevKeys...)
+				}
+				if prevScope, ok := prevItemScope[id]; ok {
+					allApplied = append(allApplied, prevScope)
+					newItemScope[id] = prevScope
+					newItemKeys[id] = prevItemKeys[id]
+				}
+				// If no previous scope (new item, never created), it is
+				// absent from the collection — downstream sees a growing
+				// list as the gate opens over successive reconciles.
+				continue
+			}
+
 			item := currentItems[id]
 			prevItem, existed := prevItems[id]
 
@@ -169,6 +220,13 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 					newItemScope[id] = prevScope
 					newItemKeys[id] = prevItemKeys[id]
 					logger.V(2).Info("forEach item unchanged, skipping", "node", node.ID, "item", id)
+					// Inline readyWhen stamp: carried-forward items preserve
+					// their previous __ready. Re-stamp so the gate expression
+					// sees current readiness if readyWhen depends on cross-node
+					// state that changed since the last reconcile.
+					if hasPerItemGate {
+						stampSingleItemReady(eval, node.ID, prevScope, node.ReadyWhen)
+					}
 					continue
 				}
 				// No previous scope — fall through to evaluate.
@@ -261,6 +319,13 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			// Record per-item state.
 			newItemScope[id] = applied.Object
 			newItemKeys[id] = itemKeys
+
+			// Inline readyWhen stamp: required when per-item
+			// propagateWhen is active so the gate expression sees
+			// __ready on items processed earlier in this cycle.
+			if hasPerItemGate {
+				stampSingleItemReady(eval, node.ID, applied.Object, node.ReadyWhen)
+			}
 		}
 
 		// Record updated state for coordinator to merge back.
@@ -285,14 +350,24 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		}
 
 		eval.scope[node.ID] = allApplied
+
+		// Per-item propagateWhen halted expansion — the collection is
+		// incomplete. Signal NotReady so the controller requeues.
+		if halted {
+			return keys, ErrWaitingForReadiness
+		}
 	}
 
 	// Check readyWhen per-item and stamp __ready on each item.
-	if err := forEachStampReadyWhen(eval.scope, node.ID, node.ReadyWhen, eval); err != nil {
-		return keys, err
-	}
-	if len(node.ReadyWhen) > 0 {
-		logger.V(1).Info("all forEach items ready", "node", node.ID)
+	// When per-item propagateWhen is active, readyWhen was already
+	// stamped inline during the loop — skip the post-loop pass.
+	if !hasPerItemGate {
+		if err := forEachStampReadyWhen(eval.scope, node.ID, node.ReadyWhen, eval); err != nil {
+			return keys, err
+		}
+		if len(node.ReadyWhen) > 0 {
+			logger.V(1).Info("all forEach items ready", "node", node.ID)
+		}
 	}
 
 	return keys, nil
@@ -318,9 +393,12 @@ func forEachStampReadyWhen(scope map[string]any, nodeID string, readyWhen []stri
 		anyNotReady := false
 		for _, applied := range items {
 			saved := scope[nodeID]
+			savedSelf := scope["self"]
 			scope[nodeID] = applied
+			scope["self"] = applied
 			err := eval.checkReadiness(readyWhen, nodeID)
 			scope[nodeID] = saved
+			scope["self"] = savedSelf
 			if err != nil {
 				if m, ok := applied.(map[string]any); ok {
 					m["__ready"] = false
@@ -344,6 +422,37 @@ func forEachStampReadyWhen(scope map[string]any, nodeID string, readyWhen []stri
 		}
 	}
 	return nil
+}
+
+// stampSingleItemReady evaluates readyWhen for a single forEach item and
+// stamps __ready on it. Used during per-item propagateWhen gating so that
+// the gate expression can see readiness state for items processed earlier
+// in the same cycle.
+func stampSingleItemReady(eval *evaluator, nodeID string, item any, readyWhen []string) {
+	m, ok := item.(map[string]any)
+	if !ok {
+		return
+	}
+	if len(readyWhen) == 0 {
+		m["__ready"] = true
+		return
+	}
+	// Temporarily point scope[nodeID] and scope["self"] at this single
+	// item so readyWhen expressions resolve against the item under
+	// evaluation. Per 001-graph.md § readyWhen: "The expression runs in
+	// a scope containing the node's current value as self."
+	saved := eval.scope[nodeID]
+	savedSelf := eval.scope["self"]
+	eval.scope[nodeID] = item
+	eval.scope["self"] = item
+	err := eval.checkReadiness(readyWhen, nodeID)
+	eval.scope[nodeID] = saved
+	eval.scope["self"] = savedSelf
+	if err != nil {
+		m["__ready"] = false
+	} else {
+		m["__ready"] = true
+	}
 }
 
 // forEachItemIdentity extracts a stable identity from a forEach collection item.

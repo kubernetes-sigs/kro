@@ -128,12 +128,21 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 		}
 	}
 
-	// Validate propagateWhen: reject self-references.
-	// propagateWhen is an input gate — it runs before the node evaluates,
-	// so the node's own data is not in scope. Self-referencing expressions
-	// would deadlock (node can't evaluate to produce data its gate requires).
+	// Validate propagateWhen: reject self-references for scalar nodes.
+	// propagateWhen on a scalar node is an input gate — it runs before the
+	// node evaluates, so the node's own data is not in scope. Self-referencing
+	// expressions would deadlock (node can't evaluate to produce data its
+	// gate requires).
+	//
+	// forEach nodes are exempt because their propagateWhen evaluates per-item
+	// inside the expansion loop, where the partially-built collection IS in
+	// scope. Self-reference is the intended pattern — the gate inspects
+	// items already processed in this cycle to decide whether to continue.
 	if exprPaths != nil {
 		for _, node := range dag.Nodes {
+			if node.ForEach != nil {
+				continue
+			}
 			for _, pw := range node.PropagateWhen {
 				pos := 0
 				for {

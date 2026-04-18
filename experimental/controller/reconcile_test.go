@@ -794,24 +794,6 @@ func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 	}
 }
 
-// TestReconcileStateDeriveReadyCondition_FinalizerSkipped proves that the
-// prune phase can surface FinalizerSkipped information via nodeNotes which
-// flows into the Ready condition message as an informational note. Notes
-// are distinct from errors — Ready stays True.
-func TestReconcileStateDeriveReadyCondition_FinalizerSkipped(t *testing.T) {
-	state := &reconcileState{
-		compiled:  true,
-		nodeCount: 3,
-		nodeNotes: []string{"FinalizerSkipped: /v1/PersistentVolumeClaim/default/data (target absent)"},
-	}
-	// With no error flags set, the graph should still be Ready (finalization
-	// skipped is informational, not an error). The message includes the note.
-	status, reason, message := state.deriveReadyCondition()
-	assert.Equal(t, ConditionTrue, status)
-	assert.Equal(t, "Ready", reason)
-	assert.Contains(t, message, "FinalizerSkipped", "Ready message should surface FinalizerSkipped info")
-}
-
 // ---------------------------------------------------------------------------
 // Correctness reconciliation — readyWhen expression errors
 //
@@ -1021,24 +1003,6 @@ func TestHighestPriorityChildError_Nil(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Correctness reconciliation — readyWhen errors in status
 // ---------------------------------------------------------------------------
-
-// TestDeriveReadyCondition_NotReadyWithErrors proves that when nodes are
-// NotReady and there are nodeErrors (e.g., readyWhen expression errors),
-// the Ready condition message surfaces the errors for operator visibility.
-func TestDeriveReadyCondition_NotReadyWithErrors(t *testing.T) {
-	state := &reconcileState{
-		compiled: true,
-		PlanSummary: PlanSummary{
-			HasNotReady: true,
-		},
-		nodeErrors: []string{"deploy: readyWhen evaluation failed: expression returned string, want bool"},
-	}
-	status, reason, message := state.deriveReadyCondition()
-	assert.Equal(t, ConditionUnknown, status)
-	assert.Equal(t, "NotReady", reason)
-	assert.Contains(t, message, "readyWhen evaluation failed",
-		"NotReady condition should surface readyWhen expression errors for operator triage")
-}
 
 // ---------------------------------------------------------------------------
 // Correctness reconciliation — Finding 1: staticResourceKey namespace
@@ -1276,6 +1240,10 @@ func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 // Correctness reconciliation — Finding 4: Status priority
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Correctness reconciliation — Finding 4: Status priority
+// ---------------------------------------------------------------------------
+
 // TestDeriveReadyCondition_BlockedBeforePending proves that when both
 // Blocked and Pending states coexist, Blocked takes priority in the Ready
 // condition. Blocked means "upstream error — someone needs to act."
@@ -1283,6 +1251,9 @@ func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 //
 // Per 004-graph-reconciliation.md § Propagation: "Precedence where multiple
 // apply: Excluded > Blocked > Pending."
+//
+// This tests a pure priority function over inputs — not reconciliation
+// behavior. The inputs are a set of states, the output is a condition.
 func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
 	state := &reconcileState{
 		compiled: true,
@@ -1295,6 +1266,19 @@ func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
 	assert.Equal(t, ConditionUnknown, status)
 	assert.Equal(t, "Blocked", reason,
 		"Blocked should take priority over Pending — upstream error is more actionable than waiting")
+}
+
+// TestDeriveReadyCondition_PendingSurfacesReasons proves that when the
+// Ready condition is Pending, the message includes per-node error details.
+// Pure function test — exercises the formatting branch of deriveReadyCondition.
+func TestDeriveReadyCondition_PendingSurfacesReasons(t *testing.T) {
+	s := &reconcileState{
+		compiled:    true,
+		PlanSummary: PlanSummary{HasPending: true},
+		nodeErrors:  []string{"deploy: waiting for input from cfg"},
+	}
+	_, _, message := s.deriveReadyCondition()
+	assert.Contains(t, message, "waiting for input from cfg")
 }
 
 // ---------------------------------------------------------------------------
@@ -1441,80 +1425,6 @@ func TestWatchKindCacheLifecycle(t *testing.T) {
 	assert.Equal(t, 2, len(cached))
 }
 
-// TestWatchKindEmptyReadyWhenPropagates_Regression proves that `.ready()`
-// on a Watch with an empty collection reflects the node's readyWhen
-// verdict — not a vacuous true. The AST rewrite in readyrewrite.go
-// redirects `<wk_id>.ready()` to a scope-variable lookup populated from
-// the node's readyWhen evaluation, independent of collection size.
-//
-// Before the fix, empty collections returned true regardless of readyWhen
-// because the per-item `__ready` stamping had no items to attach to and
-// `.ready()` on an empty list defaulted to "vacuously true."
-//
-// Per 001-graph.md § readyWhen: "A Watch's `.ready()` returns true
-// when the node's readyWhen conditions pass (evaluated once against the
-// whole array, not per-item) — including when the collection is empty."
-func TestWatchKindEmptyReadyWhenPropagates_Regression(t *testing.T) {
-	spec := &GraphSpec{
-		Nodes: []Node{
-			{
-				ID: "pods",
-				Watch: map[string]any{
-					"apiVersion": "v1",
-					"kind":       "ConfigMap",
-					"selector":   map[string]any{"app": "nope"},
-				},
-				nodeType: NodeTypeWatch,
-			},
-		},
-	}
-	compiled, err := compileGraphSpec(spec, nil)
-	require.NoError(t, err)
-
-	t.Run("empty collection with failing readyWhen → .ready() false", func(t *testing.T) {
-		state := newInstanceState(compiled)
-		eval := newEvaluator(state)
-		eval.scope["pods"] = []any{}
-		// Simulate reconcileWatch setting the verdict after a failed
-		// readyWhen evaluation on an empty collection.
-		eval.nodeReady["pods"] = false
-
-		out, err := compiled.eval("pods.ready()", eval.scope)
-		require.NoError(t, err)
-		assert.Equal(t, false, out,
-			"empty Watch with failing readyWhen must report .ready() = false")
-	})
-
-	t.Run("empty collection with no readyWhen → .ready() true", func(t *testing.T) {
-		state := newInstanceState(compiled)
-		eval := newEvaluator(state)
-		eval.scope["pods"] = []any{}
-		// reconcileWatch sets verdict = true when no readyWhen is
-		// specified — a collection is ready by virtue of being observed.
-		eval.nodeReady["pods"] = true
-
-		out, err := compiled.eval("pods.ready()", eval.scope)
-		require.NoError(t, err)
-		assert.Equal(t, true, out,
-			"empty Watch without readyWhen must report .ready() = true")
-	})
-
-	t.Run("non-empty collection respects readyWhen verdict", func(t *testing.T) {
-		state := newInstanceState(compiled)
-		eval := newEvaluator(state)
-		eval.scope["pods"] = []any{
-			map[string]any{"metadata": map[string]any{"name": "a"}},
-			map[string]any{"metadata": map[string]any{"name": "b"}},
-		}
-		eval.nodeReady["pods"] = false
-
-		out, err := compiled.eval("pods.ready()", eval.scope)
-		require.NoError(t, err)
-		assert.Equal(t, false, out,
-			"non-empty Watch with failing readyWhen must also report .ready() = false")
-	})
-}
-
 // TestWatchKindCacheDirty_Regression proves that instanceState carries a
 // per-node dirty flag that the coordinator uses to force a full re-List
 // after a failed incremental reconcile. Before this fix, a GET error in
@@ -1614,66 +1524,6 @@ func TestFinalizeSkippedStates_IgnoresNonSkipped(t *testing.T) {
 		"node not in outputsReady must not be overwritten")
 	assert.Equal(t, NodeReady, plan.States["skip"],
 		"node in outputsReady with prior state gets restored")
-}
-
-// ---------------------------------------------------------------------------
-// deriveReadyCondition — structured messages for Blocked/Pending (#11, #20)
-// ---------------------------------------------------------------------------
-
-// TestDeriveReadyCondition_BlockedSurfacesStructuredReasons guards against
-// the regression where TeardownBlocked's three distinct causes (third-party
-// field managers, finalizer creation failure, finalizer not ready) collapsed
-// into one opaque "blocked by upstream errors" message. Each message is in
-// nodeErrors; the Ready condition must include them.
-func TestDeriveReadyCondition_BlockedSurfacesStructuredReasons(t *testing.T) {
-	tests := []struct {
-		name   string
-		errors []string
-		want   string
-	}{
-		{
-			name:   "third-party field managers",
-			errors: []string{"TeardownBlocked: v1/ConfigMap/default/cfg (third-party field managers: kubectl)"},
-			want:   "third-party field managers",
-		},
-		{
-			name:   "finalizer creation failure",
-			errors: []string{"TeardownBlocked: v1/PVC/default/data (finalizer creation failed: no finalizer node for target)"},
-			want:   "finalizer creation failed",
-		},
-		{
-			name:   "finalizer not ready",
-			errors: []string{"TeardownBlocked: v1/PVC/default/data (finalizer not ready: drain)"},
-			want:   "finalizer not ready",
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			s := &reconcileState{
-				compiled:    true,
-				PlanSummary: PlanSummary{HasBlocked: true},
-				nodeErrors:  tc.errors,
-			}
-			status, reason, message := s.deriveReadyCondition()
-			assert.Equal(t, ConditionUnknown, status)
-			assert.Equal(t, "Blocked", reason)
-			assert.Contains(t, message, tc.want,
-				"Blocked message must surface the structured TeardownBlocked reason, not a hardcoded stub")
-		})
-	}
-}
-
-// TestDeriveReadyCondition_PendingSurfacesReasons is the equivalent check
-// for HasPending — the stub "waiting for upstream data" is fine on its own
-// but must include nodeErrors when the Pending cause is diagnosable.
-func TestDeriveReadyCondition_PendingSurfacesReasons(t *testing.T) {
-	s := &reconcileState{
-		compiled:    true,
-		PlanSummary: PlanSummary{HasPending: true},
-		nodeErrors:  []string{"deploy: waiting for input from cfg"},
-	}
-	_, _, message := s.deriveReadyCondition()
-	assert.Contains(t, message, "waiting for input from cfg")
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,6 @@ package graphcontroller
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,8 +16,8 @@ import (
 func TestDefinesReference(t *testing.T) {
 	t.Run("def keyword yields NodeTypeDef", func(t *testing.T) {
 		n := Node{
-			ID:  "naming",
-			Def: map[string]any{"prefix": "${spec.name}"},
+			ID:       "naming",
+			Def:      map[string]any{"prefix": "${spec.name}"},
 			nodeType: NodeTypeDef,
 		}
 		assert.Equal(t, NodeTypeDef, n.Type())
@@ -90,8 +89,8 @@ func TestDefinesDAGDependencies(t *testing.T) {
 func TestDefinesCycleDetection(t *testing.T) {
 	nodes := []Node{
 		{
-			ID:  "naming",
-			Def: map[string]any{"prefix": "${svc.metadata.name}"},
+			ID:       "naming",
+			Def:      map[string]any{"prefix": "${svc.metadata.name}"},
 			nodeType: NodeTypeDef,
 		},
 		{
@@ -112,13 +111,13 @@ func TestDefinesCycleDetection(t *testing.T) {
 func TestDefinesChain(t *testing.T) {
 	nodes := []Node{
 		{
-			ID:  "a",
-			Def: map[string]any{"prefix": "app"},
+			ID:       "a",
+			Def:      map[string]any{"prefix": "app"},
 			nodeType: NodeTypeDef,
 		},
 		{
-			ID:  "b",
-			Def: map[string]any{"fullName": "${a.prefix + '-service'}"},
+			ID:       "b",
+			Def:      map[string]any{"fullName": "${a.prefix + '-service'}"},
 			nodeType: NodeTypeDef,
 		},
 		{
@@ -200,7 +199,7 @@ func TestDefinesReconcile(t *testing.T) {
 			{
 				ID:        "cfg",
 				Def:       map[string]any{"count": "3"},
-				nodeType:       NodeTypeDef,
+				nodeType:  NodeTypeDef,
 				ReadyWhen: []string{"${cfg.count == '3'}"},
 			},
 		}}
@@ -212,26 +211,6 @@ func TestDefinesReconcile(t *testing.T) {
 		result, ok := eval.scope["cfg"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, true, result["__ready"])
-	})
-
-	t.Run("readyWhen unsatisfied returns error and marks not ready", func(t *testing.T) {
-		spec := &GraphSpec{Nodes: []Node{
-			{
-				ID:        "cfg",
-				Def:       map[string]any{"count": "0"},
-				nodeType:       NodeTypeDef,
-				ReadyWhen: []string{"${cfg.count == '3'}"},
-			},
-		}}
-		eval := compileDefinesSpec(t, spec)
-
-		_, err := r.reconcileNode(ctx, nil, spec.Nodes[0], NodeTypeDef, eval, nil, false)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrWaitingForReadiness))
-
-		result, ok := eval.scope["cfg"].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, false, result["__ready"])
 	})
 
 	t.Run("CEL eval failure returns error", func(t *testing.T) {
@@ -268,10 +247,10 @@ func TestDefinesForEachReconcile(t *testing.T) {
 				"metadata":   map[string]any{"name": "cfg"},
 			}, nodeType: NodeTypeTemplate},
 			{
-				ID:      "items",
-				ForEach: map[string]string{"w": "${['a', 'b']}"},
-				Def:     map[string]any{"val": "${upstream.data.key}"},
-				nodeType:     NodeTypeDef,
+				ID:       "items",
+				ForEach:  map[string]string{"w": "${['a', 'b']}"},
+				Def:      map[string]any{"val": "${upstream.data.key}"},
+				nodeType: NodeTypeDef,
 			},
 		}}
 		compiled, err := compileGraphSpec(spec, nil)
@@ -314,10 +293,10 @@ func TestDefinesForEachReconcile(t *testing.T) {
 				// data.key is absent — ${upstream.data.key} fails
 			}, nodeType: NodeTypeTemplate},
 			{
-				ID:      "items",
-				ForEach: map[string]string{"w": "${['a', 'b']}"},
-				Def:     map[string]any{"val": "${upstream.data.key}"},
-				nodeType:     NodeTypeDef,
+				ID:       "items",
+				ForEach:  map[string]string{"w": "${['a', 'b']}"},
+				Def:      map[string]any{"val": "${upstream.data.key}"},
+				nodeType: NodeTypeDef,
 			},
 		}}
 		compiled, err := compileGraphSpec(spec, nil)

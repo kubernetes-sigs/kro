@@ -517,3 +517,87 @@ func TestReadyWhen_RegressionNonBoolReturn(t *testing.T) {
 	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient,
 		types.NamespacedName{Name: "readywhen-nonbool", Namespace: ns}, "NotReady"))
 }
+
+// TestWatchEmptyCollectionReadyWhenPropagation proves that a Watch's .ready()
+// reflects the readyWhen evaluation result even when the collection is empty.
+//
+// Before the fix, empty collections returned .ready()=true regardless of
+// readyWhen because the per-item __ready stamping had no items to attach to,
+// and the collection-level .ready() defaulted to vacuously true.
+//
+// Per 001-graph.md § readyWhen: "A Watch's .ready() returns true when the
+// node's readyWhen conditions pass (evaluated once against the whole array,
+// not per-item) — including when the collection is empty."
+//
+// This test creates a Watch with a readyWhen that requires at least one item
+// (size() > 0). With an empty collection, .ready() must return false, and the
+// Graph should report NotReady.
+//
+// Replaces: TestWatchKindEmptyReadyWhenPropagates_Regression (unit)
+func TestWatchEmptyCollectionReadyWhenPropagation(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-empty-readywhen",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "pods",
+						"watch": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							// Selector matches nothing — empty collection.
+							"metadata": map[string]any{"namespace": ns},
+							"selector": map[string]any{"app": "nonexistent-selector-" + ns},
+						},
+						// readyWhen requires at least one item.
+						"readyWhen": []any{"${pods.size() > 0}"},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// The Graph should report NotReady because the empty collection
+	// fails readyWhen (pods.size() > 0 is false when pods is empty).
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient,
+		types.NamespacedName{Name: "test-empty-readywhen", Namespace: ns}, "NotReady"))
+
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "test-empty-readywhen", Namespace: ns}, g))
+
+	assert.Equal(t, "Unknown", graphReadyStatus(g))
+	assert.Equal(t, "NotReady", graphReadyReason(g))
+	t.Logf("Empty collection readyWhen: status=%s reason=%s message=%s",
+		graphReadyStatus(g), graphReadyReason(g), graphReadyMessage(g))
+
+	// Now create a ConfigMap that matches the selector — the collection
+	// becomes non-empty, readyWhen passes, and .ready() returns true.
+	cm := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "empty-readywhen-match",
+				"namespace": ns,
+				"labels":    map[string]any{"app": "nonexistent-selector-" + ns},
+			},
+			"data": map[string]any{"key": "value"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, cm))
+
+	// Graph should transition to Ready.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-empty-readywhen", Namespace: ns}))
+}

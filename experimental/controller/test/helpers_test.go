@@ -3,10 +3,14 @@ package graphcontroller_test
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -278,6 +282,22 @@ func waitForAbsence(ctx context.Context, c client.Client, gvk schema.GroupVersio
 			}
 		}
 	}
+}
+
+// waitForDeletion polls until a resource returns NotFound. Use this when a
+// resource has been deleted and you need to wait for teardown to complete.
+// Unlike waitForAbsence (which proves something never appears), this observes
+// the completion of a deletion that is expected to succeed.
+func waitForDeletion(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, key types.NamespacedName) error {
+	return wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(gvk)
+		err := c.Get(ctx, key, obj)
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, nil
+	})
 }
 
 // referenceLabelValue returns the identity label value stamped on obj for
@@ -709,4 +729,135 @@ func countRevisions(ctx context.Context, c client.Client, graphName, namespace s
 		return 0, err
 	}
 	return len(revisions), nil
+}
+
+// ---------------------------------------------------------------------------
+// Metrics scraping helpers
+//
+// The controller subprocess exposes a Prometheus /metrics endpoint at
+// metricsAddr (set in main_test.go). These helpers scrape it and return
+// parsed metric values so e2e tests can assert on operational signals.
+// ---------------------------------------------------------------------------
+
+// scrapeMetrics fetches and parses all metric families from the controller's
+// /metrics endpoint.
+func scrapeMetrics(t *testing.T) map[string]*dto.MetricFamily {
+	t.Helper()
+	resp, err := http.Get("http://" + metricsAddr + "/metrics")
+	require.NoError(t, err, "scraping metrics endpoint")
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "metrics endpoint should return 200")
+
+	parser := expfmt.NewTextParser(model.UTF8Validation)
+	families, err := parser.TextToMetricFamilies(resp.Body)
+	require.NoError(t, err, "parsing metrics response")
+	return families
+}
+
+// scrapeGauge returns the value of a gauge metric matching the given labels.
+// Returns (value, true) if found, (0, false) if no matching series exists.
+func scrapeGauge(t *testing.T, name string, labels map[string]string) (float64, bool) {
+	t.Helper()
+	families := scrapeMetrics(t)
+	family, ok := families[name]
+	if !ok {
+		return 0, false
+	}
+	for _, m := range family.GetMetric() {
+		if labelsMatch(m.GetLabel(), labels) {
+			return m.GetGauge().GetValue(), true
+		}
+	}
+	return 0, false
+}
+
+// scrapeCounter returns the value of a counter metric matching the given labels.
+// Returns (value, true) if found, (0, false) if no matching series exists.
+func scrapeCounter(t *testing.T, name string, labels map[string]string) (float64, bool) {
+	t.Helper()
+	families := scrapeMetrics(t)
+	family, ok := families[name]
+	if !ok {
+		return 0, false
+	}
+	for _, m := range family.GetMetric() {
+		if labelsMatch(m.GetLabel(), labels) {
+			return m.GetCounter().GetValue(), true
+		}
+	}
+	return 0, false
+}
+
+// scrapeHistogramCount returns the sample count from a histogram metric.
+func scrapeHistogramCount(t *testing.T, name string, labels map[string]string) (uint64, bool) {
+	t.Helper()
+	families := scrapeMetrics(t)
+	family, ok := families[name]
+	if !ok {
+		return 0, false
+	}
+	for _, m := range family.GetMetric() {
+		if labelsMatch(m.GetLabel(), labels) {
+			return m.GetHistogram().GetSampleCount(), true
+		}
+	}
+	return 0, false
+}
+
+// waitForMetric polls until a gauge metric with the given labels has the
+// expected value. Use this when you need to wait for the controller to
+// reconcile and update its metrics.
+func waitForMetric(ctx context.Context, t *testing.T, name string, labels map[string]string, want float64) error {
+	t.Helper()
+	return wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		val, ok := scrapeGauge(t, name, labels)
+		if !ok {
+			return false, nil
+		}
+		return val == want, nil
+	})
+}
+
+// labelsMatch returns true if every entry in want is present in got.
+func labelsMatch(got []*dto.LabelPair, want map[string]string) bool {
+	if len(want) == 0 {
+		return true
+	}
+	gotMap := make(map[string]string, len(got))
+	for _, lp := range got {
+		gotMap[lp.GetName()] = lp.GetValue()
+	}
+	for k, v := range want {
+		if gotMap[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// nodeStateLabels returns the label set for querying the graph_node_state gauge.
+func nodeStateLabels(graphName, namespace, nodeID, state string) map[string]string {
+	return map[string]string{
+		"graph_name":      graphName,
+		"graph_namespace": namespace,
+		"node_id":         nodeID,
+		"state":           state,
+	}
+}
+
+// graphLabels returns the label set for querying per-graph metrics (reconcile duration).
+func graphLabels(graphName, namespace string) map[string]string {
+	return map[string]string{
+		"graph_name":      graphName,
+		"graph_namespace": namespace,
+	}
+}
+
+// nodeLabels returns the label set for querying per-node metrics (drift timer, system error retries).
+func nodeLabels(graphName, namespace, nodeID string) map[string]string {
+	return map[string]string{
+		"graph_name":      graphName,
+		"graph_namespace": namespace,
+		"node_id":         nodeID,
+	}
 }

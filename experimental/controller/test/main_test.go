@@ -28,10 +28,11 @@ import (
 )
 
 var (
-	testEnv   *envtest.Environment
-	k8sClient client.Client
-	ctx       context.Context
-	cancel    context.CancelFunc
+	testEnv     *envtest.Environment
+	k8sClient   client.Client
+	ctx         context.Context
+	cancel      context.CancelFunc
+	metricsAddr string // address of the controller's /metrics endpoint
 )
 
 func TestMain(m *testing.M) {
@@ -347,10 +348,20 @@ func startBinary(binaryPath, kubeconfigPath string, logFile *os.File) (healthAdd
 	pprofLn.Close()
 	os.Setenv("PPROF_ADDR", pprofAddr)
 
+	// Pick a random port for the Prometheus metrics endpoint. Tests scrape
+	// /metrics to verify the controller's operational signals (node state
+	// gauges, error counters, reconcile duration histograms).
+	metricsLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", nil, fmt.Errorf("picking metrics port: %w", err)
+	}
+	metricsAddr = metricsLn.Addr().String()
+	metricsLn.Close()
+
 	cmd = exec.Command(binaryPath,
 		"--bootstrap",
 		"--health-probe-bind-address="+healthAddr,
-		"--metrics-bind-address=0",
+		"--metrics-bind-address="+metricsAddr,
 		"--pprof-bind-address="+pprofAddr,
 		"--max-workers=32",
 		"--drift-interval=2s",

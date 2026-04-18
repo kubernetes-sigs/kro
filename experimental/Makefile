@@ -69,7 +69,7 @@ bench: ## Run benchmarks.
 
 ##@ Upstream compat
 #
-# The compat suite at experimental/test/graph-compat/ runs upstream kro
+# The compat suite at experimental/test/rgd_compat/ runs upstream kro
 # core integration tests against the Graph controller. This is ONE of
 # several integration harnesses in the repo — everything below applies
 # only to that suite.
@@ -106,7 +106,7 @@ compat-one: ## Run one compat test file. Usage: make compat-one FILE=lifecycle_t
 	  KRO_TEST_TAG=$$tag \
 	  go test -tags graphcompat -v -count=1 \
 	    -timeout $(if $(TIMEOUT),$(TIMEOUT),3m) \
-	    ./experimental/test/graph-compat/ \
+	    ./experimental/test/rgd_compat/ \
 	    --ginkgo.focus-file=$(FILE) \
 	    --ginkgo.timeout=$(if $(TIMEOUT),$(TIMEOUT),3m)
 
@@ -114,7 +114,7 @@ compat-one: ## Run one compat test file. Usage: make compat-one FILE=lifecycle_t
 compat-presubmit: ## Run the passing-files allowlist in one shared envtest. Fails on any regression.
 	cd $(ROOT) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" KRO_TEST_TAG=presubmit \
 	  go test -tags graphcompat -v -count=1 -timeout 10m \
-	    ./experimental/test/graph-compat/
+	    ./experimental/test/rgd_compat/
 
 .PHONY: compat-count
 compat-count: ## Show per-file spec + assertion counts, marking allowlisted files.
@@ -122,9 +122,9 @@ compat-count: ## Show per-file spec + assertion counts, marking allowlisted file
 	printf '%-42s %6s %6s %10s\n' FILE SPECS ASSERTS ALLOWLISTED; \
 	printf '%-42s %6s %6s %10s\n' ------------------------------------------ ----- ------- -----------; \
 	total_s=0; total_a=0; on_s=0; on_a=0; \
-	for f in $$(ls experimental/test/graph-compat/*_test.go | xargs -n1 basename | grep -v '^\(setup\|compat_stubs\)_test.go$$' | sort); do \
-	  s=$$(grep -cE '^\s*It\(' experimental/test/graph-compat/$$f || true); \
-	  a=$$(grep -cE '(g\.)?Expect\(' experimental/test/graph-compat/$$f || true); \
+	for f in $$(ls experimental/test/rgd_compat/*_test.go | xargs -n1 basename | grep -v '^\(setup\|compat_stubs\)_test.go$$' | sort); do \
+	  s=$$(grep -cE '^\s*It\(' experimental/test/rgd_compat/$$f || true); \
+	  a=$$(grep -cE '(g\.)?Expect\(' experimental/test/rgd_compat/$$f || true); \
 	  on=""; for p in $(PASSING_COMPAT_FILES); do [ "$$p" = "$$f" ] && on="yes"; done; \
 	  printf '%-42s %6d %6d %10s\n' $$f $$s $$a "$$on"; \
 	  total_s=$$((total_s+s)); total_a=$$((total_a+a)); \

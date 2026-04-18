@@ -24,11 +24,11 @@
 //	# Create symlinks (once)
 //	for f in test/integration/suites/core/*_test.go; do
 //	  [ "$(basename $f)" != "setup_test.go" ] && ln -sf "../../../$f" \
-//	    experimental/test/graph-compat/
+//	    experimental/test/rgd_compat/
 //	done
 //	# Run
 //	go test -tags graphcompat -v -timeout 5m \
-//	  ./experimental/test/graph-compat/ --ginkgo.focus-file=lifecycle_test.go
+//	  ./experimental/test/rgd_compat/ --ginkgo.focus-file=lifecycle_test.go
 package core_test
 
 import (
@@ -54,7 +54,7 @@ import (
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/experimental/internal/testenv"
+	"github.com/kubernetes-sigs/kro/experimental/test/testenv"
 	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 

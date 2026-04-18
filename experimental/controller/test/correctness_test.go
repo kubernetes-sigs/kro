@@ -366,7 +366,10 @@ func TestDependencyErrorRejectsSpec(t *testing.T) {
 		types.NamespacedName{Name: "cycle-a", Namespace: ns}, 1*time.Second))
 	require.NoError(t, waitForAbsence(ctx, k8sClient,
 		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-		types.NamespacedName{Name: "cycle-b", Namespace: ns}, 500*time.Millisecond))
+		// Absence is inherently probabilistic — 2s is a confidence dial, not a
+		// correctness guarantee. The controller has already processed the spec
+		// (cycle-a check above passed), so 2s is sufficient confidence.
+		types.NamespacedName{Name: "cycle-b", Namespace: ns}, 2*time.Second))
 	t.Log("No resources created for cyclic Graph")
 }
 
@@ -1129,7 +1132,7 @@ func TestIdentityLabelsOnManagedResources(t *testing.T) {
 // type=Ready, which incorrectly imposed a Kubernetes conditions convention
 // as the default readiness model. Readiness is "CEL resolved + applied."
 // Explicit readyWhen overrides this default.
-func TestDefaultReadinessIsApplied(t *testing.T) {
+func TestReadyWhen_RegressionImplicitConditionCheck(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -1482,7 +1485,7 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 // Per 001-graph.md § readyWhen: "A Watch's .ready() returns true when
 // the node's readyWhen conditions pass (evaluated once against the whole
 // array, not per-item) — including when the collection is empty."
-func TestWatchKindEmptyReadyWhenPropagates(t *testing.T) {
+func TestWatchKind_RegressionEmptyReadyWhenPropagates(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -2377,7 +2380,7 @@ func TestStandaloneVsEmbeddedCELTypePreservation(t *testing.T) {
 //  4. Reopen gate (ready=true) WITHOUT changing data.name again.
 //  5. Consumer must see "updated-name" — the gate transition is the ONLY
 //     trigger since data.name hasn't changed between steps 3 and 4.
-func TestPropagateWhenGateOpenTriggersDownstream(t *testing.T) {
+func TestPropagateWhen_RegressionGateOpenTriggersDownstream(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 

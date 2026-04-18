@@ -701,3 +701,266 @@ func TestPrune_RegressionCrossNamespace(t *testing.T) {
 		types.NamespacedName{Name: "local-config", Namespace: ns}, localCheck),
 		"local resource should survive the prune")
 }
+
+// TestPruneSafetyErrorBlocksPrune proves that when a node enters Error
+// state (CEL evaluation failure), its previously-applied resource is NOT
+// pruned — the controller preserves it as uncertain absence.
+//
+// Per 004-graph-reconciliation.md § Prune:
+//
+//	"Uncertain absence — a dependency is Pending, Conflict, or Error.
+//	 The resource might appear once the blocker resolves. Not safe to prune."
+//
+// The existing tests cover Pending and Conflict blocking prune. This test
+// fills the Error gap: when a node's CEL evaluation fails at runtime, its
+// key is absent from the current output set, but the resource must survive
+// because Error is an uncertain absence.
+//
+// Setup:
+//   - External ConfigMap with divisor="2"
+//   - Graph: ref source, template computed (result = 100/int(divisor))
+//   - Initial convergence: computed ConfigMap has result="50"
+//   - Update divisor to "0" → division by zero → computed enters Error
+//   - Assert: computed ConfigMap survives (Error blocks prune)
+//   - Update divisor to "5" → recovery → computed ConfigMap has result="20"
+func TestPruneSafetyErrorBlocksPrune(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create the source ConfigMap with a valid divisor.
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "error-prune-source",
+				"namespace": ns,
+			},
+			"data": map[string]any{
+				"divisor": "2",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	// Graph: ref the source, compute 100/divisor.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-error-prune",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "source",
+						"ref": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "error-prune-source"},
+						},
+					},
+					map[string]any{
+						"id": "computed",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "error-prune-result"},
+							"data": map[string]any{
+								"result": "${string(100 / int(source.data.divisor))}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+	graphKey := types.NamespacedName{Name: "test-error-prune", Namespace: ns}
+
+	// Wait for convergence.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	result := &unstructured.Unstructured{}
+	result.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "error-prune-result", Namespace: ns}, result))
+	data, _, _ := unstructured.NestedStringMap(result.Object, "data")
+	assert.Equal(t, "50", data["result"])
+	t.Log("Phase 1: computed ConfigMap created with result=50")
+
+	// Cause a CEL evaluation error: set divisor to "0" → division by zero.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "error-prune-source", Namespace: ns},
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedField(obj.Object, "0", "data", "divisor")
+		}))
+	t.Log("Phase 2: Updated divisor to 0 → CEL division by zero")
+
+	// Wait for Graph to enter Error state.
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient, graphKey, "Error"))
+	t.Log("Phase 2: Graph shows Error — CEL runtime failure classified correctly")
+
+	// THE KEY ASSERTION: the computed ConfigMap must NOT be pruned.
+	// The node is in Error state (uncertain absence) so its resource survives.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+	surviving := &unstructured.Unstructured{}
+	surviving.SetGroupVersionKind(cmGVK)
+	err := k8sClient.Get(ctx,
+		types.NamespacedName{Name: "error-prune-result", Namespace: ns}, surviving)
+	assert.NoError(t, err,
+		"computed ConfigMap must NOT be pruned during Error state (uncertain absence)")
+	// Value should still be the previous result — the node was not re-evaluated.
+	if err == nil {
+		oldData, _, _ := unstructured.NestedStringMap(surviving.Object, "data")
+		assert.Equal(t, "50", oldData["result"],
+			"computed should retain previous result=50 during Error")
+	}
+	t.Log("Phase 2: computed ConfigMap survived Error — prune safety proved")
+
+	// Recovery: set divisor to "5" → CEL succeeds → Graph converges.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "error-prune-source", Namespace: ns},
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedField(obj.Object, "5", "data", "divisor")
+		}))
+	t.Log("Phase 3: Updated divisor to 5 → recovery")
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+
+	// Verify updated result.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "error-prune-result", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			d, _, _ := unstructured.NestedStringMap(check.Object, "data")
+			return d["result"] == "20", nil
+		}))
+	t.Log("Phase 3: recovered — computed ConfigMap has result=20")
+}
+
+// TestPruneSafetySystemErrorBlocksPrune proves that when a node enters
+// SystemError (5xx from webhook), its previously-applied resource is NOT
+// pruned — the controller preserves it as uncertain absence.
+//
+// Per 004-graph-reconciliation.md § Prune:
+//
+//	"Uncertain absence — a dependency is Pending, Conflict, or Error.
+//	 The resource might appear once the blocker resolves. Not safe to prune."
+//
+// SystemError is the 5xx analog of Error — both represent uncertain absence
+// where the resource might succeed on retry. This test fills the SystemError
+// gap alongside the Error gap (TestPruneSafetyErrorBlocksPrune) and the
+// existing Pending/Conflict tests.
+//
+// Setup:
+//   - Graph creates a ConfigMap
+//   - Wait for convergence
+//   - Enable webhook fault injection (500 on ConfigMap applies)
+//   - Trigger re-evaluation via spec change
+//   - Node enters SystemError — resource must survive (not pruned)
+//   - Clear fault → recovery
+func TestPruneSafetySystemErrorBlocksPrune(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	faultLabel := "fault-prune-se-" + ns
+	labelNamespace(t, ns, map[string]string{"fault-inject": faultLabel})
+
+	fw := startFaultWebhook(t)
+	registerFaultWebhook(t, k8sClient, "fault-prune-se-"+ns, fw, "fault-inject", faultLabel)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-prune-syserr",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "managed",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "prune-syserr-cm"},
+							"data":       map[string]any{"version": "v1"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+	graphKey := types.NamespacedName{Name: "test-prune-syserr", Namespace: ns}
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	t.Log("Phase 1: ConfigMap created, Graph Ready")
+
+	// Enable fault injection.
+	fw.Reject("prune-syserr-cm")
+
+	// Trigger re-evaluation — controller will try to update and get 500.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, graphKey,
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "managed",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "prune-syserr-cm"},
+						"data":       map[string]any{"version": "v2"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+
+	// Wait for SystemError state.
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient, graphKey, "SystemError"))
+	t.Log("Phase 2: Node in SystemError — webhook returning 500")
+
+	// THE KEY ASSERTION: resource must survive SystemError (uncertain absence).
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+	surviving := &unstructured.Unstructured{}
+	surviving.SetGroupVersionKind(cmGVK)
+	err := k8sClient.Get(ctx,
+		types.NamespacedName{Name: "prune-syserr-cm", Namespace: ns}, surviving)
+	assert.NoError(t, err,
+		"ConfigMap must NOT be pruned during SystemError (uncertain absence)")
+	if err == nil {
+		data, _, _ := unstructured.NestedStringMap(surviving.Object, "data")
+		assert.Equal(t, "v1", data["version"],
+			"ConfigMap should retain v1 — update was rejected by webhook")
+	}
+	t.Log("Phase 2: ConfigMap survived SystemError — prune safety proved")
+
+	// Clear fault → recovery.
+	fw.AcceptAll()
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+
+	// Verify updated.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "prune-syserr-cm", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			d, _, _ := unstructured.NestedStringMap(check.Object, "data")
+			return d["version"] == "v2", nil
+		}))
+	t.Log("Phase 3: recovered — ConfigMap updated to v2")
+}

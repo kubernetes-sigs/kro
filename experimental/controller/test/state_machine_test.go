@@ -1103,3 +1103,112 @@ func TestConflictPruneRecoveryOnRevisionTransition(t *testing.T) {
 	assert.Equal(t, "still-alive", healthyData["state"])
 	t.Log("Conflict prune recovery on revision transition proved")
 }
+
+// TestReadyRollupPrecedence_SystemErrorOverError proves that when both
+// SystemError (5xx) and Error (CEL failure) coexist on independent nodes,
+// the Graph's Ready condition reports SystemError — not Error.
+//
+// Per 004-graph-reconciliation.md and status.go deriveReadyCondition:
+//
+//	Precedence: SystemError > Error > Conflict > Blocked > Pending > NotReady
+//
+// "SystemError surfaces first because it signals degraded reconciliation
+//
+//	infrastructure — deterministic errors (Error) and conflicts may be
+//	artifacts of system instability, not real spec problems."
+//
+// Setup (three independent nodes, no dependencies):
+//   - ref source: reads external ConfigMap (GET, not intercepted by webhook)
+//   - template error_node: CEL division by zero → Error
+//   - template system_node: webhook returns 500 → SystemError
+//
+// The error_node fails during CEL evaluation (before API call), so the
+// webhook doesn't affect it. The system_node's CEL succeeds but the SSA
+// apply fails at the API server (webhook returns 500).
+func TestReadyRollupPrecedence_SystemErrorOverError(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	faultLabel := "fault-prec-" + ns
+	labelNamespace(t, ns, map[string]string{"fault-inject": faultLabel})
+
+	fw := startFaultWebhook(t)
+	registerFaultWebhook(t, k8sClient, "fault-prec-"+ns, fw, "fault-inject", faultLabel)
+
+	// Reject only the system_node's ConfigMap. The error_node never reaches
+	// the API server (CEL fails first), so the webhook is irrelevant for it.
+	fw.Reject("precedence-system")
+
+	// Pre-create the source with divisor=0 so the error_node fails immediately.
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{"name": "precedence-source", "namespace": ns},
+			"data":     map[string]any{"divisor": "0"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	// Graph with three independent nodes.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-precedence",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// Ref: GET succeeds (webhook doesn't intercept GET).
+					map[string]any{
+						"id": "source",
+						"ref": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "precedence-source"},
+						},
+					},
+					// Error node: CEL division by zero — fails before API call.
+					map[string]any{
+						"id": "errornode",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "precedence-error"},
+							"data": map[string]any{
+								"result": "${string(100 / int(source.data.divisor))}",
+							},
+						},
+					},
+					// System node: CEL succeeds, but webhook returns 500 on apply.
+					map[string]any{
+						"id": "systemnode",
+						"template": map[string]any{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]any{"name": "precedence-system"},
+							"data":     map[string]any{"value": "hello"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+	graphKey := types.NamespacedName{Name: "test-precedence", Namespace: ns}
+
+	// The Graph should report SystemError (not Error), because SystemError
+	// has higher precedence in the Ready condition rollup.
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient, graphKey, "SystemError"),
+		"Ready reason should be SystemError, not Error — SystemError takes precedence")
+
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+	assert.Equal(t, "False", graphReadyStatus(g),
+		"Ready status should be False for SystemError")
+
+	// Verify the message mentions server/infrastructure errors (not CEL errors).
+	msg := graphReadyMessage(g)
+	assert.Contains(t, msg, "server/infrastructure",
+		"Ready message should reference server/infrastructure errors")
+	t.Log("Precedence proved: SystemError > Error in Ready condition rollup")
+}

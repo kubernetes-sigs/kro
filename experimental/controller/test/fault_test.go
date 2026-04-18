@@ -17,10 +17,14 @@ import (
 //
 // These tests produce real error conditions against the envtest API server:
 // watched resources disappearing mid-reconcile, spec validation failures
-// from impossible resource states, and recovery after transient conditions
-// resolve. They prove the controller handles legible errors correctly —
-// network failures and 5xx errors are tested elsewhere (client-go's retry
-// loop owns those paths).
+// from impossible resource states, 5xx server errors via webhook fault
+// injection, and recovery after transient conditions resolve.
+//
+// 5xx / SystemError tests use a validating webhook (webhook_test.go) that
+// returns HTTP 500 for targeted ConfigMaps. This is genuine fault injection
+// at the API server layer — no mocking, no transport-level tricks. The
+// controller receives a real InternalError from a real API server and must
+// classify it as SystemError, apply backoff, and recover.
 
 // TestWatchedResourceDeletedMidReconcile proves that when a watched resource
 // is externally deleted after the Graph has converged, the controller
@@ -661,4 +665,241 @@ func TestStatusSubresourceSplitApplyRevertOnFailure(t *testing.T) {
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-split-apply", Namespace: ns}))
 	t.Log("Graph recovered to Ready — status subresource split-apply fault tolerance proved")
+}
+
+// TestSystemError_WebhookFaultAndRecovery proves that a 5xx error from the
+// API server (injected via validating webhook) is classified as SystemError
+// and the controller recovers when the fault clears.
+//
+// Per 004-graph-reconciliation.md § Node States:
+//   - "Server errors (5xx/timeout/network) → NodeSystemError"
+//   - "Transient errors retry with exponential backoff [1s, resyncInterval]"
+//
+// Per errors.go: apierrors.IsInternalError → NodeSystemError with reason
+// "ServerError".
+//
+// This was the largest gap in fault injection coverage: the controller's
+// state machine classification of 5xx errors and the backoff/recovery
+// cycle were untested at integration level.
+func TestSystemError_WebhookFaultAndRecovery(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Label the namespace so the webhook selector matches.
+	faultLabel := "fault-" + ns
+	labelNamespace(t, ns, map[string]string{"fault-inject": faultLabel})
+
+	// Start webhook server and register it.
+	fw := startFaultWebhook(t)
+	registerFaultWebhook(t, k8sClient, "fault-"+ns, fw, "fault-inject", faultLabel)
+
+	// Create a Graph that owns a ConfigMap.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-system-error",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "managed",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "system-error-cm"},
+							"data":       map[string]any{"version": "v1"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+	graphKey := types.NamespacedName{Name: "test-system-error", Namespace: ns}
+
+	// Wait for initial convergence (webhook accepts everything).
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	t.Log("Phase 1: Graph converged — ConfigMap created, webhook accepting")
+
+	// Enable fault injection: the webhook returns 500 for this ConfigMap.
+	fw.Reject("system-error-cm")
+	t.Log("Phase 2: Fault enabled — webhook rejects system-error-cm with 500")
+
+	// Trigger re-evaluation by changing the Graph spec. The controller will
+	// try to update the ConfigMap → webhook returns 500 → InternalError.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, graphKey,
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "managed",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "system-error-cm"},
+						"data":       map[string]any{"version": "v2"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+
+	// The Graph should reach SystemError state.
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient, graphKey, "SystemError"),
+		"Graph should report SystemError after 5xx from webhook")
+	t.Log("Phase 2: Graph shows SystemError — 5xx correctly classified")
+
+	// Verify the Ready condition status is False (not Unknown).
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+	assert.Equal(t, "False", graphReadyStatus(g),
+		"SystemError should produce Ready=False, not Unknown")
+
+	// Disable fault injection — controller should recover on next backoff retry.
+	fw.AcceptAll()
+	t.Log("Phase 3: Fault cleared — webhook accepting again")
+
+	// Wait for Graph to recover to Ready.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey),
+		"Graph should recover to Ready after webhook fault clears")
+
+	// Verify the ConfigMap was updated to v2.
+	cm := &unstructured.Unstructured{}
+	cm.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "system-error-cm", Namespace: ns}, cm))
+	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+	assert.Equal(t, "v2", data["version"],
+		"ConfigMap should have version=v2 after recovery")
+	t.Log("Phase 3: Graph recovered — SystemError → backoff → retry → Ready")
+}
+
+// TestSystemError_DependentInheritsBlocked proves that when a node enters
+// SystemError (5xx), its dependents inherit Blocked state — they are not
+// evaluated until the system error resolves.
+//
+// Per 004-graph-reconciliation.md § Propagation:
+//
+//	"Any dep Blocked/Error/Conflict/SystemError → Blocked"
+//
+// This ensures the Blocked propagation path from SystemError is exercised
+// at integration level, not just the Conflict→Blocked path.
+func TestSystemError_DependentInheritsBlocked(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	faultLabel := "fault-dep-" + ns
+	labelNamespace(t, ns, map[string]string{"fault-inject": faultLabel})
+
+	fw := startFaultWebhook(t)
+	registerFaultWebhook(t, k8sClient, "fault-dep-"+ns, fw, "fault-inject", faultLabel)
+
+	// Pre-create a source ConfigMap (ref target — GET not intercepted by webhook).
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{"name": "syserr-source", "namespace": ns},
+			"data":     map[string]any{"value": "upstream-data"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	// Graph: upstream (will be faulted) → downstream (depends on upstream).
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-syserr-blocked",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "upstream",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "syserr-upstream"},
+							"data":       map[string]any{"state": "v1"},
+						},
+					},
+					map[string]any{
+						"id": "downstream",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "syserr-downstream"},
+							"data":       map[string]any{"fromUpstream": "${upstream.data.state}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+	graphKey := types.NamespacedName{Name: "test-syserr-blocked", Namespace: ns}
+
+	// Initial convergence.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	t.Log("Phase 1: Both nodes converged")
+
+	// Fault the upstream node only.
+	fw.Reject("syserr-upstream")
+
+	// Trigger re-evaluation.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, graphKey,
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedSlice(obj.Object, []any{
+				map[string]any{
+					"id": "upstream",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "syserr-upstream"},
+						"data":       map[string]any{"state": "v2"},
+					},
+				},
+				map[string]any{
+					"id": "downstream",
+					"template": map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "syserr-downstream"},
+						"data":       map[string]any{"fromUpstream": "${upstream.data.state}"},
+					},
+				},
+			}, "spec", "nodes")
+		}))
+
+	// Graph should show SystemError (upstream's 5xx takes precedence).
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient, graphKey, "SystemError"))
+	t.Log("Phase 2: upstream in SystemError, Graph reports SystemError")
+
+	// downstream's resource should still exist (not pruned — uncertain absence).
+	downstream := &unstructured.Unstructured{}
+	downstream.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "syserr-downstream", Namespace: ns}, downstream),
+		"downstream resource should survive while upstream is in SystemError")
+
+	// downstream should NOT have been updated to v2 (it's blocked).
+	downData, _, _ := unstructured.NestedStringMap(downstream.Object, "data")
+	assert.Equal(t, "v1", downData["fromUpstream"],
+		"downstream should retain v1 — blocked by upstream SystemError, not re-evaluated")
+	t.Log("Phase 2: downstream blocked — retains v1, not updated to v2")
+
+	// Clear fault, wait for recovery.
+	fw.AcceptAll()
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+
+	// Verify downstream now has v2.
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "syserr-downstream", Namespace: ns}, downstream))
+	downData, _, _ = unstructured.NestedStringMap(downstream.Object, "data")
+	assert.Equal(t, "v2", downData["fromUpstream"],
+		"downstream should have v2 after SystemError recovery")
+	t.Log("Phase 3: recovered — both nodes updated to v2")
 }

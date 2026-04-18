@@ -421,7 +421,10 @@ func TestContagiousExclusion(t *testing.T) {
 	// Feature and dependent should NOT exist (contagious exclusion)
 	cmGVK2 := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK2, types.NamespacedName{Name: "feature-resource", Namespace: ns}, 1*time.Second))
-	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK2, types.NamespacedName{Name: "feature-dependent", Namespace: ns}, 500*time.Millisecond))
+	// Absence is inherently probabilistic — 2s is a confidence dial, not a
+	// correctness guarantee. The controller has processed the spec (previous
+	// check passed), so 2s is sufficient.
+	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK2, types.NamespacedName{Name: "feature-dependent", Namespace: ns}, 2*time.Second))
 	t.Log("Feature + dependent correctly excluded (contagious)")
 
 	// Status should be Active (excluded resources don't block readiness)
@@ -494,7 +497,9 @@ func TestPendingChain(t *testing.T) {
 	// Middle and tail should NOT exist (data pending)
 	cmGVK3 := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK3, types.NamespacedName{Name: "chain-middle", Namespace: ns}, 1*time.Second))
-	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK3, types.NamespacedName{Name: "chain-tail", Namespace: ns}, 500*time.Millisecond))
+	// Absence is inherently probabilistic — 2s is a confidence dial, not a
+	// correctness guarantee.
+	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK3, types.NamespacedName{Name: "chain-tail", Namespace: ns}, 2*time.Second))
 	t.Log("Chain correctly blocked: middle + tail pending")
 
 	// Add the missing field

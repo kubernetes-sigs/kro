@@ -29,7 +29,7 @@ var regressionCMGVK = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "C
 // child during deletion.
 //
 // The invariant: if B depends on A, then B is deleted before A.
-func TestDeletionOrderIsTopological(t *testing.T) {
+func TestDeletion_RegressionTopologicalOrder(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -115,7 +115,7 @@ func TestDeletionOrderIsTopological(t *testing.T) {
 //
 // The invariant: the prune candidate set is the union of ALL superseded
 // revisions' applied sets minus the active revision's applied set.
-func TestMultiHopRevisionPrune(t *testing.T) {
+func TestRevisionPrune_RegressionMultiHopOrphan(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -227,7 +227,7 @@ func TestMultiHopRevisionPrune(t *testing.T) {
 //
 // The invariant: pruning a Contribute key triggers release apply (field
 // release), not delete. The target resource survives.
-func TestContributeCleanupOnPrune(t *testing.T) {
+func TestContribute_RegressionCleanupOnPrune(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -344,7 +344,7 @@ func TestContributeCleanupOnPrune(t *testing.T) {
 // Regression: reconcileDelete() previously skipped Contribute templates
 // entirely during teardown. The contributed fields were never released,
 // leaving the Graph's field manager as a stale owner.
-func TestContributeCleanupOnTeardown(t *testing.T) {
+func TestContribute_RegressionCleanupOnTeardown(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -446,7 +446,7 @@ func TestContributeCleanupOnTeardown(t *testing.T) {
 // change-check optimization would retain stale scope, and the Contribute
 // would never re-evaluate. The fix pushes downstream dependency sections
 // into upstream SelfSections during DAG compilation.
-func TestContributionUpdatesWhenDependencyChanges(t *testing.T) {
+func TestContribute_RegressionDependencyChangeUpdate(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -577,7 +577,7 @@ func TestContributionUpdatesWhenDependencyChanges(t *testing.T) {
 // Regression: routeEvent's namespace filter rejected events for cluster-scoped
 // resources (namespace="") because the entry's namespace was the Graph's
 // namespace (non-empty), and "" != "default" caused the event to be skipped.
-func TestWatchKindClusterScopedResource(t *testing.T) {
+func TestWatchKind_RegressionClusterScopedRouting(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -688,7 +688,7 @@ func TestWatchKindClusterScopedResource(t *testing.T) {
 //   - Delete the external ConfigMap → Watch enters Pending → dependent is Blocked
 //   - Recreate the external ConfigMap → Watch resolves → dependent reconverges
 //   - Assert: Graph reaches Ready, dependent resource exists with correct data
-func TestBlockedDependencyRecoveryReconverges(t *testing.T) {
+func TestBlockedDependency_RegressionRecoveryReconverges(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -815,7 +815,7 @@ func TestBlockedDependencyRecoveryReconverges(t *testing.T) {
 //   - Contribute node has readyWhen checking a data field
 //   - Initially the field doesn't satisfy readyWhen → Graph NotReady
 //   - External update satisfies the condition → Graph Ready
-func TestContributeReadyWhenGatesGraphReadiness(t *testing.T) {
+func TestContribute_RegressionReadyWhenGatesGraph(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -919,7 +919,7 @@ func TestContributeReadyWhenGatesGraphReadiness(t *testing.T) {
 // After a controller restart, deriveAppliedSet() scanned informer caches for
 // identity labels and found nothing for Patch resources — teardown
 // orphaned their fields (never released via release apply).
-func TestContributeIdentityLabels(t *testing.T) {
+func TestContribute_RegressionIdentityLabels(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -1155,7 +1155,7 @@ func TestDriftTimer_RegressionSkippedNodeReset(t *testing.T) {
 //     (input gate: upstream.ready() is false)
 //  2. source → "active": upstream.ready() becomes true, downstream input gate opens
 //  3. downstream is created with relayStatus = "active"
-func TestPropagateWhenCrossNodeRef(t *testing.T) {
+func TestPropagateWhen_RegressionCrossNodeRef(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 

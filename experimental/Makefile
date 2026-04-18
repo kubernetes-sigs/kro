@@ -40,9 +40,9 @@ help: ## Display this help.
 ##@ Presubmit
 
 .PHONY: presubmit
-presubmit: vet ## Run presubmit checks (vet, unit+integration tests, compat allowlist, mod tidy)
-	cd $(ROOT) && go test $(TEST_FLAGS) $(TEST_PKGS)
-	$(MAKE) compat-presubmit
+presubmit: vet ## Run presubmit checks (vet, all tests including compat allowlist, mod tidy)
+	cd $(ROOT) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" KRO_TEST_TAG=presubmit \
+	  go test $(TEST_FLAGS) -tags graphcompat $(TEST_PKGS)
 	cd $(ROOT) && go mod tidy && git diff --exit-code go.mod go.sum
 
 ##@ Development
@@ -112,11 +112,9 @@ compat-one: ## Run one compat test file. Usage: make compat-one FILE=lifecycle_t
 
 .PHONY: compat-presubmit
 compat-presubmit: ## Run the passing-files allowlist in one shared envtest. Fails on any regression.
-	cd $(ROOT) && KRO_TEST_TAG=presubmit \
+	cd $(ROOT) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" KRO_TEST_TAG=presubmit \
 	  go test -tags graphcompat -v -count=1 -timeout 10m \
-	    ./experimental/test/graph-compat/ \
-	    $(foreach f,$(PASSING_COMPAT_FILES),--ginkgo.focus-file=$(f)) \
-	    --ginkgo.timeout=10m
+	    ./experimental/test/graph-compat/
 
 .PHONY: compat-count
 compat-count: ## Show per-file spec + assertion counts, marking allowlisted files.

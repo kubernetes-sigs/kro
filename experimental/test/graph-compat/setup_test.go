@@ -34,6 +34,7 @@ package core_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -106,7 +107,15 @@ func TestCore(t *testing.T) {
 		}
 	})
 
-	RunSpecs(t, "Graph Compat Suite")
+	// Allow the Makefile to restrict which compat files run via env var,
+	// so the compat suite can share a single `go test ./experimental/...`
+	// invocation with the unit and integration packages (parallel via -p).
+	// CLI --ginkgo.focus-file still works for single-file iteration.
+	suiteConfig, reporterConfig := GinkgoConfiguration()
+	if files := os.Getenv("COMPAT_FOCUS_FILES"); files != "" {
+		suiteConfig.FocusFiles = append(suiteConfig.FocusFiles, strings.Fields(files)...)
+	}
+	RunSpecs(t, "Graph Compat Suite", suiteConfig, reporterConfig)
 }
 
 // toRawExtension converts a value to runtime.RawExtension via JSON.

@@ -1533,3 +1533,245 @@ func TestMarkUpdated(t *testing.T) {
 	eval.markUpdated("deploy", false)
 	assert.Equal(t, false, m["__updated"])
 }
+
+// ---------------------------------------------------------------------------
+// __updated stamping integration tests
+//
+// These exercise the actual code paths that stamp __updated, not just the
+// helper functions. Each test drives a real reconciliation method or
+// forEach loop path and verifies __updated appears with the correct value.
+// ---------------------------------------------------------------------------
+
+// TestReconcileDefinition_StampsUpdated proves that reconcileDefinition
+// stamps __updated = true on the scope entry. Definition nodes are always
+// re-evaluated — vacuously updated.
+func TestReconcileDefinition_StampsUpdated(t *testing.T) {
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{ID: "config", Def: map[string]any{
+				"name":  "my-app",
+				"port":  "8080",
+				"debug": "false",
+			}},
+		},
+	}
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+
+	eval := &evaluator{compiled: compiled, scope: map[string]any{}}
+	r := &GraphReconciler{}
+	err = r.reconcileDefinition(context.Background(), spec.Nodes[0], eval)
+	require.NoError(t, err)
+
+	m, ok := eval.scope["config"].(map[string]any)
+	require.True(t, ok, "scope should contain config")
+	assert.Equal(t, true, m["__updated"],
+		"definition node must have __updated = true (always re-evaluated)")
+}
+
+// TestForEach_CarryForwardStampsUpdatedFromLabel proves that forEach items
+// carried forward by propagateWhen get __updated derived from the generation
+// label on the resource, not hardcoded true. This is the critical path for
+// rollout gating — carried-forward items on an old generation must show
+// updated() = false so propagateWhen can count them as "Pending" in the
+// four-state matrix (004-graph-reconciliation.md § Propagation Control).
+func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{ID: "source", Def: map[string]any{
+				"items": []any{
+					map[string]any{"metadata": map[string]any{"name": "alpha"}},
+					map[string]any{"metadata": map[string]any{"name": "beta"}},
+				},
+			}},
+			{ID: "workers", ForEach: map[string]string{"item": "${source.items}"},
+				// propagateWhen that immediately halts — forces ALL items
+				// through the carry-forward path.
+				PropagateWhen: []string{"${false}"},
+				Def:           map[string]any{"name": "${item.metadata.name}"},
+			},
+		},
+	}
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+
+	state := newInstanceState(compiled)
+	eval := newEvaluator(state)
+	eval.effectiveGeneration = 5
+
+	// Populate source in scope.
+	eval.scope["source"] = map[string]any{
+		"items": []any{
+			map[string]any{"metadata": map[string]any{"name": "alpha"}},
+			map[string]any{"metadata": map[string]any{"name": "beta"}},
+		},
+	}
+
+	// Build previous scope data with generation labels.
+	// "alpha" has current generation (5) → __updated = true
+	// "beta" has old generation (4) → __updated = false
+	alphaGenKey := forEachChildGenerationLabelKey("workers", "alpha", "default", "Deployment", "apps", "test", "default")
+	betaGenKey := forEachChildGenerationLabelKey("workers", "beta", "default", "Deployment", "apps", "test", "default")
+
+	prevAlpha := map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{
+			"name": "alpha", "namespace": "default",
+			"labels": map[string]any{alphaGenKey: "5"},
+		},
+		"__ready": true,
+	}
+	prevBeta := map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{
+			"name": "beta", "namespace": "default",
+			"labels": map[string]any{betaGenKey: "4"},
+		},
+		"__ready": true,
+	}
+
+	// Pre-populate forEach state so items are "known" and can be carried forward.
+	eval.forEachPrevItems = map[string][]any{
+		"workers/item": {
+			map[string]any{"metadata": map[string]any{"name": "alpha"}},
+			map[string]any{"metadata": map[string]any{"name": "beta"}},
+		},
+	}
+	eval.forEachPrevScope = map[string]map[string]any{
+		"workers": {"alpha": prevAlpha, "beta": prevBeta},
+	}
+	eval.forEachPrevKeys = map[string]map[string][]string{
+		"workers": {"alpha": {"key-alpha"}, "beta": {"key-beta"}},
+	}
+	eval.forEachNewScope = map[string]map[string]any{}
+	eval.forEachNewKeys = map[string]map[string][]string{}
+	eval.forEachNewItems = map[string][]any{}
+
+	graph := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "experimental.kro.run/v1alpha1",
+		"kind":       "Graph",
+		"metadata":   map[string]any{"name": "test", "namespace": "default"},
+	}}
+
+	r := &GraphReconciler{}
+	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false)
+	// ErrWaitingForReadiness expected — propagateWhen halted expansion.
+	require.ErrorIs(t, err, ErrWaitingForReadiness)
+
+	// Verify carried-forward items in scope have correct __updated stamps.
+	items, ok := eval.scope["workers"].([]any)
+	require.True(t, ok, "scope should contain workers as []any")
+	require.Len(t, items, 2)
+
+	alpha, ok := items[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, alpha["__updated"],
+		"alpha (generation 5 == effectiveGeneration 5) should be updated")
+
+	beta, ok := items[1].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, beta["__updated"],
+		"beta (generation 4 != effectiveGeneration 5) should NOT be updated")
+}
+
+// TestForEach_SkippedUnchangedStampsUpdatedFromLabel proves that forEach
+// items skipped because their input is unchanged still get __updated
+// re-stamped from the generation label. This matters after restarts: the
+// input hash matches but the generation label on the resource is the only
+// signal of which generation it was applied in.
+func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{ID: "source", Def: map[string]any{
+				"items": []any{
+					map[string]any{"metadata": map[string]any{"name": "alpha"}},
+				},
+			}},
+			{ID: "results", ForEach: map[string]string{"item": "${source.items}"},
+				Def: map[string]any{"name": "${item.metadata.name}"},
+			},
+		},
+	}
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+
+	state := newInstanceState(compiled)
+	eval := newEvaluator(state)
+	eval.effectiveGeneration = 7
+
+	sourceItems := []any{
+		map[string]any{"metadata": map[string]any{"name": "alpha"}},
+	}
+	eval.scope["source"] = map[string]any{"items": sourceItems}
+
+	// Build previous scope with a generation label matching current gen.
+	genKey := forEachChildGenerationLabelKey("results", "alpha", "default", "Deployment", "apps", "test", "default")
+	prevAlpha := map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{
+			"name": "alpha", "namespace": "default",
+			"labels": map[string]any{genKey: "7"},
+		},
+		"name": "alpha",
+	}
+
+	// Pre-populate forEach state: same items as current → skip path fires.
+	eval.forEachPrevItems = map[string][]any{
+		"results/item": sourceItems,
+	}
+	eval.forEachPrevScope = map[string]map[string]any{
+		"results": {"alpha": prevAlpha},
+	}
+	eval.forEachPrevKeys = map[string]map[string][]string{
+		"results": {"alpha": {}},
+	}
+	eval.forEachNewScope = map[string]map[string]any{}
+	eval.forEachNewKeys = map[string]map[string][]string{}
+	eval.forEachNewItems = map[string][]any{}
+
+	graph := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "experimental.kro.run/v1alpha1",
+		"kind":       "Graph",
+		"metadata":   map[string]any{"name": "test", "namespace": "default"},
+	}}
+
+	r := &GraphReconciler{}
+	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false)
+	require.NoError(t, err)
+
+	items, ok := eval.scope["results"].([]any)
+	require.True(t, ok)
+	require.Len(t, items, 1)
+
+	alpha, ok := items[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, alpha["__updated"],
+		"skipped-unchanged item with matching generation (7 == 7) should be updated")
+
+	// Now test the mismatch case: same input, old generation label.
+	eval2 := newEvaluator(state)
+	eval2.effectiveGeneration = 8 // generation advanced
+	eval2.scope["source"] = map[string]any{"items": sourceItems}
+
+	// prevAlpha still has generation "7" but effectiveGeneration is now 8.
+	eval2.forEachPrevItems = map[string][]any{"results/item": sourceItems}
+	eval2.forEachPrevScope = map[string]map[string]any{
+		"results": {"alpha": prevAlpha},
+	}
+	eval2.forEachPrevKeys = map[string]map[string][]string{"results": {"alpha": {}}}
+	eval2.forEachNewScope = map[string]map[string]any{}
+	eval2.forEachNewKeys = map[string]map[string][]string{}
+	eval2.forEachNewItems = map[string][]any{}
+
+	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval2, nil, false)
+	require.NoError(t, err)
+
+	items2, ok := eval2.scope["results"].([]any)
+	require.True(t, ok)
+	require.Len(t, items2, 1)
+
+	alpha2, ok := items2[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, alpha2["__updated"],
+		"skipped-unchanged item with old generation (7 != 8) should NOT be updated")
+}

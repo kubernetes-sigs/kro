@@ -2181,3 +2181,185 @@ func TestForEach_PropagateWhenPerItemOrderingStable(t *testing.T) {
 		"worker A must still exist")
 	t.Log("Phase 2: ord-0 created, ord-a still exists — stable ordering proved")
 }
+
+// ---------------------------------------------------------------------------
+// .updated() in propagateWhen
+// ---------------------------------------------------------------------------
+
+// TestForEach_PropagateWhenUpdatedGatesCreation proves that .updated() works
+// in a per-item propagateWhen expression. This is the rollout gating pattern
+// from 004-graph-reconciliation.md § Propagation Control.
+//
+// The gate expression uses .updated() as an aggregate alongside .ready():
+//
+//	${size(workers) < 2 || (workers.updated() && workers.ready())}
+//
+// Phase 1: Workers A,B created (size < 2 is true). After 2 items,
+//
+//	gate closes: workers.updated()=true but workers.ready()=false.
+//	Worker C gated.
+//
+// Phase 2: Workers A,B made ready. workers.ready()=true → gate reopens.
+//
+//	Worker C created.
+//
+// Phase 3: Worker C made ready. Graph Ready.
+func TestForEach_PropagateWhenUpdatedGatesCreation(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create 3 source CMs.
+	sources := []string{"upd-src-a", "upd-src-b", "upd-src-c"}
+	for _, name := range sources {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": ns,
+					"labels":    map[string]any{"group": "upd-foreach"},
+				},
+				"data": map[string]any{"ready": "false"},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+
+	// Graph: Watch sources → forEach stamps workers with readyWhen.
+	// propagateWhen uses .updated() to limit inflight (updated && !ready).
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-updated",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "sources",
+						"watch": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"selector":   map[string]any{"group": "upd-foreach"},
+						},
+					},
+					map[string]any{
+						"id": "workers",
+						"forEach": map[string]any{
+							"src": "${sources}",
+						},
+						// Per-item propagateWhen: allow creation while < 2 items,
+						// then require all existing items to be updated AND ready.
+						// On first creation, .updated()=true (fresh apply) but
+						// .ready()=false → gates after 2 items.
+						"propagateWhen": []any{
+							"${size(workers) < 2 || (workers.updated() && workers.ready())}",
+						},
+						"readyWhen": []any{"${workers.data.ready == 'true'}"},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "upd-worker-${src.metadata.name}"},
+							"data": map[string]any{
+								"ready":  "${src.data.ready}",
+								"source": "${src.metadata.name}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// ---------------------------------------------------------------
+	// Phase 1: Per-item gate halts at 2 inflight workers.
+	// Workers A,B created (updated=true, ready=false → inflight=2).
+	// Worker C gated because inflight count reaches the limit.
+	// ---------------------------------------------------------------
+	workerA := types.NamespacedName{Name: "upd-worker-upd-src-a", Namespace: ns}
+	workerB := types.NamespacedName{Name: "upd-worker-upd-src-b", Namespace: ns}
+	workerC := types.NamespacedName{Name: "upd-worker-upd-src-c", Namespace: ns}
+
+	cmA := &unstructured.Unstructured{}
+	cmA.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerA, cmA),
+		"worker A must be created (inflight < 2)")
+	cmB := &unstructured.Unstructured{}
+	cmB.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerB, cmB),
+		"worker B must be created (inflight < 2)")
+
+	// Worker C must NOT exist — the .updated() gate halted iteration.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-foreach-updated", Namespace: ns}))
+	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk, workerC, 3*time.Second),
+		"worker C must be absent — workers.updated()=true && workers.ready()=false closes gate")
+	t.Log("Phase 1: 2 workers created, 3rd gated by .updated() && .ready() propagateWhen")
+
+	// ---------------------------------------------------------------
+	// Phase 2: Unblock by making workers A and B ready.
+	// After readyWhen passes, .updated() && !.ready() count drops to 0.
+	// Gate reopens → worker C created.
+	// ---------------------------------------------------------------
+	for _, srcName := range []string{"upd-src-a", "upd-src-b"} {
+		src := &unstructured.Unstructured{}
+		src.SetGroupVersionKind(gvk)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: srcName, Namespace: ns}, src))
+		require.NoError(t, unstructured.SetNestedField(src.Object, "true", "data", "ready"))
+		require.NoError(t, k8sClient.Update(ctx, src))
+	}
+	t.Log("Phase 2: Set upd-src-a and upd-src-b ready=true")
+
+	// Wait for workers A,B to pick up the change.
+	for _, wk := range []types.NamespacedName{workerA, workerB} {
+		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+			func(ctx context.Context) (bool, error) {
+				cm := &unstructured.Unstructured{}
+				cm.SetGroupVersionKind(gvk)
+				if err := k8sClient.Get(ctx, wk, cm); err != nil {
+					return false, nil
+				}
+				data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+				return data["ready"] == "true", nil
+			}), "worker %s must update to ready=true", wk.Name)
+	}
+
+	// Worker C should now be created (gate reopened).
+	cmC := &unstructured.Unstructured{}
+	cmC.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerC, cmC),
+		"worker C must be created after .updated() gate opens")
+	t.Log("Phase 2: Worker C created — .updated() gate opened")
+
+	// ---------------------------------------------------------------
+	// Phase 3: Make remaining worker ready → graph Ready.
+	// ---------------------------------------------------------------
+	src := &unstructured.Unstructured{}
+	src.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "upd-src-c", Namespace: ns}, src))
+	require.NoError(t, unstructured.SetNestedField(src.Object, "true", "data", "ready"))
+	require.NoError(t, k8sClient.Update(ctx, src))
+
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			cm := &unstructured.Unstructured{}
+			cm.SetGroupVersionKind(gvk)
+			if err := k8sClient.Get(ctx, workerC, cm); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+			return data["ready"] == "true", nil
+		}), "worker C must update to ready=true")
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-foreach-updated", Namespace: ns}))
+	t.Log("Phase 3: All workers ready, graph Ready — .updated() rollout gating works end-to-end")
+}

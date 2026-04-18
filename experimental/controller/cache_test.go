@@ -193,6 +193,70 @@ func TestHashFieldPathGranularity(t *testing.T) {
 		"changing status.availableReplicas MUST affect the hash")
 }
 
+// TestHashDesiredState_RegressionStringEscaping proves that string values
+// containing quote characters produce distinct hashes from strings that
+// don't. Without escaping, a value like `a"b` produces `"a"b"` in the
+// buffer — structurally ambiguous with a key-value boundary.
+func TestHashDesiredState_RegressionStringEscaping(t *testing.T) {
+	// A value containing a quote character must not collide with a
+	// structurally different map.
+	h1, err := hashDesiredState(map[string]any{"key": `value"with"quotes`})
+	require.NoError(t, err)
+
+	h2, err := hashDesiredState(map[string]any{"key": `valuewithquotes`})
+	require.NoError(t, err)
+
+	assert.NotEqual(t, h1, h2,
+		"strings with and without embedded quotes must hash differently")
+
+	// Backslash must also be escaped to prevent ambiguity with the
+	// escape character itself.
+	h3, err := hashDesiredState(map[string]any{"key": `a\b`})
+	require.NoError(t, err)
+
+	h4, err := hashDesiredState(map[string]any{"key": `ab`})
+	require.NoError(t, err)
+
+	assert.NotEqual(t, h3, h4,
+		"strings with and without backslashes must hash differently")
+
+	// Adversarial: a string that looks like a JSON key-value boundary.
+	h5, err := hashDesiredState(map[string]any{"a": `b","c":"d`})
+	require.NoError(t, err)
+
+	h6, err := hashDesiredState(map[string]any{"a": "b", "c": "d"})
+	require.NoError(t, err)
+
+	assert.NotEqual(t, h5, h6,
+		"a string mimicking JSON structure must not collide with actual structure")
+}
+
+// TestHashDesiredStateDeterministic proves the hasher produces identical
+// results across calls for the same input — the foundational property.
+func TestHashDesiredStateDeterministic(t *testing.T) {
+	m := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":      "test",
+			"namespace": "default",
+		},
+		"data": map[string]any{
+			"key1": "value1",
+			"key2": int64(42),
+		},
+	}
+
+	h1, err := hashDesiredState(m)
+	require.NoError(t, err)
+
+	for i := 0; i < 100; i++ {
+		h2, err := hashDesiredState(m)
+		require.NoError(t, err)
+		assert.Equal(t, h1, h2, "hash must be deterministic across calls (iteration %d)", i)
+	}
+}
+
 // TestResourceCache tests the resource cache operations.
 func TestResourceCache(t *testing.T) {
 	rc := newResourceCache()

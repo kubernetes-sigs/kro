@@ -664,6 +664,94 @@ func walkSkipBench(dag *DAG, plan *PlanState, scope, prevScope map[string]any, t
 	}
 }
 
+// ---------------------------------------------------------------------------
+// forEach item diffing benchmarks
+// ---------------------------------------------------------------------------
+
+// BenchmarkForEachItemDiff measures the cost of forEach item diffing — the
+// O(N) pass that identifies which collection items changed between reconciles.
+// This is the one hot-path operation whose cost scales with collection size
+// rather than change count. The diff consists of three phases:
+//
+//  1. Identity map construction: O(N) per reconcile — both the current and
+//     previous collections build identity maps (neither is persisted as a map;
+//     the raw []any is cached, identity maps are rebuilt each cycle).
+//  2. Identity extraction (forEachItemIdentity): O(1) per item — reads
+//     metadata.name/namespace from the collection item.
+//  3. Unchanged comparison (forEachItemUnchanged): two hashDesiredState calls
+//     per unchanged item.
+//
+// The benchmark exercises the realistic case: a large collection where K items
+// changed and N-K items are unchanged. The N-K items pay the full diff cost
+// (identity + two hashes) but skip template evaluation and apply. The K
+// changed items are not measured here — their cost is template eval + SSA
+// apply, already benchmarked separately.
+//
+// This is the architectural exception to the "work proportional to change"
+// property. The diff cost is O(N) regardless of K. The benchmark makes this
+// cost visible and establishes a regression baseline.
+//
+// Run: go test ./experimental/controller -bench=BenchmarkForEachItemDiff -benchmem
+func BenchmarkForEachItemDiff(b *testing.B) {
+	for _, itemCount := range []int{10, 100, 1000, 10000} {
+		b.Run(fmt.Sprintf("items=%d/changed=1", itemCount), func(b *testing.B) {
+			// Build current and previous collections. Previous has one
+			// changed item (item 0). Both are raw []any — the identity
+			// maps are built inside the measured region because
+			// reconcileForEach rebuilds them every cycle.
+			items := buildForEachItems(itemCount)
+			prevItemsRaw := buildForEachItems(itemCount)
+			prevItemsRaw[0].(map[string]any)["data"].(map[string]any)["key"] = "changed-value"
+
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				// Phase 1: Build previous identity map (rebuilt each reconcile).
+				prevByID := make(map[string]any, len(prevItemsRaw))
+				for _, item := range prevItemsRaw {
+					prevByID[forEachItemIdentity(item)] = item
+				}
+
+				// Phase 2-3: Identity extraction + unchanged comparison.
+				changed := 0
+				for _, item := range items {
+					id := forEachItemIdentity(item)
+					prev, existed := prevByID[id]
+					if !existed || !forEachItemUnchanged(prev, item) {
+						changed++
+					}
+				}
+				if changed != 1 {
+					b.Fatalf("expected 1 changed item, got %d", changed)
+				}
+			}
+		})
+	}
+}
+
+// buildForEachItems creates N ConfigMap-like items for forEach benchmarks.
+// Each item has metadata (name, namespace, uid, resourceVersion) and a data
+// section — representative of a typical Watch collection driving forEach.
+func buildForEachItems(n int) []any {
+	items := make([]any, n)
+	for i := 0; i < n; i++ {
+		items[i] = map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":            fmt.Sprintf("item-%d", i),
+				"namespace":       "default",
+				"uid":             fmt.Sprintf("uid-%d", i),
+				"resourceVersion": "12345",
+			},
+			"data": map[string]any{
+				"key": fmt.Sprintf("value-%d", i),
+			},
+		}
+	}
+	return items
+}
+
 // BenchmarkSpecHash measures the cost of computing the spec content hash —
 // the gate that enables compiled graph sharing. This must be significantly
 // cheaper than compilation to justify the indirection.

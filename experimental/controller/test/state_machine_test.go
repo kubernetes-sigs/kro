@@ -665,16 +665,16 @@ func TestDeepDagChain(t *testing.T) {
 	t.Logf("Deep DAG (%d levels) converged to Ready — no stack overflow or timeout", depth)
 }
 
-// TestGraphWithZeroOwnsNodes proves that a Graph with only Watch and
-// Contribute nodes (no Own) is valid and converges.
-func TestGraphWithZeroOwnsNodes(t *testing.T) {
+// TestGraphWithZeroTemplateNodes proves that a Graph with only Watch and
+// Patch nodes (no template:) is valid and converges.
+func TestGraphWithZeroTemplateNodes(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
 	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 
 	// Pre-create the resources.
-	for _, name := range []string{"zero-owns-watch", "zero-owns-contrib"} {
+	for _, name := range []string{"zero-templates-watch", "zero-templates-patch"} {
 		cm := &unstructured.Unstructured{
 			Object: map[string]any{
 				"apiVersion": "v1",
@@ -694,7 +694,7 @@ func TestGraphWithZeroOwnsNodes(t *testing.T) {
 			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
-				"name":      "test-zero-owns",
+				"name":      "test-zero-templates",
 				"namespace": ns,
 			},
 			"spec": map[string]any{
@@ -705,17 +705,17 @@ func TestGraphWithZeroOwnsNodes(t *testing.T) {
 						"ref": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata":   map[string]any{"name": "zero-owns-watch"},
+							"metadata":   map[string]any{"name": "zero-templates-watch"},
 						},
 					},
-					// Contribute node (writes to pre-existing resource).
+					// Patch node (writes to pre-existing resource).
 					map[string]any{
 						"id": "contrib",
 						"patch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
-								"name": "zero-owns-contrib",
+								"name": "zero-templates-patch",
 								"annotations": map[string]any{
 									"kro.run/managed":     "true",
 									"kro.run/watched-uid": "${watched.metadata.uid}",
@@ -729,31 +729,31 @@ func TestGraphWithZeroOwnsNodes(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Wait for contribution to be applied.
+	// Wait for patch to be applied.
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			check := &unstructured.Unstructured{}
 			check.SetGroupVersionKind(gvk)
 			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "zero-owns-contrib", Namespace: ns}, check); err != nil {
+				types.NamespacedName{Name: "zero-templates-patch", Namespace: ns}, check); err != nil {
 				return false, nil
 			}
 			return check.GetAnnotations()["kro.run/managed"] == "true", nil
 		}))
 
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
-		types.NamespacedName{Name: "test-zero-owns", Namespace: ns}))
-	t.Log("Graph with zero Own nodes (Watch + Contribute only) converged to Ready")
+		types.NamespacedName{Name: "test-zero-templates", Namespace: ns}))
+	t.Log("Graph with zero template: nodes (Watch + Patch only) converged to Ready")
 
-	// Verify watched UID was passed to the contribution.
+	// Verify watched UID was passed to the patch.
 	contribCM := &unstructured.Unstructured{}
 	contribCM.SetGroupVersionKind(gvk)
 	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "zero-owns-contrib", Namespace: ns}, contribCM))
+		types.NamespacedName{Name: "zero-templates-patch", Namespace: ns}, contribCM))
 	ann := contribCM.GetAnnotations()
 	assert.NotEmpty(t, ann["kro.run/watched-uid"],
-		"contribution should contain server-assigned UID from watched resource")
-	t.Logf("Contribute has watched UID: %s", ann["kro.run/watched-uid"])
+		"patch should contain server-assigned UID from watched resource")
+	t.Logf("Patch has watched UID: %s", ann["kro.run/watched-uid"])
 }
 
 // TestDiamondStatePrecedence_RegressionExcludedOverBlocked proves that in a
@@ -986,7 +986,7 @@ func TestPendingPropagatesAsPending_RegressionNotBlocked(t *testing.T) {
 //
 // Design 003-ownership § Prune:
 //
-//	"Clear from applied set, no delete (for Own)."
+//	"Clear from applied set, no delete (for template:)."
 //
 // Design 004-graph-reconciliation § Prune:
 //

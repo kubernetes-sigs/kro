@@ -239,7 +239,7 @@ func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]
 					Version: gvr.Version,
 					Kind:    gvrKindFromInformer(gvr, item),
 				}
-				ref, ok := NodeTypeFromLabelValue(labelValue)
+				nodeType, ok := NodeTypeFromLabelValue(labelValue)
 				if !ok {
 					m.log.V(1).Info("skipping resource with unrecognized reference label value",
 						"resource", accessor.GetNamespace()+"/"+accessor.GetName(),
@@ -251,7 +251,7 @@ func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]
 					accessor.GetNamespace(), accessor.GetName())
 				result[key] = appliedEntry{
 					NodeID:   nodeID,
-					NodeType: ref,
+					NodeType: nodeType,
 					Key:      key,
 				}
 				break // one identity label match per resource is sufficient

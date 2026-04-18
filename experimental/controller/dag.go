@@ -105,7 +105,7 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 	// If node B references deploy.status.availableReplicas, the deploy node
 	// needs ["status", "availableReplicas"] in its SelfPaths so self-state
 	// changes are detected and the updated scope propagates to B. Without
-	// this, a bare Own node with no readyWhen/propagateWhen would have empty
+	// this, a bare Template node with no readyWhen/propagateWhen would have empty
 	// SelfPaths — status changes would be invisible to downstream consumers.
 	for _, node := range dag.Nodes {
 		for depID, paths := range node.DepPaths {

@@ -1002,8 +1002,8 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 			if node.Identity() == nil {
 				continue
 			}
-			ref := node.Type()
-			if ref == NodeTypeRef || ref == NodeTypeWatch {
+			nodeType := node.Type()
+			if nodeType == NodeTypeRef || nodeType == NodeTypeWatch {
 				continue // read-only references don't create resources
 			}
 			id := node.Identity()

@@ -160,16 +160,16 @@ func TestPruneSafetyPendingBlocksPrune(t *testing.T) {
 
 // TestPruneManagedCheckBlocksDeletion proves that the controller respects
 // managedFields during teardown — if another field manager has an SSA Apply
-// entry on an Own resource, the finalizer holds until the other manager
+// entry on a template: resource, the finalizer holds until the other manager
 // releases.
 //
 // Design 003-ownership § Prune — managed check:
 //
-//	"Before deleting an Own resource, checks managedFields for other field
+//	"Before deleting a template: resource, checks managedFields for other field
 //	managers. If present, deletion is blocked until the other manager releases."
 //
 // Setup:
-//   - Graph creates and owns a ConfigMap (Own shape, template hash set).
+//   - Graph creates and owns a ConfigMap (template:, template hash set).
 //   - After convergence, external manager SSA-applies a field to the same CM,
 //     gaining a managedFields entry.
 //   - Graph is deleted (deletion timestamp set, finalizer holds).
@@ -277,12 +277,12 @@ func TestPruneManagedCheckBlocksDeletion(t *testing.T) {
 
 // TestPruneManagedCheckOnSpecChange proves that the controller respects
 // managedFields during wind/prune — if another field manager has an SSA Apply
-// entry on an Own resource that becomes a prune candidate (removed from spec),
+// entry on a template: resource that becomes a prune candidate (removed from spec),
 // deletion is blocked.
 //
 // Design 003-ownership § Prune — managed check (wind path, apply.go):
 //
-//	"Before deleting an Own resource, checks managedFields for other field
+//	"Before deleting a template: resource, checks managedFields for other field
 //	managers. If present, deletion is blocked."
 //
 // This is a distinct code path from the teardown check (TestPruneManagedCheckBlocksDeletion).
@@ -497,7 +497,7 @@ func TestPruneSafetyConflictBlocksPrune(t *testing.T) {
 
 // TestPruneSweptOnSpecNodeRemoval proves that removing nodes from the Graph
 // spec causes their managed resources to be pruned on the next reconcile.
-// This covers the case where the new revision has ZERO Own nodes — triggered
+// This covers the case where the new revision has ZERO template: nodes — triggered
 // is empty, but the prune phase must still run to clean up superseded resources.
 //
 // Design 004-graph-reconciliation § Prune:
@@ -505,7 +505,7 @@ func TestPruneSafetyConflictBlocksPrune(t *testing.T) {
 //	"After wind, diff the current key set against the applied set. Absent
 //	resources are prune candidates if their absence is definitive."
 //
-// A revision transition that removes all Own nodes produces 0 triggered nodes
+// A revision transition that removes all template: nodes produces 0 triggered nodes
 // in the new revision. The controller must NOT return early before the prune
 // phase — otherwise resources from the superseded revision are orphaned.
 func TestPruneSweptOnSpecNodeRemoval(t *testing.T) {
@@ -514,7 +514,7 @@ func TestPruneSweptOnSpecNodeRemoval(t *testing.T) {
 
 	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 
-	// 1. Create a Graph with two independent Own nodes.
+	// 1. Create a Graph with two independent template: nodes.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "experimental.kro.run/v1alpha1",
@@ -562,7 +562,7 @@ func TestPruneSweptOnSpecNodeRemoval(t *testing.T) {
 		types.NamespacedName{Name: "test-prune-sweep", Namespace: ns}))
 	t.Log("Both ConfigMaps created, Graph Active")
 
-	// 3. Update the spec to have ZERO nodes. The new revision has no Own
+	// 3. Update the spec to have ZERO nodes. The new revision has no template:
 	// nodes — triggered is empty, but the prune phase must still run.
 	// This is the exact scenario needsPruneSweep / isRevisionTransition
 	// guards are meant to handle.

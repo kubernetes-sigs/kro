@@ -374,7 +374,7 @@ func TestDependencyErrorRejectsSpec(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Watch absent / Contribute target absent → Pending
+// Watch absent / Patch target absent → Pending
 // ---------------------------------------------------------------------------
 
 // TestWatchAbsentResourceIsPending proves that a Watch node targeting a
@@ -491,15 +491,15 @@ func TestWatchAbsentResourceIsPending(t *testing.T) {
 
 // TestAbsentResourceIsOwnedByDefault proves that a `template:` node creates
 // the target resource when it does not exist. Under the declared-keyword
-// schema this is tautological — `template:` is Own, full stop — but the
-// test remains useful as an end-to-end smoke check that Own-creates-when-
+// schema this is tautological — `template:` creates and manages, full stop — but the
+// test remains useful as an end-to-end smoke check that template:-creates-when-
 // absent converges to Ready with the identity label stamped.
 func TestAbsentResourceIsOwnedByDefault(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
 	// Graph: target a non-existent ConfigMap via template:. Declaration is
-	// authoritative — `template:` always classifies as Own.
+	// authoritative — `template:` always creates and manages resources.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "experimental.kro.run/v1alpha1",
@@ -529,17 +529,17 @@ func TestAbsentResourceIsOwnedByDefault(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// The Graph should create the resource (Own) and reach Ready.
+	// The Graph should create the resource (template:) and reach Ready.
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-absent-owned", Namespace: ns}))
-	t.Log("Graph reached Ready — absent resource was created (Own)")
+	t.Log("Graph reached Ready — absent resource was created (template:)")
 
-	// Verify the resource was created and has the kro label (Own stamps it)
+	// Verify the resource was created and has the kro label (template: stamps it)
 	cm := &unstructured.Unstructured{}
 	cm.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "absent-target", Namespace: ns}, cm))
 	assertManagedBy(t, cm, "test-absent-owned")
-	t.Log("Resource created with kro label — Own shape confirmed")
+	t.Log("Resource created with kro label — template: confirmed")
 }
 
 // ---------------------------------------------------------------------------

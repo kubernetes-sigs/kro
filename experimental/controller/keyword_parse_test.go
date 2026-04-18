@@ -89,7 +89,7 @@ func TestParseKeyword_ClassificationMap(t *testing.T) {
 		want NodeType
 	}{
 		{
-			name: "template → Own",
+			name: "template → Template",
 			raw: map[string]any{
 				"id":       "a",
 				"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "x"}, "data": map[string]any{"k": "v"}},
@@ -97,7 +97,7 @@ func TestParseKeyword_ClassificationMap(t *testing.T) {
 			want: NodeTypeTemplate,
 		},
 		{
-			name: "patch → Contribute",
+			name: "patch → Patch",
 			raw: map[string]any{
 				"id":    "a",
 				"patch": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "x"}, "data": map[string]any{"k": "v"}},
@@ -155,12 +155,12 @@ func TestParseKeyword_ClassificationExpr(t *testing.T) {
 		want NodeType
 	}{
 		{
-			name: "template string → Own",
+			name: "template string → Template",
 			raw:  map[string]any{"id": "a", "template": "${schema.spec.template}"},
 			want: NodeTypeTemplate,
 		},
 		{
-			name: "patch string → Contribute",
+			name: "patch string → Patch",
 			raw:  map[string]any{"id": "a", "patch": "${schema.spec.patch}"},
 			want: NodeTypePatch,
 		},

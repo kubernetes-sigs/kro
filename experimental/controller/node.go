@@ -28,9 +28,8 @@ import (
 //
 // After dispatch, reconcileNode evaluates readyWhen as a post-dispatch step
 // for node types that don't handle their own per-item readiness (Definition,
-// Watch, Own, Contribute). Watch and ForEach return early — they
-// handle readiness internally (per-item for ForEach, per-collection for
-// Watch).
+// Template, Patch). Watch and ForEach return early — they handle
+// readiness internally (per-item for ForEach, per-collection for Watch).
 //
 // All paths return (keys, error) with a uniform error contract:
 //   - ErrPending: retryable, data not yet available
@@ -342,8 +341,8 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 
 	if nodeType == NodeTypePatch {
 		// Track the patch in the applied set with a "patch:" prefix.
-		// This lets prune and teardown distinguish Patch keys (release apply
-		// to release fields) from Template keys (delete).
+		// This lets prune and teardown distinguish patch keys (release apply
+		// to release fields) from template keys (delete).
 		hasStatus := evalMap["status"] != nil
 		return patchKey(applied, hasStatus), nil
 	}

@@ -35,8 +35,8 @@ func TestMultiGraphFieldCoexistence(t *testing.T) {
 
 	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 
-	// Pre-create the shared resource. Both Graphs will detect Contribute shape
-	// (resource exists on first reconcile → Contribute, not Own).
+	// Pre-create the shared resource. Both Graphs will detect patch:
+	// (resource exists on first reconcile → patch:, not template:).
 	shared := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -421,24 +421,24 @@ func TestResourcePruning(t *testing.T) {
 	t.Log("Kept ConfigMap still exists with correct data")
 }
 
-// TestContributeReferenceDetectedByExistence proves that when a resource
-// pre-exists before the Graph creates it, the controller detects Contribute
-// shape — behavioral consequence: the resource is NOT deleted when the
-// template is removed from the Graph spec. Own shape would delete it.
+// TestPatchReferenceDetectedByExistence proves that when a resource
+// pre-exists before the Graph creates it, the controller detects patch:
+// behavior — behavioral consequence: the resource is NOT deleted when the
+// node is removed from the Graph spec. template: would delete it.
 //
-// Design 003-ownership § NodeType Types: "Own — Creates the resource if
-// absent. Deletes on prune." vs "Contribute — Writes fields on a resource
+// Design 003-ownership § NodeType Types: "template: — Creates the resource if
+// absent. Deletes on prune." vs "patch: — Writes fields on a resource
 // the Graph does not create. Releases fields on prune, never deletes."
 //
 // The assertion is on behavioral consequence (no delete on prune), not
 // internal classification.
-func TestContributeReferenceDetectedByExistence(t *testing.T) {
+func TestPatchReferenceDetectedByExistence(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
 	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 
-	// Pre-create the target resource — this makes the template a Contribute.
+	// Pre-create the target resource — this makes the node a patch:.
 	external := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -524,7 +524,7 @@ func TestContributeReferenceDetectedByExistence(t *testing.T) {
 		}))
 	t.Log("Removed both nodes from spec — prune triggered")
 
-	// Wait for the owned resource to be deleted (Own shape → delete on prune).
+	// Wait for the owned resource to be deleted (template: → delete on prune).
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
 			check := &unstructured.Unstructured{}
@@ -533,15 +533,15 @@ func TestContributeReferenceDetectedByExistence(t *testing.T) {
 				types.NamespacedName{Name: "contribute-owned", Namespace: ns}, check)
 			return err != nil, nil // gone = true
 		}))
-	t.Log("Owned resource deleted on prune — Own shape confirmed")
+	t.Log("Owned resource deleted on prune — template: confirmed")
 
-	// THE KEY ASSERTION: the contributed resource should still exist
-	// (Contribute shape → release fields on prune, never delete).
+	// THE KEY ASSERTION: the patched resource should still exist
+	// (patch: → release fields on prune, never delete).
 	target := &unstructured.Unstructured{}
 	target.SetGroupVersionKind(cmGVK)
 	require.NoError(t, k8sClient.Get(ctx,
 		types.NamespacedName{Name: "contribute-target", Namespace: ns}, target),
-		"contributed resource should NOT be deleted on prune (Contribute shape)")
+		"patched resource should NOT be deleted on prune (patch:)")
 
 	// Original data should still be there.
 	data, _, _ := unstructured.NestedStringMap(target.Object, "data")
@@ -549,17 +549,17 @@ func TestContributeReferenceDetectedByExistence(t *testing.T) {
 		"contributed resource should preserve original data")
 	assert.Equal(t, "data", data["original"],
 		"contributed resource should preserve original data")
-	t.Log("Contributed resource survived prune — Contribute shape detection proved via behavioral consequence")
+	t.Log("Patched resource survived prune — patch: detection proved via behavioral consequence")
 }
 
-// TestContribute_RegressionStatusSubresourceTeardown proves that a Contribute
+// TestPatch_RegressionStatusSubresourceTeardown proves that a patch:
 // node writing status fields releases field ownership via release apply during
-// Graph deletion. The target must survive (it's Contribute, not Own) and the
-// Graph's field manager must not retain contributed status fields.
+// Graph deletion. The target must survive (it's patch:, not template:) and the
+// Graph's field manager must not retain patched status fields.
 //
 // Per 003-ownership.md § Status Subresource: "Releases only target the
 // subresources the template actually applied to."
-func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
+func TestPatch_RegressionStatusSubresourceTeardown(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -635,14 +635,14 @@ func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
 			return err != nil, nil
 		}))
 
-	// The target MUST still exist (it's a Contribute, not Own)
+	// The target MUST still exist (it's a patch:, not template:)
 	finalTarget := &unstructured.Unstructured{}
 	finalTarget.SetGroupVersionKind(schema.GroupVersionKind{
 		Group: "test.kro.run", Version: "v1alpha1", Kind: "SimpleApp",
 	})
 	require.NoError(t, k8sClient.Get(ctx,
 		types.NamespacedName{Name: "status-target", Namespace: ns}, finalTarget),
-		"Contribute target must survive Graph deletion")
+		"Patch target must survive Graph deletion")
 
 	// Verify the Graph's field manager state after release apply.
 	managedFields := finalTarget.GetManagedFields()
@@ -678,7 +678,7 @@ func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
 		"contributed status.message should be removed after teardown")
 }
 
-// TestContributeMetadataAndStatus proves that a Contribute node writing both
+// TestPatchMetadataAndStatus proves that a patch: node writing both
 // metadata (annotations) and status fields to a resource with a real status
 // subresource exercises both apply paths: main resource apply for metadata,
 // status subresource apply for status. On Graph deletion, release apply must
@@ -691,7 +691,7 @@ func TestContribute_RegressionStatusSubresourceTeardown(t *testing.T) {
 //
 // Per 003-ownership.md § Status Subresource: "Releases only target the
 // subresources the template actually applied to."
-func TestContributeMetadataAndStatus(t *testing.T) {
+func TestPatchMetadataAndStatus(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -808,12 +808,12 @@ func TestContributeMetadataAndStatus(t *testing.T) {
 		}))
 	t.Log("Graph deleted — release apply should have run on both subresources")
 
-	// The target MUST still exist (Contribute, not Own).
+	// The target MUST still exist (Patch, not Template).
 	finalTarget := &unstructured.Unstructured{}
 	finalTarget.SetGroupVersionKind(saGVK)
 	require.NoError(t, k8sClient.Get(ctx,
 		types.NamespacedName{Name: "dual-target", Namespace: ns}, finalTarget),
-		"Contribute target must survive Graph deletion")
+		"Patch target must survive Graph deletion")
 
 	// Assert contributed annotation VALUES are gone after teardown.
 	// Release apply sends an identity-only release body to the main resource.
@@ -860,11 +860,11 @@ func TestContributeMetadataAndStatus(t *testing.T) {
 	// Original spec must survive.
 	specName, _, _ := unstructured.NestedString(finalTarget.Object, "spec", "name")
 	assert.Equal(t, "my-app", specName,
-		"original spec.name must survive Contribute teardown")
-	t.Log("Dual-subresource Contribute: metadata and status released cleanly after teardown")
+		"original spec.name must survive Patch teardown")
+	t.Log("Dual-subresource Patch: metadata and status released cleanly after teardown")
 }
 
-// TestContributeMapFieldOwnership proves that a Contribute node writing
+// TestPatchMapFieldOwnership proves that a patch: node writing
 // specific keys to a map field (ConfigMap .data) takes field-level ownership
 // of only those keys, and release apply releases that ownership on prune.
 //
@@ -881,7 +881,7 @@ func TestContributeMetadataAndStatus(t *testing.T) {
 //     (sole owner released → SSA removes the field)
 //  4. Graph's field manager no longer owns the contributed keys
 //  5. External manager's field ownership is unaffected
-func TestContributeMapFieldOwnership(t *testing.T) {
+func TestPatchMapFieldOwnership(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -993,12 +993,12 @@ func TestContributeMapFieldOwnership(t *testing.T) {
 		"Graph's field manager should own .data.contributed-key before prune")
 	t.Log("Graph field manager owns contributed data keys")
 
-	// Prune: remove the Contribute node from the Graph spec.
+	// Prune: remove the patch: node from the Graph spec.
 	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
 		types.NamespacedName{Name: graphName, Namespace: ns}, func(obj *unstructured.Unstructured) {
 			unstructured.SetNestedSlice(obj.Object, []any{}, "spec", "nodes")
 		}))
-	t.Log("Removed Contribute node — prune triggered")
+	t.Log("Removed patch node — prune triggered")
 
 	// Wait for the Graph to settle after prune.
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
@@ -1009,19 +1009,19 @@ func TestContributeMapFieldOwnership(t *testing.T) {
 	final.SetGroupVersionKind(cmGVK)
 	require.NoError(t, k8sClient.Get(ctx,
 		types.NamespacedName{Name: "map-target", Namespace: ns}, final),
-		"Contribute target must survive prune")
+		"Patch target must survive prune")
 
 	// ASSERTION 1: External manager's keys must be intact.
 	finalData, _, _ := unstructured.NestedStringMap(final.Object, "data")
 	assert.Equal(t, "external-value", finalData["original-key"],
-		"external manager's key must survive Contribute prune")
+		"external manager's key must survive patch prune")
 	assert.Equal(t, "untouched", finalData["keep-me"],
-		"external manager's key must survive Contribute prune")
+		"external manager's key must survive patch prune")
 
 	// ASSERTION 2: Contributed key VALUES are deleted — when the sole owner
 	// releases a field via SSA, the API server removes it entirely. This is
-	// the correct Contribute prune behavior: contributed data disappears when
-	// the Graph stops contributing.
+	// the correct patch prune behavior: contributed data disappears when
+	// the Graph stops patching.
 	_, contributedExists := finalData["contributed-key"]
 	assert.False(t, contributedExists,
 		"contributed key should be removed entirely when sole owner releases via release apply")

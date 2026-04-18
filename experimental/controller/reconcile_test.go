@@ -1174,18 +1174,18 @@ func TestStaticResourceKey_ClusterScopedNamespace_Regression(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Correctness reconciliation — Finding 2: Contribute status in teardown
+// Correctness reconciliation — Finding 2: Patch status in teardown
 // ---------------------------------------------------------------------------
 
-// TestContributeStatusDetection proves that contributeHasStatus correctly
-// detects whether a template's Contribute node applies status fields.
+// TestPatchStatusDetection proves that templateHasStatus correctly
+// detects whether a Patch node applies status fields.
 // During teardown, this determines whether releaseApply releases the
 // status subresource.
 //
 // Per 003-ownership.md § Status Subresource: "Releases only target the
-// subresources the template actually applied to — a status-only Contribute
+// subresources the template actually applied to — a status-only Patch
 // releases only the status subresource."
-func TestContributeStatusDetection(t *testing.T) {
+func TestPatchStatusDetection(t *testing.T) {
 	t.Run("template with status field", func(t *testing.T) {
 		tmpl := map[string]any{
 			"apiVersion": "v1",

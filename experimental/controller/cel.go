@@ -451,7 +451,7 @@ func celPluralFunction() []cel.EnvOption {
 //   - No readyWhen: __ready = true (applied = ready)
 //   - With readyWhen: __ready = (all conditions passed)
 //
-// For scalar nodes (Watch, Own, Contribute), .ready() reads __ready from
+// For scalar nodes (Template, Patch), .ready() reads __ready from
 // the object map. For forEach parents, .ready() returns true when ALL items
 // have __ready == true — the collection's readiness is a function of its
 // children's readiness.

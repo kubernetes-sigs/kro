@@ -20,9 +20,9 @@ import (
 //
 // These tests exercise combinations of features that are individually tested
 // but whose interactions may produce emergent bugs. The matrix is:
-// forEach × {includeWhen, Contribute, Force, Multi-rev},
-// includeWhen × {propagateWhen, Contribute, finalizes},
-// propagateWhen × {Contribute},
+// forEach × {includeWhen, Patch, Force, Multi-rev},
+// includeWhen × {propagateWhen, Patch, finalizes},
+// propagateWhen × {Patch},
 // Nested Graphs × {revision transition, includeWhen},
 // readyWhen × {includeWhen}.
 // ---------------------------------------------------------------------------
@@ -361,21 +361,21 @@ func TestIncludeWhenPropagateWhenPrecedence(t *testing.T) {
 	t.Log("Both upstream and downstream pruned — exclusion overrides propagateWhen gate")
 }
 
-// TestPropagateWhenContribute proves that propagateWhen on a node upstream
-// of a Contribute node gates the Contribute's re-evaluation. While gated,
-// the Contribute retains its previous fields.
+// TestPropagateWhenPatch proves that propagateWhen on a node upstream
+// of a patch: node gates the patch's re-evaluation. While gated,
+// the patch retains its previous fields.
 //
-// Important: We use a Watch node to feed data into an Own upstream node.
+// Important: We use a Watch node to feed data into a template: upstream node.
 // Changes to the watched resource close the gate WITHOUT triggering a
 // revision transition (which would create a new instanceState with no
 // previous data to retain).
-func TestPropagateWhenContribute(t *testing.T) {
+func TestPropagateWhenPatch(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
 	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 
-	// Pre-create the external resource the Contribute will write to.
+	// Pre-create the external resource the patch will write to.
 	external := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -427,7 +427,7 @@ func TestPropagateWhenContribute(t *testing.T) {
 							"metadata":   map[string]any{"name": "prop-contrib-control"},
 						},
 					},
-					// Upstream: Own a resource, no propagateWhen.
+					// Upstream: template: a resource, no propagateWhen.
 					map[string]any{
 						"id": "upstream",
 						"template": map[string]any{
@@ -439,7 +439,7 @@ func TestPropagateWhenContribute(t *testing.T) {
 							},
 						},
 					},
-					// Contribute: writes upstream's value to the external resource, input-gated.
+					// Patch: writes upstream's value to the external resource, input-gated.
 					map[string]any{
 						"id":            "contrib",
 						"propagateWhen": []any{"${control.data.ready == 'true'}"},
@@ -473,7 +473,7 @@ func TestPropagateWhenContribute(t *testing.T) {
 		}))
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-prop-contrib", Namespace: ns}))
-	t.Log("Contribute applied v1, Graph ready")
+	t.Log("Patch applied v1, Graph ready")
 
 	// Close the gate by updating the control resource (no revision transition).
 	latest := &unstructured.Unstructured{}
@@ -500,19 +500,19 @@ func TestPropagateWhenContribute(t *testing.T) {
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
 		types.NamespacedName{Name: "test-prop-contrib", Namespace: ns}))
 
-	// Contribute should still have v1 — gate is closed, downstream retains previous.
+	// Patch should still have v1 — gate is closed, downstream retains previous.
 	target := &unstructured.Unstructured{}
 	target.SetGroupVersionKind(gvk)
 	require.NoError(t, k8sClient.Get(ctx,
 		types.NamespacedName{Name: "prop-contrib-target", Namespace: ns}, target))
 	assert.Equal(t, "v1", target.GetAnnotations()["kro.run/value"],
-		"Contribute should retain v1 while propagateWhen gate is closed")
-	t.Log("Contribute retained v1 while gate closed — propagateWhen + Contribute proved")
+		"Patch should retain v1 while propagateWhen gate is closed")
+	t.Log("Patch retained v1 while gate closed — propagateWhen + Patch proved")
 }
 
-// TestIncludeWhenContributeReleaseFields proves that when includeWhen toggles
-// a Contribute node to false, release apply releases the contributed fields.
-func TestIncludeWhenContributeReleaseFields(t *testing.T) {
+// TestIncludeWhenPatchReleaseFields proves that when includeWhen toggles
+// a patch: node to false, release apply releases the patched fields.
+func TestIncludeWhenPatchReleaseFields(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -609,28 +609,28 @@ func TestIncludeWhenContributeReleaseFields(t *testing.T) {
 		types.NamespacedName{Name: "inc-contrib-control", Namespace: ns}, latest))
 	unstructured.SetNestedField(latest.Object, "false", "data", "toggle")
 	require.NoError(t, k8sClient.Update(ctx, latest))
-	t.Log("Toggle set to false → Contribute excluded")
+	t.Log("Toggle set to false → patch: excluded")
 
-	// Target resource must still exist (Contribute → never delete).
+	// Target resource must still exist (patch: → never delete).
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
 		types.NamespacedName{Name: "test-inc-contrib", Namespace: ns}))
 	target := &unstructured.Unstructured{}
 	target.SetGroupVersionKind(gvk)
 	require.NoError(t, k8sClient.Get(ctx,
 		types.NamespacedName{Name: "inc-contrib-target", Namespace: ns}, target),
-		"Contribute target must survive includeWhen toggle (never delete)")
+		"Patch target must survive includeWhen toggle (never delete)")
 
 	// Original data must still be there.
 	data, _, _ := unstructured.NestedStringMap(target.Object, "data")
 	assert.Equal(t, "data", data["original"],
-		"original data should survive Contribute release")
-	t.Log("Contribute target survived exclusion — includeWhen + Contribute proved")
+		"original data should survive patch release")
+	t.Log("Patch target survived exclusion — includeWhen + Patch proved")
 }
 
-// TestForEachContributeScaleDown proves that forEach can stamp Contribute
+// TestForEachPatchScaleDown proves that forEach can stamp patch:
 // resources (write fields to pre-existing targets per collection item),
 // and that scale-down releases fields via release apply without deleting.
-func TestForEachContributeScaleDown(t *testing.T) {
+func TestForEachPatchScaleDown(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -747,17 +747,17 @@ func TestForEachContributeScaleDown(t *testing.T) {
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
 		types.NamespacedName{Name: "test-foreach-contrib", Namespace: ns}))
 
-	// fe-contrib-c must still exist (Contribute → release fields, never delete).
+	// fe-contrib-c must still exist (patch: → release fields, never delete).
 	target := &unstructured.Unstructured{}
 	target.SetGroupVersionKind(gvk)
 	require.NoError(t, k8sClient.Get(ctx,
 		types.NamespacedName{Name: "fe-contrib-c", Namespace: ns}, target),
-		"forEach Contribute target must survive scale-down (never delete)")
+		"forEach patch target must survive scale-down (never delete)")
 
 	data, _, _ := unstructured.NestedStringMap(target.Object, "data")
 	assert.Equal(t, "data-fe-contrib-c", data["original"],
-		"original data should survive Contribute release on scale-down")
-	t.Log("fe-contrib-c survived scale-down — forEach + Contribute proved")
+		"original data should survive patch release on scale-down")
+	t.Log("fe-contrib-c survived scale-down — forEach + Patch proved")
 }
 
 // TestForEachRevisionTransition proves that a spec change altering a forEach
@@ -1510,9 +1510,9 @@ func TestIncludeWhenFinalizesNeverCreatedTarget(t *testing.T) {
 	t.Log("Target excluded, snapshot dormant, Graph Ready — includeWhen + finalizes proved")
 }
 
-// TestContributeIdentityLabelsPerGraph proves that when two Graphs contribute
-// to the same resource, each gets its own identity labels with "patch" role.
-func TestContributeIdentityLabelsPerGraph(t *testing.T) {
+// TestPatchIdentityLabelsPerGraph proves that when two Graphs patch
+// the same resource, each gets its own identity labels with "patch" role.
+func TestPatchIdentityLabelsPerGraph(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -1585,7 +1585,7 @@ func TestContributeIdentityLabelsPerGraph(t *testing.T) {
 	}
 	assert.True(t, foundA, "Graph A's identity label must be present")
 	assert.True(t, foundB, "Graph B's identity label must be present")
-	t.Log("Both Graphs have independent 'contributes' identity labels — multi-graph Contribute labels proved")
+	t.Log("Both Graphs have independent 'patch' identity labels — multi-graph Patch labels proved")
 }
 
 // TestForEachForceApply proves that forEach resources with kro.run/apply: Force

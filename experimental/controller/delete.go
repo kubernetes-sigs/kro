@@ -67,8 +67,8 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 				}
 			}
 			// Also extract static template keys (merged from separate loop).
-			ref := node.Type()
-			if ref == NodeTypeRef || ref == NodeTypeWatch {
+			nodeType := node.Type()
+			if nodeType == NodeTypeRef || nodeType == NodeTypeWatch {
 				continue // read-only
 			}
 			if node.Finalizes != "" {
@@ -138,7 +138,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 	}
 
-	// Convert Own keys to slice for ordered deletion.
+	// Convert template keys to slice for ordered deletion.
 	var keys []string
 	for k := range ownKeys {
 		keys = append(keys, k)

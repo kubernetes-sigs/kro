@@ -259,7 +259,7 @@ func TestRevisionCreatedOnGraphCreate(t *testing.T) {
 	require.True(t, ok)
 	// Verify the template has the expected structure (metadata with name).
 	// Labels are injected at apply time (not materialization time) for Deferred
-	// shapes since Own vs Contribute isn't known until the first reconcile.
+	// shapes since template: vs patch: isn't known until the first reconcile.
 	md, _ := tmpl["metadata"].(map[string]any)
 	require.NotNil(t, md)
 	assert.Equal(t, "rev-test-cm", md["name"])

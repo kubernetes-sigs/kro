@@ -64,9 +64,9 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 	for _, node := range nodes {
 		seen[node.ID] = true
 
-		ref := node.Type()
+		nodeType := node.Type()
 		switch {
-		case ref == NodeTypeDef:
+		case nodeType == NodeTypeDef:
 			// Phase 2: infer type from template structure.
 			typeName := krocel.TypeNamePrefix + node.ID
 			dt := inferObjectType(typeName, node.Payload())
@@ -75,7 +75,7 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 				ts.forEachDefinitions[node.ID] = true
 			}
 
-		case schemaResolver != nil && ref != NodeTypeDef:
+		case schemaResolver != nil && nodeType != NodeTypeDef:
 			// Phase 1: resolve schema for resource nodes with literal GVK.
 			//
 			// forEach nodes skip schema resolution: the same variable
@@ -91,7 +91,7 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 					s, err := schemaResolver.ResolveSchema(*gvk)
 					if err == nil && s != nil {
 						ts.resourceSchemas[node.ID] = s
-						if ref == NodeTypeWatch {
+						if nodeType == NodeTypeWatch {
 							ts.resourceCollections[node.ID] = true
 						}
 						resolved = true
@@ -101,7 +101,7 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 				}
 			}
 			if !resolved {
-				if ref == NodeTypeWatch {
+				if nodeType == NodeTypeWatch {
 					ts.listIDs = append(ts.listIDs, node.ID)
 				} else {
 					ts.untypedIDs = append(ts.untypedIDs, node.ID)
@@ -109,7 +109,7 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 			}
 
 		default:
-			if ref == NodeTypeWatch {
+			if nodeType == NodeTypeWatch {
 				ts.listIDs = append(ts.listIDs, node.ID)
 			} else {
 				ts.untypedIDs = append(ts.untypedIDs, node.ID)

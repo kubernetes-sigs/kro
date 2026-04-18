@@ -960,7 +960,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 		if res.state == NodePending {
 			plan.SetState(dag, node.ID, NodePending)
-			// Under declared-keyword classification, Contribute→Own is an
+			// Under declared-keyword classification, patch→template is an
 			// authoring event (patch: → template: spec edit) handled by
 			// revision supersession. No runtime reclassification reset.
 			state.previousPlanStates[node.ID] = NodePending

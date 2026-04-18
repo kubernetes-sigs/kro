@@ -12,9 +12,9 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 
-// ownNode builds an Own-classified Node from a template map. Test-only helper;
+// templateNode builds a Template-classified Node from a template map. Test-only helper;
 // production code sets the classification via parseNodeList.
-func ownNode(id string, tmpl map[string]any) Node {
+func templateNode(id string, tmpl map[string]any) Node {
 	return Node{ID: id, Template: tmpl, nodeType: NodeTypeTemplate}
 }
 

@@ -170,7 +170,7 @@ func hasGraphIdentityLabels(labels map[string]string, graphName, namespace strin
 
 // hasOtherGraphIdentityLabel checks if a resource's labels contain any
 // identity labels from a DIFFERENT graph than the specified one. Used by
-// the kro label check before applying an Own template — if present,
+// the kro label check before applying a Template node — if present,
 // another kro Graph manages this resource.
 //
 // Label keys are compared case-insensitively. stamping writes lowercase keys

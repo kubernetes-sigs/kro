@@ -85,7 +85,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 											},
 										},
 									},
-									// L2: Contribute status + annotations back to the instance.
+									// L2: Patch status + annotations back to the instance.
 									// Auto-detected as contribution: template has only
 									// apiVersion, kind, metadata, and status (no spec).
 									map[string]any{

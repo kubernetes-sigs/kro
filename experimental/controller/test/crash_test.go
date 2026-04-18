@@ -297,10 +297,10 @@ func TestRecoveryForEachScaleDownFullLifecycle(t *testing.T) {
 	t.Log("3 survived, 2 pruned — forEach scale-down recovery proved")
 }
 
-// TestRecoveryContributeFieldsPreserved simulates a crash after Contribute
+// TestRecoveryPatchFieldsPreserved simulates a crash after patch:
 // fields were applied. On recovery, the controller should re-apply the
-// contribution idempotently without deleting the target.
-func TestRecoveryContributeFieldsPreserved(t *testing.T) {
+// patch idempotently without deleting the target.
+func TestRecoveryPatchFieldsPreserved(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -329,7 +329,7 @@ func TestRecoveryContributeFieldsPreserved(t *testing.T) {
 		},
 	}
 	require.NoError(t, k8sClient.Create(ctx, external))
-	t.Log("Pre-created Contribute target with identity label")
+	t.Log("Pre-created patch target with identity label")
 
 	// Create Graph that contributes to the target.
 	graph := &unstructured.Unstructured{
@@ -377,11 +377,11 @@ func TestRecoveryContributeFieldsPreserved(t *testing.T) {
 	ann := target.GetAnnotations()
 	assert.Equal(t, "recovered", ann["kro.run/version"],
 		"contribution should be re-applied on recovery")
-	t.Log("Contribute target preserved, fields re-applied — crash recovery for Contribute proved")
+	t.Log("Patch target preserved, fields re-applied — crash recovery for patch: proved")
 }
 
 // TestRecoveryPartialTeardown simulates a crash during teardown where some
-// Own resources were deleted but others remain. The controller should
+// template: resources were deleted but others remain. The controller should
 // complete teardown by deleting the remaining resources.
 func TestRecoveryPartialTeardown(t *testing.T) {
 	t.Parallel()

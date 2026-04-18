@@ -216,18 +216,18 @@ func TestRevisionPrune_RegressionMultiHopOrphan(t *testing.T) {
 	t.Log("Multi-hop prune proved: no orphaned resources across 3 revisions")
 }
 
-// TestContributeCleanupOnPrune proves that when a Contribute template is
+// TestPatch_RegressionCleanupOnPrune proves that when a patch: node is
 // removed from a Graph spec, the controller releases its field ownership
 // via release apply instead of deleting the target resource.
 //
-// Regression: reconcileApply() for Contribute returned "" as the resource key, so
-// contributions never entered the applied set. releaseApply() existed
-// but had zero callers. On spec change removing a Contribute template,
-// the contributed fields were never released.
+// Regression: reconcileApply() for patch: returned "" as the resource key, so
+// patches never entered the applied set. releaseApply() existed
+// but had zero callers. On spec change removing a patch: node,
+// the patched fields were never released.
 //
-// The invariant: pruning a Contribute key triggers release apply (field
+// The invariant: pruning a patch key triggers release apply (field
 // release), not delete. The target resource survives.
-func TestContribute_RegressionCleanupOnPrune(t *testing.T) {
+func TestPatch_RegressionCleanupOnPrune(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -247,7 +247,7 @@ func TestContribute_RegressionCleanupOnPrune(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, target))
 
-	// Graph with two nodes: a Watch (read target) and a Contribute (write annotations).
+	// Graph with two nodes: a Watch (read target) and a Patch (write annotations).
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "experimental.kro.run/v1alpha1",
@@ -299,7 +299,7 @@ func TestContribute_RegressionCleanupOnPrune(t *testing.T) {
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-contrib-prune", Namespace: ns}))
 	t.Log("Contribution applied — target has graph-contributed annotation")
 
-	// Update the Graph to remove the Contribute node (keep only the Watch).
+	// Update the Graph to remove the patch node (keep only the Watch).
 	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
 		types.NamespacedName{Name: "test-contrib-prune", Namespace: ns}, func(obj *unstructured.Unstructured) {
 			unstructured.SetNestedSlice(obj.Object, []any{
@@ -315,9 +315,9 @@ func TestContribute_RegressionCleanupOnPrune(t *testing.T) {
 
 	// Wait for the new revision to be reconciled.
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-contrib-prune", Namespace: ns}))
-	t.Log("Graph updated — Contribute node removed")
+	t.Log("Graph updated — patch node removed")
 
-	// The target resource must still exist (Contribute never deletes).
+	// The target resource must still exist (patch: never deletes).
 	finalTarget := &unstructured.Unstructured{}
 	finalTarget.SetGroupVersionKind(regressionCMGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "contribute-target", Namespace: ns}, finalTarget))
@@ -334,17 +334,17 @@ func TestContribute_RegressionCleanupOnPrune(t *testing.T) {
 	// apply from another manager overwrites it. The key assertion is
 	// that the resource exists and original data is intact — the Graph's
 	// field ownership has been released.
-	t.Log("Contribute cleanup proved: target resource survived with original data intact")
+	t.Log("Patch cleanup proved: target resource survived with original data intact")
 }
 
-// TestContributeCleanupOnTeardown proves that Graph deletion releases
-// Contribute field ownership via release apply instead of skipping
+// TestPatch_RegressionCleanupOnTeardown proves that Graph deletion releases
+// patch: field ownership via release apply instead of skipping
 // or deleting.
 //
-// Regression: reconcileDelete() previously skipped Contribute templates
-// entirely during teardown. The contributed fields were never released,
+// Regression: reconcileDelete() previously skipped patch: nodes
+// entirely during teardown. The patched fields were never released,
 // leaving the Graph's field manager as a stale owner.
-func TestContribute_RegressionCleanupOnTeardown(t *testing.T) {
+func TestPatch_RegressionCleanupOnTeardown(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -423,7 +423,7 @@ func TestContribute_RegressionCleanupOnTeardown(t *testing.T) {
 	}))
 	t.Log("Graph deleted")
 
-	// The target resource must still exist — Contribute never deletes.
+	// The target resource must still exist — patch: never deletes.
 	finalTarget := &unstructured.Unstructured{}
 	finalTarget.SetGroupVersionKind(regressionCMGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "teardown-target", Namespace: ns}, finalTarget))
@@ -433,20 +433,20 @@ func TestContribute_RegressionCleanupOnTeardown(t *testing.T) {
 	data, _, _ := unstructured.NestedStringMap(finalTarget.Object, "data")
 	assert.Equal(t, "me", data["keep"],
 		"target's original data must survive Graph teardown — release apply must not disturb other managers' fields")
-	t.Log("Teardown proved: Contribute target survived Graph deletion with data intact")
+	t.Log("Teardown proved: patch target survived Graph deletion with data intact")
 }
 
-// TestContributionUpdatesWhenDependencyChanges proves that a Contribute node
+// TestPatch_RegressionDependencyChangeUpdate proves that a patch: node
 // re-evaluates when its upstream dependency's status changes, even when the
 // dependency has no readyWhen/propagateWhen gates.
 //
 // Regression: SelfSections was only populated from the node's own
-// readyWhen/propagateWhen. A bare Own node (no gates) whose .data was
-// referenced by a downstream Contribute would have empty SelfSections. The
-// change-check optimization would retain stale scope, and the Contribute
+// readyWhen/propagateWhen. A bare template: node (no gates) whose .data was
+// referenced by a downstream patch: would have empty SelfSections. The
+// change-check optimization would retain stale scope, and the patch:
 // would never re-evaluate. The fix pushes downstream dependency sections
 // into upstream SelfSections during DAG compilation.
-func TestContribute_RegressionDependencyChangeUpdate(t *testing.T) {
+func TestPatch_RegressionDependencyChangeUpdate(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -501,7 +501,7 @@ func TestContribute_RegressionDependencyChangeUpdate(t *testing.T) {
 						},
 					},
 					// Owned resource that references the source. This is a bare
-					// Own node with NO readyWhen/propagateWhen gates.
+					// template: node with NO readyWhen/propagateWhen gates.
 					map[string]any{
 						"id": "owned",
 						"template": map[string]any{
@@ -513,7 +513,7 @@ func TestContribute_RegressionDependencyChangeUpdate(t *testing.T) {
 							},
 						},
 					},
-					// Contribute: write the owned resource's data to the target.
+					// Patch: write the owned resource's data to the target.
 					// References owned.data — this is the downstream reference
 					// that should push .data into owned's SelfSections.
 					map[string]any{
@@ -684,7 +684,7 @@ func TestWatchKind_RegressionClusterScopedRouting(t *testing.T) {
 //
 // Setup:
 //   - Watch node reads an external ConfigMap
-//   - Dependent Own node references the watched data
+//   - Dependent template: node references the watched data
 //   - Delete the external ConfigMap → Watch enters Pending → dependent is Blocked
 //   - Recreate the external ConfigMap → Watch resolves → dependent reconverges
 //   - Assert: Graph reaches Ready, dependent resource exists with correct data
@@ -798,24 +798,24 @@ func TestBlockedDependency_RegressionRecoveryReconverges(t *testing.T) {
 	t.Log("Phase 3: Graph reconverged — dependent has fromSource=v2")
 }
 
-// TestContributeReadyWhenGatesGraphReadiness proves that readyWhen on a
-// Contribute node is evaluated and gates the Graph's Ready condition.
+// TestPatch_RegressionReadyWhenGatesGraph proves that readyWhen on a
+// patch: node is evaluated and gates the Graph's Ready condition.
 //
-// Regression: the Contribute path unconditionally called markReady(true),
-// ignoring readyWhen. A user who set readyWhen on a Contribute node would
+// Regression: the patch: path unconditionally called markReady(true),
+// ignoring readyWhen. A user who set readyWhen on a patch: node would
 // see the Graph report Ready before the target controller actuated the
-// contributed state.
+// patched state.
 //
 // This test proves the positive behavior: the Graph reports NotReady until
-// the Contribute node's readyWhen is satisfied.
+// the patch: node's readyWhen is satisfied.
 //
 // Setup:
 //   - Pre-create target ConfigMap
-//   - Graph watches target, then contributes an annotation
-//   - Contribute node has readyWhen checking a data field
+//   - Graph watches target, then patches an annotation
+//   - Patch node has readyWhen checking a data field
 //   - Initially the field doesn't satisfy readyWhen → Graph NotReady
 //   - External update satisfies the condition → Graph Ready
-func TestContribute_RegressionReadyWhenGatesGraph(t *testing.T) {
+func TestPatch_RegressionReadyWhenGatesGraph(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -893,7 +893,7 @@ func TestContribute_RegressionReadyWhenGatesGraph(t *testing.T) {
 	reason := graphReadyReason(g)
 	assert.Equal(t, "NotReady", reason,
 		"Ready reason should be NotReady (readyWhen unsatisfied)")
-	t.Log("Graph is NotReady — readyWhen gates Contribute readiness")
+	t.Log("Graph is NotReady — readyWhen gates patch readiness")
 
 	// Update the target to satisfy readyWhen.
 	latest := &unstructured.Unstructured{}
@@ -907,19 +907,19 @@ func TestContribute_RegressionReadyWhenGatesGraph(t *testing.T) {
 	// Graph should now reach Ready.
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-contrib-readywhen", Namespace: ns}))
-	t.Log("Graph is Ready — contribute readyWhen satisfied")
+	t.Log("Graph is Ready — patch readyWhen satisfied")
 }
 
-// TestContributeIdentityLabels proves that Patch resources carry identity
+// TestPatch_RegressionIdentityLabels proves that Patch resources carry identity
 // labels with role "patch". These labels make Patch resources
 // discoverable via deriveAppliedSet() after controller restart, ensuring
 // teardown can release their fields via release apply.
 //
-// Regression: applySSA for Patch references previously did not call setIdentityLabels.
+// Regression: applySSA for patch: references previously did not call setIdentityLabels.
 // After a controller restart, deriveAppliedSet() scanned informer caches for
-// identity labels and found nothing for Patch resources — teardown
+// identity labels and found nothing for patch: resources — teardown
 // orphaned their fields (never released via release apply).
-func TestContribute_RegressionIdentityLabels(t *testing.T) {
+func TestPatch_RegressionIdentityLabels(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -1002,15 +1002,15 @@ func TestContribute_RegressionIdentityLabels(t *testing.T) {
 	for key, val := range resultLabels {
 		if strings.HasSuffix(key, labelSuffix) {
 			assert.Equal(t, "patch", val,
-				"Contribute resource must have role 'patch', not 'template'")
+				"Patch resource must have role 'patch', not 'template'")
 			foundContribLabel = true
 			break
 		}
 	}
 	assert.True(t, foundContribLabel,
-		"Contribute resource must have an identity label (suffix %s) for applied set discovery; "+
-			"without this, teardown after restart orphans contributed fields", labelSuffix)
-	t.Log("Contribute identity label found — resource is discoverable via deriveAppliedSet()")
+		"Patch resource must have an identity label (suffix %s) for applied set discovery; "+
+			"without this, teardown after restart orphans patched fields", labelSuffix)
+	t.Log("Patch identity label found — resource is discoverable via deriveAppliedSet()")
 }
 
 // TestDriftTimer_RegressionSkippedNodeReset proves that drift timers for
@@ -1146,8 +1146,8 @@ func TestDriftTimer_RegressionSkippedNodeReset(t *testing.T) {
 // Setup:
 //   - source ConfigMap: data.status = "pending"
 //   - upstream: Ref on source, readyWhen: ${upstream.data.status == 'active'}
-//   - relay: Own ConfigMap, data.status: ${upstream.data.status}
-//   - downstream: Own ConfigMap, propagateWhen: [${upstream.ready()}],
+//   - relay: template: ConfigMap, data.status: ${upstream.data.status}
+//   - downstream: template: ConfigMap, propagateWhen: [${upstream.ready()}],
 //     data.relayStatus: ${relay.data.status}
 //
 // Scenario:

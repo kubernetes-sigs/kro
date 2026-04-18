@@ -787,7 +787,7 @@ func TestIdempotentReReconcileZeroWrites(t *testing.T) {
 // claim: "If [propagation-hash matches], propagation stops."
 // (004-graph-reconciliation.md § Propagation, step 8)
 //
-// The test creates a 3-node chain: source (Watch) → middle (Own) → leaf (Own).
+// The test creates a 3-node chain: source (Watch) → middle (template:) → leaf (template:).
 // middle references source.data.version. leaf references middle.data.fromSource.
 // After convergence, the test changes source.data.irrelevant — a field middle
 // does NOT reference. The propagation-hash for source covers only the paths

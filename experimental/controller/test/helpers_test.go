@@ -328,7 +328,7 @@ func assertReferenceClassification(t *testing.T, obj *unstructured.Unstructured,
 // waitForReferenceClassification polls until a resource's identity label for
 // the named Graph matches want, or the context expires. Used when a
 // classification flip is in flight — the reconciler updates the label
-// asynchronously after a re-resolution event (e.g., Contribute→Own when the
+// asynchronously after a re-resolution event (e.g., Patch→Template when the
 // target's original owner is torn down).
 //
 // This helper only confirms the final state, not that a transition occurred.

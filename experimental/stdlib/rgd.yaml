@@ -61,7 +61,7 @@ spec:
         priority: integer
     spec:
       schema:
-        kind: string
+        kind: 'string | required=true pattern="^[A-Z][a-zA-Z0-9]{0,62}$"'
         apiVersion: string
         group: string | default=kro.run
         scope: string | default=Namespaced
@@ -128,7 +128,7 @@ spec:
               subresources:
                 status: {}
               schema:
-                openAPIV3Schema: ${simpleSchema.toOpenAPI(schema.spec.schema, schema.spec.resources)}
+                openAPIV3Schema: '${simpleSchema.toOpenAPI(schema.spec.schema, has(schema.spec.resources) ? schema.spec.resources : [])}'
               additionalPrinterColumns: '${has(schema.spec.schema.additionalPrinterColumns) ? schema.spec.schema.additionalPrinterColumns : []}'
 
     - id: watchInstances
@@ -276,7 +276,7 @@ spec:
           name: ${schema.metadata.name}
         status:
           state: '${validation.result.valid ? "Active" : "Inactive"}'
-          topologicalOrder: '${validation.result.valid ? schema.spec.resources.map(r, r.id) : []}'
+          topologicalOrder: '${validation.result.valid ? (has(schema.spec.resources) ? schema.spec.resources.map(r, r.id) : []) : []}'
           conditions:
             - type: Ready
               status: '${validation.result.valid ? "True" : "False"}'

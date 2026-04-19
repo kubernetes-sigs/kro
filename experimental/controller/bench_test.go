@@ -752,9 +752,9 @@ func buildForEachItems(n int) []any {
 	return items
 }
 
-// BenchmarkSpecHash measures the cost of computing the spec content hash —
-// the gate that enables compiled graph sharing. This must be significantly
-// cheaper than compilation to justify the indirection.
+// BenchmarkSpecHash measures the cost of computing the full spec content hash.
+// Used for revision diffing (diffRevisionNodes). The compilation key
+// (CompilationKey) is the structural subset that gates compiled graph sharing.
 func BenchmarkSpecHash(b *testing.B) {
 	for _, nodeCount := range []int{1, 5, 10, 25, 50} {
 		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {

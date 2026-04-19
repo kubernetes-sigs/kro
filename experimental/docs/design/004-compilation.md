@@ -26,8 +26,8 @@ The compiler has two objectives:
 The Watcher runs metadata-only informers against the API server and triggers the reconciler on
 resource or schema changes. The reconciler declares interest in new types it discovers during the DAG
 walk (fire-and-forget). When triggered, the reconciler requests compilation, which returns a cached
-artifact or recompiles if the type cache generation has advanced. The compiler is passive -- it
-resolves schemas and compiles expressions only when called.
+artifact or recompiles if the schema generation has advanced. The compiler is passive -- it resolves
+schemas and compiles expressions only when called.
 
 ## Type System
 
@@ -35,11 +35,11 @@ To type-check expressions, the compiler needs to know each node's type. Each nod
 how its type is resolved:
 
 - **`template:`, `patch:`, `ref:`, `watch:`** -- resolve OpenAPI schemas from the API server by
-  apiVersion/kind, cached in the [type cache](#type-cache).
+  apiVersion/kind. The resolved schema is baked into the compiled artifact.
 - **`def:`** -- infer types from template structure and expression return types. Literal fields are
   typed from their values. Expression fields (`${expr}`) are typed from the return type of the
   compiled expression, resolved during topological compilation (see [Algorithm](#algorithm)). The
-  inferred type is written to the type cache so downstream nodes see it.
+  inferred type is recorded in the artifact so downstream nodes see it.
 
 When a node's type cannot be resolved (unresolved CRDs, dynamic GVKs), the compiler declares it
 untyped and proceeds permissively. Any field access on an untyped node compiles without error. Types
@@ -50,25 +50,6 @@ The compiler validates assignment compatibility: each expression's return type m
 destination field's schema. `spec.replicas: ${someString}` is rejected because the schema expects an
 integer.
 
-### Type Cache
-
-All resolved types live in a type cache. Resource nodes populate the cache from the API server's
-OpenAPI schemas, resolved during compilation. Def nodes populate it during compilation (node ID to
-inferred type from structure and expression return types). forEach element types are derived from
-collection expressions during compilation. The cache is part of the compiled artifact.
-Reconciliation reads it -- it never re-resolves types.
-
-The cache tracks a single global generation counter. Any schema change (CRD installed, updated,
-removed) advances it. Staleness is one integer comparison: current generation exceeds the artifact's
-recorded generation. This over-invalidates -- a schema change to an unrelated CRD marks all artifacts
-stale -- but CRD changes are rare and recompilation is cheap relative to the alternative (per-entry
-versioning with dependency tracking). The hot path pays one comparison. Spec mutations invalidate the
-entire artifact unconditionally.
-
-For dynamic GVK nodes, the resolved GVK is also recorded per-node in the artifact. When the
-reconciler evaluates a dynamic GVK expression and gets a different type than what was compiled
-against, that node's compilation is stale regardless of the cache generation.
-
 ### Deferred Types
 
 Dynamic GVK nodes (`kind: ${expr}`) can't be typed at first compilation because the schema depends
@@ -76,8 +57,8 @@ on runtime data. The node is declared untyped and compiled permissively.
 
 When the reconciler evaluates the GVK expression and resolves a concrete type, it checks whether the
 resolved GVK matches what the artifact was compiled against. If the GVK is new or different, the
-artifact is stale and recompilation produces a fully-typed result. This time the type cache has the
-concrete schema, so the node types fully and downstream narrows through the topological walk.
+artifact is stale and recompilation produces a fully-typed result. This time the schema is available,
+so the node types fully and downstream narrows through the topological walk.
 
 If the GVK changes on a subsequent reconcile, the artifact is stale again and compilation fires with
 the new schema. This is rare -- dynamic GVKs typically stabilize -- but the system handles it the
@@ -85,7 +66,7 @@ same way every time.
 
 This is the same invalidation model as CRD changes. The difference is the detection path: CRD
 changes are detected by watches, dynamic GVK changes are detected at reconcile time. Both resolve
-schemas from the type cache. Both invalidate the artifact when the schema differs from what was
+schemas from the API server. Both invalidate the artifact when the schema differs from what was
 compiled against.
 
 ### Unsafe Types
@@ -101,9 +82,9 @@ access in systems languages, the compiler cannot help -- the type information do
 dependency to dependent, both forward and reverse adjacency. Topological order is stable with
 respect to `spec.nodes` ordering. Cycles rejected.
 
-**Compile in topological order.** For each node: resolve its type from the type cache, compile its
-expressions against all upstream types (already resolved), then write the narrowed type back to the
-cache so the next node sees it.
+**Compile in topological order.** For each node: resolve its type from the API server, compile its
+expressions against all upstream types (already resolved), then record the narrowed type in the
+artifact so the next node sees it.
 
 During expression compilation, the compiler extracts field paths from the AST and validates
 assignment compatibility. Two node types require special handling:
@@ -120,16 +101,32 @@ Field paths are (node, field chain) pairs: `${deploy.status.replicas}` yields
 last static select. These paths drive the hash mechanics in
 [005-reconciliation](005-reconciliation.md#hash-mechanics).
 
-The result is an immutable artifact: compiled programs, field paths, DAG topology, type cache, and
-the cache generation it was compiled against.
+The result is an immutable artifact: compiled programs, field paths, DAG topology, resolved types, and
+the schema generation it was compiled against. If compilation fails, no revision is created and
+`Compiled` is set to `False` on the Graph (see [001-graph](001-graph.md#conditions)); reconciliation
+continues on the previous revision if one exists.
 
-Compilation runs when its inputs change. **Spec mutation** is detected when `metadata.generation`
-changes -- the reconciler requests compilation, which compiles the new spec and produces a revision
-(see [002-revisions](002-revisions.md)). If compilation fails, no revision is created and `Compiled`
-is set to `False` on the Graph (see [001-graph](001-graph.md#conditions)); reconciliation continues
-on the previous revision if one exists. **Cache invalidation** is detected when the type cache
-generation advances -- at least one schema changed (CRD installed, updated, or removed) and the
-artifact is stale.
+## Compilation Cache
+
+The compiler does not run on every reconcile. Compiled artifacts are stored and reused until their
+inputs change.
+
+Artifacts are content-addressed by their structural inputs: expressions, node IDs, types, conditions.
+Concrete values are excluded. N forEach children with different values but identical structure share a
+single compiled artifact -- one compilation instead of N.
+
+Three events invalidate a cached artifact:
+
+- **Spec mutation** -- detected when `metadata.generation` changes. The reconciler compiles the new
+  spec and produces a new revision (see [002-revisions](002-revisions.md)).
+- **Schema change** -- a global generation counter tracks schema freshness. Any schema change (CRD
+  installed, updated, removed) advances it. Staleness is one integer comparison: current generation
+  exceeds the artifact's recorded generation. When stale, the next reconcile rebuilds the artifact
+  from scratch -- schemas are resolved fresh from the API server, types are re-inferred, and the
+  topology is reconstructed.
+- **Dynamic GVK change** -- for dynamic GVK nodes (`kind: ${expr}`), the resolved GVK is recorded
+  per-node. When the reconciler evaluates the expression and gets a different type than what was
+  compiled against, that node is stale regardless of the generation counter.
 
 ## Optimizations
 
@@ -162,25 +159,7 @@ errors in the updated template before children are re-created.
 
 Pre-compilation requires literal apiVersion/kind and a literal node list. When conditions aren't
 met, the child compiles independently at reconcile time. Missing CRDs in the child scope are handled
-the same way as at the parent level -- typed permissively, narrowed when the cache is populated.
+the same way as at the parent level -- typed permissively, narrowed when schemas become available.
 
 Errors from both mechanisms carry enough context to trace back to the exact location in the parent
 spec: parent node, deferral depth, child node, inner expression.
-
-### Structural Caching
-
-forEach stamps N child Graphs from the same template. Each child has different concrete values, but
-compilation ignores concrete values -- the compiled programs, DAG topology, and type environment are
-identical across all N children.
-
-A compilation key hashes only structural inputs: node IDs, node types, expression strings, literal
-apiVersion/kind values, forEach bindings, condition strings. Concrete values are excluded. Two specs
-with the same compilation key produce the same compiled output.
-
-The artifact splits into shared and per-instance parts. The shared artifact (programs, field paths,
-DAG topology, types) is keyed by compilation key and immutable. Per-instance state (concrete node
-bodies, scope, forEach state) is assembled from the shared artifact and the instance's spec.
-Instances are isolated -- mutations to one never affect another.
-
-For a Kind with 100 instances: 1 compilation + 99 cache hits. Shared artifacts are retained while
-referenced and cleaned up when the last reference is removed.

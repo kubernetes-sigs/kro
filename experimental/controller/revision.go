@@ -567,10 +567,10 @@ func diffRevisionNodes(active *GraphSpec, superseded []*unstructured.Unstructure
 }
 
 //   - Instance state: keyed by namespace/revision-name (per-Graph mutable state)
-//   - Compiled graph: keyed by spec content hash (shared across identical specs)
+//   - Compiled graph: keyed by compilation key (shared across structurally identical specs)
 //
 // For N identical child graphs (common in nested graph patterns with forEach),
-// this means 1 compilation + N-1 hash lookups instead of N compilations.
+// this means 1 compilation + N-1 key lookups instead of N compilations.
 func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (*GraphSpec, *instanceState, error) {
 	instanceKey := revision.GetNamespace() + "/" + revision.GetName()
 
@@ -578,7 +578,7 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 	// (steady-state reconcile). Check generation-based staleness per
 	// 004-compilation.md § Type Cache: "Staleness is one integer comparison."
 	if existing := r.Caches.get(instanceKey); existing != nil && existing.compiled != nil {
-		if r.TypeCache == nil || existing.compiled.typeCacheGen >= r.TypeCache.Generation() {
+		if r.SchemaGen == nil || existing.compiled.typeCacheGen >= r.SchemaGen.Generation() {
 			return existing.spec, existing, nil
 		}
 		// Type cache generation advanced since this artifact was compiled.
@@ -599,14 +599,14 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 	compilationKey := spec.CompilationKey()
 	compiled := r.Caches.getCompiled(compilationKey)
 	// Validate the cached artifact is not stale (generation check).
-	if compiled != nil && r.TypeCache != nil && compiled.typeCacheGen < r.TypeCache.Generation() {
+	if compiled != nil && r.SchemaGen != nil && compiled.typeCacheGen < r.SchemaGen.Generation() {
 		compiled = nil // stale — recompile
 	}
 	if compiled == nil {
 		// No shared compiled graph or stale — compile from scratch.
 		var cacheGen int64
-		if r.TypeCache != nil {
-			cacheGen = r.TypeCache.Generation()
+		if r.SchemaGen != nil {
+			cacheGen = r.SchemaGen.Generation()
 		}
 		compiled, err = compileGraphSpec(spec, resolveNodeTypes(spec.Nodes, r.SchemaResolver))
 		if err != nil {

@@ -12,8 +12,8 @@ they stop mattering.
 A Graph reconciles on:
 
 - **Changes** — detected via watch. This includes resources referenced by nodes, the Graph itself,
-  and CRDs (schema changes advance the type cache generation; the compiled artifact is stale on the
-  next reconcile; see [004-compilation](004-compilation.md#type-cache)).
+  and CRDs (schema changes advance the schema generation; the compiled artifact is stale on the
+  next reconcile; see [004-compilation](004-compilation.md#compilation-cache)).
 - **Resync** — per-node, jittered; corrects configuration drift. On startup, all resync timers are
   reset.
 

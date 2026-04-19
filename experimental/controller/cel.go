@@ -6,11 +6,11 @@
 // Graph spec is first seen (or when it changes). The reconcile loop only evaluates
 // pre-compiled programs — no compilation happens during the resource walk.
 //
-// Compiled graph sharing: compiled artifacts (CEL env, programs, DAG) are
-// content-addressed by spec hash. Multiple Graph instances with identical specs
-// (e.g., nested graphs stamped by forEach) share a single compiledGraph. Per-instance
-// mutable state (scope, input hashes, forEach state) is tracked separately in
-// instanceState, keyed by namespace/revision-name.
+// Compiled graph sharing: compiled artifacts (CEL env, programs, topology) are
+// content-addressed by compilation key. Multiple Graph instances with identical
+// structural inputs (e.g., nested graphs stamped by forEach) share a single
+// compiledGraph. Per-instance mutable state (scope, input hashes, forEach state)
+// is tracked separately in instanceState, keyed by namespace/revision-name.
 package graphcontroller
 
 import (
@@ -124,11 +124,16 @@ func isPending(err error) bool {
 // All fields are derived from the spec and are safe to share across multiple
 // Graph instances with identical specs (e.g., nested graphs stamped by forEach).
 //
-// Content-addressed by specHash: two Graph specs that produce the same hash
-// share a single compiledGraph. The DAG, CEL programs, and CEL environment are
-// all immutable after construction — cel.Program is thread-safe by the CEL spec,
-// and BuildDAG produces a read-only structure (verified: zero writes to DAG
-// fields during reconciliation).
+// Content-addressed by compilationKey: two Graph specs with the same structural
+// inputs (expressions, node IDs, types, conditions) share a single compiledGraph.
+// Concrete values (literal strings, numbers) are excluded from the key — forEach
+// children with different values share one compiled artifact.
+//
+// The DAG topology, CEL programs, and CEL environment are all immutable after
+// construction — cel.Program is thread-safe by the CEL spec, and BuildDAG
+// produces a read-only topology (verified: zero writes to topology fields
+// during reconciliation). Per-instance concrete node bodies are assembled
+// separately via assembleDAG.
 type compiledGraph struct {
 	compilationKey string                            // structural hash of compilation inputs (ignores concrete values)
 	env            *cel.Env                          // CEL environment (immutable after Extend)

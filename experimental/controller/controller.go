@@ -106,7 +106,7 @@ func gvkToGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
 type GraphReconciler struct {
 	Client         client.Client
 	SchemaResolver resolver.SchemaResolver // nil = all resource nodes fall back to dyn
-	TypeCache      *TypeCache              // nil = no caching; schemas resolved fresh each compilation
+	SchemaGen      *SchemaGeneration       // nil = no generation tracking; never triggers recompilation
 	Watcher        *WatchCoordinator       // nil = no dynamic watches (backward compat with existing tests)
 	Caches         *graphCaches            // per-revision compiled expression caches
 	Resources      *resourceCache          // per-resource full object cache
@@ -1218,8 +1218,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			if prevGVK, hadPrev := state.resolvedDynamicGVKs[node.ID]; hadPrev && prevGVK != *res.resolvedGVK {
 				// GVK changed — artifact is stale. Advance the type cache
 				// to trigger recompilation on the next reconcile.
-				if r.TypeCache != nil {
-					r.TypeCache.AdvanceGeneration()
+				if r.SchemaGen != nil {
+					r.SchemaGen.AdvanceGeneration()
 					logger.Info("dynamic GVK changed; triggering recompilation",
 						"node", node.ID, "previousGVK", prevGVK, "newGVK", *res.resolvedGVK)
 				}
@@ -1674,7 +1674,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 	reconciler := &GraphReconciler{
 		Client:         mgr.GetClient(),
 		SchemaResolver: schemaResolver,
-		TypeCache:      NewTypeCache(schemaResolver),
+		SchemaGen:      NewSchemaGeneration(),
 		Watcher:        coordinator,
 		Caches:         newGraphCaches(),
 		Resources:      newResourceCache(),
@@ -1702,8 +1702,8 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 		// generation counter]." Only advance when a genuinely unresolved GVK
 		// becomes available — not for every first-watched type (core types like
 		// ConfigMap are always resolvable and don't represent schema changes).
-		if reconciler.TypeCache != nil {
-			reconciler.TypeCache.AdvanceGeneration()
+		if reconciler.SchemaGen != nil {
+			reconciler.SchemaGen.AdvanceGeneration()
 		}
 		log.Log.Info("new type observed; recompiling affected graphs",
 			"gvr", gvr, "affectedGraphs", len(affected))

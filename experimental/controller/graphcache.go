@@ -1,8 +1,8 @@
 // graphcache.go manages the two-level cache for compiled graphs and per-instance state.
 //
-// The compiled cache is content-addressed by spec hash: N identical child
+// The compiled cache is content-addressed by compilation key: N identical child
 // graphs share one compiledGraph instead of each independently compiling
-// identical CEL programs and DAGs.
+// identical CEL programs and topologies.
 //
 // The instance cache is keyed by namespace/revision-name: each Graph CR
 // gets its own mutable state even when sharing a compiledGraph.
@@ -17,12 +17,12 @@ import (
 
 // graphCaches manages two cache layers:
 //   - compiled: content-addressed compiledGraph instances shared across all
-//     Graph instances with identical specs. Keyed by spec hash.
+//     Graph instances with identical structural inputs. Keyed by compilation key.
 //   - instances: per-Graph-instance mutable state. Keyed by namespace/revision-name.
 //
 // This separation means N identical child graphs (common in nested graph
 // patterns with forEach) share one compiledGraph instead of each independently
-// compiling identical CEL programs and DAGs.
+// compiling identical CEL programs and topologies.
 //
 // When evictUnresolved fires (CRD discovery), affected instanceStates have
 // their compiled pointer set to nil rather than being moved to a separate map.
@@ -70,7 +70,7 @@ func (gc *graphCaches) remove(key string) {
 	// Sweep: if no other instance references this compiledGraph, remove it.
 	// O(instances) per removal — acceptable for typical graph counts (<1000).
 	// If this becomes hot (e.g., 10K+ forEach items tearing down), replace
-	// with a reference count or reverse index from specHash → instance keys.
+	// with a reference count or reverse index from compilationKey → instance keys.
 	if inst != nil && inst.compiled != nil {
 		hash := inst.compiled.compilationKey
 		referenced := false
@@ -86,11 +86,11 @@ func (gc *graphCaches) remove(key string) {
 	}
 }
 
-// getCompiled returns a shared compiledGraph by spec hash, or nil if not cached.
-func (gc *graphCaches) getCompiled(specHash string) *compiledGraph {
+// getCompiled returns a shared compiledGraph by compilation key, or nil if not cached.
+func (gc *graphCaches) getCompiled(compilationKey string) *compiledGraph {
 	gc.mu.RLock()
 	defer gc.mu.RUnlock()
-	return gc.compiled[specHash]
+	return gc.compiled[compilationKey]
 }
 
 // CacheSizes returns the number of compiled graphs and instance states.

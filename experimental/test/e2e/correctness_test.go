@@ -14,7 +14,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// propagateWhen — design 001-graph, 004-graph-reconciliation
+// propagateWhen — design 001-graph, 005-reconciliation
 // ---------------------------------------------------------------------------
 
 // TestPropagateWhenGatesDataFlow proves that propagateWhen gates data flow to
@@ -647,7 +647,7 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 	ns := createNamespace(t)
 
 	// Pre-create a resource labeled as owned by a different Graph.
-	// Uses the DNS subdomain identity label format per 004-graph-reconciliation.md.
+	// Uses the DNS subdomain identity label format per 005-reconciliation.md.
 	preexisting := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -1036,7 +1036,7 @@ func TestExpressionErrorRejectsSpec(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestIdentityLabelsOnManagedResources verifies that managed resources carry
-// the DNS subdomain identity labels per 004-graph-reconciliation.md § API Server Interaction.
+// the DNS subdomain identity labels per 005-reconciliation.md § API Server Interaction.
 func TestIdentityLabelsOnManagedResources(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -2055,7 +2055,7 @@ func TestSupersededRevisionGC(t *testing.T) {
 // TestPropagateWhenOnForEach proves that propagateWhen interacts correctly
 // with forEach collections — a scalar node with propagateWhen referencing a
 // forEach parent gates data flow to downstream nodes (design 001-graph §
-// propagateWhen, design 004-graph-reconciliation § Propagation).
+// propagateWhen, design 005-reconciliation § Propagation).
 //
 // When propagateWhen is unsatisfied on a node that depends on a forEach,
 // downstream nodes that reference it retain their previous state. When
@@ -2365,7 +2365,7 @@ func TestStandaloneVsEmbeddedCELTypePreservation(t *testing.T) {
 // even when the dependency's output fields that the dependent references
 // haven't changed since the gate closed.
 //
-// This is the exact scenario from design 004-graph-reconciliation § Propagation
+// This is the exact scenario from design 005-reconciliation § Propagation
 // Event 1 follow-up: deploy's propagateWhen becomes satisfied, service gets
 // "Dep invalidated? Yes (deploy)" because the "gate changed" — regardless of
 // whether deploy.metadata.name or deploy.spec.selector.matchLabels changed.
@@ -2672,7 +2672,7 @@ func TestDeclarationError_ForEachVariableCollision(t *testing.T) {
 // resource gains a field that was previously absent, the dependent node
 // re-evaluates because the input-hash changed (absent sentinel → present value).
 //
-// Design 004-graph-reconciliation § Hash Mechanics:
+// Design 005-reconciliation § Hash Mechanics:
 //
 //	"Absent paths hash to a sentinel — absent to present is a change, not a skip."
 //

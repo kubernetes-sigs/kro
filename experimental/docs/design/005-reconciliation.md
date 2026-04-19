@@ -1,42 +1,21 @@
 # Graph Reconciliation
 
-How the controller reconciles a Graph. The DAG is the dependency structure between nodes. Watches
-bring external state in. Performance is structural — work is proportional to change, not to DAG
-size. Changes propagate forward through the DAG and stop when they stop mattering.
-
-## Compilation
-
-When a Graph's `metadata.generation` advances, the controller compiles the spec. If compilation
-fails, no revision is created; `Compiled` is set to `False` on the Graph (see
-[001-graph](001-graph.md) for condition details). Reconciliation continues on the previous revision
-if one exists.
-
-Compilation produces:
-
-- **DAG** — nodes and edges. One node per resource declaration, edges inferred from CEL expression
-  references. Both forward (dependency → dependent) and reverse adjacency are produced — propagation
-  walks the forward DAG, prune walks the reverse. Topological order is stable with respect to
-  `spec.nodes` ordering (min-heap Kahn's). Node types are the five keywords (`template:`,
-  `patch:`, `ref:`, `watch:`, `def:`) defined in [001-graph](001-graph.md) § type.
-- **Compiled CEL programs** — each expression is compiled once against a typed environment. Nodes
-  with a known kind resolve OpenAPI schemas; definitions infer types from template structure. Nodes
-  whose kind is a CEL expression compile untyped — the kind is not known until runtime. Nodes whose
-  kind is literal but unresolvable — a CRD not yet installed, an aggregated API not yet registered —
-  also compile untyped. When the kind becomes watchable, the Graph recompiles and type errors halt.
-- **GraphRevision** — an immutable snapshot of the spec, persisted for future diffs (see
-  [002-revisions](002-revisions.md)).
-
-When a new revision is compiled, the controller diffs it against the previous. Nodes that differ are
-triggered. Removed nodes become prune candidates.
+Reconciliation operates on a [compiled Graph](004-compilation.md) — per-node compiled programs, field
+path dependencies defining each node's input surface, and a DAG. When the
+[revision](002-revisions.md) changes, the controller diffs it against the previous — nodes that
+differ are triggered, removed nodes become prune candidates. Performance is structural — work is
+proportional to change, not to DAG size. Changes propagate forward through the DAG and stop when
+they stop mattering.
 
 ## Trigger
 
 A Graph reconciles on:
 
-- **Changes** — detected via watch. This includes resources referenced by nodes and the Graph
-  itself.
-- **Resync** — per-node, jittered; corrects configuration drift. On startup,
-  all resync timers are reset.
+- **Changes** — detected via watch. This includes resources referenced by nodes, the Graph itself,
+  and CRDs (schema changes advance the type cache generation; the compiled artifact is stale on the
+  next reconcile; see [004-compilation](004-compilation.md#type-cache)).
+- **Resync** — per-node, jittered; corrects configuration drift. On startup, all resync timers are
+  reset.
 
 Zero triggers → no work; the controller schedules the next reconcile at the earliest resync.
 
@@ -83,23 +62,23 @@ Ready and NotReady are both "applied and in scope." readyWhen is a health signal
 dependents. Pending and Blocked both represent uncertain absence — previous applied keys are
 retained, not safe to prune. Excluded propagates as Excluded (definitive absence — safe to prune).
 
-`def:` nodes can be Ready, NotReady (readyWhen unsatisfied), Pending (upstream dependency
-unresolved — the CEL expression references scope data that is not yet available), or Error (CEL
-evaluation failure). They do not produce Pending from their own execution (no API calls), but inherit
-it from unresolved upstream dependencies. They cannot be Conflict (no SSA) or SystemError (no API
-calls).
+`def:` nodes can be Ready, NotReady (readyWhen unsatisfied), Pending (upstream dependency unresolved
+— the CEL expression references scope data that is not yet available), or Error (CEL evaluation
+failure). They do not produce Pending from their own execution (no API calls), but inherit it from
+unresolved upstream dependencies. They cannot be Conflict (no SSA) or SystemError (no API calls).
 
-The Graph's Ready condition (see [001-graph](001-graph.md) § Conditions) rolls up node states into a
+The Graph's Ready condition (see [001-graph](001-graph.md#conditions)) rolls up node states into a
 single signal. When multiple failure states coexist, precedence is SystemError > Error > Conflict >
 Blocked > Pending > NotReady. SystemError surfaces first because it signals degraded infrastructure
 — deterministic errors may be artifacts of system instability, not real spec problems.
 
 ### Propagation
 
-The forward walk visits only triggered nodes and their affected downstream — untriggered nodes retain
-their previous state and scope entry.
+The forward walk visits only triggered nodes and their affected downstream — untriggered nodes
+retain their previous state and scope entry.
 
 A node is **triggered** when:
+
 - its resourceVersion in the informer store differs from the value recorded at last evaluation.
   Absence counts — a resource deleted since last evaluation (present → absent) or not yet evaluated
   (no recorded value) both trigger. nil != anything.
@@ -107,6 +86,7 @@ A node is **triggered** when:
 - the node changed in the latest compilation
 
 A node enters the frontier when all its dependencies have been processed AND either:
+
 - a dependency's output changed (propagation trigger), or
 - the node is triggered
 
@@ -133,9 +113,9 @@ At each frontier node:
    - input-hash mismatch → continue
    - input-hash match + resourceVersion unchanged → skip
    - input-hash match + resourceVersion changed → GET live object, re-evaluate readyWhen, check
-     output-hash. Template not re-evaluated. For `ref:` and `watch:`, this is the primary
-     evaluation path — their output depends on cluster state, not template inputs, so input-hash
-     stability doesn't imply output stability.
+     output-hash. Template not re-evaluated. For `ref:` and `watch:`, this is the primary evaluation
+     path — their output depends on cluster state, not template inputs, so input-hash stability
+     doesn't imply output stability.
    - Resync → continue
 
 4. **includeWhen**
@@ -150,8 +130,8 @@ At each frontier node:
      than re-listing — O(1) per event, not O(matching).
    - forEach parent — evaluate collection, determine children, dispatch changed children.
    - `def:` — resolve all values against the current scope. No API calls.
-   - `template:` — evaluate, hash desired state (apply-hash), compare against previous. Match →
-     omit write. Resync bypasses — apply unconditionally. Differs → SSA apply. 409 → Conflict.
+   - `template:` — evaluate, hash desired state (apply-hash), compare against previous. Match → omit
+     write. Resync bypasses — apply unconditionally. Differs → SSA apply. 409 → Conflict.
    - `patch:` — same as `template:`. 409 → Conflict. Auto-splits status subresource.
 
    The apply-hash within Resolve is the third hash layer — it skips the SSA write when the desired
@@ -359,8 +339,8 @@ The loop always completes. Children whose propagateWhen is unsatisfied are skipp
 continues to the next child.
 
 **Ordering.** Ready before NotReady, before error states. Within a readiness class, random. This
-avoids baking in a policy for which children go first — the propagateWhen expression controls
-what happens, ordering just determines who is evaluated next.
+avoids baking in a policy for which children go first — the propagateWhen expression controls what
+happens, ordering just determines who is evaluated next.
 
 ### Collection Ordering
 
@@ -383,15 +363,6 @@ unknown — prune is blocked and existing children persist until the next succes
 
 ## Optimizations
 
-### Compilation Caching
-
-Compilation output is content-addressed by a hash of the spec (FNV-64a of all compilation inputs).
-Multiple Graph instances with identical specs — common with nested Graphs stamped by forEach — share
-a single compiled output (DAG, CEL programs, reference paths). N identical child Graphs cost 1
-compilation + (N-1) hash lookups. Per-instance mutable state (scope, forEach state, resync timers) is
-isolated. When an instance is removed, the shared compilation is retained if other instances
-reference it and cleaned up when the last reference is removed.
-
 ### Hash Mechanics
 
 The input-hash and output-hash are ephemeral — recomputed on cold start. The apply-hash is persisted
@@ -400,15 +371,11 @@ without it cold start produces an N-write burst. Resync bypasses the apply-hash 
 unconditionally) but the output-hash still applies — if corrected output matches previous output,
 dependents are not added to the frontier.
 
-Input-hash and output-hash share the same reference paths. At compilation, the controller walks each
-expression's AST to extract reference chains — sequences of select operations rooted at a scope
-variable. `${deploy.status.availableReplicas}` yields `(deploy, status.availableReplicas)`.
-`${a.spec.x + b.data.y}` yields `(a, spec.x)` and `(b, data.y)`. When a chain contains a dynamic
-operation (function call, index, comprehension), the path terminates at the last static select and
-the value at that prefix is hashed in full:
-`${deploy.status.conditions.filter(c, c.type == 'Available')[0].status}` yields
-`(deploy, status.conditions)`. Absent paths hash to a sentinel — absent to present is a change, not
-a skip.
+Compilation extracts a field path per expression — a (node, field chain) pair identifying the
+observed state the expression depends on (see [004-compilation](004-compilation.md#algorithm)). The
+reconcile loop reads each path from the node's current state and hashes the value. Input-hash and
+output-hash share the same reference paths. Absent paths hash to a sentinel — absent to present is a
+change, not a skip.
 
 ### API Server Interaction
 
@@ -419,15 +386,15 @@ label per Graph-node pair:
     <node>.<graph>.<ns>.internal.kro.run/type = template | patch
 
 The label key encodes the node ID using DNS subdomain structure, enabling watch event routing and
-prune selection. Multiple Graphs targeting the same resource coexist without collision (2N labels for
-N Graphs). A generation label propagates `metadata.generation` for observability (see
+prune selection. Multiple Graphs targeting the same resource coexist without collision (2N labels
+for N Graphs). A generation label propagates `metadata.generation` for observability (see
 [002-revisions](002-revisions.md)).
 
 Each node has an in-memory resync timer with a jittered interval (default 30 minutes) — a
-consistency floor bounding how long any divergence can persist. On expiry, the node bypasses hash checks —
-propagateWhen still gates. Between resyncs, the hash layers eliminate all no-op writes. SSA corrects drift as a
-side effect. A skipped node does not reset its timer. Jitter decorrelates across nodes. On restart,
-timers start fresh — bounded burst (10k nodes over 30 minutes ≈ 5.5 applies/sec).
+consistency floor bounding how long any divergence can persist. On expiry, the node bypasses hash
+checks — propagateWhen still gates. Between resyncs, the hash layers eliminate all no-op writes. SSA
+corrects drift as a side effect. A skipped node does not reset its timer. Jitter decorrelates across
+nodes. On restart, timers start fresh — bounded burst (10k nodes over 30 minutes ≈ 5.5 applies/sec).
 
 The controller's operational inputs are the informer store and the DAG. Revision status is a
 write-only observation surface.
@@ -486,7 +453,7 @@ dependents. Conflates the health signal (which belongs in readyWhen) with the ga
 belongs at the consumer). Each consumer has different input tolerance — a blanket gate on the source
 removes that flexibility. readyWhen produces the signal, propagateWhen on the consumer consumes it.
 
-**Concurrent propagateWhen evaluation for forEach children.** The propagateWhen expression references
-the parent collection, which includes sibling state. Concurrent evaluation against a static snapshot
-produces incorrect budget enforcement — all children see the same state and all dispatch. Sequential
-evaluation with aggregate updates after each dispatch is required.
+**Concurrent propagateWhen evaluation for forEach children.** The propagateWhen expression
+references the parent collection, which includes sibling state. Concurrent evaluation against a
+static snapshot produces incorrect budget enforcement — all children see the same state and all
+dispatch. Sequential evaluation with aggregate updates after each dispatch is required.

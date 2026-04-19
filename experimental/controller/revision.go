@@ -362,7 +362,7 @@ func revisionGeneration(revision *unstructured.Unstructured) int64 {
 // the labels must reflect that revision's generation, not the failed one —
 // otherwise labels lie about which generation materialized the resource.
 //
-// Per 004-graph-reconciliation.md § API Server Interaction: identity labels
+// Per 005-reconciliation.md § API Server Interaction: identity labels
 // are "the receipt of what was applied." On a fallback reconcile, what's
 // being applied is the active revision; the receipt must match.
 func pickEffectiveGeneration(graph, activeRevision *unstructured.Unstructured, compilationErr error) int64 {
@@ -418,7 +418,7 @@ func deepCopyValue(v any) any {
 // generation. Returns the active revision to reconcile from, and all
 // superseded revisions for prune diffing.
 //
-// Per the design (004-graph-reconciliation): the prune candidate set is the union
+// Per the design (005-reconciliation): the prune candidate set is the union
 // of all superseded revisions' applied sets minus the active revision's
 // applied set. Returning all superseded revisions (not just the most recent)
 // prevents multi-hop transitions from orphaning resources.
@@ -519,7 +519,7 @@ func (r *GraphReconciler) findSupersededRevisions(ctx context.Context, graphName
 // set of node IDs that changed (or are new). Unchanged nodes retain their
 // previous state and are not triggered on revision transition.
 //
-// Per 004-graph-reconciliation.md § Revision transition: "Nodes that differ are
+// Per 005-reconciliation.md § Revision transition: "Nodes that differ are
 // triggered." The comparison covers all fields that affect a node's behavior:
 // Template, IncludeWhen, ReadyWhen, PropagateWhen, ForEach, Finalizes.
 //

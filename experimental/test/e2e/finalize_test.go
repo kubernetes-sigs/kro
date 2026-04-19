@@ -281,7 +281,7 @@ func TestFinalizesRejectsCELNames(t *testing.T) {
 //	"The resource is created only when the target becomes a prune candidate
 //	and must reach readyWhen before the target's removal completes."
 //
-// Design 004-graph-reconciliation § Finalization:
+// Design 005-reconciliation § Finalization:
 //
 //	"(2) wait for readyWhen, (3) DELETE target."
 //
@@ -718,7 +718,7 @@ func TestSupersededRevisionFinalizesGovernsPrompt(t *testing.T) {
 // Ready=True. The design requires that Ready=True means the desired state is
 // fully realized AND all artifacts of the previous desired state are gone.
 //
-// Design 004-graph-reconciliation § Finalization:
+// Design 005-reconciliation § Finalization:
 //
 //	"The prune walk continues. The finalizer resources are in the applied
 //	set but not in the desired state — they are prune candidates."
@@ -829,7 +829,7 @@ func TestFinalizer_RegressionCleanupLingersBeyondReady(t *testing.T) {
 
 	// THE KEY ASSERTION: when the Graph is Ready=True, the finalizer
 	// resource must already be cleaned up. The deferred-delete after the
-	// prune walk ensures same-cycle cleanup. Per 004-graph-reconciliation.md
+	// prune walk ensures same-cycle cleanup. Per 005-reconciliation.md
 	// § Finalization: "The finalizer resources are in the applied set but
 	// not in the desired state — they are prune candidates."
 	snapshotCheck := &unstructured.Unstructured{}
@@ -848,7 +848,7 @@ func TestFinalizer_RegressionCleanupLingersBeyondReady(t *testing.T) {
 // doesn't exist (deleted externally), the Graph's Ready condition message
 // surfaces that finalization was skipped.
 //
-// Design 004-graph-reconciliation § Finalization:
+// Design 005-reconciliation § Finalization:
 //
 //	"Target absent → Skip finalization → FinalizerSkipped status."
 //	"The Graph's status surfaces this: FinalizerSkipped with a message

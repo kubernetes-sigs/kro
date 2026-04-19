@@ -565,7 +565,7 @@ func BenchmarkPropagateStateLinearScan(b *testing.B) {
 // This runs once per node per reconcile (step 8 of Wind). Without this
 // benchmark, GC pressure from per-call allocations would be invisible.
 //
-// Per 004-graph-reconciliation.md § Hash Mechanics: "hash the output paths
+// Per 005-reconciliation.md § Hash Mechanics: "hash the output paths
 // downstream expressions reference [...] compare against in-memory
 // propagation-hash from previous evaluation."
 func BenchmarkHashSelfPaths(b *testing.B) {
@@ -601,7 +601,7 @@ func BenchmarkHashSelfPaths(b *testing.B) {
 
 // BenchmarkWalkSkip measures the cost of the O(1) skip check per untriggered
 // node during the DAG walk. The design commits: "Otherwise — skip. O(1) per
-// skipped node." (004-graph-reconciliation.md § Reconcile). This benchmark compiles
+// skipped node." (005-reconciliation.md § Reconcile). This benchmark compiles
 // a large DAG, builds the walk infrastructure, and measures the amortized
 // per-node cost of restoring previous scope + dispatching dependents.
 //

@@ -173,7 +173,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// finalizer relationships, deletion ordering, and an evaluator for
 	// template rendering. listRevisions returns ascending by generation,
 	// so the active revision is the last element. Per
-	// 004-graph-reconciliation.md § Teardown: "Ordering comes from the
+	// 005-reconciliation.md § Teardown: "Ordering comes from the
 	// active revision's DAG." Compiled BEFORE deletionOrder so the
 	// already-compiled DAG can drive ordering rather than re-parsing the
 	// live Graph spec.
@@ -191,7 +191,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			// stamping any finalizer resources we need to create.
 			teardownEval.effectiveGeneration = revisionGeneration(active)
 		} else {
-			// Per 004-graph-reconciliation.md § Teardown, ordering comes from
+			// Per 005-reconciliation.md § Teardown, ordering comes from
 			// the active revision's DAG. If compile fails at teardown — a
 			// CRD was uninstalled mid-life, a schema change invalidated the
 			// revision — surface it so operators know why ordering fell back
@@ -208,7 +208,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	deletedKeys := map[string]bool{}
 	deleteOrder, err := r.deletionOrder(graph, keys, teardownDAG)
 	if err != nil {
-		// Per the design (004-graph-reconciliation): teardown is blocked until
+		// Per the design (005-reconciliation): teardown is blocked until
 		// ordering is available — never degrade to unordered deletion.
 		logger.Error(err, "cannot determine deletion order, requeueing")
 		return ctrl.Result{RequeueAfter: systemErrorRequeueInterval}, nil
@@ -235,13 +235,13 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	//   - third-party field managers still writing the resource
 	//   - finalizer creation failed (can't build or apply the finalizer resource)
 	//   - finalizer created but never reaches readyWhen
-	// Per 004-graph-reconciliation.md § Finalization, these three causes have
+	// Per 005-reconciliation.md § Finalization, these three causes have
 	// different remediation actions; collapsing them into one message sends
 	// operators chasing the wrong problem.
 	var teardownBlockedReasons []string
 	// teardownNotes accumulates informational notes (e.g., FinalizerSkipped)
 	// that don't block teardown but are operationally useful. Per
-	// 004-graph-reconciliation.md § Finalization: "The Graph's status surfaces
+	// 005-reconciliation.md § Finalization: "The Graph's status surfaces
 	// this: FinalizerSkipped with a message naming the resource." The prune
 	// path already surfaces these via pruneNotes; teardown gets the same
 	// treatment so the signal is consistent across both deletion paths.
@@ -374,7 +374,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	}
 
 	// If any resource deletion was blocked, surface each distinct reason so
-	// operators can triage. Per 004-graph-reconciliation.md § Teardown:
+	// operators can triage. Per 005-reconciliation.md § Teardown:
 	// TeardownBlocked is not a skip — the target has data the user intended
 	// to finalize. A single "teardown blocked" message collapses three
 	// distinct causes (third-party field managers, finalizer creation

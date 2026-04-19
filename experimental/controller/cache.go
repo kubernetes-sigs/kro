@@ -250,7 +250,7 @@ var volatileMetadataFields = map[string]bool{
 // Only the specific field paths that the node's CEL expressions reference are
 // included (from node.DepPaths). For metadata paths, volatile fields are excluded.
 //
-// Per 004-graph-reconciliation.md § Hash Mechanics: "At graph compilation, the
+// Per 005-reconciliation.md § Hash Mechanics: "At graph compilation, the
 // controller walks each compiled expression's AST to extract reference chains."
 //
 // Returns "" if the node has no dependency paths to hash.
@@ -349,7 +349,7 @@ func hashFieldPath(hs *hashState, prefix string, fp FieldPath, obj map[string]an
 		}
 		val, exists := m[segment]
 		if !exists {
-			// Per 004-graph-reconciliation.md: "Absent paths hash to a fixed sentinel."
+			// Per 005-reconciliation.md: "Absent paths hash to a fixed sentinel."
 			hs.buf = append(hs.buf, "\x00__absent__\x00"...)
 			return
 		}

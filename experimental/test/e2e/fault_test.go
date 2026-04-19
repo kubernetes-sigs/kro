@@ -158,7 +158,7 @@ func TestWatchedResourceDeletedMidReconcile(t *testing.T) {
 
 // TestOwnedResourceDeletedExternally proves that when a resource the Graph
 // owns is externally deleted, the controller recreates it on the next
-// reconcile (design 004-graph-reconciliation § Propagation: SSA apply creates if absent).
+// reconcile (design 005-reconciliation § Propagation: SSA apply creates if absent).
 func TestOwnedResourceDeletedExternally(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -415,7 +415,7 @@ func TestConflictThenSpecChangeResolvesConflict(t *testing.T) {
 // that compiles but fails at runtime (division by zero) is classified as a
 // deterministic user error (Error) — not SystemError (transient/retriable).
 //
-// Per 004-graph-reconciliation.md § Node States: Definition nodes do not
+// Per 005-reconciliation.md § Node States: Definition nodes do not
 // produce SystemError (no API calls). CEL evaluation failures are Error.
 //
 // Two bugs were found:
@@ -484,7 +484,7 @@ func TestErrorClassification_RegressionCELRuntime(t *testing.T) {
 // NOT advanced. The next reconcile retries both main + status apply.
 // Once the status apply succeeds, steady state resumes.
 //
-// Design 004-graph-reconciliation § Propagation:
+// Design 005-reconciliation § Propagation:
 //
 //	"When a template targets both the main resource and the status subresource,
 //	the controller splits the apply into two operations."
@@ -671,7 +671,7 @@ func TestStatusSubresourceSplitApplyRevertOnFailure(t *testing.T) {
 // API server (injected via validating webhook) is classified as SystemError
 // and the controller recovers when the fault clears.
 //
-// Per 004-graph-reconciliation.md § Node States:
+// Per 005-reconciliation.md § Node States:
 //   - "Server errors (5xx/timeout/network) → NodeSystemError"
 //   - "Transient errors retry with exponential backoff [1s, resyncInterval]"
 //
@@ -780,7 +780,7 @@ func TestSystemError_WebhookFaultAndRecovery(t *testing.T) {
 // SystemError (5xx), its dependents inherit Blocked state — they are not
 // evaluated until the system error resolves.
 //
-// Per 004-graph-reconciliation.md § Propagation:
+// Per 005-reconciliation.md § Propagation:
 //
 //	"Any dep Blocked/Error/Conflict/SystemError → Blocked"
 //
@@ -913,7 +913,7 @@ func TestSystemError_DependentInheritsBlocked(t *testing.T) {
 // triggers re-evaluation, the expression succeeds, and the Graph converges
 // to Ready.
 //
-// Per 004-graph-reconciliation.md § Node States: "Deterministic errors (4xx)
+// Per 005-reconciliation.md § Node States: "Deterministic errors (4xx)
 // are not retried — same inputs produce the same failure." The recovery path
 // requires an input change (watch event) to trigger re-evaluation.
 func TestCELRuntimeError_RegressionRecovery(t *testing.T) {
@@ -995,7 +995,7 @@ func TestCELRuntimeError_RegressionRecovery(t *testing.T) {
 // a degraded state (Error or SystemError) but does not crash, does not
 // corrupt other resources, and can recover when the CRD is reinstalled.
 //
-// Per 004-graph-reconciliation.md § Teardown: "If the DAG is unavailable,
+// Per 005-reconciliation.md § Teardown: "If the DAG is unavailable,
 // prune is blocked — never degrade to unordered deletion." CRD deletion
 // makes the Kind unresolvable; the controller must handle this gracefully.
 func TestCRDDeletion_RegressionGracefulDegradation(t *testing.T) {

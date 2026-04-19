@@ -139,7 +139,7 @@ func (r *GraphReconciler) deleteByKeys(ctx context.Context, keys []string) {
 // references produce edges in the main DAG, and the DAG's topological
 // position is the sort key. This ensures that if finalizer B references
 // finalizer A's output, A is created and populated into scope before B
-// evaluates. Per 004-graph-reconciliation.md § Finalization: "dependencies
+// evaluates. Per 005-reconciliation.md § Finalization: "dependencies
 // among them determine ordering."
 func (r *GraphReconciler) runFinalization(
 	ctx context.Context,
@@ -522,7 +522,7 @@ func templateHasStatus(tmpl map[string]any) bool {
 // the choice is visible at the call site.
 //
 // driftCorrection bypasses the content-addressed apply hash check.
-// Per 004-graph-reconciliation.md § Reconcile: "The drift timer bypasses the
+// Per 005-reconciliation.md § Reconcile: "The drift timer bypasses the
 // template-hash check — apply unconditionally, because server-side
 // defaulters and mutating webhooks can change fields without changing
 // the desired state hash. SSA is idempotent; the apply corrects drift
@@ -535,7 +535,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		obj.SetNamespace(graph.GetNamespace())
 	}
 
-	// Stamp identity labels per 004-graph-reconciliation.md § API Server Interaction.
+	// Stamp identity labels per 005-reconciliation.md § API Server Interaction.
 	generationStr := fmt.Sprintf("%d", generation)
 	lbls := obj.GetLabels()
 	if lbls == nil {
@@ -885,7 +885,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 		// Check if it exists and is ours before deleting.
 		if err := r.Client.Get(ctx, nn, obj); err != nil {
-			// Per 004-graph-reconciliation.md § Finalization: "If the target resource
+			// Per 005-reconciliation.md § Finalization: "If the target resource
 			// does not exist in the cluster (creation failed, already deleted
 			// externally), there is nothing to finalize. The controller skips
 			// finalization and proceeds with cleanup."
@@ -935,7 +935,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 		// Finalization: if this target has finalizer nodes (from any revision),
 		// run the finalization sequence before deleting. Per
-		// 004-graph-reconciliation.md § Finalization, creation failure and
+		// 005-reconciliation.md § Finalization, creation failure and
 		// readyWhen failure are distinct TeardownBlocked causes — operators
 		// need to tell them apart to pick the right remediation.
 		var targetFinalizerKeys []string // keys from THIS target's finalization only
@@ -978,7 +978,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	}
 
 	// Process deferred deletes: finalizer resources whose targets were
-	// successfully deleted above. Per 004-graph-reconciliation.md §
+	// successfully deleted above. Per 005-reconciliation.md §
 	// Finalization: "The finalizer resources are in the applied set but
 	// not in the desired state — they are prune candidates."
 	r.deleteByKeys(ctx, deferredDeletes)
@@ -1122,7 +1122,7 @@ func pruneOrder(keys []string, dags []*DAG, defaultNS string, scope GVKScopeReso
 // topological order from the DAG. Delegates to pruneOrder for the actual
 // ordering logic.
 //
-// Per 004-graph-reconciliation.md § Teardown: "Ordering comes from the
+// Per 005-reconciliation.md § Teardown: "Ordering comes from the
 // active revision's DAG [...] If the revision was deleted (ownerReference
 // cascade race), the controller regenerates the DAG from spec."
 //

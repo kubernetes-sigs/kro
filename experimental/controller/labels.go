@@ -8,7 +8,7 @@
 //
 // The identity label key is unique per node-graph-namespace triple. Multiple
 // Graphs targeting the same resource coexist without collision — each Graph's
-// labels use its own key prefix. See 004-graph-reconciliation.md § API Server Interaction.
+// labels use its own key prefix. See 005-reconciliation.md § API Server Interaction.
 //
 // DNS subdomain format (253-character limit) requires that graph names, node
 // IDs, and namespaces are DNS labels (no dots). Parsing is unambiguous.
@@ -232,7 +232,7 @@ func forEachChildLabelPrefix(parentID, resName, resNamespace, kind, group, graph
 }
 
 // forEachChildIdentityLabelKey returns the identity label key for a forEach child.
-// Per 004-graph-reconciliation.md § Child Identity:
+// Per 005-reconciliation.md § Child Identity:
 //
 //	<parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/type
 //

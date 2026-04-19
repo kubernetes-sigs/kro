@@ -760,7 +760,7 @@ func TestGraphWithZeroTemplateNodes(t *testing.T) {
 // diamond DAG where one parent is Excluded (includeWhen=false) and another
 // is Pending (Watch target absent), the child inherits Excluded — not Blocked.
 //
-// Per 004-graph-reconciliation.md § Propagation: "Any dependency Excluded →
+// Per 005-reconciliation.md § Propagation: "Any dependency Excluded →
 // Excluded, regardless of other dependencies' states. Precedence where
 // multiple apply: Excluded > Blocked > Pending."
 //
@@ -889,7 +889,7 @@ func TestDiamondStatePrecedence_RegressionExcludedOverBlocked(t *testing.T) {
 // The distinction matters for operator triage: Blocked means "upstream error,
 // someone needs to act." Pending means "just waiting for an external resource."
 //
-// Per 004-graph-reconciliation.md § Propagation: "Any dependency Pending →
+// Per 005-reconciliation.md § Propagation: "Any dependency Pending →
 // inherit Pending."
 //
 // Bug: Pending was conflated with Blocked in the propagation path.
@@ -988,7 +988,7 @@ func TestPendingPropagatesAsPending_RegressionNotBlocked(t *testing.T) {
 //
 //	"Clear from applied set, no delete (for template:)."
 //
-// Design 004-graph-reconciliation § Prune:
+// Design 005-reconciliation § Prune:
 //
 //	"Conflict excluded from prune gate — 409 = resource exists = prunable."
 //
@@ -1108,7 +1108,7 @@ func TestConflictPruneRecoveryOnRevisionTransition(t *testing.T) {
 // SystemError (5xx) and Error (CEL failure) coexist on independent nodes,
 // the Graph's Ready condition reports SystemError — not Error.
 //
-// Per 004-graph-reconciliation.md and status.go deriveReadyCondition:
+// Per 005-reconciliation.md and status.go deriveReadyCondition:
 //
 //	Precedence: SystemError > Error > Conflict > Blocked > Pending > NotReady
 //

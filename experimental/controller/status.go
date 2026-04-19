@@ -47,7 +47,7 @@ type reconcileState struct {
 	// FinalizerSkipped emitted during prune when the target resource was
 	// already absent. Notes appear in the Ready condition message when the
 	// graph is otherwise healthy, so operators see the event without being
-	// misled by an Unknown/False status. Per 004-graph-reconciliation.md §
+	// misled by an Unknown/False status. Per 005-reconciliation.md §
 	// Finalization: "FinalizerSkipped is not an error — finalization was
 	// bypassed because there was nothing to finalize."
 	nodeNotes []string
@@ -117,7 +117,7 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 		msg := "One or more resources blocked by upstream errors"
 		// Surface TeardownBlocked reasons (third-party field managers,
 		// finalizer creation failure, finalizer not ready) so operators can
-		// pick the right remediation. Per 004-graph-reconciliation.md §
+		// pick the right remediation. Per 005-reconciliation.md §
 		// Finalization, the three causes need different responses — collapsing
 		// them into one message is observability without actionability.
 		if len(s.nodeErrors) > 0 {
@@ -145,7 +145,7 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	}
 	msg := fmt.Sprintf("All %d resources reconciled", s.ReadyCount)
 	// Surface informational notes (e.g., FinalizerSkipped) that don't
-	// constitute errors but are operationally useful. Per 004-graph-reconciliation.md
+	// constitute errors but are operationally useful. Per 005-reconciliation.md
 	// § Finalization: "The Graph's status surfaces this: FinalizerSkipped
 	// with a message naming the resource."
 	//

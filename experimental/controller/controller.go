@@ -55,7 +55,7 @@ var GraphGVK = schema.GroupVersionKind{
 }
 
 // DefaultDriftInterval is the per-node consistency floor interval.
-// Per 004-graph-reconciliation.md § Reconcile: "Each node has an in-memory
+// Per 005-reconciliation.md § Reconcile: "Each node has an in-memory
 // drift timer with a jittered interval (default 30 minutes)."
 // On expiry, the node bypasses the apply-hash check and applies
 // unconditionally.
@@ -77,7 +77,7 @@ const (
 	// in progress. The primary trigger is a watch event on the gate
 	// resource (when readyWhen's dependencies change). This timer ensures
 	// the gate is re-checked even if that watch event is slow.
-	// Per 004-graph-reconciliation.md § Finalization: "wait for readyWhen before
+	// Per 005-reconciliation.md § Finalization: "wait for readyWhen before
 	// deleting the target."
 	finalizationRequeueInterval = 5 * time.Second
 
@@ -164,7 +164,7 @@ type walkState struct {
 	propagationTriggered map[string]bool
 
 	// Watch incremental cache — drained once at walk start.
-	// Per 004-graph-reconciliation.md § Propagation.
+	// Per 005-reconciliation.md § Propagation.
 	collectionChanges map[string][]CollectionChange // nodeID → changes
 
 	// Walk-local tracking
@@ -535,7 +535,7 @@ func (w *walkState) tryDispatch(idx int) {
 		if !included {
 			// Excluded is definitive absence — the node's previous resources
 			// are a legitimate prune candidate, so keys are NOT carried
-			// forward. Per 004-graph-reconciliation.md § Prune: "Excluded
+			// forward. Per 005-reconciliation.md § Prune: "Excluded
 			// propagates as Excluded (definitive absence — safe to prune)."
 			w.plan.SetState(w.dag, node.ID, NodeExcluded)
 			w.notifyDependents(node.ID)
@@ -554,7 +554,7 @@ func (w *walkState) tryDispatch(idx int) {
 		// dirty: a previous incremental reconcile errored mid-merge,
 		// so the drained CollectionChanges were lost. Force a full
 		// re-List from the API server to recover authoritative state.
-		// Per 004-graph-reconciliation.md § Propagation: incremental
+		// Per 005-reconciliation.md § Propagation: incremental
 		// updates must not allow the cache to serve stale data beyond
 		// the drift interval when a recoverable error interrupted a
 		// merge.
@@ -725,7 +725,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	var compilationErr error // non-nil when current generation failed to compile
 	if err != nil {
 		// Compilation or materialization failure — no revision created for
-		// the current generation. Per 004-graph-reconciliation.md § Compilation:
+		// the current generation. Per 005-reconciliation.md § Compilation:
 		// "Reconciliation continues on the previous revision if one exists."
 		// Fall back to the most recent existing revision so healthy resources
 		// keep converging. A typo in the spec should not halt management.
@@ -779,11 +779,11 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	plan := NewPlanState(dag)
 
 	// Determine which nodes are triggered this reconcile.
-	// Per 004-graph-reconciliation.md § Reconcile: nodes evaluate on external
+	// Per 005-reconciliation.md § Reconcile: nodes evaluate on external
 	// triggers or propagation triggers. Otherwise O(1) skip.
 	triggered := make(map[string]bool, len(dag.Nodes))
 	// driftTriggered tracks nodes triggered specifically by the drift timer.
-	// Per 004-graph-reconciliation.md § Reconcile: "The drift timer bypasses the
+	// Per 005-reconciliation.md § Reconcile: "The drift timer bypasses the
 	// template-hash check — apply unconditionally." Drift-triggered nodes
 	// skip the step 3 evaluation hash check AND force the SSA Patch in step 5,
 	// because the question is "does live state match desired state?" not
@@ -815,7 +815,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				}
 			}
 		}
-		// Per 004-graph-reconciliation.md § Revision transition: "Nodes that
+		// Per 005-reconciliation.md § Revision transition: "Nodes that
 		// differ are triggered." On revision transition, transfer previous
 		// state from the superseded revision's cache for unchanged nodes.
 		// The evaluation hash check at Step 4 will then skip unchanged
@@ -885,7 +885,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// coordinator knows which specific items changed.
 		collectionChanges = watcher.drainCollectionChanges()
 		// Drift timer triggers: nodes whose consistency timer expired.
-		// Per 004-graph-reconciliation.md § Reconcile: "Each node has an
+		// Per 005-reconciliation.md § Reconcile: "Each node has an
 		// in-memory drift timer with a jittered interval (default 30
 		// minutes). On expiry, the node runs the full pipeline (steps
 		// 1-7). The drift timer bypasses the template-hash check —
@@ -1003,7 +1003,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// reconcile takes the full-list path to recover authoritative
 		// state from the API server. Without this, stale cache can
 		// persist for up to the drift interval (default 30m). Per
-		// 004-graph-reconciliation.md § Propagation.
+		// 005-reconciliation.md § Propagation.
 		if res.err != nil && node.Type() == NodeTypeWatch &&
 			len(res.collectionCacheUpdate) == 0 {
 			state.collectionDirty[node.ID] = true
@@ -1093,7 +1093,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// Dirty is cleared only when the worker took the full-List path
 		// — that's the only thing that recovers from a lost incremental
 		// merge. An incremental success against an already-stale cache
-		// does not address the staleness. Per 004-graph-reconciliation.md
+		// does not address the staleness. Per 005-reconciliation.md
 		// § Propagation.
 		for nodeID, cached := range res.collectionCacheUpdate {
 			state.collectionCache[nodeID] = cached
@@ -1127,7 +1127,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// dependents reference from this node's output, plus propagateWhen
 		// state. If the hash differs from the previous reconcile, mark
 		// dependents as having a propagation trigger.
-		// Per 004-graph-reconciliation.md § Propagation.
+		// Per 005-reconciliation.md § Propagation.
 		if res.state == NodeReady || res.state == NodeNotReady {
 			if observed := eval.scope[node.ID]; observed != nil {
 				propagateHash, err := hashSelfPaths(node, observed)
@@ -1210,7 +1210,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Retain previous keys for uncertain-absence nodes. These nodes were never
 	// dispatched to workers, so their keys aren't in appliedKeys yet.
 	// Without this, their managed resources would appear as prune candidates.
-	// Per 004-graph-reconciliation.md § Prune: "Pending and Blocked both represent
+	// Per 005-reconciliation.md § Prune: "Pending and Blocked both represent
 	// uncertain absence — previous applied keys are retained, not safe to prune."
 	//
 	// Belt-and-suspenders: the prune gate also blocks on these states, but key
@@ -1237,14 +1237,14 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	//
 	// The applied set is derived from the watch cache — all resources where
 	// the Graph's identity label exists in the controller's informer stores.
-	// Per 004-graph-reconciliation.md § Prune.
+	// Per 005-reconciliation.md § Prune.
 	//
 	// Prune candidates = appliedSet - currentKeySet.
 	// forEach scale-down, includeWhen toggles, and revision transitions all
 	// produce the same diff — one mechanism.
 	pruneOK := true
 	prunePending := false
-	// Per 004-graph-reconciliation.md § Prune: "Uncertain absence (Pending, Blocked,
+	// Per 005-reconciliation.md § Prune: "Uncertain absence (Pending, Blocked,
 	// Error, SystemError) blocks pruning — the resource might reappear once the
 	// blocker resolves."
 	pruneSafe := !summary.HasPending && !summary.HasBlocked && !summary.HasError && !summary.HasSystemError
@@ -1311,7 +1311,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			// Route structured results:
 			//   - blocked reasons become error text and gate Ready (HasBlocked set below)
 			//   - notes (FinalizerSkipped) become informational text, Ready stays True
-			// Per 004-graph-reconciliation.md § Finalization.
+			// Per 005-reconciliation.md § Finalization.
 			nodeErrors = append(nodeErrors, pruneBlockedReasons...)
 			nodeNotes = append(nodeNotes, pruneNotes...)
 			if len(pruneBlockedReasons) > 0 {
@@ -1328,7 +1328,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				// readyWhen not yet satisfied). Request a short requeue as a
 				// consistency floor — the primary trigger is a watch event on
 				// the gate resource, but under load that event may be slow.
-				// Per 004-graph-reconciliation.md § Finalization: the controller
+				// Per 005-reconciliation.md § Finalization: the controller
 				// waits for readyWhen before deleting the target. This floor
 				// ensures the gate is re-checked even if the watch event is
 				// delayed. Same principle as the NodePending 1s timer,
@@ -1377,7 +1377,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK && !prunePending)
 
 	// Reset drift timers for nodes that were dispatched to workers.
-	// Per 004-graph-reconciliation.md § Reconcile: "An SSA apply resets the
+	// Per 005-reconciliation.md § Reconcile: "An SSA apply resets the
 	// drift timer. A skipped write during normal evaluation (hash match
 	// from a watch event or propagation trigger) does not — the timer
 	// still fires to catch divergence that the hash cannot detect."
@@ -1417,7 +1417,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.resetDriftTimer(node.ID, 1*time.Second, 0)
 			delete(state.systemErrorBackoff, node.ID)
 		case NodeSystemError:
-			// Per 004-graph-reconciliation.md § Trigger: "Transient errors
+			// Per 005-reconciliation.md § Trigger: "Transient errors
 			// (5xx) retry with exponential backoff [1s, resyncInterval]."
 			// Double the backoff duration on each consecutive SystemError,
 			// capped at the drift interval. Initial backoff is 1s.
@@ -1434,7 +1434,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.systemErrorBackoff[node.ID] = backoff
 			state.resetDriftTimer(node.ID, backoff, 0)
 		case NodeError:
-			// Per 004-graph-reconciliation.md § Trigger: "Deterministic
+			// Per 005-reconciliation.md § Trigger: "Deterministic
 			// errors (4xx) are not retried — same inputs produce the same
 			// failure. They resolve via changes or resync." The drift timer
 			// is the resync path — the designed recovery mechanism for
@@ -1446,7 +1446,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	// Schedule next reconcile. Watch events handle convergence — no
 	// periodic polling. The drift timer is the consistency floor.
-	// Per 004-graph-reconciliation.md § Why Not: "Periodic full-graph resync
+	// Per 005-reconciliation.md § Why Not: "Periodic full-graph resync
 	// ... Informer resyncs trigger all nodes simultaneously — correlated,
 	// expensive. Per-node drift timers with jitter amortize resync."
 	//

@@ -61,7 +61,7 @@ type evaluator struct {
 	// before dispatching a Watch worker (cached list + collection
 	// changes). The worker merges changes into the cached list and returns
 	// the updated list via collectionUpdatedCache.
-	// Per 004-graph-reconciliation.md § Propagation: "When a single resource
+	// Per 005-reconciliation.md § Propagation: "When a single resource
 	// changes, update the cached list incrementally rather than re-listing
 	// — O(1) per event, not O(matching)."
 	collectionNodeID       string             // node ID for cache key (set by coordinator)
@@ -75,7 +75,7 @@ type evaluator struct {
 	// cleared only when a full re-List has successfully completed,
 	// because dirty means "drained incremental changes were lost, cache
 	// is suspect." An incremental-merge success with an already-stale
-	// cache does not address the staleness. Per 004-graph-reconciliation.md
+	// cache does not address the staleness. Per 005-reconciliation.md
 	// § Propagation.
 	collectionDidFullList bool
 }
@@ -181,7 +181,7 @@ func (e *evaluator) markUpdated(nodeID string, updated bool) {
 //
 // Returns false when the label is absent — missing labels mean unknown
 // provenance, and the safe direction is "needs update" (re-apply is
-// idempotent and self-healing). Per 004-graph-reconciliation.md § Propagation
+// idempotent and self-healing). Per 005-reconciliation.md § Propagation
 // Control: returning true on unknown provenance would inflate the "current"
 // count in propagateWhen filters, permitting faster rollout than intended.
 //
@@ -546,7 +546,7 @@ func copyScope(scope map[string]any) map[string]any {
 // available, but dependency detection for topological sort still works.
 //
 // The exprPaths map is computed from CEL ASTs during compilation in
-// compileGraphSpec. See 004-graph-reconciliation.md § Hash Mechanics.
+// compileGraphSpec. See 005-reconciliation.md § Hash Mechanics.
 func extractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][]FieldPath) (
 	dependencies map[string]bool,
 	depPaths map[string][]FieldPath,

@@ -215,7 +215,7 @@ func (m *WatchManager) KindFor(gvr schema.GroupVersionResource) string {
 // the specified graph's identity labels. Returns the applied set — all
 // resources this graph has written to the cluster, keyed by resource key.
 //
-// Per 004-graph-reconciliation.md: "The applied set is derived from the watch
+// Per 005-reconciliation.md: "The applied set is derived from the watch
 // cache — all resources where the Graph's identity label exists in the
 // controller's informer stores. Not persisted."
 func (m *WatchManager) deriveAppliedSet(graphName, namespace string) map[string]appliedEntry {
@@ -442,7 +442,7 @@ type WatchCoordinator struct {
 	// (namespace/name + event type) is recorded alongside the node ID trigger.
 	// This enables reconcileWatch to GET only changed items instead of
 	// re-listing the entire collection — O(changed) per reconcile, not
-	// O(matching). Per 004-graph-reconciliation.md § Propagation: "When a single
+	// O(matching). Per 005-reconciliation.md § Propagation: "When a single
 	// resource changes, update the cached list incrementally rather than
 	// re-listing — O(1) per event, not O(matching)."
 	// Protected by triggerMu (same lock as pendingTriggers — deposited and

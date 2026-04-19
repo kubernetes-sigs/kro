@@ -342,7 +342,7 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 
 // TestForEachReadyWhenDoesNotGateDownstream proves that per-item readyWhen on
 // forEach collections is a health signal, not a gate for dependents
-// (design 001-graph § readyWhen, design 004-graph-reconciliation § Propagation).
+// (design 001-graph § readyWhen, design 005-reconciliation § Propagation).
 //
 // Dependents proceed as soon as data is in scope regardless of readyWhen.
 // Graph status shows InProgress when items aren't ready, transitions to
@@ -591,7 +591,7 @@ func TestForEachReadyWhenPassesImmediately(t *testing.T) {
 // Inserting a new collection member must not disturb existing children —
 // their resourceVersions must be stable.
 //
-// Design 004-graph-reconciliation § Parent Expansion:
+// Design 005-reconciliation § Parent Expansion:
 //
 //	"Child identity is resource-key-based (stable under reordering)."
 //
@@ -758,7 +758,7 @@ func TestForEachChildIdentityStableUnderReordering(t *testing.T) {
 // propagateWhen is satisfied only when ALL children's propagateWhen pass.
 // Partial satisfaction (2/3 children ready) does not open the gate.
 //
-// Design 004-graph-reconciliation § forEach:
+// Design 005-reconciliation § forEach:
 //
 //	"The parent's propagateWhen is satisfied when all children's propagateWhen
 //	are satisfied."
@@ -918,7 +918,7 @@ func TestForEachPropagateWhenMultiChildAggregation(t *testing.T) {
 // TestForEachPartialFailureDoesNotPrune proves that when one forEach child's
 // template evaluation fails, previously-applied children are NOT pruned.
 //
-// Design 004-graph-reconciliation § forEach:
+// Design 005-reconciliation § forEach:
 //
 //	"If any identity expression cannot evaluate [...] Expansion does not
 //	proceed and existing children persist. Partial expansion is never
@@ -1084,7 +1084,7 @@ func TestForEachPartialFailureDoesNotPrune(t *testing.T) {
 // the same resource key (same name/namespace/GVK), the controller surfaces
 // an error rather than silently dropping one child.
 //
-// Design 004-graph-reconciliation § forEach:
+// Design 005-reconciliation § forEach:
 //
 //	"Resource keys must be unique across children of the same parent —
 //	validated at expansion time."
@@ -1180,7 +1180,7 @@ func TestForEach_RegressionDuplicateKeySilentOverwrite(t *testing.T) {
 // is evaluated per-item: all items must satisfy the condition for the parent
 // to be propagate-ready.
 //
-// Design 004-graph-reconciliation.md § forEach > Parent State:
+// Design 005-reconciliation.md § forEach > Parent State:
 //
 //	"The parent's propagateWhen is satisfied when all children's propagateWhen
 //	are satisfied."
@@ -2188,7 +2188,7 @@ func TestForEach_PropagateWhenPerItemOrderingStable(t *testing.T) {
 
 // TestForEach_PropagateWhenUpdatedGatesCreation proves that .updated() works
 // in a per-item propagateWhen expression. This is the rollout gating pattern
-// from 004-graph-reconciliation.md § Propagation Control.
+// from 005-reconciliation.md § Propagation Control.
 //
 // The gate expression uses .updated() as an aggregate alongside .ready():
 //

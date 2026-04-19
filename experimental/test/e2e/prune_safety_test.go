@@ -15,7 +15,7 @@ import (
 )
 
 // Prune safety tests prove that the controller does not prune resources when
-// their absence is uncertain (design 004-graph-reconciliation § Prune):
+// their absence is uncertain (design 005-reconciliation § Prune):
 //
 //   "Not all absent resources should be pruned:
 //    Uncertain absence — a dependency is Pending, Conflict, or Error. The
@@ -412,8 +412,8 @@ func TestPruneManagedCheckOnSpecChange(t *testing.T) {
 // state (409 from competing SSA field manager), dependent resources that
 // were previously applied are not pruned.
 //
-// Design 004-graph-reconciliation § Node States: Conflict blocks dependents.
-// Design 004-graph-reconciliation § Prune: "Uncertain absence — a dependency is
+// Design 005-reconciliation § Node States: Conflict blocks dependents.
+// Design 005-reconciliation § Prune: "Uncertain absence — a dependency is
 // Pending, Conflict, or Error."
 //
 // Setup:
@@ -500,7 +500,7 @@ func TestPruneSafetyConflictBlocksPrune(t *testing.T) {
 // This covers the case where the new revision has ZERO template: nodes — triggered
 // is empty, but the prune phase must still run to clean up superseded resources.
 //
-// Design 004-graph-reconciliation § Prune:
+// Design 005-reconciliation § Prune:
 //
 //	"After wind, diff the current key set against the applied set. Absent
 //	resources are prune candidates if their absence is definitive."
@@ -601,7 +601,7 @@ func TestPruneSweptOnSpecNodeRemoval(t *testing.T) {
 // metadata.namespace in the template are pruned correctly when removed from
 // the spec. The prune key must use the template's namespace, not the Graph's.
 //
-// Per 004-graph-reconciliation.md § Prune: resource keys encode
+// Per 005-reconciliation.md § Prune: resource keys encode
 // group/version/Kind/namespace/name.
 //
 // Bug: staticResourceKey always used the Graph's namespace, making
@@ -706,7 +706,7 @@ func TestPrune_RegressionCrossNamespace(t *testing.T) {
 // state (CEL evaluation failure), its previously-applied resource is NOT
 // pruned — the controller preserves it as uncertain absence.
 //
-// Per 004-graph-reconciliation.md § Prune:
+// Per 005-reconciliation.md § Prune:
 //
 //	"Uncertain absence — a dependency is Pending, Conflict, or Error.
 //	 The resource might appear once the blocker resolves. Not safe to prune."
@@ -850,7 +850,7 @@ func TestPruneSafetyErrorBlocksPrune(t *testing.T) {
 // SystemError (5xx from webhook), its previously-applied resource is NOT
 // pruned — the controller preserves it as uncertain absence.
 //
-// Per 004-graph-reconciliation.md § Prune:
+// Per 005-reconciliation.md § Prune:
 //
 //	"Uncertain absence — a dependency is Pending, Conflict, or Error.
 //	 The resource might appear once the blocker resolves. Not safe to prune."

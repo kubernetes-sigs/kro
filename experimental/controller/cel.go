@@ -377,7 +377,7 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 			return nil, fmt.Errorf("checking expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
 		}
 		// Extract field paths from the AST before creating the program.
-		// Per 004-graph-reconciliation.md § Hash Mechanics: "At graph compilation,
+		// Per 005-reconciliation.md § Hash Mechanics: "At graph compilation,
 		// the controller walks each compiled expression's AST to extract
 		// reference chains." One walk per expression, at compile time.
 		exprPaths[expr] = extractFieldPathsFromAST(ast.NativeRep().Expr(), scopeVars, nil)
@@ -603,7 +603,7 @@ func celSimpleSchemaFunction() []cel.EnvOption {
 //
 // .updated() returns whether a node's resource is on the latest graph
 // generation. Per 001-graph.md § CEL Functions: ".updated() — true when the
-// node is on the latest graph generation." Per 004-graph-reconciliation.md
+// node is on the latest graph generation." Per 005-reconciliation.md
 // § Propagation Control: used in propagateWhen for forEach rollout gating.
 //
 // Three paths determine __updated:

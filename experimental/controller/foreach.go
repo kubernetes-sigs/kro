@@ -137,7 +137,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	var currentOrder []string
 	for _, item := range items {
 		id := forEachItemIdentity(item)
-		// Per 004-graph-reconciliation.md § forEach: identity must be
+		// Per 005-reconciliation.md § forEach: identity must be
 		// unique across items. Duplicate identities silently drop one
 		// item (map overwrite) — that's data loss, not dedup.
 		if _, exists := currentItems[id]; exists {
@@ -225,7 +225,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				// Re-stamp __updated: carried-forward items retain their
 				// generation label from when they were last applied. Compare
 				// against effectiveGeneration to determine if this item is
-				// on the latest generation. Per 004-graph-reconciliation.md
+				// on the latest generation. Per 005-reconciliation.md
 				// § Propagation Control: gated items on an old generation
 				// show updated()=false ("Pending" or "Stuck" state).
 				if m, ok := prevScope.(map[string]any); ok {
@@ -351,7 +351,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			return nil, fmt.Errorf("forEach %s item: %w", node.ID, err)
 		}
 
-		// Stamp forEach child identity labels per 004-graph-reconciliation.md § Child Identity.
+		// Stamp forEach child identity labels per 005-reconciliation.md § Child Identity.
 		// Each child's label key encodes the full resource key:
 		//   <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/type
 		childObj := &unstructured.Unstructured{Object: evalMap}
@@ -360,7 +360,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		}
 		gvk := childObj.GroupVersionKind()
 
-		// Per 004-graph-reconciliation.md § forEach: "Resource keys must be
+		// Per 005-reconciliation.md § forEach: "Resource keys must be
 		// unique across children of the same parent — validated at expansion
 		// time." Detect duplicate resource keys before any apply. Without
 		// this, the second item silently overwrites the first in the identity
@@ -388,7 +388,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeTemplate, eval.effectiveGeneration, driftCorrection)
 		}
 		if err != nil {
-			// Per 004-graph-reconciliation.md § Parent State: track per-child errors
+			// Per 005-reconciliation.md § Parent State: track per-child errors
 			// for proper state aggregation. Don't fail fast on the first error.
 			childErrors = append(childErrors, err)
 			logger.V(1).Info("forEach child error", "node", node.ID, "item", id, "error", err)
@@ -440,7 +440,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	// Record updated collection for next reconcile's diff.
 	eval.forEachNewItems[cacheKey] = items
 
-	// Per 004-graph-reconciliation.md § Parent State: derive parent state from children.
+	// Per 005-reconciliation.md § Parent State: derive parent state from children.
 	// Error states take precedence over Pending; deterministic errors (Error)
 	// take precedence over transient errors (SystemError, Conflict).
 	//
@@ -629,7 +629,7 @@ func forEachItemUnchangedCached(cachedPrevHash string, current any, contextHash 
 }
 
 // highestPriorityChildError returns the highest-priority error from a list
-// of forEach child errors. Per 004-graph-reconciliation.md § Parent State:
+// of forEach child errors. Per 005-reconciliation.md § Parent State:
 // "Deterministic errors (Error) take precedence over transient errors
 // (SystemError, Conflict) — if any child's failure is deterministic,
 // retrying cannot resolve the parent."

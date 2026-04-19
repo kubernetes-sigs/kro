@@ -168,7 +168,7 @@ Before deleting a `template:` resource, the controller checks managedFields for 
 resource's existence. The condition message names the blocking manager. During prune, the resource
 stays in the applied set until the other manager releases. During teardown, the Graph's finalizer
 holds. Applied set tracking and teardown ordering are defined in
-[004-graph-reconciliation](004-graph-reconciliation.md).
+[005-reconciliation](005-reconciliation.md).
 
 ## Why Not
 

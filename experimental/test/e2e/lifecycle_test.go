@@ -16,7 +16,7 @@ import (
 
 // TestFullLifecycle proves the complete create → verify → update → verify →
 // delete → cleanup lifecycle for a Graph with dependent resources
-// (design 001-graph § Object, design 004-graph-reconciliation § Reconcile).
+// (design 001-graph § Object, design 005-reconciliation § Reconcile).
 //
 // Verifies: server-assigned field flow through CEL, spec update triggers
 // re-evaluation, and Graph deletion removes the finalizer after teardown.
@@ -525,7 +525,7 @@ func TestPendingChain(t *testing.T) {
 
 // TestForEachCollectionScaleUpDown proves forEach with Watch: adding
 // or removing collection members creates or prunes stamped resources
-// (design 004-graph-reconciliation § forEach).
+// (design 005-reconciliation § forEach).
 func TestForEachCollectionScaleUpDown(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -735,7 +735,7 @@ func TestIncludeWhenToggle(t *testing.T) {
 // the Patch), but the drift timer bypasses the hash check and applies
 // unconditionally, restoring managed fields to the desired state.
 //
-// Per 004-graph-reconciliation.md § Reconcile: "The drift timer bypasses the
+// Per 005-reconciliation.md § Reconcile: "The drift timer bypasses the
 // template-hash check — apply unconditionally, because server-side
 // defaulters and mutating webhooks can change fields without changing
 // the desired state hash. SSA is idempotent; the apply corrects drift
@@ -796,7 +796,7 @@ func TestDriftCorrectedByTimer(t *testing.T) {
 	// timer fires after the shortened interval (2s) and applies unconditionally,
 	// correcting the drift.
 	//
-	// Per 004-graph-reconciliation.md § Reconcile: "The drift timer bypasses the
+	// Per 005-reconciliation.md § Reconcile: "The drift timer bypasses the
 	// template-hash check — apply unconditionally."
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}

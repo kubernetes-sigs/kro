@@ -56,7 +56,7 @@ type DAG struct {
 // BuildDAG constructs a dependency graph from a node list.
 // exprPaths contains pre-extracted field paths from CEL ASTs (computed during
 // compilation in compileGraphSpec). These replace string-scanning with AST-walked
-// field paths per 004-graph-reconciliation.md § Hash Mechanics.
+// field paths per 005-reconciliation.md § Hash Mechanics.
 // Returns an error if the dependency graph contains a cycle (ErrCircularDependency).
 // Topological order is computed via Kahn's algorithm with a min-heap keyed by
 // declaration index, so independent nodes preserve their spec.nodes ordering.

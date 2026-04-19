@@ -24,7 +24,7 @@ import (
 // NodeType is a parse-time property of the node; no runtime resolution.
 //
 // driftCorrection is true when the node was triggered by the drift timer.
-// Per 004-graph-reconciliation.md § Reconcile: drift-triggered nodes bypass the
+// Per 005-reconciliation.md § Reconcile: drift-triggered nodes bypass the
 // apply-hash check and apply unconditionally via SSA.
 //
 // After dispatch, reconcileNode evaluates readyWhen as a post-dispatch step
@@ -127,7 +127,7 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 
 // reconcileWatch reads a collection of resources matching a selector into scope.
 //
-// Per 004-graph-reconciliation.md § Propagation: "When a single resource changes,
+// Per 005-reconciliation.md § Propagation: "When a single resource changes,
 // update the cached list incrementally rather than re-listing — O(1) per
 // event, not O(matching)." The evaluator carries the cached list and buffered
 // collection changes from the coordinator. On incremental path, only changed
@@ -324,7 +324,7 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 // on an internally-owned slice. This makes cache corruption structurally
 // impossible regardless of how callers handle the returned list.
 //
-// Per 004-graph-reconciliation.md § Propagation: "When a single resource
+// Per 005-reconciliation.md § Propagation: "When a single resource
 // changes, update the cached list incrementally rather than re-listing —
 // O(1) per event, not O(matching)."
 func mergeCollectionChanges(

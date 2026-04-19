@@ -1,0 +1,6 @@
+graph TD
+    apiserver[API Server] -->|"Metadata"| watcher[Watcher]
+    watcher -->|"Watch()"| apiserver
+    watcher -->|"Trigger()"| reconciler[Reconciler]
+    reconciler -->|"RegisterWatch(Kind)"| watcher
+    reconciler -->|"Compile(Graph)"| compiler[Compiler]

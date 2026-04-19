@@ -673,7 +673,7 @@ func TestDedicatedFieldManagerName(t *testing.T) {
 
 // TestIdempotentReReconcileZeroWrites proves that re-reconciling a converged
 // Graph with no spec change produces zero API writes to ALL managed resources
-// (design 004-graph-reconciliation § Propagation: change check hash match → skip).
+// (design 005-reconciliation § Propagation: change check hash match → skip).
 //
 // This extends TestSteadyStateNoStatusWrite by checking every managed resource's
 // resourceVersion, not just the Graph object. The most common production
@@ -785,7 +785,7 @@ func TestIdempotentReReconcileZeroWrites(t *testing.T) {
 
 // TestPropagationStopsOnIrrelevantChange verifies the design's core performance
 // claim: "If [propagation-hash matches], propagation stops."
-// (004-graph-reconciliation.md § Propagation, step 8)
+// (005-reconciliation.md § Propagation, step 8)
 //
 // The test creates a 3-node chain: source (Watch) → middle (template:) → leaf (template:).
 // middle references source.data.version. leaf references middle.data.fromSource.

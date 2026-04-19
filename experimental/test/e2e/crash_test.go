@@ -485,7 +485,7 @@ func TestRecoveryPartialTeardown(t *testing.T) {
 // state). This test exercises the case where the cluster has resources that
 // belong to different points in time AND the new revision is incomplete.
 //
-// Per 004-graph-reconciliation.md § Prune: "The applied set is the union of
+// Per 005-reconciliation.md § Prune: "The applied set is the union of
 // all identity-labeled resources in the informer store. Prune candidates =
 // applied set minus current output set."
 func TestRecoveryPartialRevisionTransition(t *testing.T) {

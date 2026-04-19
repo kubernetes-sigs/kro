@@ -25,7 +25,7 @@ type instanceState struct {
 	forEachItems       map[string][]any     // "nodeID/varName" → cached collection items
 
 	// Evaluation hashing state — retained across reconciles for change detection.
-	// See 004-graph-reconciliation.md § Propagation.
+	// See 005-reconciliation.md § Propagation.
 	previousEvalHashes map[string]string // node ID → last dependency evaluation hash
 	previousSelfHashes map[string]string // node ID → last self-section hash
 
@@ -52,11 +52,11 @@ type instanceState struct {
 	// Per-node drift timer expiry times. When expired, the node is triggered
 	// unconditionally — the consistency floor. Reset on successful evaluation.
 	// On restart, all timers start fresh with random jitter.
-	// Per 004-graph-reconciliation.md § Reconcile.
+	// Per 005-reconciliation.md § Reconcile.
 	driftTimers map[string]time.Time
 
 	// collectionCache holds the cached full-object list per Watch node.
-	// Per 004-graph-reconciliation.md § Propagation: "When a single resource
+	// Per 005-reconciliation.md § Propagation: "When a single resource
 	// changes, update the cached list incrementally rather than re-listing
 	// — O(1) per event, not O(matching)." On watch events, only the changed
 	// items are GET'd and merged. On drift timer, the cache is replaced via
@@ -83,7 +83,7 @@ type instanceState struct {
 	nodeReady map[string]bool
 
 	// systemErrorBackoff tracks the current exponential backoff duration per
-	// node in SystemError state. Per 004-graph-reconciliation.md § Trigger:
+	// node in SystemError state. Per 005-reconciliation.md § Trigger:
 	// "Transient errors (5xx) retry with exponential backoff [1s,
 	// resyncInterval]." Doubles on each consecutive SystemError, resets on
 	// any non-SystemError state.
@@ -122,7 +122,7 @@ func (s *instanceState) updateAppliedKeys(keys []string) {
 
 // resetDriftTimer sets the drift timer for a node to fire after the default
 // interval plus jitter. Called after a node is successfully evaluated.
-// Per 004-graph-reconciliation.md § Reconcile: "An SSA apply resets the drift timer."
+// Per 005-reconciliation.md § Reconcile: "An SSA apply resets the drift timer."
 func (s *instanceState) resetDriftTimer(nodeID string, interval, maxJitter time.Duration) {
 	var jitter time.Duration
 	if maxJitter > 0 {

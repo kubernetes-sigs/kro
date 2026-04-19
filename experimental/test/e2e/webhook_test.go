@@ -6,7 +6,7 @@
 // (5xx) to the controller — exercising the SystemError state machine path
 // that was previously untested at integration level.
 //
-// Per 004-graph-reconciliation.md § Node States: "Server errors (5xx/timeout/
+// Per 005-reconciliation.md § Node States: "Server errors (5xx/timeout/
 // network) → NodeSystemError. Retry with exponential backoff [1s, resyncInterval]."
 package graphcontroller_test
 

@@ -593,7 +593,7 @@ func TestRevisionActivation(t *testing.T) {
 // lands after the new revision starts propagating. The final state matches
 // the new revision with no intermediate churn.
 //
-// Design 004-graph-reconciliation § Propagation:
+// Design 005-reconciliation § Propagation:
 //
 //	"Takes precedence even on spec changes where all nodes enter the frontier."
 //
@@ -782,7 +782,7 @@ func TestRevisionTransitionAbandonsStaleEvaluation(t *testing.T) {
 // resources. The controller falls back to the most recent existing revision
 // and continues Phase 2.
 //
-// Design 004-graph-reconciliation.md § Compilation:
+// Design 005-reconciliation.md § Compilation:
 //
 //	"Reconciliation continues on the previous revision if one exists."
 func TestCompilationFailureFallsBackToPreviousRevision(t *testing.T) {
@@ -887,7 +887,7 @@ func TestCompilationFailureFallsBackToPreviousRevision(t *testing.T) {
 // transition, nodes whose spec did not change retain their data. Changed
 // nodes receive the updated spec.
 //
-// Design 004-graph-reconciliation.md § Revision transition:
+// Design 005-reconciliation.md § Revision transition:
 //
 //	"Nodes that differ are triggered. Removed nodes become prune candidates."
 func TestRevisionTransitionPreservesUnchangedNodes(t *testing.T) {

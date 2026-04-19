@@ -19,7 +19,7 @@ var (
 	// DriftTimerFiresTotal counts drift timer expirations that trigger an
 	// unconditional apply. Incremented in the trigger determination block
 	// when a per-node drift timer expires and bypasses the apply-hash
-	// check. Per 004-graph-reconciliation.md: "the drift timer bypasses the
+	// check. Per 005-reconciliation.md: "the drift timer bypasses the
 	// template-hash check — apply unconditionally."
 	DriftTimerFiresTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

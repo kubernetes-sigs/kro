@@ -335,6 +335,58 @@ func TestDefinitionFieldValidation(t *testing.T) {
 		assert.Contains(t, err.Error(), "a.typo")
 	})
 
+	t.Run("type refinement narrows def expression field from dyn to string", func(t *testing.T) {
+		// b.full is ${a.prefix + '-svc'} which returns string.
+		// After refinement, b.full is typed as string, not dyn.
+		// Verify: .startsWith() is a string method, not available on dyn.
+		spec := &GraphSpec{Nodes: []Node{
+			{ID: "a", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
+			{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}, nodeType: NodeTypeDef},
+		}}
+		compiled, err := compileGraphSpec(spec, nil)
+		require.NoError(t, err)
+
+		// The refined environment should type b.full as string.
+		parsed, issues := compiled.env.Parse("b.full.startsWith('app')")
+		require.Nil(t, issues.Err())
+		ast, issues := compiled.env.Check(parsed)
+		require.Nil(t, issues.Err(), "b.full should be string after refinement, supporting .startsWith()")
+		assert.Equal(t, "bool", ast.OutputType().String())
+	})
+
+	t.Run("type refinement catches field access error on narrowed string", func(t *testing.T) {
+		// b.full is narrowed to string. Accessing .nonExistentField is a
+		// type error on string that was invisible against dyn.
+		spec := &GraphSpec{Nodes: []Node{
+			{ID: "a", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
+			{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}, nodeType: NodeTypeDef},
+			{ID: "svc", Template: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "Service",
+				"metadata":   map[string]any{"name": "${b.full.nonExistentField}"},
+			}, nodeType: NodeTypeTemplate},
+		}}
+		_, err := compileGraphSpec(spec, nil)
+		require.Error(t, err, "b.full is string after narrowing; field access should fail")
+		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.Contains(t, err.Error(), "type refinement")
+	})
+
+	t.Run("type refinement allows valid narrowed access", func(t *testing.T) {
+		// b.full is narrowed to string. Using string operations should work.
+		spec := &GraphSpec{Nodes: []Node{
+			{ID: "a", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
+			{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}, nodeType: NodeTypeDef},
+			{ID: "svc", Template: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "Service",
+				"metadata":   map[string]any{"name": "${b.full.upperAscii()}"},
+			}, nodeType: NodeTypeTemplate},
+		}}
+		_, err := compileGraphSpec(spec, nil)
+		require.NoError(t, err, "b.full is string after narrowing; string methods should work")
+	})
+
 	t.Run("readyWhen can access definition fields", func(t *testing.T) {
 		spec := &GraphSpec{Nodes: []Node{
 			{
@@ -366,8 +418,130 @@ func TestDefinitionFieldValidation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// extractLiteralGVK tests
+// forEach return-type validation tests
 // ---------------------------------------------------------------------------
+
+func TestForEachReturnTypeValidation(t *testing.T) {
+	t.Run("list expression accepted", func(t *testing.T) {
+		// A definition node producing a list, referenced by forEach.
+		spec := &GraphSpec{Nodes: []Node{
+			defNode("data", map[string]any{"items": []any{"a", "b"}}),
+			{
+				ID:       "worker",
+				ForEach:  &ForEachBinding{VarName: "item", Expr: "${data.items}"},
+				Def:      map[string]any{"name": "${item}"},
+				nodeType: NodeTypeDef,
+			},
+		}}
+		_, err := compileGraphSpec(spec, nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("string expression rejected", func(t *testing.T) {
+		// A definition node producing a string — forEach over a string
+		// is always wrong.
+		spec := &GraphSpec{Nodes: []Node{
+			defNode("data", map[string]any{"name": "hello"}),
+			{
+				ID:       "worker",
+				ForEach:  &ForEachBinding{VarName: "item", Expr: "${data.name}"},
+				Def:      map[string]any{"v": "${item}"},
+				nodeType: NodeTypeDef,
+			},
+		}}
+		_, err := compileGraphSpec(spec, nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.Contains(t, err.Error(), "must return a list")
+		assert.Contains(t, err.Error(), "worker")
+	})
+
+	t.Run("dyn expression accepted", func(t *testing.T) {
+		// An unresolved template node — typed as dyn. The compiler
+		// can't prove it's wrong, so it must accept it.
+		spec := &GraphSpec{Nodes: []Node{
+			templateNode("source", map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+			}),
+			{
+				ID:       "worker",
+				ForEach:  &ForEachBinding{VarName: "item", Expr: "${source}"},
+				Def:      map[string]any{"v": "${item}"},
+				nodeType: NodeTypeDef,
+			},
+		}}
+		_, err := compileGraphSpec(spec, nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("interpolated expression rejected", func(t *testing.T) {
+		// A forEach expression that's an interpolated string, not a
+		// standalone ${...}. Interpolation always produces a string.
+		spec := &GraphSpec{Nodes: []Node{
+			defNode("data", map[string]any{"items": []any{"a", "b"}}),
+			{
+				ID:       "worker",
+				ForEach:  &ForEachBinding{VarName: "item", Expr: "prefix-${data.items}"},
+				Def:      map[string]any{"v": "${item}"},
+				nodeType: NodeTypeDef,
+			},
+		}}
+		_, err := compileGraphSpec(spec, nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.Contains(t, err.Error(), "standalone")
+	})
+
+	t.Run("literal string rejected", func(t *testing.T) {
+		// A forEach expression with no ${...} at all.
+		spec := &GraphSpec{Nodes: []Node{
+			{
+				ID:       "worker",
+				ForEach:  &ForEachBinding{VarName: "item", Expr: "just a string"},
+				Def:      map[string]any{"v": "${item}"},
+				nodeType: NodeTypeDef,
+			},
+		}}
+		_, err := compileGraphSpec(spec, nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.Contains(t, err.Error(), "must contain")
+	})
+
+	t.Run("deferred expression skipped", func(t *testing.T) {
+		// A $${...} forEach is deferred to the child graph. The parent
+		// compiler must not reject it.
+		spec := &GraphSpec{Nodes: []Node{
+			defNode("data", map[string]any{"items": []any{"a", "b"}}),
+			{
+				ID:       "worker",
+				ForEach:  &ForEachBinding{VarName: "item", Expr: "$${data.items}"},
+				Def:      map[string]any{"v": "literal"},
+				nodeType: NodeTypeDef,
+			},
+		}}
+		_, err := compileGraphSpec(spec, nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("map expression rejected", func(t *testing.T) {
+		// A definition producing a map — forEach over a map is wrong.
+		spec := &GraphSpec{Nodes: []Node{
+			defNode("data", map[string]any{"kv": map[string]any{"a": "1"}}),
+			{
+				ID:       "worker",
+				ForEach:  &ForEachBinding{VarName: "item", Expr: "${data.kv}"},
+				Def:      map[string]any{"v": "${item}"},
+				nodeType: NodeTypeDef,
+			},
+		}}
+		_, err := compileGraphSpec(spec, nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.Contains(t, err.Error(), "must return a list")
+	})
+}
 
 func TestExtractLiteralGVK(t *testing.T) {
 	t.Run("literal GVK", func(t *testing.T) {
@@ -637,7 +811,7 @@ func TestEvictUnresolved(t *testing.T) {
 
 		// Create a compiled graph with unresolved GVKs.
 		unresolvedCompiled := &compiledGraph{
-			specHash:       "hash-unresolved",
+			compilationKey: "hash-unresolved",
 			unresolvedGVKs: []schema.GroupVersionKind{{Group: "example.com", Version: "v1", Kind: "Foo"}},
 		}
 		state := &instanceState{compiled: unresolvedCompiled}
@@ -645,7 +819,7 @@ func TestEvictUnresolved(t *testing.T) {
 
 		// Create a compiled graph without unresolved GVKs.
 		resolvedCompiled := &compiledGraph{
-			specHash: "hash-resolved",
+			compilationKey: "hash-resolved",
 		}
 		resolvedState := &instanceState{compiled: resolvedCompiled}
 		caches.set("default/other-graph-g00001", resolvedState)
@@ -685,7 +859,7 @@ func TestEvictUnresolved(t *testing.T) {
 	t.Run("no-op when no unresolved compilations", func(t *testing.T) {
 		caches := newGraphCaches()
 
-		resolvedCompiled := &compiledGraph{specHash: "hash-resolved"}
+		resolvedCompiled := &compiledGraph{compilationKey: "hash-resolved"}
 		caches.set("default/graph-g00001", &instanceState{compiled: resolvedCompiled})
 
 		// No unresolved compilations → no-op regardless of GVR.
@@ -707,7 +881,7 @@ func TestEvictUnresolved(t *testing.T) {
 		caches := newGraphCaches()
 
 		fooCompiled := &compiledGraph{
-			specHash: "hash-foo",
+			compilationKey: "hash-foo",
 			unresolvedGVKs: []schema.GroupVersionKind{
 				{Group: "example.com", Version: "v1", Kind: "Foo"},
 			},
@@ -715,7 +889,7 @@ func TestEvictUnresolved(t *testing.T) {
 		caches.set("default/foo-graph-g00001", &instanceState{compiled: fooCompiled})
 
 		barCompiled := &compiledGraph{
-			specHash: "hash-bar",
+			compilationKey: "hash-bar",
 			unresolvedGVKs: []schema.GroupVersionKind{
 				{Group: "example.com", Version: "v1", Kind: "Bar"},
 			},
@@ -827,4 +1001,88 @@ func TestRecompilationOnSchemaChange(t *testing.T) {
 	_, err = compileGraphSpec(graphSpec, newTypeInfo)
 	require.Error(t, err, "should fail — 'typo' is not a field on Widget.status")
 	assert.Contains(t, err.Error(), "typo")
+}
+
+// ---------------------------------------------------------------------------
+// Expression-to-field compatibility tests
+// ---------------------------------------------------------------------------
+
+func TestExprFieldCompat(t *testing.T) {
+	// Schema: spec.replicas is integer, spec.name is string.
+	deploySchema := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"apiVersion": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"kind":       {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"metadata":   {SchemaProps: spec.SchemaProps{Type: []string{"object"}}},
+				"spec": {
+					SchemaProps: spec.SchemaProps{
+						Type: []string{"object"},
+						Properties: map[string]spec.Schema{
+							"replicas": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+							"name":     {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+						},
+					},
+				},
+			},
+		},
+	}
+	deployGVK := schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	resolver := &stubResolver{schemas: map[schema.GroupVersionKind]*spec.Schema{
+		deployGVK: deploySchema,
+	}}
+
+	t.Run("string expression into string field accepted", func(t *testing.T) {
+		graphSpec := &GraphSpec{Nodes: []Node{
+			defNode("data", map[string]any{"appName": "myapp"}),
+			{ID: "deploy", Template: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata":   map[string]any{"name": "test"},
+				"spec":       map[string]any{"name": "${data.appName}"},
+			}, nodeType: NodeTypeTemplate},
+		}}
+		ts := resolveNodeTypes(graphSpec.Nodes, resolver)
+		_, err := compileGraphSpec(graphSpec, ts)
+		require.NoError(t, err)
+	})
+
+	t.Run("string expression into integer field rejected", func(t *testing.T) {
+		graphSpec := &GraphSpec{Nodes: []Node{
+			defNode("data", map[string]any{"count": "three"}),
+			{ID: "deploy", Template: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata":   map[string]any{"name": "test"},
+				"spec":       map[string]any{"replicas": "${data.count}"},
+			}, nodeType: NodeTypeTemplate},
+		}}
+		ts := resolveNodeTypes(graphSpec.Nodes, resolver)
+		_, err := compileGraphSpec(graphSpec, ts)
+		require.Error(t, err, "string expression into integer field should fail")
+		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.Contains(t, err.Error(), "replicas")
+		assert.Contains(t, err.Error(), "string")
+		assert.Contains(t, err.Error(), "integer")
+	})
+
+	t.Run("dyn expression into integer field accepted permissively", func(t *testing.T) {
+		// When the expression type is dyn, we can't prove it wrong.
+		graphSpec := &GraphSpec{Nodes: []Node{
+			templateNode("source", map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+			}),
+			{ID: "deploy", Template: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata":   map[string]any{"name": "test"},
+				"spec":       map[string]any{"replicas": "${source.spec.replicas}"},
+			}, nodeType: NodeTypeTemplate},
+		}}
+		ts := resolveNodeTypes(graphSpec.Nodes, resolver)
+		_, err := compileGraphSpec(graphSpec, ts)
+		require.NoError(t, err, "dyn expression should be accepted permissively")
+	})
 }

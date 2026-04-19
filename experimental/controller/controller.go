@@ -106,6 +106,7 @@ func gvkToGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
 type GraphReconciler struct {
 	Client         client.Client
 	SchemaResolver resolver.SchemaResolver // nil = all resource nodes fall back to dyn
+	TypeCache      *TypeCache              // nil = no caching; schemas resolved fresh each compilation
 	Watcher        *WatchCoordinator       // nil = no dynamic watches (backward compat with existing tests)
 	Caches         *graphCaches            // per-revision compiled expression caches
 	Resources      *resourceCache          // per-resource full object cache
@@ -143,6 +144,10 @@ type nodeResult struct {
 	// worker did not evaluate readiness (e.g., non-Watch or
 	// early-exit path).
 	nodeReadyUpdate *bool
+	// resolvedGVK carries the GVK resolved by a dynamic-GVK node's template
+	// evaluation. The coordinator uses it to detect staleness per
+	// 004-compilation.md § Deferred Types.
+	resolvedGVK *schema.GroupVersionKind
 }
 
 // walkState holds coordinator-local state for a single DAG walk.
@@ -621,6 +626,13 @@ func (w *walkState) tryDispatch(idx int) {
 				nodeReadyUpdate = &v
 			}
 		}
+		// Extract dynamic GVK resolution from worker.
+		var resolvedGVK *schema.GroupVersionKind
+		if we.dynamicGVKResolved != nil {
+			if gvk, ok := we.dynamicGVKResolved[n.ID]; ok {
+				resolvedGVK = &gvk
+			}
+		}
 		w.results <- nodeResult{
 			idx:                   idx,
 			keys:                  keys,
@@ -636,6 +648,7 @@ func (w *walkState) tryDispatch(idx int) {
 			collectionCacheUpdate: we.collectionCacheUpdate(),
 			collectionDidFullList: we.collectionDidFullList,
 			nodeReadyUpdate:       nodeReadyUpdate,
+			resolvedGVK:           resolvedGVK,
 		}
 	}(*node, workerEval, resolvedNodeType, isDrift)
 	w.inflight++
@@ -775,7 +788,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	eval := newEvaluator(state)
 	eval.effectiveGeneration = effectiveGeneration
-	dag := state.compiled.dag
+	dag := state.dag
 	plan := NewPlanState(dag)
 
 	// Determine which nodes are triggered this reconcile.
@@ -1193,6 +1206,27 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.previousEvalHashes[node.ID] = evalHash
 		}
 
+		// Merge dynamic GVK resolutions. Per 004-compilation.md § Deferred Types:
+		// "When the reconciler evaluates a dynamic GVK expression and gets a
+		// different type than what was compiled against, that node's compilation
+		// is stale." Compare against previous reconcile's resolved GVK — if
+		// different, advance the type cache generation to trigger recompilation.
+		if res.resolvedGVK != nil {
+			if state.resolvedDynamicGVKs == nil {
+				state.resolvedDynamicGVKs = make(map[string]schema.GroupVersionKind)
+			}
+			if prevGVK, hadPrev := state.resolvedDynamicGVKs[node.ID]; hadPrev && prevGVK != *res.resolvedGVK {
+				// GVK changed — artifact is stale. Advance the type cache
+				// to trigger recompilation on the next reconcile.
+				if r.TypeCache != nil {
+					r.TypeCache.AdvanceGeneration()
+					logger.Info("dynamic GVK changed; triggering recompilation",
+						"node", node.ID, "previousGVK", prevGVK, "newGVK", *res.resolvedGVK)
+				}
+			}
+			state.resolvedDynamicGVKs[node.ID] = *res.resolvedGVK
+		}
+
 		// Check dependents: dispatch any whose dependencies are now satisfied.
 		for _, depIdx := range dag.Dependents[node.ID] {
 			walk.tryDispatch(depIdx)
@@ -1299,7 +1333,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			}
 			// Compile superseded revisions to access their finalizer relationships.
 			if _, revState, compileErr := r.compileRevision(rev); compileErr == nil {
-				supersededDAGs[rev.GetName()] = revState.compiled.dag
+				supersededDAGs[rev.GetName()] = revState.dag
 			}
 		}
 
@@ -1640,6 +1674,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 	reconciler := &GraphReconciler{
 		Client:         mgr.GetClient(),
 		SchemaResolver: schemaResolver,
+		TypeCache:      NewTypeCache(schemaResolver),
 		Watcher:        coordinator,
 		Caches:         newGraphCaches(),
 		Resources:      newResourceCache(),
@@ -1662,6 +1697,13 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 		affected := reconciler.Caches.evictUnresolved(gvr)
 		if len(affected) == 0 {
 			return
+		}
+		// Per 004-compilation.md § Type Cache: "Any schema change advances [the
+		// generation counter]." Only advance when a genuinely unresolved GVK
+		// becomes available — not for every first-watched type (core types like
+		// ConfigMap are always resolvable and don't represent schema changes).
+		if reconciler.TypeCache != nil {
+			reconciler.TypeCache.AdvanceGeneration()
 		}
 		log.Log.Info("new type observed; recompiling affected graphs",
 			"gvr", gvr, "affectedGraphs", len(affected))

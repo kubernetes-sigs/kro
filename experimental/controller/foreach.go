@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -43,11 +44,20 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 		snap[reservedNodeReadyVar] = workerReady
 	}
 
+	// Propagate dynamic GVK tracking to the worker if the compiled graph has
+	// dynamic nodes. Each worker gets its own map (no sharing) — the resolved
+	// GVK is returned via nodeResult.resolvedGVK.
+	var workerDynamicGVK map[string]schema.GroupVersionKind
+	if e.dynamicGVKResolved != nil {
+		workerDynamicGVK = make(map[string]schema.GroupVersionKind, 1)
+	}
+
 	worker := &evaluator{
 		compiled:            e.compiled,
 		scope:               snap,
 		effectiveGeneration: e.effectiveGeneration,
 		nodeReady:           workerReady,
+		dynamicGVKResolved:  workerDynamicGVK,
 		forEachNewScope:     map[string]map[string]any{},
 		forEachNewKeys:      map[string]map[string][]string{},
 		forEachNewHashes:    map[string]map[string]string{},
@@ -433,11 +443,23 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	}
 
 	// Record updated state for coordinator to merge back.
+	if eval.forEachNewScope == nil {
+		eval.forEachNewScope = map[string]map[string]any{}
+	}
 	eval.forEachNewScope[node.ID] = newItemScope
+	if eval.forEachNewKeys == nil {
+		eval.forEachNewKeys = map[string]map[string][]string{}
+	}
 	eval.forEachNewKeys[node.ID] = newItemKeys
+	if eval.forEachNewHashes == nil {
+		eval.forEachNewHashes = map[string]map[string]string{}
+	}
 	eval.forEachNewHashes[node.ID] = newItemHashes
 
 	// Record updated collection for next reconcile's diff.
+	if eval.forEachNewItems == nil {
+		eval.forEachNewItems = map[string][]any{}
+	}
 	eval.forEachNewItems[cacheKey] = items
 
 	// Per 005-reconciliation.md § Parent State: derive parent state from children.

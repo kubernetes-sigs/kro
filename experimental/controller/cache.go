@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"hash/fnv"
 	"sort"
 	"strconv"
@@ -250,8 +251,9 @@ var volatileMetadataFields = map[string]bool{
 // Only the specific field paths that the node's CEL expressions reference are
 // included (from node.DepPaths). For metadata paths, volatile fields are excluded.
 //
-// Per 005-reconciliation.md § Hash Mechanics: "At graph compilation, the
-// controller walks each compiled expression's AST to extract reference chains."
+// Field paths are extracted at compile time (see 004-compilation.md § Algorithm,
+// Phase 4 step 5). Hashing uses them at reconcile time per
+// 005-reconciliation.md § Hash Mechanics.
 //
 // Returns "" if the node has no dependency paths to hash.
 func hashNodeInputs(node *Node, scope map[string]any) (string, error) {
@@ -522,4 +524,91 @@ func (s *GraphSpec) Hash() string {
 	}
 
 	return fmt.Sprintf("%016x", h.Sum64())
+}
+
+// CompilationKey returns a structural hash of the spec that considers only
+// inputs affecting compilation output. Unlike Hash(), which is a full content
+// hash, CompilationKey ignores concrete values (string literals without
+// expressions, numbers, booleans) that don't influence the compiled CEL
+// programs, DAG, or type environment.
+//
+// Per 004-compilation.md § Structural Compilation Caching: "Two specs with
+// the same compilation key produce the same compiled output."
+func (s *GraphSpec) CompilationKey() string {
+	h := fnv.New64a()
+
+	hashField := func(data []byte) {
+		binary.Write(h, binary.LittleEndian, int64(len(data))) //nolint:errcheck
+		h.Write(data)
+	}
+
+	for _, node := range s.Nodes {
+		// Node ID — always compilation-relevant (CEL variable name).
+		hashField([]byte(node.ID))
+
+		// Node type — affects how the body is processed.
+		binary.Write(h, binary.LittleEndian, int64(node.Type())) //nolint:errcheck
+
+		// Body: hash only compilation-relevant strings (expressions,
+		// literal apiVersion/kind for schema resolution). Concrete
+		// values without expressions are excluded.
+		if node.TemplateExpr != "" {
+			hashField([]byte(node.TemplateExpr))
+		} else if body := node.Body(); body != nil {
+			hashCompilationRelevantFields(h, hashField, body)
+		}
+
+		// Finalizes
+		hashField([]byte(node.Finalizes))
+
+		// ForEach — compilation-relevant (variable name + collection expression).
+		if node.ForEach != nil {
+			hashField([]byte(node.ForEach.VarName))
+			hashField([]byte(node.ForEach.Expr))
+			binary.Write(h, binary.LittleEndian, int64(1)) //nolint:errcheck
+		} else {
+			binary.Write(h, binary.LittleEndian, int64(0)) //nolint:errcheck
+		}
+
+		// Conditions — always compilation-relevant.
+		for _, c := range node.IncludeWhen {
+			hashField([]byte(c))
+		}
+		binary.Write(h, binary.LittleEndian, int64(len(node.IncludeWhen))) //nolint:errcheck
+		for _, c := range node.ReadyWhen {
+			hashField([]byte(c))
+		}
+		binary.Write(h, binary.LittleEndian, int64(len(node.ReadyWhen))) //nolint:errcheck
+		for _, c := range node.PropagateWhen {
+			hashField([]byte(c))
+		}
+		binary.Write(h, binary.LittleEndian, int64(len(node.PropagateWhen))) //nolint:errcheck
+	}
+
+	return fmt.Sprintf("%016x", h.Sum64())
+}
+
+// hashCompilationRelevantFields walks a body map and hashes only the fields
+// that affect compilation: expression strings (containing ${...} or $${...}),
+// and literal apiVersion/kind values (which affect schema resolution).
+func hashCompilationRelevantFields(h hash.Hash64, hashField func([]byte), body map[string]any) {
+	// apiVersion and kind affect schema resolution → compilation-relevant.
+	if av, ok := body["apiVersion"].(string); ok {
+		hashField([]byte("apiVersion"))
+		hashField([]byte(av))
+	}
+	if k, ok := body["kind"].(string); ok {
+		hashField([]byte("kind"))
+		hashField([]byte(k))
+	}
+
+	// Walk the body for expression strings.
+	var strs []string
+	collectStrings(body, &strs)
+	sort.Strings(strs) // deterministic order
+	for _, s := range strs {
+		if strings.Contains(s, "${") {
+			hashField([]byte(s))
+		}
+	}
 }

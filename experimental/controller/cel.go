@@ -130,14 +130,22 @@ func isPending(err error) bool {
 // and BuildDAG produces a read-only structure (verified: zero writes to DAG
 // fields during reconciliation).
 type compiledGraph struct {
-	specHash       string                            // content hash of the compilation inputs
+	compilationKey string                            // structural hash of compilation inputs (ignores concrete values)
 	env            *cel.Env                          // CEL environment (immutable after Extend)
 	programs       map[string]cel.Program            // expression string → compiled program
 	exprPaths      map[string]map[string][]FieldPath // expression string → (scope var → field paths)
 	declaredVars   map[string]bool                   // variable names declared in the CEL env
-	spec           *GraphSpec                        // parsed spec (immutable)
-	dag            *DAG                              // dependency graph (immutable after BuildDAG)
+	topology       *dagTopology                      // shared DAG structure (immutable after BuildDAG)
 	unresolvedGVKs []schema.GroupVersionKind         // GVKs that fell back to dyn (triggers recompilation on CRD install)
+	// typeCacheGen records the type cache generation at compile time.
+	// Per 004-compilation.md § Type Cache: "Staleness is one integer comparison:
+	// current generation exceeds the artifact's recorded generation."
+	typeCacheGen int64
+	// dynamicGVKNodes lists node IDs whose apiVersion or kind contains a CEL
+	// expression. Per 004-compilation.md § Deferred Types: "the resolved GVK is
+	// also recorded per-node in the artifact." These nodes are compiled
+	// permissively; the reconciler detects GVK changes at runtime.
+	dynamicGVKNodes []string
 	// collectionIDs captures the set of Watch node IDs in this spec.
 	// Used by the dynamic-compile fallback to apply the same
 	// `<wk_id>.ready()` AST rewrite that the eager-compile path does —
@@ -329,8 +337,16 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 		return nil, fmt.Errorf("creating CEL env: %w", err)
 	}
 
-	// Phase 4: compile expressions and build DAG.
+	// Phase 3b: preliminary dependency scan — detect cycles before expensive
+	// CEL compilation. Scans expression text for identifier references using
+	// extractFirstIdentifier (no CEL parsing). Builds a dependency graph and
+	// rejects cycles early.
 	allIDs := spec.AllIdentifiers()
+	if err := detectCyclesEarly(spec.Nodes, allIDs); err != nil {
+		return nil, err
+	}
+
+	// Phase 4: compile expressions and build DAG.
 
 	// Build scope var set for field path extraction.
 	scopeVars := make(map[string]bool, len(allIDs))
@@ -349,6 +365,7 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 	expressions := spec.AllExpressions()
 	programs := make(map[string]cel.Program, len(expressions))
 	exprPaths := make(map[string]map[string][]FieldPath, len(expressions))
+	exprTypes := make(map[string]*cel.Type, len(expressions))
 
 	for _, expr := range expressions {
 		// Parse first so we can rewrite `<wk_id>.ready()` into a scope
@@ -376,16 +393,209 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 		if issues != nil && issues.Err() != nil {
 			return nil, fmt.Errorf("checking expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
 		}
+		exprTypes[expr] = ast.OutputType()
 		// Extract field paths from the AST before creating the program.
-		// Per 005-reconciliation.md § Hash Mechanics: "At graph compilation,
-		// the controller walks each compiled expression's AST to extract
-		// reference chains." One walk per expression, at compile time.
+		// Per 004-compilation.md § Algorithm, Phase 4 step 5: field path
+		// extraction walks the AST at compile time. One walk per expression.
 		exprPaths[expr] = extractFieldPathsFromAST(ast.NativeRep().Expr(), scopeVars, nil)
 		prg, err := env.Program(ast)
 		if err != nil {
 			return nil, fmt.Errorf("programming expression %q: %w: %w", expr, ErrInvalidExpression, err)
 		}
 		programs[expr] = prg
+	}
+
+	// Phase 4a: type refinement (second pass).
+	// Narrow def expression fields from dyn to their compiled return types.
+	// Narrow forEach iterators from the collection expression's element type.
+	// Re-check expressions that reference narrowed types against a new environment.
+	refinedTypeInfo := refineDefTypes(spec.Nodes, typeInfo, exprTypes)
+	if refinedTypeInfo != nil {
+		// Types narrowed — rebuild the environment and re-check affected expressions.
+		refinedDecls := buildTypedEnvOptions(refinedTypeInfo)
+		refinedEnv, err := krocel.DefaultEnvironment(
+			krocel.WithResourceIDs(refinedTypeInfo.untypedIDs),
+			krocel.WithListVariables(refinedTypeInfo.listIDs),
+			krocel.WithCustomDeclarations(refinedDecls),
+			krocel.WithCustomDeclarations(celPluralFunction()),
+			krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
+			krocel.WithCustomDeclarations(celReadyFunction()),
+			krocel.WithCustomDeclarations(celUpdatedFunction()),
+			krocel.WithCustomDeclarations(celDependenciesFunction()),
+			krocel.WithCustomDeclarations([]cel.EnvOption{
+				cel.Variable(reservedNodeReadyVar, cel.MapType(cel.StringType, cel.BoolType)),
+				cel.Variable(reservedDepsMapVar, cel.MapType(cel.StringType, cel.ListType(cel.DynType))),
+			}),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("creating refined CEL env: %w", err)
+		}
+		// Re-check all expressions against the refined environment.
+		// This catches type errors that were invisible against dyn.
+		for _, expr := range expressions {
+			parsed, issues := refinedEnv.Parse(expr)
+			if issues != nil && issues.Err() != nil {
+				// Parse errors were caught in the first pass — should not happen.
+				continue
+			}
+			nativeAst := parsed.NativeRep()
+			nextIDVal := celast.MaxID(nativeAst)
+			nextID := func() int64 {
+				id := nextIDVal
+				nextIDVal++
+				return id
+			}
+			rewriteCollectionReady(nativeAst.Expr(), collectionIDs, rewriteFactory, nextID)
+			rewriteDependencies(nativeAst.Expr(), scopeVars, rewriteFactory, nextID)
+			_, issues = refinedEnv.Check(parsed)
+			if issues != nil && issues.Err() != nil {
+				return nil, fmt.Errorf("checking expression %q (type refinement): %w: %w", expr, ErrInvalidExpression, issues.Err())
+			}
+		}
+		// Use the refined environment for the compiled graph.
+		env = refinedEnv
+	}
+
+	// Phase 4a-2: validate expression-to-field compatibility.
+	// Check that standalone expression return types match the destination
+	// field's schema type. Only for nodes with resolved schemas.
+	if err := validateExprFieldCompat(spec.Nodes, typeInfo, exprTypes); err != nil {
+		return nil, err
+	}
+
+	// Phase 4a-3: forEach readyWhen inner-scope compilation.
+	// Per 004-compilation.md § Algorithm: "Inner scope (readyWhen) binds the
+	// iterator to the collection's element type. Outer scope (downstream)
+	// binds the node ID to the list type."
+	// For each forEach node with readyWhen AND a resolved schema, build an
+	// inner env where the node ID is the element type (not list type) and
+	// re-check readyWhen expressions against it.
+	for _, node := range spec.Nodes {
+		if node.ForEach == nil || len(node.ReadyWhen) == 0 {
+			continue
+		}
+		s, ok := typeInfo.forEachSchemas[node.ID]
+		if !ok || s == nil {
+			continue // unresolved schema — readyWhen compiles against dyn (permissive)
+		}
+		// Build element-typed declaration for the node ID.
+		declType := krocel.SchemaDeclTypeWithMetadata(&celopenapi.Schema{Schema: s}, false)
+		if declType == nil {
+			continue
+		}
+		typeName := krocel.TypeNamePrefix + node.ID
+		declType = declType.MaybeAssignTypeName(typeName)
+		// Build inner env: create a fresh env with the element type for this
+		// node ID. We can't use env.Extend because the node ID may already be
+		// declared in the outer env (as dyn). Build a minimal env instead.
+		innerProvider := krocel.NewDeclTypeProvider(declType)
+		innerProvider.SetRecognizeKeywordAsFieldName(true)
+		innerRegistry := types.NewEmptyRegistry()
+		wrappedInner, err := innerProvider.WithTypeProvider(innerRegistry)
+		if err != nil {
+			continue
+		}
+		// Filter out the forEach node ID from untypedIDs to avoid overlap.
+		var filteredIDs []string
+		for _, id := range typeInfo.untypedIDs {
+			if id != node.ID {
+				filteredIDs = append(filteredIDs, id)
+			}
+		}
+		innerEnv, err := krocel.DefaultEnvironment(
+			krocel.WithResourceIDs(filteredIDs),
+			krocel.WithListVariables(typeInfo.listIDs),
+			krocel.WithCustomDeclarations([]cel.EnvOption{
+				cel.CustomTypeProvider(wrappedInner),
+				cel.Variable(node.ID, declType.CelType()), // element type, not list
+			}),
+			krocel.WithCustomDeclarations(celPluralFunction()),
+			krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
+			krocel.WithCustomDeclarations(celReadyFunction()),
+			krocel.WithCustomDeclarations(celUpdatedFunction()),
+			krocel.WithCustomDeclarations(celDependenciesFunction()),
+			krocel.WithCustomDeclarations([]cel.EnvOption{
+				cel.Variable(reservedNodeReadyVar, cel.MapType(cel.StringType, cel.BoolType)),
+				cel.Variable(reservedDepsMapVar, cel.MapType(cel.StringType, cel.ListType(cel.DynType))),
+			}),
+		)
+		if err != nil {
+			continue
+		}
+		// Re-check readyWhen expressions against the inner env.
+		for _, rwExpr := range node.ReadyWhen {
+			// Extract inner expression from ${...}
+			dollars, expr, start, end := findExpr(rwExpr, 0)
+			if start < 0 || len(dollars) != 1 || start != 0 || end != len(rwExpr) {
+				continue
+			}
+			parsed, issues := innerEnv.Parse(expr)
+			if issues != nil && issues.Err() != nil {
+				continue // parse error caught by main compilation
+			}
+			nativeAst := parsed.NativeRep()
+			nextIDVal := celast.MaxID(nativeAst)
+			nextID := func() int64 {
+				id := nextIDVal
+				nextIDVal++
+				return id
+			}
+			rewriteCollectionReady(nativeAst.Expr(), collectionIDs, rewriteFactory, nextID)
+			rewriteDependencies(nativeAst.Expr(), scopeVars, rewriteFactory, nextID)
+			_, issues = innerEnv.Check(parsed)
+			if issues != nil && issues.Err() != nil {
+				return nil, fmt.Errorf("node %q: readyWhen expression %q (forEach inner scope): %w: %w",
+					node.ID, expr, ErrInvalidExpression, issues.Err())
+			}
+		}
+	}
+
+	// Phase 4b: validate forEach collection expressions return a list.
+	// A forEach expression must be a standalone ${expr} whose output type
+	// is list(T). Deferred expressions ($${...}) are validated by the
+	// child graph's compiler. Expressions typed as dyn are permissive —
+	// we can't statically prove they're wrong.
+	for _, node := range spec.Nodes {
+		if node.ForEach == nil {
+			continue
+		}
+		dollars, innerExpr, start, end := findExpr(node.ForEach.Expr, 0)
+		if start < 0 {
+			// No ${...} expression at all — a literal string is never iterable.
+			return nil, fmt.Errorf("node %q: forEach expression %q must contain a ${...} expression: %w",
+				node.ID, node.ForEach.Expr, ErrInvalidExpression)
+		}
+		if len(dollars) != 1 {
+			continue // deferred ($${...}) — validated by child compiler
+		}
+		// The entire string must be ${expr}, not an interpolation like
+		// "prefix-${expr}-suffix". Interpolation always produces a string,
+		// which is never iterable.
+		if start != 0 || end != len(node.ForEach.Expr) {
+			return nil, fmt.Errorf("node %q: forEach expression must be a standalone ${...}, got %q: %w",
+				node.ID, node.ForEach.Expr, ErrInvalidExpression)
+		}
+		outputType, ok := exprTypes[innerExpr]
+		if !ok {
+			continue // expression not in compilation set (shouldn't happen)
+		}
+		// dyn/any are permissive — can't statically prove they're not a list.
+		// AnyType (google.protobuf.Any) is how unresolved resource IDs are
+		// declared; DynType is the CEL-native dynamic type. Both mean
+		// "type unknown at compile time."
+		if outputType == cel.DynType || outputType == cel.AnyType {
+			continue
+		}
+		if _, err := krocel.ListElementType(outputType); err != nil {
+			return nil, fmt.Errorf("node %q: forEach expression %q must return a list, got %q: %w",
+				node.ID, innerExpr, outputType, ErrInvalidExpression)
+		}
+	}
+
+	// Phase 4c: validate deferred ($${...}) expressions at each deferral depth.
+	// Per 004-compilation.md § Deferred Expression Analysis.
+	if err := compileDeferredExpressions(spec); err != nil {
+		return nil, err
 	}
 
 	// Build the dependency graph using pre-extracted field paths.
@@ -410,15 +620,19 @@ func compileGraphSpec(spec *GraphSpec, typeInfo *typeSource) (*compiledGraph, er
 	declared[reservedNodeReadyVar] = true
 	declared[reservedDepsMapVar] = true
 
+	var dynamicGVKNodes []string
+	if typeInfo != nil {
+		dynamicGVKNodes = typeInfo.dynamicGVKNodes
+	}
 	return &compiledGraph{
-		specHash:        spec.Hash(),
+		compilationKey:  spec.CompilationKey(),
 		env:             env,
 		programs:        programs,
 		exprPaths:       exprPaths,
 		declaredVars:    declared,
-		spec:            spec,
-		dag:             dag,
+		topology:        dag.dagTopology,
 		unresolvedGVKs:  typeInfo.unresolvedGVKs,
+		dynamicGVKNodes: dynamicGVKNodes,
 		collectionIDs:   collectionIDs,
 		resourceSchemas: typeInfo.resourceSchemas,
 	}, nil

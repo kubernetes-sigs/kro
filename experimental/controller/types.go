@@ -291,6 +291,19 @@ func (n *Node) HasBody() bool {
 	return n.Payload() != nil || n.TemplateExpr != ""
 }
 
+// Body returns the node's body map regardless of node type. All five body
+// fields (Template, Patch, Ref, Watch, Def) may carry ${...} expressions
+// and must be compiled. Returns nil for nodes with no body (TemplateExpr-only
+// nodes have a nil Body — the expression is accessed via TemplateExpr).
+func (n *Node) Body() map[string]any {
+	for _, body := range []map[string]any{n.Template, n.Patch, n.Ref, n.Watch, n.Def} {
+		if body != nil {
+			return body
+		}
+	}
+	return nil
+}
+
 // Note: there is no IdentityKey method because computing the applied-set
 // key requires a GVKScopeResolver (to handle cluster-scoped resources
 // correctly per 003-ownership.md § Priority Resolution). The scope
@@ -356,13 +369,11 @@ func (s *GraphSpec) AllExpressions() []string {
 	// Collect expressions from each node
 	for _, node := range s.Nodes { // Template expressions
 		var templateStrings []string
-		// Walk all body maps that may carry CEL expressions. Ref/Watch
+		// Walk body maps that may carry CEL expressions. Ref/Watch
 		// bodies (identity-only) also contain ${...} in metadata.name,
 		// metadata.namespace, selector values — they must be compiled too.
-		for _, body := range []map[string]any{node.Template, node.Patch, node.Ref, node.Watch, node.Def} {
-			if body != nil {
-				collectStrings(body, &templateStrings)
-			}
+		if body := node.Body(); body != nil {
+			collectStrings(body, &templateStrings)
 		}
 		if node.TemplateExpr != "" {
 			templateStrings = append(templateStrings, node.TemplateExpr)

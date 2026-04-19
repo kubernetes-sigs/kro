@@ -183,7 +183,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	if len(revisions) > 0 {
 		active := revisions[len(revisions)-1]
 		if _, state, compileErr := r.compileRevision(active); compileErr == nil {
-			teardownDAG = state.compiled.dag
+			teardownDAG = state.dag
 			teardownEval = newEvaluator(state)
 			// During teardown, the effective generation is the active
 			// revision's generation — the graph's live generation is

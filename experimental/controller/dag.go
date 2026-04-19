@@ -26,8 +26,23 @@ func (h *indexHeap) Pop() any {
 // CEL expressions for variable references. It provides topological ordering
 // and dependency-aware planning for the reconcile loop.
 type DAG struct {
-	// Nodes in declaration order (same as spec.nodes)
+	// Nodes in declaration order (same as spec.nodes). Per-instance: contains
+	// the node bodies with instance-specific concrete values.
 	Nodes []Node
+	// Topology holds the shared structural information derived from
+	// expression dependencies. Immutable after BuildDAG. Multiple instances
+	// with the same compilation key share a single topology via assembleDAG.
+	*dagTopology
+}
+
+// dagTopology holds the structural information derived from expression
+// dependencies during compilation. It is a compilation artifact — immutable
+// after BuildDAG, shared across all instances with the same compilation key.
+//
+// Per 004-compilation.md § Structural Compilation Caching: topology is
+// determined by expression references, not concrete values. Separating it
+// enables O(1) compilation per unique template instead of O(N) per instance.
+type dagTopology struct {
 	// Index from node ID to node index
 	Index map[string]int
 	// TopologicalOrder is the apply order (respects dependencies).
@@ -51,6 +66,14 @@ type DAG struct {
 	// target becomes a prune candidate. The DAG records the relationship
 	// but finalization logic lives in the prune phase, not the walk.
 	Finalizers map[string][]string
+
+	// Per-node dependency metadata. Indexed by declaration order (same as
+	// Nodes). These are derived from expression paths during compilation
+	// and are the same across all instances with the same compilation key.
+	nodeDeps          []map[string]bool        // node index → dependency IDs
+	nodeDepPaths      []map[string][]FieldPath // node index → dep ID → field paths
+	nodeSelfPaths     [][]FieldPath            // node index → self field paths
+	nodeReadinessDeps []map[string]bool        // node index → readiness dep IDs
 }
 
 // BuildDAG constructs a dependency graph from a node list.
@@ -61,12 +84,20 @@ type DAG struct {
 // Topological order is computed via Kahn's algorithm with a min-heap keyed by
 // declaration index, so independent nodes preserve their spec.nodes ordering.
 func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, error) {
+	topo := &dagTopology{
+		Index:             make(map[string]int, len(nodes)),
+		NodeTypes:         make(map[string]NodeType),
+		Dependents:        make(map[string][]int),
+		Finalizers:        make(map[string][]string),
+		nodeDeps:          make([]map[string]bool, len(nodes)),
+		nodeDepPaths:      make([]map[string][]FieldPath, len(nodes)),
+		nodeSelfPaths:     make([][]FieldPath, len(nodes)),
+		nodeReadinessDeps: make([]map[string]bool, len(nodes)),
+	}
+
 	dag := &DAG{
-		Nodes:      make([]Node, len(nodes)),
-		Index:      make(map[string]int, len(nodes)),
-		NodeTypes:  make(map[string]NodeType),
-		Dependents: make(map[string][]int),
-		Finalizers: make(map[string][]string),
+		Nodes:       make([]Node, len(nodes)),
+		dagTopology: topo,
 	}
 
 	for i, node := range nodes {
@@ -75,8 +106,13 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 			node.ForEach.CollectionSource = resolveCollectionSource(node, exprPaths)
 		}
 		dag.Nodes[i] = node
-		dag.Index[node.ID] = i
-		dag.NodeTypes[node.ID] = node.Type()
+		topo.Index[node.ID] = i
+		topo.NodeTypes[node.ID] = node.Type()
+		// Store per-node dependency metadata in topology for assembleDAG.
+		topo.nodeDeps[i] = node.Dependencies
+		topo.nodeDepPaths[i] = node.DepPaths
+		topo.nodeSelfPaths[i] = node.SelfPaths
+		topo.nodeReadinessDeps[i] = node.ReadinessDeps
 	}
 
 	// Build finalizer map: target node ID → list of finalizer node IDs.
@@ -118,6 +154,7 @@ func BuildDAG(nodes []Node, exprPaths map[string]map[string][]FieldPath) (*DAG, 
 			}
 			for _, p := range paths {
 				addFieldPath(&dag.Nodes[depIdx].SelfPaths, p)
+				addFieldPath(&topo.nodeSelfPaths[depIdx], p)
 			}
 		}
 	}
@@ -339,6 +376,72 @@ func extractScopeVars(s string, nodeID string, exprPaths map[string]map[string][
 	return vars
 }
 
+// assembleDAG builds a per-instance DAG from an instance's nodes and a shared
+// dagTopology. The topology was computed during compilation and is shared
+// across all instances with the same compilation key. This function is
+// infallible by construction — all validation (cycles, self-references,
+// finalizer targets) was performed during BuildDAG.
+//
+// Per-node dependency metadata (Dependencies, DepPaths, SelfPaths,
+// ReadinessDeps) is deep-copied from the topology to prevent mutation of
+// one instance's DAG from corrupting the shared topology. The topology
+// itself (Index, TopologicalOrder, Levels, Dependents, Finalizers,
+// NodeTypes) is shared by pointer — it is immutable after BuildDAG.
+//
+// Per 004-compilation.md § Structural Compilation Caching: "Per-instance DAG
+// construction takes: shared sort order + shared edges + per-instance node
+// specs, and assembles the structure the reconcile loop consumes."
+func assembleDAG(nodes []Node, topo *dagTopology) *DAG {
+	dag := &DAG{
+		Nodes:       make([]Node, len(nodes)),
+		dagTopology: topo,
+	}
+	for i, node := range nodes {
+		// Deep-copy per-node dependency metadata from the shared topology.
+		// The topology slices must not be mutated through the per-instance
+		// DAG — concurrent instances sharing the same topology would corrupt.
+		node.Dependencies = copyMapBool(topo.nodeDeps[i])
+		node.DepPaths = copyDepPaths(topo.nodeDepPaths[i])
+		node.SelfPaths = copySelfPaths(topo.nodeSelfPaths[i])
+		node.ReadinessDeps = copyMapBool(topo.nodeReadinessDeps[i])
+		dag.Nodes[i] = node
+	}
+	return dag
+}
+
+func copyMapBool(m map[string]bool) map[string]bool {
+	if m == nil {
+		return nil
+	}
+	c := make(map[string]bool, len(m))
+	for k, v := range m {
+		c[k] = v
+	}
+	return c
+}
+
+func copyDepPaths(m map[string][]FieldPath) map[string][]FieldPath {
+	if m == nil {
+		return nil
+	}
+	c := make(map[string][]FieldPath, len(m))
+	for k, v := range m {
+		cp := make([]FieldPath, len(v))
+		copy(cp, v)
+		c[k] = cp
+	}
+	return c
+}
+
+func copySelfPaths(s []FieldPath) []FieldPath {
+	if s == nil {
+		return nil
+	}
+	c := make([]FieldPath, len(s))
+	copy(c, s)
+	return c
+}
+
 // NodeState tracks the reconcile-time state of a single node.
 type NodeState int
 
@@ -488,4 +591,106 @@ func (ps *PlanState) Summary() PlanSummary {
 		}
 	}
 	return s
+}
+
+// detectCyclesEarly builds a preliminary dependency graph from expression text
+// scanning (no CEL parsing) and rejects cycles before expensive compilation.
+// Uses extractFirstIdentifier to extract root scope references from expression
+// strings. This is an approximation — it may produce false edges (function
+// names look like identifiers) but never misses a real dependency.
+//
+// Per 004-compilation.md § Algorithm step 1: "Scan expressions for references
+// without CEL parsing. Build a DAG. Cycles rejected."
+func detectCyclesEarly(nodes []Node, allIDs []string) error {
+	idSet := make(map[string]bool, len(allIDs))
+	for _, id := range allIDs {
+		idSet[id] = true
+	}
+
+	// Build node index and adjacency.
+	nodeIndex := make(map[string]int, len(nodes))
+	for i, n := range nodes {
+		nodeIndex[n.ID] = i
+	}
+
+	inDegree := make([]int, len(nodes))
+	adj := make([][]int, len(nodes)) // forward adjacency: dep → dependent
+
+	addEdge := func(fromID string, toIdx int) {
+		fromIdx, ok := nodeIndex[fromID]
+		if !ok || fromIdx == toIdx {
+			return // unknown ID or self-reference (harmless for cycle detection)
+		}
+		adj[fromIdx] = append(adj[fromIdx], toIdx)
+		inDegree[toIdx]++
+	}
+
+	for i, node := range nodes {
+		// Scan all expression-bearing strings in the node's body.
+		var strs []string
+		if body := node.Body(); body != nil {
+			collectStrings(body, &strs)
+		}
+		if node.TemplateExpr != "" {
+			strs = append(strs, node.TemplateExpr)
+		}
+		strs = append(strs, node.IncludeWhen...)
+		strs = append(strs, node.ReadyWhen...)
+		strs = append(strs, node.PropagateWhen...)
+		if node.ForEach != nil {
+			strs = append(strs, node.ForEach.Expr)
+		}
+
+		// Extract expression references.
+		seen := make(map[string]bool)
+		for _, s := range strs {
+			pos := 0
+			for {
+				dollars, expr, start, _ := findExpr(s, pos)
+				if start < 0 {
+					break
+				}
+				pos = start + len(dollars) + len(expr) + 2
+				if len(dollars) != 1 {
+					continue // deferred — not a dependency at this level
+				}
+				rootID := extractFirstIdentifier(expr)
+				if rootID == "" || !idSet[rootID] || seen[rootID] {
+					continue
+				}
+				seen[rootID] = true
+				addEdge(rootID, i)
+			}
+		}
+	}
+
+	// Kahn's algorithm — cycle detection only (no ordering needed).
+	queue := make([]int, 0, len(nodes))
+	for i, d := range inDegree {
+		if d == 0 {
+			queue = append(queue, i)
+		}
+	}
+	processed := 0
+	for len(queue) > 0 {
+		idx := queue[0]
+		queue = queue[1:]
+		processed++
+		for _, dep := range adj[idx] {
+			inDegree[dep]--
+			if inDegree[dep] == 0 {
+				queue = append(queue, dep)
+			}
+		}
+	}
+	if processed < len(nodes) {
+		var cycleIDs []string
+		for i, d := range inDegree {
+			if d > 0 {
+				cycleIDs = append(cycleIDs, nodes[i].ID)
+			}
+		}
+		return fmt.Errorf("graph contains a cycle: nodes %v (detected before compilation): %w", cycleIDs, ErrDependencyError)
+	}
+	return nil
 }

@@ -25,7 +25,7 @@ import (
 func TestCompiledGraphCacheLifecycle(t *testing.T) {
 	spec := buildBenchSpec(5)
 	caches := newGraphCaches()
-	specHash := spec.Hash()
+	compilationKey := spec.CompilationKey()
 
 	// --- Phase 1: Two instances with identical specs share one compiledGraph ---
 	compiled, err := compileGraphSpec(spec, nil)
@@ -35,7 +35,7 @@ func TestCompiledGraphCacheLifecycle(t *testing.T) {
 	caches.set("ns/graph-a-g00001", newInstanceState(compiled))
 
 	// Second instance finds the shared compiledGraph by hash.
-	shared := caches.getCompiled(specHash)
+	shared := caches.getCompiled(compilationKey)
 	if shared == nil {
 		t.Fatal("expected shared compiledGraph, got nil")
 	}
@@ -59,18 +59,18 @@ func TestCompiledGraphCacheLifecycle(t *testing.T) {
 
 	// --- Phase 3: Removing one instance retains shared compiledGraph ---
 	caches.remove("ns/graph-a-g00001")
-	if caches.getCompiled(specHash) == nil {
+	if caches.getCompiled(compilationKey) == nil {
 		t.Fatal("compiledGraph should survive with remaining references")
 	}
 
 	// --- Phase 4: Removing last instance cleans up compiledGraph ---
 	caches.remove("ns/graph-b-g00001")
-	if caches.getCompiled(specHash) != nil {
+	if caches.getCompiled(compilationKey) != nil {
 		t.Fatal("compiledGraph should be cleaned up when last reference is removed")
 	}
 
 	// Different spec's compiledGraph should be unaffected.
-	if caches.getCompiled(differentSpec.Hash()) == nil {
+	if caches.getCompiled(differentSpec.CompilationKey()) == nil {
 		t.Fatal("unrelated compiledGraph should survive other spec's cleanup")
 	}
 }
@@ -469,7 +469,7 @@ func BenchmarkCompileRevisionSharing(b *testing.B) {
 					caches := newGraphCaches()
 					for j := 0; j < instanceCount; j++ {
 						// Simulate N revisions with the same spec but different names.
-						specHash := spec.Hash()
+						specHash := spec.CompilationKey()
 						instanceKey := fmt.Sprintf("ns/graph-%d-g00001", j)
 
 						compiled := caches.getCompiled(specHash)
@@ -618,7 +618,7 @@ func BenchmarkWalkSkip(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			dag := compiled.dag
+			dag := assembleDAG(spec.Nodes, compiled.topology)
 
 			// Pre-build steady-state data once — not part of the measured path.
 			prevScope := make(map[string]any, len(dag.Nodes))
@@ -1043,9 +1043,13 @@ func TestResolveCollectionSource(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compileGraphSpec: %v", err)
 			}
-			// Find the forEach node in the compiled DAG.
-			nodeIdx := compiled.dag.Index[tt.node.ID]
-			got := compiled.dag.Nodes[nodeIdx].ForEach.CollectionSource
+			// Build a full DAG to access CollectionSource (set during BuildDAG).
+			dag, err := BuildDAG(spec.Nodes, compiled.exprPaths)
+			if err != nil {
+				t.Fatalf("BuildDAG: %v", err)
+			}
+			nodeIdx := dag.Index[tt.node.ID]
+			got := dag.Nodes[nodeIdx].ForEach.CollectionSource
 			if got != tt.wantSrc {
 				t.Errorf("CollectionSource = %q, want %q (%s)", got, tt.wantSrc, tt.wantDesc)
 			}

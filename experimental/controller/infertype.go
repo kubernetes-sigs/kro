@@ -12,6 +12,8 @@
 package graphcontroller
 
 import (
+	"fmt"
+
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -27,7 +29,12 @@ import (
 // Populated during compilation phases 1 (schema resolution) and 2 (definition inference).
 type typeSource struct {
 	// resourceSchemas maps node ID → OpenAPI schema for nodes with resolved GVKs.
+	// Does NOT include forEach nodes (those stay dyn in outer scope).
 	resourceSchemas map[string]*spec.Schema
+	// forEachSchemas maps forEach node ID → OpenAPI schema, used only for
+	// inner-scope readyWhen validation (Phase 4a-3 in cel.go). These nodes
+	// are NOT added to typed declarations — they stay dyn in outer scope.
+	forEachSchemas map[string]*spec.Schema
 	// resourceCollections marks resolved-schema node IDs whose CEL variable
 	// should be typed as list(element) rather than the element itself
 	// (Watch-class nodes expose a collection of observed objects).
@@ -45,6 +52,15 @@ type typeSource struct {
 	// could not be resolved (CRD not yet installed). Used by the CRD watch to
 	// detect when recompilation is needed.
 	unresolvedGVKs []runtimeschema.GroupVersionKind
+	// narrowedIterators maps forEach iterator variable names to their element
+	// cel.Type, narrowed from the collection expression's return type during
+	// the type refinement pass. These variables are declared as the element
+	// type in the refined environment instead of dyn.
+	narrowedIterators map[string]*cel.Type
+	// dynamicGVKNodes lists node IDs whose apiVersion or kind contains a CEL
+	// expression. Per 004-compilation.md § Deferred Types: the type is
+	// unknowable until runtime.
+	dynamicGVKNodes []string
 }
 
 // resolveNodeTypes resolves types for all nodes in the spec.
@@ -53,6 +69,7 @@ type typeSource struct {
 func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typeSource {
 	ts := &typeSource{
 		resourceSchemas:     make(map[string]*spec.Schema),
+		forEachSchemas:      make(map[string]*spec.Schema),
 		resourceCollections: make(map[string]bool),
 		definitionTypes:     make(map[string]*apiservercel.DeclType),
 		forEachDefinitions:  make(map[string]bool),
@@ -78,12 +95,10 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 		case schemaResolver != nil && nodeType != NodeTypeDef:
 			// Phase 1: resolve schema for resource nodes with literal GVK.
 			//
-			// forEach nodes skip schema resolution: the same variable
-			// appears in two runtime contexts with incompatible shapes.
-			// Inside per-item readyWhen, the coordinator swaps
-			// scope[nodeID] to a single item map; sibling expressions
-			// see the collection. A typed declaration breaks one of
-			// the two access patterns. dyn accepts both.
+			// forEach nodes skip schema resolution for the OUTER scope
+			// (the node ID is dyn, permitting both field access and list ops).
+			// The INNER scope (readyWhen on the forEach node itself) uses
+			// element type — see cel.go Phase 4a-3.
 			resolved := false
 			if node.ForEach == nil {
 				gvk := extractLiteralGVK(node.Identity())
@@ -98,12 +113,34 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 					} else {
 						ts.unresolvedGVKs = append(ts.unresolvedGVKs, *gvk)
 					}
+				} else if gvk == nil && node.HasDynamicGVR() {
+					// Per 004-compilation.md § Deferred Types: "Dynamic GVK nodes
+					// can't be typed at first compilation because the schema depends
+					// on runtime data." Record for reconcile-time staleness detection.
+					ts.dynamicGVKNodes = append(ts.dynamicGVKNodes, node.ID)
+				}
+			} else {
+				// forEach nodes: resolve schema for inner-scope readyWhen
+				// validation but DON'T add to typed declarations. Store
+				// in forEachSchemas for the Phase 4a-3 inner-scope check.
+				gvk := extractLiteralGVK(node.Identity())
+				if gvk != nil && !isUpstreamKroGroup(gvk.Group) {
+					s, err := schemaResolver.ResolveSchema(*gvk)
+					if err == nil && s != nil {
+						ts.forEachSchemas[node.ID] = s
+					}
 				}
 			}
 			if !resolved {
 				if nodeType == NodeTypeWatch {
+					// Unresolved Watch nodes are list(dyn) to support
+					// comprehension macros (.map, .filter, .exists).
 					ts.listIDs = append(ts.listIDs, node.ID)
 				} else {
+					// Unresolved forEach nodes stay as dyn (not list(dyn)).
+					// dyn is permissive for both field access and list ops.
+					// list(dyn) breaks field access: ${instances.status}
+					// fails because lists don't have .status.
 					ts.untypedIDs = append(ts.untypedIDs, node.ID)
 				}
 			}
@@ -181,6 +218,12 @@ func buildTypedEnvOptions(ts *typeSource) []cel.EnvOption {
 		if err == nil {
 			declarations = append(declarations, cel.CustomTypeProvider(wrappedProvider))
 		}
+	}
+
+	// Narrowed forEach iterators (from the type refinement pass).
+	// These are declared with their element type instead of dyn.
+	for varName, elemCelType := range ts.narrowedIterators {
+		declarations = append(declarations, cel.Variable(varName, elemCelType))
 	}
 
 	return declarations
@@ -398,6 +441,199 @@ func inferStringType(s string) *apiservercel.DeclType {
 }
 
 // ---------------------------------------------------------------------------
+// Type refinement (second pass)
+// ---------------------------------------------------------------------------
+
+// refineDefTypes narrows definition types using expression return types from
+// the first compilation pass. For each def node, standalone expression fields
+// that were initially typed as dyn are narrowed to their compiled return type.
+//
+// Returns a new typeSource with narrowed definitions, or nil if nothing changed.
+func refineDefTypes(nodes []Node, ts *typeSource, exprTypes map[string]*cel.Type) *typeSource {
+	narrowed := false
+	newDefTypes := make(map[string]*apiservercel.DeclType, len(ts.definitionTypes))
+
+	for _, node := range nodes {
+		if node.Type() != NodeTypeDef {
+			continue
+		}
+		body := node.Payload()
+		if body == nil {
+			continue
+		}
+		origDT, ok := ts.definitionTypes[node.ID]
+		if !ok {
+			continue
+		}
+
+		typeName := krocel.TypeNamePrefix + node.ID
+		var fieldNarrowed bool
+		refinedDT := narrowObjectTypeTracked(typeName, body, exprTypes, &fieldNarrowed)
+		if fieldNarrowed {
+			newDefTypes[node.ID] = refinedDT
+			narrowed = true
+		} else {
+			newDefTypes[node.ID] = origDT
+		}
+	}
+
+	if !narrowed {
+		return nil
+	}
+
+	// Narrow forEach iterator variables from the collection expression's
+	// element type. If the collection returns list(T), the iterator is T.
+	// Remove narrowed iterators from untypedIDs.
+	narrowedIterators := make(map[string]*cel.Type) // varName → element cel.Type
+	for _, node := range nodes {
+		if node.ForEach == nil {
+			continue
+		}
+		dollars, innerExpr, start, end := findExpr(node.ForEach.Expr, 0)
+		if start < 0 || len(dollars) != 1 || start != 0 || end != len(node.ForEach.Expr) {
+			continue
+		}
+		ct, ok := exprTypes[innerExpr]
+		if !ok || ct == cel.DynType || ct == cel.AnyType {
+			continue
+		}
+		params := ct.Parameters()
+		if len(params) == 1 {
+			// list(T) — iterator should be T
+			elemType := params[0]
+			if elemType != cel.DynType && elemType != cel.AnyType {
+				narrowedIterators[node.ForEach.VarName] = elemType
+				narrowed = true
+			}
+		}
+	}
+
+	// Filter narrowed iterators out of untypedIDs.
+	var filteredUntypedIDs []string
+	for _, id := range ts.untypedIDs {
+		if _, isNarrowed := narrowedIterators[id]; !isNarrowed {
+			filteredUntypedIDs = append(filteredUntypedIDs, id)
+		}
+	}
+
+	// Build a new typeSource with narrowed definitions. Resource schemas
+	// and other fields are unchanged.
+	return &typeSource{
+		resourceSchemas:     ts.resourceSchemas,
+		forEachSchemas:      ts.forEachSchemas,
+		resourceCollections: ts.resourceCollections,
+		definitionTypes:     newDefTypes,
+		forEachDefinitions:  ts.forEachDefinitions,
+		untypedIDs:          filteredUntypedIDs,
+		listIDs:             ts.listIDs,
+		unresolvedGVKs:      ts.unresolvedGVKs,
+		narrowedIterators:   narrowedIterators,
+	}
+}
+
+// narrowObjectType rebuilds a DeclType for a def body, replacing dyn fields
+// with their expression return types where known.
+func narrowObjectType(typeName string, body map[string]any, exprTypes map[string]*cel.Type) *apiservercel.DeclType {
+	var ignored bool
+	return narrowObjectTypeTracked(typeName, body, exprTypes, &ignored)
+}
+
+// narrowObjectTypeTracked is like narrowObjectType but sets *narrowed to true
+// if any field was narrowed from dyn to a concrete type.
+func narrowObjectTypeTracked(typeName string, body map[string]any, exprTypes map[string]*cel.Type, narrowed *bool) *apiservercel.DeclType {
+	fields := make(map[string]*apiservercel.DeclField, len(body))
+	for name, value := range body {
+		fieldPath := typeName + "." + name
+		fieldType := narrowFieldType(fieldPath, value, exprTypes, narrowed)
+		fields[name] = apiservercel.NewDeclField(name, fieldType, false, nil, nil)
+	}
+	return apiservercel.NewObjectType(typeName, fields)
+}
+
+// narrowFieldType determines the CEL type of a field value, using expression
+// return types to narrow standalone expressions from dyn to their actual type.
+func narrowFieldType(path string, value any, exprTypes map[string]*cel.Type, narrowed *bool) *apiservercel.DeclType {
+	switch v := value.(type) {
+	case string:
+		return narrowStringType(v, exprTypes, narrowed)
+	case map[string]any:
+		return narrowObjectTypeTracked(path, v, exprTypes, narrowed)
+	case []any:
+		if len(v) == 0 {
+			return apiservercel.NewListType(apiservercel.DynType, -1)
+		}
+		elemType := narrowFieldType(path+".@idx", v[0], exprTypes, narrowed)
+		return apiservercel.NewListType(elemType, -1)
+	default:
+		return inferFieldType(path, value)
+	}
+}
+
+// narrowStringType is like inferStringType but narrows standalone expressions
+// using the expression's compiled return type.
+func narrowStringType(s string, exprTypes map[string]*cel.Type, narrowed *bool) *apiservercel.DeclType {
+	dollars, expr, start, end := findExpr(s, 0)
+	if start < 0 {
+		return apiservercel.StringType
+	}
+	if start == 0 && end == len(s) && len(dollars) == 1 {
+		// Standalone expression — check if we have a compiled return type.
+		if ct, ok := exprTypes[expr]; ok && ct != cel.DynType && ct != cel.AnyType {
+			if dt := celTypeToDeclType(ct); dt != nil && dt != apiservercel.DynType {
+				*narrowed = true
+				return dt
+			}
+		}
+		return apiservercel.DynType
+	}
+	return apiservercel.StringType
+}
+
+// celTypeToDeclType converts a cel.Type (from expression output) to an
+// apiservercel.DeclType for use in the type provider. Only scalar and
+// collection types are converted; structured object types remain dyn
+// (the DeclType can't be reconstructed from the cel.Type alone).
+func celTypeToDeclType(ct *cel.Type) *apiservercel.DeclType {
+	switch {
+	case ct == cel.StringType:
+		return apiservercel.StringType
+	case ct == cel.IntType:
+		return apiservercel.IntType
+	case ct == cel.BoolType:
+		return apiservercel.BoolType
+	case ct == cel.DoubleType:
+		return apiservercel.DoubleType
+	case ct == cel.BytesType:
+		return apiservercel.BytesType
+	case ct == cel.DurationType:
+		return apiservercel.DurationType
+	case ct == cel.TimestampType:
+		return apiservercel.DateType
+	case ct == cel.DynType || ct == cel.AnyType:
+		return apiservercel.DynType
+	default:
+		// Check for list and map types via parameters.
+		params := ct.Parameters()
+		if len(params) == 1 {
+			// list(T)
+			elemDT := celTypeToDeclType(params[0])
+			if elemDT != nil {
+				return apiservercel.NewListType(elemDT, -1)
+			}
+		} else if len(params) == 2 {
+			// map(K, V)
+			keyDT := celTypeToDeclType(params[0])
+			valDT := celTypeToDeclType(params[1])
+			if keyDT != nil && valDT != nil {
+				return apiservercel.NewMapType(keyDT, valDT, -1)
+			}
+		}
+		// Structured types or unknown — keep as dyn.
+		return apiservercel.DynType
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Schema resolution helpers (phase 1)
 // ---------------------------------------------------------------------------
 
@@ -422,4 +658,102 @@ func extractLiteralGVK(tmpl map[string]any) *runtimeschema.GroupVersionKind {
 	}
 	gvk := gv.WithKind(kind)
 	return &gvk
+}
+
+// ---------------------------------------------------------------------------
+// Expression-to-field compatibility
+// ---------------------------------------------------------------------------
+
+// validateExprFieldCompat checks that standalone expressions in node bodies
+// produce types compatible with the destination field's schema. For example,
+// spec.replicas: ${someString} is rejected if the schema says replicas is
+// integer. Only checked for nodes with resolved schemas (template, patch, ref).
+func validateExprFieldCompat(nodes []Node, ts *typeSource, exprTypes map[string]*cel.Type) error {
+	for _, node := range nodes {
+		nodeType := node.Type()
+		if nodeType == NodeTypeDef {
+			continue // defs don't have external schemas
+		}
+		s, ok := ts.resourceSchemas[node.ID]
+		if !ok || s == nil {
+			continue // no schema resolved — can't check
+		}
+		body := node.Body()
+		if body == nil {
+			continue
+		}
+		if err := checkFieldCompat(node.ID, body, s, exprTypes, ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkFieldCompat recursively walks a body map and its corresponding schema,
+// checking that standalone expression return types are compatible with schema
+// field types.
+func checkFieldCompat(nodeID string, body map[string]any, s *spec.Schema, exprTypes map[string]*cel.Type, path string) error {
+	if s == nil || s.Properties == nil {
+		return nil
+	}
+	for key, value := range body {
+		fieldPath := path + "." + key
+		fieldSchema, ok := s.Properties[key]
+		if !ok {
+			continue // field not in schema — skip (extra fields allowed)
+		}
+
+		switch v := value.(type) {
+		case string:
+			dollars, expr, start, end := findExpr(v, 0)
+			if start < 0 || start != 0 || end != len(v) || len(dollars) != 1 {
+				continue // not a standalone expression
+			}
+			ct, ok := exprTypes[expr]
+			if !ok || ct == cel.DynType || ct == cel.AnyType {
+				continue // unknown type — can't check
+			}
+			if err := checkTypeCompat(nodeID, fieldPath, expr, ct, &fieldSchema); err != nil {
+				return err
+			}
+
+		case map[string]any:
+			if err := checkFieldCompat(nodeID, v, &fieldSchema, exprTypes, fieldPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkTypeCompat validates that a CEL return type is compatible with an OpenAPI
+// schema type. Returns an error if the types are incompatible.
+func checkTypeCompat(nodeID, fieldPath, expr string, celType *cel.Type, fieldSchema *spec.Schema) error {
+	schemaType := fieldSchema.Type
+	if len(schemaType) == 0 {
+		return nil // no type constraint in schema
+	}
+	expectedType := schemaType[0]
+
+	// Map CEL types to OpenAPI type names.
+	var celTypeName string
+	switch {
+	case celType == cel.StringType:
+		celTypeName = "string"
+	case celType == cel.IntType:
+		celTypeName = "integer"
+	case celType == cel.BoolType:
+		celTypeName = "boolean"
+	case celType == cel.DoubleType:
+		celTypeName = "number"
+	default:
+		// Complex types (list, map, object) — skip for now.
+		return nil
+	}
+
+	if celTypeName != expectedType {
+		return fmt.Errorf("node %q: expression %q at %s returns %s, but schema expects %s: %w",
+			nodeID, expr, fieldPath, celTypeName, expectedType, ErrInvalidExpression)
+	}
+	return nil
 }

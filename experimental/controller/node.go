@@ -297,6 +297,13 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 		return "", err
 	}
 
+	// Per 004-compilation.md § Deferred Types: record the resolved GVK for
+	// dynamic GVK nodes. The staleness check compares this against what was
+	// compiled — if different, recompilation is needed on the next reconcile.
+	if eval.dynamicGVKResolved != nil && node.HasDynamicGVR() {
+		eval.dynamicGVKResolved[node.ID] = applied.GroupVersionKind()
+	}
+
 	eval.scope[node.ID] = normalizeTypes(applied.Object)
 	// Just applied with effectiveGeneration — resource is on the latest generation.
 	eval.markUpdated(node.ID, true)

@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // evaluator holds the pre-compiled expression cache and the current scope
@@ -78,6 +80,12 @@ type evaluator struct {
 	// cache does not address the staleness. Per 005-reconciliation.md
 	// § Propagation.
 	collectionDidFullList bool
+
+	// dynamicGVKResolved maps node ID → resolved GVK for dynamic GVK nodes.
+	// Per 004-compilation.md § Deferred Types: recorded after template evaluation
+	// so the coordinator can compare against the previous reconcile. When a
+	// dynamic GVK changes, the artifact is stale.
+	dynamicGVKResolved map[string]schema.GroupVersionKind
 }
 
 // newEvaluator creates an evaluator for a reconcile cycle.
@@ -95,10 +103,16 @@ func newEvaluator(state *instanceState) *evaluator {
 	scope := map[string]any{
 		reservedNodeReadyVar: state.nodeReady,
 	}
+	// Initialize dynamic GVK tracking if the compiled graph has dynamic nodes.
+	var dynamicGVKResolved map[string]schema.GroupVersionKind
+	if state.compiled != nil && len(state.compiled.dynamicGVKNodes) > 0 {
+		dynamicGVKResolved = make(map[string]schema.GroupVersionKind, len(state.compiled.dynamicGVKNodes))
+	}
 	return &evaluator{
-		compiled:  state.compiled,
-		scope:     scope,
-		nodeReady: state.nodeReady,
+		compiled:           state.compiled,
+		scope:              scope,
+		nodeReady:          state.nodeReady,
+		dynamicGVKResolved: dynamicGVKResolved,
 	}
 }
 
@@ -612,10 +626,8 @@ func extractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 	// Watch may still carry CEL expressions (e.g., a dynamic name
 	// from an upstream node).
 	var templateStrs []string
-	for _, body := range []map[string]any{node.Template, node.Patch, node.Ref, node.Watch, node.Def} {
-		if body != nil {
-			collectStrings(body, &templateStrs)
-		}
+	if body := node.Body(); body != nil {
+		collectStrings(body, &templateStrs)
 	}
 	if node.TemplateExpr != "" {
 		templateStrs = append(templateStrs, node.TemplateExpr)

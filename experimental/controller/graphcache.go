@@ -34,7 +34,7 @@ type graphCaches struct {
 	// mutate both maps and take Lock. The read path (one get per reconcile per
 	// graph) is the hot path under multi-worker controllers.
 	mu        sync.RWMutex
-	compiled  map[string]*compiledGraph // spec hash → shared compiled graph
+	compiled  map[string]*compiledGraph // compilation key → shared compiled graph
 	instances map[string]*instanceState // namespace/revision-name → per-instance state
 }
 
@@ -57,7 +57,7 @@ func (gc *graphCaches) set(key string, s *instanceState) {
 	gc.instances[key] = s
 	// Ensure the compiledGraph is also tracked.
 	if s.compiled != nil {
-		gc.compiled[s.compiled.specHash] = s.compiled
+		gc.compiled[s.compiled.compilationKey] = s.compiled
 	}
 }
 
@@ -72,10 +72,10 @@ func (gc *graphCaches) remove(key string) {
 	// If this becomes hot (e.g., 10K+ forEach items tearing down), replace
 	// with a reference count or reverse index from specHash → instance keys.
 	if inst != nil && inst.compiled != nil {
-		hash := inst.compiled.specHash
+		hash := inst.compiled.compilationKey
 		referenced := false
 		for _, other := range gc.instances {
-			if other.compiled != nil && other.compiled.specHash == hash {
+			if other.compiled != nil && other.compiled.compilationKey == hash {
 				referenced = true
 				break
 			}
@@ -141,7 +141,7 @@ func (gc *graphCaches) evictUnresolved(gvr schema.GroupVersionResource) []graphK
 	// stays in the map — compileRevision will recompile in-place.
 	var affected []graphKey
 	for key, state := range gc.instances {
-		if state.compiled != nil && evictHashes[state.compiled.specHash] {
+		if state.compiled != nil && evictHashes[state.compiled.compilationKey] {
 			state.compiled = nil
 			// Instance key is "namespace/revision-name". The Graph name
 			// is the revision name minus the "-gNNNNN" suffix.

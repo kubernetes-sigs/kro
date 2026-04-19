@@ -102,6 +102,10 @@ spec:
             ? {"valid": false, "message": "invalid kubernetes object structure: invalid apiVersion"}
             : has(schema.spec.schema.status) && schema.spec.schema.status.size() > 0 && schema.spec.schema.status.exists(k, !string(schema.spec.schema.status[k]).contains("${"))
             ? {"valid": false, "message": "failed to build instance status schema: status fields without expressions are not supported"}
+            : has(schema.spec.schema) && has(schema.spec.schema.spec) && checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(dim, dim.exists(iterVar, type(dim[iterVar]) == type("") && string(dim[iterVar]).contains("${schema.spec.") && schema.spec.schema.spec.exists(field, dim[iterVar] == '${schema.spec.' + field + '}' && type(schema.spec.schema.spec[field]) == type("") && !string(schema.spec.schema.spec[field]).startsWith('[')))))
+            ? {"valid": false, "message": "forEach collection expression must return a list, got non-list schema field"}
+            : checks.resources.exists(r, has(r.template) && has(r.template.metadata) && has(r.template.metadata.name) && type(r.template.metadata.name) == type("") && string(r.template.metadata.name).contains("${") && !string(r.template.metadata.name).matches('.*\\$\\{(schema|' + checks.ids.join("|") + ')([.}]).*'))
+            ? {"valid": false, "message": "invalid expression in resource template: expression references unknown scope variable"}
             : {"valid": true, "message": ""}
           }
 

@@ -65,14 +65,9 @@ const (
 
 const (
 	// LifecyclePolicyAnnotation stores the evaluated lifecycle policy decision (e.g., "retain").
-	// This annotation is required because:
-	// 1. CEL evaluation depends on runtime context (dependencies, CEL vars) that may not be
-	//    available during prune (e.g., when RGD is deleted or dependencies are gone)
-	// 2. We cannot re-evaluate lifecycle expressions during prune without full graph context
-	// 3. The decision must persist on the resource to survive RGD changes and instance deletion
-	//
-	// The annotation is set during apply when lifecycle policy evaluates to "retain", allowing
-	// prune to orphan (remove KRO labels) rather than delete these resources.
+	// CEL evaluation depends on runtime context that may not be available during prune,
+	// so the decision must persist on the resource. When set to "retain", prune will
+	// orphan (remove KRO labels) rather than delete the resource.
 	LifecyclePolicyAnnotation = internalv1alpha1.InternalKRODomainName + "/lifecycle-policy"
 )
 

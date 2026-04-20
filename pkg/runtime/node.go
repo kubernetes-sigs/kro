@@ -186,7 +186,7 @@ func (n *Node) ShouldRetain() (bool, error) {
 	// Evaluate the lifecycle expression
 	val, err := evalExprAny(&expressionEvaluationState{Expression: n.Spec.Lifecycle}, ctx)
 	if err != nil {
-		return false, fmt.Errorf("failed to evaluate lifecycle expression: %w", err)
+		return false, fmt.Errorf("evaluate lifecycle expression: %w", err)
 	}
 
 	if val == nil {
@@ -196,7 +196,7 @@ func (n *Node) ShouldRetain() (bool, error) {
 	// Extract deletePolicy from the result map
 	policyMap, ok := val.(map[string]interface{})
 	if !ok {
-		return false, fmt.Errorf("lifecycle expression must evaluate to a map, got %T", val)
+		return false, fmt.Errorf("unmarshal lifecycle: expression must evaluate to a map, got %T", val)
 	}
 
 	deletePolicy, ok := policyMap["deletePolicy"]

@@ -1193,7 +1193,7 @@ func validateAndCompileNode(bc *buildContext, node *Node, inspector *ast.Inspect
 
 		// Compile lifecycle using the shared typed environment
 		if _, err := bc.compile(bc.env, node.Lifecycle); err != nil {
-			return fmt.Errorf("resource %q: failed to compile lifecycle expression: %w", node.Meta.ID, err)
+			return fmt.Errorf("resource %q: compile lifecycle expression: %w", node.Meta.ID, err)
 		}
 	}
 
@@ -1425,13 +1425,13 @@ func parseLifecycleExpression(raw []byte, resourceID string) (*krocel.Expression
 	// Unmarshal as string - could be CEL expression or direct YAML map
 	var lifecycleStr string
 	if err := yaml.Unmarshal(raw, &lifecycleStr); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal lifecycle for resource %s: %w", resourceID, err)
+		return nil, fmt.Errorf("unmarshal lifecycle for resource %s: %w", resourceID, err)
 	}
 
 	// Parse as CEL expression
 	lifecycleExprs, err := parser.ParseConditionExpressions([]string{lifecycleStr})
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse lifecycle expression for resource %s: %w", resourceID, err)
+		return nil, fmt.Errorf("parse lifecycle expression for resource %s: %w", resourceID, err)
 	}
 	if len(lifecycleExprs) > 0 {
 		return lifecycleExprs[0], nil

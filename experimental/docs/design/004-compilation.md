@@ -52,22 +52,30 @@ integer.
 
 ### Deferred Types
 
-Dynamic GVK nodes (`kind: ${expr}`) can't be typed at first compilation because the schema depends
-on runtime data. The node is declared untyped and compiled permissively.
+Dynamic GVK nodes (`kind: ${expr}`) can't be typed on first compilation because the GVK depends on
+a CEL expression evaluated at runtime. The node is declared untyped and compiled permissively.
 
-When the reconciler evaluates the GVK expression and resolves a concrete type, it checks whether the
-resolved GVK matches what the artifact was compiled against. If the GVK is new or different, the
-artifact is stale and recompilation produces a fully-typed result. This time the schema is available,
-so the node types fully and downstream narrows through the topological walk.
+The compiler is a pure function: spec + types in, artifact out. It has no concept of "dynamic GVK"
+or "deferred resolution." It compiles whatever types it's given. The deferred typing lifecycle is
+owned entirely by the caller:
 
-If the GVK changes on a subsequent reconcile, the artifact is stale again and compilation fires with
-the new schema. This is rare -- dynamic GVKs typically stabilize -- but the system handles it the
-same way every time.
+1. **First reconcile.** The caller has no type information for dynamic nodes. Type resolution falls
+   back to dyn. The compiler produces a permissive artifact. The reconciler evaluates the expression,
+   resolves the concrete GVK, and records it per-instance.
+2. **Requeue.** The caller detects that a new GVK was resolved and requeues the instance.
+3. **Second reconcile.** The caller resolves the schema for the recorded GVK and pre-populates the
+   type source before calling the compiler. Type resolution sees "already resolved" and skips those
+   nodes. The compiler produces a fully-typed artifact. Downstream expressions are type-checked
+   against the resolved schema.
+4. **Steady state.** The pre-populated types are the same as last time. The compilation key (which
+   includes resolved dynamic GVKs) is unchanged. Cache hit.
 
-This is the same invalidation model as CRD changes. The difference is the detection path: CRD
-changes are detected by watches, dynamic GVK changes are detected at reconcile time. Both resolve
-schemas from the API server. Both invalidate the artifact when the schema differs from what was
-compiled against.
+The compilation key includes resolved dynamic GVKs as a suffix. Instances with the same structure
+AND same resolved GVKs share a typed artifact. Instances that resolve to different GVKs get separate
+typed artifacts. All instances share the permissive bootstrap artifact during their first reconcile.
+
+If the resolved GVK changes on a subsequent reconcile (rare -- dynamic GVKs typically stabilize), the
+key changes and a new typed artifact is compiled for the new schema.
 
 ### Unsafe Types
 
@@ -93,8 +101,10 @@ assignment compatibility. Two node types require special handling:
   variable is typed as the collection's element type (e.g., `list(Namespace)` yields a `Namespace`
   iterator). The node ID is typed as the list type for downstream references. readyWhen expressions
   compile against the element type; all other expressions compile against the list type.
-- **Dynamic GVK nodes** are marked as deferred -- their type will be resolved when the reconciler
-  evaluates the GVK expression (see [Deferred Types](#deferred-types)).
+- **Unresolved types** compile permissively and narrow across compilations. Dynamic GVK nodes
+  resolve when the reconciler evaluates the expression (see [Deferred Types](#deferred-types)).
+  Nodes referencing CRDs not yet created resolve when the CRD appears
+  (see [Compilation Cache](#compilation-cache)).
 
 Field paths are (node, field chain) pairs: `${deploy.status.replicas}` yields
 `(deploy, status.replicas)`. When a chain contains a dynamic operation, the path terminates at the
@@ -115,18 +125,18 @@ Artifacts are content-addressed by their structural inputs: expressions, node ID
 Concrete values are excluded. N forEach children with different values but identical structure share a
 single compiled artifact -- one compilation instead of N.
 
-Three events invalidate a cached artifact:
+Two events invalidate a cached artifact:
 
-- **Spec mutation** -- detected when `metadata.generation` changes. The reconciler compiles the new
-  spec and produces a new revision (see [002-revisions](002-revisions.md)).
-- **Schema change** -- a global generation counter tracks schema freshness. Any schema change (CRD
+- **Graph structure change** -- detected when `metadata.generation` changes. The reconciler compiles
+  the new spec and produces a new revision (see [002-revisions](002-revisions.md)).
+- **API structure change** -- a global generation counter tracks API freshness. Any API change (CRD
   installed, updated, removed) advances it. Staleness is one integer comparison: current generation
   exceeds the artifact's recorded generation. When stale, the next reconcile rebuilds the artifact
-  from scratch -- schemas are resolved fresh from the API server, types are re-inferred, and the
-  topology is reconstructed.
-- **Dynamic GVK change** -- for dynamic GVK nodes (`kind: ${expr}`), the resolved GVK is recorded
-  per-node. When the reconciler evaluates the expression and gets a different type than what was
-  compiled against, that node is stale regardless of the generation counter.
+  from scratch -- types are resolved fresh from the API server and the topology is reconstructed.
+
+Dynamic GVK resolution does not invalidate existing artifacts. Instead, the resolution changes the
+compilation key (which includes resolved GVKs as a suffix), causing a cache miss and producing a new
+typed artifact alongside the existing permissive one. Both remain valid for their respective keys.
 
 ## Optimizations
 

@@ -574,15 +574,25 @@ func diffRevisionNodes(active *GraphSpec, superseded []*unstructured.Unstructure
 func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (*GraphSpec, *instanceState, error) {
 	instanceKey := revision.GetNamespace() + "/" + revision.GetName()
 
+	// Retrieve existing instance state (may have resolvedDynamicGVKs from
+	// a previous reconcile). These serve as hints for schema resolution of
+	// dynamic GVK nodes on subsequent compilations.
+	existing := r.Caches.get(instanceKey)
+	var dynamicGVKHints map[string]schema.GroupVersionKind
+	if existing != nil {
+		dynamicGVKHints = existing.resolvedDynamicGVKs
+	}
+
 	// Fast path: instance state already exists with a valid compilation
-	// (steady-state reconcile). Check generation-based staleness per
-	// 004-compilation.md § Type Cache: "Staleness is one integer comparison."
-	if existing := r.Caches.get(instanceKey); existing != nil && existing.compiled != nil {
-		if r.SchemaGen == nil || existing.compiled.typeCacheGen >= r.SchemaGen.Generation() {
+	// (steady-state reconcile). Check generation-based staleness and
+	// whether dynamic GVK schemas can now be resolved.
+	if existing != nil && existing.compiled != nil {
+		genFresh := r.SchemaGen == nil || existing.compiled.typeCacheGen >= r.SchemaGen.Generation()
+		schemasFresh := !dynamicGVKSchemasStale(existing.compiled, dynamicGVKHints)
+		if genFresh && schemasFresh {
 			return existing.spec, existing, nil
 		}
-		// Type cache generation advanced since this artifact was compiled.
-		// Fall through to recompile with updated schemas.
+		// Stale — fall through to recompile.
 		existing.compiled = nil
 	}
 
@@ -592,11 +602,11 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 		return nil, nil, err
 	}
 
-	// Check for a shared compiled graph by compilation key.
-	// The compilation key hashes only compilation-relevant inputs (expressions,
-	// node IDs, types, conditions) — not concrete values. This means N forEach
-	// instances with different concrete values share one compiled graph.
-	compilationKey := spec.CompilationKey()
+	// Compute the compilation key. The structural key is combined with
+	// resolved dynamic GVK hints to produce the full cache key. Instances
+	// with the same structure AND same resolved GVKs share a compiled artifact.
+	// On first reconcile (no hints), all instances share the bootstrap artifact.
+	compilationKey := compilationKeyWithHints(spec.CompilationKey(), dynamicGVKHints)
 	compiled := r.Caches.getCompiled(compilationKey)
 	// Validate the cached artifact is not stale (generation check).
 	if compiled != nil && r.SchemaGen != nil && compiled.typeCacheGen < r.SchemaGen.Generation() {
@@ -608,7 +618,18 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 		if r.SchemaGen != nil {
 			cacheGen = r.SchemaGen.Generation()
 		}
-		compiled, err = compileGraphSpec(spec, resolveNodeTypes(spec.Nodes, r.SchemaResolver))
+		// Resolve types. Then pre-populate schemas for dynamic GVK nodes
+		// whose GVK was resolved on a previous reconcile. The compiler
+		// is unaware of dynamic GVKs — it just sees pre-populated types.
+		typeInfo := resolveNodeTypes(spec.Nodes, r.SchemaResolver)
+		if r.SchemaResolver != nil && len(dynamicGVKHints) > 0 {
+			for _, nodeID := range typeInfo.dynamicGVKNodes {
+				if gvk, ok := dynamicGVKHints[nodeID]; ok {
+					typeInfo.prePopulateSchema(nodeID, gvk, r.SchemaResolver)
+				}
+			}
+		}
+		compiled, err = compileGraphSpec(spec, typeInfo)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -717,4 +738,22 @@ func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active *unst
 			logger.V(1).Info("failed to set revision Ready=Unknown", "error", err)
 		}
 	}
+}
+
+// dynamicGVKSchemasStale reports whether the artifact has dynamic GVK nodes
+// whose schemas can now be resolved (the instance has resolved GVKs from a
+// previous reconcile, but the artifact was compiled without those schemas).
+func dynamicGVKSchemasStale(compiled *compiledGraph, resolvedGVKs map[string]schema.GroupVersionKind) bool {
+	if len(compiled.dynamicGVKNodes) == 0 || len(resolvedGVKs) == 0 {
+		return false
+	}
+	for _, nodeID := range compiled.dynamicGVKNodes {
+		if _, resolved := resolvedGVKs[nodeID]; !resolved {
+			continue
+		}
+		if _, hasSchema := compiled.resourceSchemas[nodeID]; !hasSchema {
+			return true // resolved GVK available but artifact compiled without schema
+		}
+	}
+	return false
 }

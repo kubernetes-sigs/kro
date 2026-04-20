@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 const applyHashAnnotation = "internal.kro.run/template-hash"
@@ -586,6 +588,33 @@ func (s *GraphSpec) CompilationKey() string {
 	}
 
 	return fmt.Sprintf("%016x", h.Sum64())
+}
+
+// compilationKeyWithHints produces the full cache key by combining the
+// structural compilation key with resolved dynamic GVK hints. Instances
+// with the same structure AND same resolved GVKs share a compiled artifact.
+// When hints is nil or empty, returns the structural key unchanged (bootstrap).
+func compilationKeyWithHints(structuralKey string, hints map[string]schema.GroupVersionKind) string {
+	if len(hints) == 0 {
+		return structuralKey
+	}
+	// Sort node IDs for deterministic hashing.
+	nodeIDs := make([]string, 0, len(hints))
+	for id := range hints {
+		nodeIDs = append(nodeIDs, id)
+	}
+	sort.Strings(nodeIDs)
+
+	h := fnv.New64a()
+	h.Write([]byte(structuralKey))
+	for _, id := range nodeIDs {
+		gvk := hints[id]
+		h.Write([]byte(id))
+		h.Write([]byte(gvk.Group))
+		h.Write([]byte(gvk.Version))
+		h.Write([]byte(gvk.Kind))
+	}
+	return fmt.Sprintf("%s+%016x", structuralKey, h.Sum64())
 }
 
 // hashCompilationRelevantFields walks a body map and hashes only the fields

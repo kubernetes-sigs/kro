@@ -249,3 +249,115 @@ func (r *stubSchemaResolver) ResolveSchema(gvk schema.GroupVersionKind) (*spec.S
 	}
 	return nil, nil
 }
+
+// TestCRDUpdate_AdvanceGenerationInvalidatesArtifact verifies that a CRD
+// schema update (simulated by advancing SchemaGeneration) triggers recompilation
+// which picks up the updated schema. Per 004-compilation.md § Compilation Cache:
+// "Any schema change (CRD installed, updated, removed) advances [the generation
+// counter]."
+//
+// This tests the CRD update path end-to-end through compileRevision:
+//  1. Compile with schema v1 → artifact uses v1
+//  2. CRD updated → SchemaGeneration advances (simulates CRD watch handler)
+//  3. Resolver now returns v2
+//  4. compileRevision detects staleness → recompiles with v2
+func TestCRDUpdate_AdvanceGenerationInvalidatesArtifact(t *testing.T) {
+	t.Parallel()
+
+	widgetGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Widget"}
+
+	schemaV1 := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"apiVersion": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"kind":       {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"metadata":   {SchemaProps: spec.SchemaProps{Type: []string{"object"}}},
+				"spec": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"replicas": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+					},
+				}},
+			},
+		},
+	}
+
+	resolverSchemas := map[schema.GroupVersionKind]*spec.Schema{widgetGVK: schemaV1}
+	mutableResolver := &stubSchemaResolver{schemas: resolverSchemas}
+
+	sg := NewSchemaGeneration()
+	r := &GraphReconciler{
+		SchemaResolver: mutableResolver,
+		SchemaGen:      sg,
+		Caches:         newGraphCaches(),
+	}
+
+	revision := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "experimental.kro.run/v1alpha1",
+		"kind":       "GraphRevision",
+		"metadata": map[string]any{
+			"name":      "widget-graph-g00001",
+			"namespace": "default",
+		},
+		"spec": map[string]any{
+			"nodes": []any{
+				map[string]any{
+					"id": "widget",
+					"template": map[string]any{
+						"apiVersion": "example.com/v1",
+						"kind":       "Widget",
+						"metadata":   map[string]any{"name": "test"},
+						"spec":       map[string]any{"replicas": int64(3)},
+					},
+				},
+			},
+		},
+	}}
+
+	// Phase 1: compile with schema v1.
+	_, state1, err := r.compileRevision(revision)
+	require.NoError(t, err)
+	require.NotNil(t, state1.compiled)
+	firstCompiled := state1.compiled
+
+	widgetSchema := state1.compiled.resourceSchemas["widget"]
+	require.NotNil(t, widgetSchema)
+	assert.Contains(t, widgetSchema.Properties["spec"].Properties, "replicas")
+	assert.NotContains(t, widgetSchema.Properties["spec"].Properties, "maxReplicas",
+		"v1 schema should not have maxReplicas")
+
+	// Phase 2: CRD updated — schema v2 adds spec.maxReplicas.
+	// Simulate what the CRD watch handler does: swap schema + advance generation.
+	schemaV2 := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"apiVersion": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"kind":       {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"metadata":   {SchemaProps: spec.SchemaProps{Type: []string{"object"}}},
+				"spec": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"replicas":    {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+						"maxReplicas": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+					},
+				}},
+			},
+		},
+	}
+	mutableResolver.schemas[widgetGVK] = schemaV2
+	sg.AdvanceGeneration()
+
+	// Phase 3: compileRevision detects staleness → recompiles with v2.
+	_, state2, err := r.compileRevision(revision)
+	require.NoError(t, err)
+	require.NotNil(t, state2.compiled)
+	assert.NotSame(t, firstCompiled, state2.compiled,
+		"after generation advance, compileRevision must recompile")
+
+	widgetSchemaV2 := state2.compiled.resourceSchemas["widget"]
+	require.NotNil(t, widgetSchemaV2)
+	assert.Contains(t, widgetSchemaV2.Properties["spec"].Properties, "maxReplicas",
+		"recompiled artifact should reflect v2 schema with maxReplicas field")
+}

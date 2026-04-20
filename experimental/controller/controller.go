@@ -34,7 +34,9 @@ import (
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/metadata"
+	"k8s.io/client-go/metadata/metadatainformer"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 
 	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -173,12 +175,13 @@ type walkState struct {
 	collectionChanges map[string][]CollectionChange // nodeID → changes
 
 	// Walk-local tracking
-	dispatched   map[int]bool
-	outputsReady map[string]bool
-	appliedKeys  []string
-	nodeErrors   []string // "nodeID: reason" for status reporting
-	results      chan nodeResult
-	inflight     int
+	dispatched        map[int]bool
+	outputsReady      map[string]bool
+	appliedKeys       []string
+	nodeErrors        []string // "nodeID: reason" for status reporting
+	results           chan nodeResult
+	inflight          int
+	dynamicGVKChanged bool // set when a dynamic GVK resolves for the first time or changes
 }
 
 // notifyDependents dispatches all dependents of a node after its state is
@@ -1206,25 +1209,16 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.previousEvalHashes[node.ID] = evalHash
 		}
 
-		// Merge dynamic GVK resolutions. Per 004-compilation.md § Deferred Types:
-		// "When the reconciler evaluates a dynamic GVK expression and gets a
-		// different type than what was compiled against, that node's compilation
-		// is stale." Compare against previous reconcile's resolved GVK — if
-		// different, advance the type cache generation to trigger recompilation.
+		// Record dynamic GVK resolutions. When a dynamic GVK node resolves
+		// for the first time or changes, the compilation key will differ on
+		// the next reconcile (includes resolved GVKs as hints). Mark for
+		// requeue so the next reconcile compiles with the schema available.
 		if res.resolvedGVK != nil {
-			if state.resolvedDynamicGVKs == nil {
-				state.resolvedDynamicGVKs = make(map[string]schema.GroupVersionKind)
+			if state.mergeDynamicGVK(node.ID, *res.resolvedGVK) {
+				walk.dynamicGVKChanged = true
+				logger.Info("dynamic GVK resolved; will recompile with schema on next reconcile",
+					"node", node.ID, "gvk", *res.resolvedGVK)
 			}
-			if prevGVK, hadPrev := state.resolvedDynamicGVKs[node.ID]; hadPrev && prevGVK != *res.resolvedGVK {
-				// GVK changed — artifact is stale. Advance the type cache
-				// to trigger recompilation on the next reconcile.
-				if r.SchemaGen != nil {
-					r.SchemaGen.AdvanceGeneration()
-					logger.Info("dynamic GVK changed; triggering recompilation",
-						"node", node.ID, "previousGVK", prevGVK, "newGVK", *res.resolvedGVK)
-				}
-			}
-			state.resolvedDynamicGVKs[node.ID] = *res.resolvedGVK
 		}
 
 		// Check dependents: dispatch any whose dependencies are now satisfied.
@@ -1524,6 +1518,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	if requeue > 0 {
 		return ctrl.Result{RequeueAfter: requeue}, nil
 	}
+	// If a dynamic GVK resolved for the first time (or changed), requeue
+	// immediately so the next reconcile compiles with the schema available.
+	// The compilation key now includes the resolved GVK hints, producing a
+	// typed artifact on the next pass.
+	if walk.dynamicGVKChanged {
+		return ctrl.Result{Requeue: true}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -1740,6 +1741,30 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 			}
 		}
 	}
+
+	// Watch CRDs for schema changes. Per 004-compilation.md § Compilation Cache:
+	// "Any schema change (CRD installed, updated, removed) advances [the
+	// generation counter]." The onNewType callback handles CRD install (first
+	// informer for a GVR). This watch handles CRD updates and deletions —
+	// schema changes to already-watched types.
+	crdGVR := schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+	crdCtx, crdCancel := context.WithCancel(context.Background())
+	crdGenericInformer := metadatainformer.NewFilteredMetadataInformer(metadataClient, crdGVR, metav1.NamespaceAll, 0, cache.Indexers{}, nil)
+	crdInformer := crdGenericInformer.Informer()
+	crdInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{ //nolint:errcheck
+		UpdateFunc: func(_, _ any) {
+			if reconciler.SchemaGen != nil {
+				reconciler.SchemaGen.AdvanceGeneration()
+			}
+		},
+		DeleteFunc: func(_ any) {
+			if reconciler.SchemaGen != nil {
+				reconciler.SchemaGen.AdvanceGeneration()
+			}
+		},
+	})
+	go crdInformer.RunWithContext(crdCtx)
+	_ = crdCancel // stopped when the WatchManager shuts down (same process lifecycle)
 
 	// Pre-populate watch informers from existing GraphRevisions before the
 	// controller starts. This ensures deriveAppliedSet works for cross-GVR

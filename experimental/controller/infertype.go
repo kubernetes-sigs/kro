@@ -63,6 +63,30 @@ type typeSource struct {
 	dynamicGVKNodes []string
 }
 
+// prePopulateSchema injects a resolved schema for a dynamic GVK node. Called
+// by the compilation caller (not the compiler) when the node's GVK was resolved
+// on a previous reconcile. The compiler sees the pre-populated schema and types
+// the node like any static resource node.
+//
+// Per 004-compilation.md § Deferred Types: "The caller resolves the schema for
+// the recorded GVK and pre-populates the type source before calling the compiler."
+func (ts *typeSource) prePopulateSchema(nodeID string, gvk runtimeschema.GroupVersionKind, schemaResolver resolver.SchemaResolver) {
+	s, err := schemaResolver.ResolveSchema(gvk)
+	if err != nil || s == nil {
+		return // schema not available — node stays dyn
+	}
+	ts.resourceSchemas[nodeID] = s
+	// Remove from untypedIDs so the CEL environment doesn't declare both
+	// a typed and an untyped binding for the same node.
+	filtered := ts.untypedIDs[:0]
+	for _, id := range ts.untypedIDs {
+		if id != nodeID {
+			filtered = append(filtered, id)
+		}
+	}
+	ts.untypedIDs = filtered
+}
+
 // resolveNodeTypes resolves types for all nodes in the spec.
 // It resolves OpenAPI schemas for resource nodes and infers types for definition nodes.
 // The resolver may be nil — all resource nodes fall back to dyn.
@@ -114,9 +138,10 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 						ts.unresolvedGVKs = append(ts.unresolvedGVKs, *gvk)
 					}
 				} else if gvk == nil && node.HasDynamicGVR() {
-					// Per 004-compilation.md § Deferred Types: "Dynamic GVK nodes
-					// can't be typed at first compilation because the schema depends
-					// on runtime data." Record for reconcile-time staleness detection.
+					// Dynamic GVK node — type depends on a CEL expression
+					// evaluated at runtime. Record for tracking. The caller
+					// may pre-populate the schema after resolution via
+					// typeSource.prePopulateSchema.
 					ts.dynamicGVKNodes = append(ts.dynamicGVKNodes, node.ID)
 				}
 			} else {

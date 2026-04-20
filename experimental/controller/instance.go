@@ -179,3 +179,18 @@ func (s *instanceState) nextDriftExpiry() time.Time {
 	}
 	return earliest
 }
+
+// mergeDynamicGVK records a resolved dynamic GVK for a node and reports
+// whether the compilation key has changed (first resolution or GVK change).
+// When stale=true, the caller should requeue: the next reconcile will compute
+// a new compilation key that includes the resolved GVK, causing a cache miss
+// and recompilation with the schema available for type checking.
+func (s *instanceState) mergeDynamicGVK(nodeID string, resolved schema.GroupVersionKind) (stale bool) {
+	if s.resolvedDynamicGVKs == nil {
+		s.resolvedDynamicGVKs = make(map[string]schema.GroupVersionKind)
+	}
+	prevGVK, hadPrev := s.resolvedDynamicGVKs[nodeID]
+	stale = !hadPrev || prevGVK != resolved
+	s.resolvedDynamicGVKs[nodeID] = resolved
+	return stale
+}

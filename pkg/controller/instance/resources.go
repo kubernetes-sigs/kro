@@ -366,11 +366,11 @@ func (c *Controller) processRegularNode(
 	// Evaluate lifecycle policy for this resource
 	shouldRetain, err := node.ShouldRetain()
 	if err != nil {
-		shouldRetain = false
+		return nil, errorState(err), err
 	}
 
 	// Apply decorator labels and lifecycle annotation to desired object
-	c.applyDecoratorLabels(rcx, node, desired, id, nil, shouldRetain)
+	c.applyDecoratorLabels(rcx, desired, id, nil, shouldRetain)
 
 	resource := applyset.Resource{
 		ID:      id,
@@ -382,10 +382,9 @@ func (c *Controller) processRegularNode(
 }
 
 // applyDecoratorLabels merges tool labels and adds node/collection identifiers.
-// If shouldRetain is true, adds lifecycle-policy annotation for prune.
+// Sets lifecycle-policy annotation based on shouldRetain (true="retain", false=null).
 func (c *Controller) applyDecoratorLabels(
 	rcx *ReconcileContext,
-	node *runtime.Node,
 	obj *unstructured.Unstructured,
 	nodeID string,
 	collectionInfo *CollectionInfo,
@@ -425,15 +424,17 @@ func (c *Controller) applyDecoratorLabels(
 
 	obj.SetLabels(labels)
 
-	// Add lifecycle policy annotation if resource should be retained
-	if shouldRetain {
-		annotations := obj.GetAnnotations()
-		if annotations == nil {
-			annotations = make(map[string]string)
-		}
-		annotations[metadata.LifecyclePolicyAnnotation] = "retain"
-		obj.SetAnnotations(annotations)
+	// Set lifecycle policy annotation based on shouldRetain
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
 	}
+	if shouldRetain {
+		annotations[metadata.LifecyclePolicyAnnotation] = "retain"
+	} else {
+		delete(annotations, metadata.LifecyclePolicyAnnotation)
+	}
+	obj.SetAnnotations(annotations)
 }
 
 // patchInstanceWithApplySetMetadata applies applyset metadata to the parent instance.

@@ -95,7 +95,7 @@ func (c *Controller) processCollectionNode(
 	// Evaluate lifecycle policy once for the whole collection
 	shouldRetain, err := node.ShouldRetain()
 	if err != nil {
-		shouldRetain = false
+		return nil, errorState(err), err
 	}
 
 	// Build resources list for apply
@@ -103,7 +103,7 @@ func (c *Controller) processCollectionNode(
 	for i, expandedResource := range expandedResources {
 		// Apply decorator labels and lifecycle annotation with collection info
 		collectionInfo := &CollectionInfo{Index: i, Size: collectionSize}
-		c.applyDecoratorLabels(rcx, node, expandedResource, id, collectionInfo, shouldRetain)
+		c.applyDecoratorLabels(rcx, expandedResource, id, collectionInfo, shouldRetain)
 
 		// Look up current revision from LIST results
 		key := expandedResource.GetNamespace() + "/" + expandedResource.GetName()

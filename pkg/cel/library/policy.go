@@ -16,6 +16,7 @@ package library
 
 import (
 	"math"
+	"reflect"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -150,6 +151,15 @@ func (p *policyValue) withDelete() *policyValue {
 
 func (p *policyValue) Type() ref.Type {
 	return p.policyType
+}
+
+func (p *policyValue) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
+	// Convert to map[string]interface{} for Go consumption
+	result := make(map[string]interface{})
+	if p.deletePolicy != "" {
+		result["deletePolicy"] = p.deletePolicy
+	}
+	return result, nil
 }
 
 func (p *policyValue) Get(key ref.Val) ref.Val {

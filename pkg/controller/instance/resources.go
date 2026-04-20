@@ -425,6 +425,8 @@ func (c *Controller) applyDecoratorLabels(
 	obj.SetLabels(labels)
 
 	// Set lifecycle policy annotation based on shouldRetain
+	// For SSA semantics, we always set the annotation (never delete from map)
+	// so the field manager owns it and can explicitly set/unset it
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
 		annotations = make(map[string]string)
@@ -432,7 +434,7 @@ func (c *Controller) applyDecoratorLabels(
 	if shouldRetain {
 		annotations[metadata.LifecyclePolicyAnnotation] = "retain"
 	} else {
-		delete(annotations, metadata.LifecyclePolicyAnnotation)
+		annotations[metadata.LifecyclePolicyAnnotation] = "delete"
 	}
 	obj.SetAnnotations(annotations)
 }

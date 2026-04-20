@@ -27,6 +27,26 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 			snap[depID] = v
 		}
 	}
+	// For nodes with zero declared dependencies (e.g., status reporter
+	// nodes whose template only uses .ready() calls — which the field
+	// path extractor skips), include scope entries for ALL graph nodes
+	// so the worker can evaluate .ready() without "no such attribute"
+	// errors. Use previous scope (carries __ready stamps from last
+	// reconcile) with empty-map fallback for new nodes.
+	if len(node.Dependencies) == 0 && e.compiled != nil {
+		for nodeID := range e.compiled.topology.Index {
+			if _, exists := snap[nodeID]; exists {
+				continue
+			}
+			if v, ok := e.scope[nodeID]; ok {
+				snap[nodeID] = v
+			} else if prev, ok := state.previousScope[nodeID]; ok {
+				snap[nodeID] = prev
+			} else {
+				snap[nodeID] = map[string]any{}
+			}
+		}
+	}
 	// The node-readiness sidecar must be visible to rewritten
 	// `<wk_id>.ready()` lookups, including those nested inside CEL
 	// comprehensions evaluated by the worker. The worker receives a
@@ -393,9 +413,9 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 		var applied *unstructured.Unstructured
 		if childNodeType == NodeTypePatch {
-			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypePatch, eval.effectiveGeneration, driftCorrection)
+			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypePatch, eval.effectiveGeneration, driftCorrection, node.Lifecycle.ForceApply())
 		} else {
-			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeTemplate, eval.effectiveGeneration, driftCorrection)
+			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeTemplate, eval.effectiveGeneration, driftCorrection, node.Lifecycle.ForceApply())
 		}
 		if err != nil {
 			// Per 005-reconciliation.md § Parent State: track per-child errors

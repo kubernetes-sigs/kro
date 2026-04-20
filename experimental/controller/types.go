@@ -147,6 +147,18 @@ type ForEachBinding struct {
 // uses "resource" for five distinct concepts; adding a sixth blurs the
 // boundary between the user's declaration and the Kubernetes objects it
 // produces.
+// Lifecycle holds node-level lifecycle policies that direct the controller's
+// behavior when applying (and in the future, deleting) the node's resources.
+// Per 003-ownership.md § lifecycle.
+type Lifecycle struct {
+	Apply string // SSA strategy: "" (default, non-force) or "Force"
+}
+
+// ForceApply returns true when the lifecycle policy requests force SSA.
+func (l Lifecycle) ForceApply() bool {
+	return strings.EqualFold(l.Apply, "Force")
+}
+
 type Node struct {
 	ID string
 
@@ -183,7 +195,8 @@ type Node struct {
 	// instead of iterating a map that always has exactly one entry.
 	// nil means no forEach on this node.
 	ForEach       *ForEachBinding
-	Finalizes     string // target node ID — resource created only during prune/teardown
+	Finalizes     string    // target node ID — resource created only during prune/teardown
+	Lifecycle     Lifecycle // node-level lifecycle policies (apply strategy, etc.)
 	IncludeWhen   []string
 	ReadyWhen     []string // CEL conditions; all must be true for the node to be "ready"
 	PropagateWhen []string // CEL conditions; input gate — all must be true for this node to evaluate
@@ -597,6 +610,18 @@ func parseNodeList(raw any) ([]Node, error) {
 		} else if len(pw) > 0 {
 			node.PropagateWhen = pw
 		}
+		if lc, ok := m["lifecycle"].(map[string]any); ok {
+			if apply, ok := lc["apply"].(string); ok {
+				node.Lifecycle.Apply = apply
+			}
+		}
+		// Also accept forceApply: true for CEL-generated node maps where
+		// nested map types may not survive JSON round-trip via the API server.
+		if fa, ok := m["forceApply"].(bool); ok && fa {
+			node.Lifecycle.Apply = "Force"
+		} else if fas, ok := m["forceApply"].(string); ok && strings.EqualFold(fas, "true") {
+			node.Lifecycle.Apply = "Force"
+		}
 		nodes = append(nodes, node)
 	}
 	return nodes, nil
@@ -727,9 +752,6 @@ func validatePatch(tmpl map[string]any) error {
 	if _, ok := md["name"]; !ok {
 		return fmt.Errorf("patch: missing metadata.name (a patch targets a named existing resource; omit metadata.name for watch:)")
 	}
-	if isForceApplyMap(tmpl) {
-		return fmt.Errorf("patch: kro.run/apply: Force is only valid on template: (adoption path); use template: to take ownership")
-	}
 	return nil
 }
 
@@ -764,9 +786,6 @@ func validateRef(tmpl map[string]any) error {
 			return fmt.Errorf("ref: unexpected metadata field %q (ref is identity-only)", key)
 		}
 	}
-	if isForceApplyMap(tmpl) {
-		return fmt.Errorf("ref: kro.run/apply: Force is only valid on template:")
-	}
 	return nil
 }
 
@@ -784,9 +803,6 @@ func validateWatch(tmpl map[string]any) error {
 	if _, ok := md["name"]; ok {
 		return fmt.Errorf("watch: metadata.name is not valid (name implies single-object; use ref:)")
 	}
-	if isForceApplyMap(tmpl) {
-		return fmt.Errorf("watch: kro.run/apply: Force is only valid on template:")
-	}
 	return nil
 }
 
@@ -801,16 +817,6 @@ func validateDef(tmpl map[string]any) error {
 		return fmt.Errorf("def: kind is not valid (def produces values into scope, not a Kubernetes resource)")
 	}
 	return nil
-}
-
-// isForceApplyMap checks for the kro.run/apply: Force annotation on a body
-// map. Defined here rather than importing from apply.go to keep the parser
-// free of apply-time dependencies.
-func isForceApplyMap(tmpl map[string]any) bool {
-	md, _ := tmpl["metadata"].(map[string]any)
-	anns, _ := md["annotations"].(map[string]any)
-	v, _ := anns["kro.run/apply"].(string)
-	return v == "Force"
 }
 
 // parseStringList extracts a validated []string from a map key that holds []any.

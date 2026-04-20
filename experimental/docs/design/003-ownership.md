@@ -38,32 +38,29 @@ field. Initial value and ongoing ownership are the same declaration.
 - **`watch:`** — observe a collection of resources. No claim, nothing to clean up.
 - **`def:`** — computed values into scope. No Kubernetes resource.
 
-### kro.run/apply
+### lifecycle
 
-The `kro.run/apply` annotation on a `template:`'s metadata controls the SSA strategy:
-
-- **Absent (default)** — non-force SSA. 409 on value conflicts with other managers.
-- **`kro.run/apply: Force`** — force SSA. Takes contested fields.
-
-Force is valid only on `template:`. Force takes contested fields *and* asserts the Graph as the
-resource's identity owner — a combined move that only makes sense when the Graph is declaring the
-whole resource. `patch:` nodes write specific fields without asserting identity; SSA 409 is the
-correct signal when those fields collide.
-
-The annotation flows to the managed resource — anyone inspecting the cluster sees the apply strategy.
+`lifecycle.apply: Force` activates force SSA — takes contested fields and asserts the Graph as
+the resource's identity owner. Force is valid only on `template:` nodes. `patch:` nodes write
+specific fields without asserting identity; SSA 409 is the correct signal when those fields
+collide. For CEL-generated node maps, `forceApply: true` is accepted as a shorthand.
 
 ```yaml
-- id: migrated
+- id: deploy
+  lifecycle:
+    apply: Force
   template:
     apiVersion: apps/v1
     kind: Deployment
     metadata:
-      name: existing-app
-      annotations:
-        kro.run/apply: Force
+      name: my-app
     spec:
       replicas: 3
 ```
+
+On every force apply, the controller evicts all third-party Apply-type field managers via
+eviction release (see § Release Apply). After eviction, the Graph is the sole field manager
+on the resource.
 
 ### Identity Labels
 
@@ -82,10 +79,10 @@ deletes the resource (`template`) or releases its fields (`patch` — see § Rel
 
 Before applying a `template:`, the controller checks for existing identity labels from other
 Graphs. If present, the resource is managed by another kro Graph — the apply is rejected unless
-`kro.run/apply: Force` is set. This catches accidental duplicates and makes kro-to-kro migration
-explicit. The label check runs before SSA and rejects every kro-to-kro identity conflict — SSA
-alone cannot, because it assigns silent co-ownership when two managers apply identical values. For
-non-kro resources (no `*.internal.kro.run/type` label), the normal SSA flow applies.
+`lifecycle.apply: Force` is set. The label check runs before SSA and rejects every kro-to-kro
+identity conflict — SSA alone cannot, because it assigns silent co-ownership when two managers
+apply identical values. For non-kro resources (no `*.internal.kro.run/type` label), the identity
+check passes unconditionally.
 
 The label check runs only for `template:`. Two `patch:` nodes on the same target — the
 steady-state pattern — are allowed. When two `patch:` nodes write the same field, SSA 409 catches
@@ -99,9 +96,8 @@ fields, the controller splits the apply into two patches: metadata/spec via the 
 status via the status subresource. The identity label goes in the first patch — the resource is
 tracked for cleanup even if the controller crashes before the second patch runs. On restart, the
 reconcile loop re-applies the full node; SSA idempotency makes the completed patch a no-op and the
-failed patch catches up. Both release variants target the main resource (full release clears the
-identity label, partial release updates it); the status subresource release is additive when the
-node wrote status fields.
+failed patch catches up. Release variants target the main resource; if the node wrote status
+fields, an additional release targets the status subresource.
 
 ### forEach
 
@@ -114,7 +110,7 @@ semantics.
 
 **Coexistence.** The steady state. Multiple writers — Graphs, controllers, HPAs — each own disjoint
 fields on the same resource. Each field manager owns its fields, no 409. A `patch:` on one Graph
-writing status to a resource a `template:` on another Graph created is the standard pattern; so is
+writing status to a resource that a `template:` on another Graph created is the standard pattern; so is
 a Deployment where kro owns `spec.template` and an HPA owns `spec.replicas`.
 
 **Conflict.** A claim collides. Two detection layers catch different collisions. Identity labels
@@ -123,17 +119,15 @@ labeled by another Graph is rejected. SSA 409 catches every field-level collisio
 managers, a kro node and a non-kro manager, or two `patch:` nodes (same or different Graphs)
 writing the same field. Both surface as error conditions on the Graph; reconciliation stops on
 that resource. Resolution depends on the conflict: identity conflicts (between `template:` nodes)
-clear by setting `kro.run/apply: Force` or removing one of the `template:` nodes; field conflicts
+clear by setting `lifecycle.apply: Force` or removing one of the `template:` nodes; field conflicts
 clear by removing the contested fields from one side (Force is not applicable to `patch:`).
 
 **Migration.** Management transfers from one Graph to another. The importing side adds a
-`template:` with `kro.run/apply: Force` and takes the fields. The exporting side's next reconcile
-detects the takeover via the identity label check and errors — conflict state prevents accidental
-deletion while ownership is contested. The user removes the node from the exporting side. Once
-adopted, the importing side removes the Force annotation to return to cooperative non-force SSA.
-Migration from a non-kro manager follows the same arc, except the exporting side detects via 409
-rather than label check; if the new owner happens to apply identical values, shared ownership
-persists silently until values diverge.
+`template:` with `lifecycle.apply: Force`. The force apply takes all fields; the eviction release
+removes the old manager's identity labels and `managedFields` entry. The old Graph's next
+reconcile finds no identity labels on the resource and no longer considers it owned. The user
+removes the node from the exporting side. Migration from a non-kro manager follows the same
+arc.
 
 **Type change across revisions.** Swapping `template:` for `patch:` (or vice versa) on the same
 node ID is a spec edit handled by revision supersession. The running resource is not reclassified
@@ -146,16 +140,23 @@ releasing fields outside the new `patch:` body and re-claiming the fields inside
 
 ## Release Apply
 
-Releasing fields uses a release apply — an SSA apply from the Graph's field manager that omits the
-fields being released. SSA interprets omitted fields as "no longer managed" and releases them.
-Two variants:
+Releasing fields uses a release apply — an SSA apply that omits the fields being released. SSA
+interprets omitted fields as "no longer managed" and releases them. Three variants:
 
 - **Full release** — body contains only identity fields (`apiVersion`, `kind`, `metadata.name`,
-  `metadata.namespace`). All previously-owned fields are released, including the identity label.
+  `metadata.namespace`). All previously-owned fields are released, including the identity labels.
   Used when pruning a `patch:` node.
 - **Partial release** — body contains the fields to retain. Fields the Graph previously owned but
   no longer declares are released; declared fields remain claimed; the identity label is updated.
   Used when a `template:` → `patch:` transition narrows the Graph's claim.
+- **Eviction release** — a full release issued under a *different* field manager's identity to
+  evict that manager from the resource. The controller reads `managedFields` from the applied
+  object, identifies third-party Apply managers (excluding its own and the API server's defaulting
+  manager), and issues a full release impersonating each. Fields the evicted manager solely owned
+  (e.g., their identity labels) are deleted from the object; fields co-owned by the Graph persist.
+  The evicted manager's `managedFields` entry is garbage-collected. SSA field manager names are
+  unauthenticated strings — any client with write access can apply under any manager identity.
+  Used after force-apply (see § lifecycle).
 
 The release always targets the main resource; if the node wrote status fields, an additional
 release targets the status subresource. If the release returns 404, the resource is already gone —

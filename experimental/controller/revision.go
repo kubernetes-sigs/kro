@@ -174,6 +174,9 @@ func snapshotNode(node Node) map[string]any {
 	if len(node.PropagateWhen) > 0 {
 		entry["propagateWhen"] = stringsToAny(node.PropagateWhen)
 	}
+	if node.Lifecycle.Apply != "" {
+		entry["lifecycle"] = map[string]any{"apply": node.Lifecycle.Apply}
+	}
 
 	return entry
 }

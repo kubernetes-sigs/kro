@@ -22,8 +22,10 @@ PASSING_COMPAT_FILES := \
   two_var_comprehensions_test.go \
   kubernetes_time_test.go \
   instance_resource_watch_test.go \
-  instance_conflict_test.go \
-  schema_aware_cel_test.go
+  schema_aware_cel_test.go \
+  readiness_test.go \
+  dependency_readiness_test.go \
+  instance_conflict_test.go
 
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec

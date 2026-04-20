@@ -239,18 +239,6 @@ func TestParseKeyword_ShapeValidation(t *testing.T) {
 			}},
 			wantMsg: "patch: missing metadata.name",
 		},
-		{
-			name: "patch with Force rejected",
-			raw: map[string]any{"id": "a", "patch": map[string]any{
-				"apiVersion": "v1", "kind": "ConfigMap",
-				"metadata": map[string]any{
-					"name":        "x",
-					"annotations": map[string]any{"kro.run/apply": "Force"},
-				},
-				"data": map[string]any{"k": "v"},
-			}},
-			wantMsg: "patch: kro.run/apply: Force",
-		},
 
 		// ref — identity-only, requires metadata.name
 		{
@@ -338,19 +326,21 @@ func TestParseKeyword_ShapeValidation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Force annotation is valid on template:
+// lifecycle.apply: Force is parsed into Node.Lifecycle
 // ---------------------------------------------------------------------------
 
-func TestParseKeyword_ForceOnTemplate(t *testing.T) {
+func TestParseKeyword_LifecycleApplyForce(t *testing.T) {
 	nodes, err := parseNodeList([]any{
 		map[string]any{
 			"id": "a",
+			"lifecycle": map[string]any{
+				"apply": "Force",
+			},
 			"template": map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata": map[string]any{
-					"name":        "x",
-					"annotations": map[string]any{"kro.run/apply": "Force"},
+					"name": "x",
 				},
 				"data": map[string]any{"k": "v"},
 			},
@@ -359,6 +349,7 @@ func TestParseKeyword_ForceOnTemplate(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
 	assert.Equal(t, NodeTypeTemplate, nodes[0].Type())
+	assert.True(t, nodes[0].Lifecycle.ForceApply(), "lifecycle.apply: Force should set ForceApply")
 }
 
 // ---------------------------------------------------------------------------

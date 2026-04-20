@@ -130,9 +130,9 @@ func toRawExtension(v interface{}) runtime.RawExtension {
 // Metadata filtering client
 // ---------------------------------------------------------------------------
 
-// metadataFilteringClient strips internal.kro.run/* annotations and labels
-// from objects returned by Get and List. These are implementation details
-// that upstream tests should not see.
+// metadataFilteringClient strips internal.kro.run/* annotations/labels and
+// kro.run/* annotations from objects returned by Get and List. These are
+// implementation details that upstream tests should not see.
 type metadataFilteringClient struct {
 	client.Client
 }
@@ -165,9 +165,10 @@ func stripInternalMetadata(obj client.Object) {
 	if annotations := obj.GetAnnotations(); len(annotations) > 0 {
 		filtered := make(map[string]string, len(annotations))
 		for k, v := range annotations {
-			if !strings.Contains(k, "internal.kro.run") {
-				filtered[k] = v
+			if strings.Contains(k, "internal.kro.run") || strings.HasPrefix(k, "kro.run/") {
+				continue
 			}
+			filtered[k] = v
 		}
 		if len(filtered) == 0 {
 			filtered = nil

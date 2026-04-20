@@ -202,19 +202,29 @@ spec:
           #   template.metadata.labels. The .merge() CEL function is shallow,
           #   hence the nested merge expression.
           #
-          # Force-apply annotation (kro.run/apply: Force):
+          # Force-apply (forceApply: true / lifecycle.apply: Force):
           #   RGD semantics are "declared state is the source of truth." When
           #   an external actor mutates a managed field, the next reconcile
           #   must stomp that mutation back to declared state. Upstream kro
           #   implements this by using Force on every SSA apply (see
           #   pkg/controller/instance/applyset/applyset.go). The Graph
-          #   controller exposes Force as per-resource opt-in via the
-          #   kro.run/apply: Force annotation; the RGD stdlib opts in on every
-          #   managed child to match upstream's always-force RGD contract.
-          #   Consequence: manually-edited managed fields revert on the next
-          #   reconcile. This is correct for RGD users — they chose the RGD
-          #   abstraction to delegate lifecycle. Users who want cooperative
-          #   field ownership should use Kind directly, not RGD.
+          #   controller supports force SSA via lifecycle.apply: Force (for
+          #   human-authored YAML) or forceApply: true (for CEL-generated
+          #   node maps where nested maps may not survive JSON round-trip).
+          #   The RGD stdlib uses forceApply because its nodes are
+          #   CEL-generated. Per 003-ownership.md § lifecycle.
+          #
+          # rgdInstanceStatus:
+          #   A reporter, not a gate. Has zero DAG dependencies — the only CEL
+          #   expressions in its template are .ready() calls on resource IDs,
+          #   which the field path extractor explicitly skips (they are runtime
+          #   readiness checks, not data dependencies). This lets the status
+          #   node dispatch on every reconcile regardless of which resources
+          #   are gated by propagateWhen. For gated resources with no prior
+          #   scope, the controller seeds an empty map so .ready() returns
+          #   false instead of "data pending". The result: status.state
+          #   transitions correctly from IN_PROGRESS → ACTIVE as resources
+          #   satisfy their readyWhen conditions.
           nodes: >-
             ${
               [{"id": "schema", "ref": {
@@ -227,6 +237,7 @@ spec:
               }}]
               + schema.spec.resources.map(r, r.merge({
                 "propagateWhen": has(r.propagateWhen) ? r.propagateWhen : ["${" + r.id + ".dependencies().all(d, d.ready())}"],
+                "forceApply": true,
                 "template": r.template.merge({
                   "metadata": (has(r.template.metadata) ? r.template.metadata : {}).merge({
                     "labels": (has(r.template.metadata) && has(r.template.metadata.labels) ? r.template.metadata.labels : {}).merge({
@@ -236,15 +247,11 @@ spec:
                       "kro.run/instance-group": schema.spec.schema.group,
                       "kro.run/instance-version": schema.spec.schema.apiVersion,
                       "kro.run/instance-kind": schema.spec.schema.kind
-                    }),
-                    "annotations": (has(r.template.metadata) && has(r.template.metadata.annotations) ? r.template.metadata.annotations : {}).merge({
-                      "kro.run/apply": "Force"
                     })
                   })
                 })
               }))
               + [{"id": "rgdInstanceStatus",
-                 "readyWhen": (schema.spec.resources.size() == 0 ? ["${true}"] : schema.spec.resources.map(r, "${" + r.id + ".ready()}")),
                  "patch": {
                 "apiVersion": schema.spec.schema.group + "/" + schema.spec.schema.apiVersion,
                 "kind": schema.spec.schema.kind,

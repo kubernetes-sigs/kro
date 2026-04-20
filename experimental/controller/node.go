@@ -292,7 +292,7 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 		return "", fmt.Errorf("%s %s: %w", nodeType, node.ID, err)
 	}
 
-	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, nodeType, eval.effectiveGeneration, driftCorrection)
+	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, nodeType, eval.effectiveGeneration, driftCorrection, node.Lifecycle.ForceApply())
 	if err != nil {
 		return "", err
 	}

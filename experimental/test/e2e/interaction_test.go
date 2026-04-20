@@ -1588,17 +1588,23 @@ func TestPatchIdentityLabelsPerGraph(t *testing.T) {
 	t.Log("Both Graphs have independent 'patch' identity labels — multi-graph Patch labels proved")
 }
 
-// TestForEachForceApply proves that forEach resources with kro.run/apply: Force
-// can take ownership of resources owned by another field manager.
+// TestForEachForceApply proves that forEach resources with lifecycle.apply: Force
+// can take ownership of resources owned by another field manager and evict
+// that manager via eviction release — including deletion of fields the
+// template doesn't declare.
 func TestForEachForceApply(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
 	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 
+	// Pre-create with extra fields the Graph's template does NOT declare.
+	// "extra" is solely owned by external-manager — it should be deleted
+	// after eviction release.
 	for _, name := range []string{"force-target-a", "force-target-b"} {
 		applyConfigMapAs(t, ns, name, "external-manager", map[string]string{
-			"key": "external-value",
+			"key":   "external-value",
+			"extra": "should-be-deleted",
 		})
 	}
 
@@ -1614,6 +1620,9 @@ func TestForEachForceApply(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "items",
+						"lifecycle": map[string]any{
+							"apply": "Force",
+						},
 						"forEach": map[string]any{
 							"name": "${['force-target-a', 'force-target-b']}",
 						},
@@ -1622,9 +1631,6 @@ func TestForEachForceApply(t *testing.T) {
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
 								"name": "${name}",
-								"annotations": map[string]any{
-									"kro.run/apply": "Force",
-								},
 							},
 							"data": map[string]any{
 								"key": "graph-value",
@@ -1653,7 +1659,24 @@ func TestForEachForceApply(t *testing.T) {
 	}
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-foreach-force", Namespace: ns}))
-	t.Log("forEach with Force apply took ownership of both targets — forEach + Force proved")
+
+	// Verify external-manager was evicted and residual fields deleted on both targets
+	for _, name := range []string{"force-target-a", "force-target-b"} {
+		check := &unstructured.Unstructured{}
+		check.SetGroupVersionKind(gvk)
+		require.NoError(t, k8sClient.Get(ctx,
+			types.NamespacedName{Name: name, Namespace: ns}, check))
+		for _, mf := range check.GetManagedFields() {
+			assert.NotEqual(t, "external-manager", mf.Manager,
+				"external-manager should be evicted from managedFields on %s", name)
+		}
+		data, _, _ := unstructured.NestedStringMap(check.Object, "data")
+		assert.Equal(t, "graph-value", data["key"],
+			"Graph's declared field should be present on %s", name)
+		assert.Empty(t, data["extra"],
+			"external-manager's solely-owned field should be deleted on %s", name)
+	}
+	t.Log("forEach with Force apply took ownership and evicted old managers — forEach + eviction proved")
 }
 
 // TestPropagateWhenRespectsResyncGate proves that resync (drift timer)

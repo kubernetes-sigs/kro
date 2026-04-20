@@ -28,20 +28,6 @@ import (
 // SSA configuration
 // ---------------------------------------------------------------------------
 
-// applyAnnotation controls the SSA strategy per resource.
-// Absent (default) → non-force SSA. applyAnnotationForce → force SSA.
-const applyAnnotation = "kro.run/apply"
-
-// applyAnnotationForce is the annotation value that enables force SSA.
-const applyAnnotationForce = "Force"
-
-// isForceApply checks whether a resource opts into force SSA via the
-// kro.run/apply annotation.
-func isForceApply(obj *unstructured.Unstructured) bool {
-	ann := obj.GetAnnotations()
-	return ann != nil && ann[applyAnnotation] == applyAnnotationForce
-}
-
 // graphFieldOwner returns the SSA field manager identity for a Graph.
 // Per the design (003-ownership): <name>.<namespace>.internal.kro.run
 func graphFieldOwner(graph *unstructured.Unstructured) client.FieldOwner {
@@ -337,7 +323,7 @@ func templateHasStatus(tmpl map[string]any) bool {
 // defaulters and mutating webhooks can change fields without changing
 // the desired state hash. SSA is idempotent; the apply corrects drift
 // as a side effect."
-func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, nodeType NodeType, generation int64, driftCorrection bool) (*unstructured.Unstructured, error) {
+func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, nodeType NodeType, generation int64, driftCorrection bool, forceApply bool) (*unstructured.Unstructured, error) {
 	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
@@ -422,8 +408,6 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		obj.SetAnnotations(annotations)
 	}
 
-	forceApply := isForceApply(obj)
-
 	// Pre-apply check differs by node type.
 	if nodeType == NodeTypeTemplate {
 		// kro label check: if the existing resource has a different Graph's identity
@@ -434,7 +418,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 			existingLabels := existing.GetLabels()
 			if otherGraph, found := hasOtherGraphIdentityLabel(existingLabels, graph.GetName(), graph.GetNamespace()); found {
 				if !forceApply {
-					return nil, fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use kro.run/apply: Force to take ownership): %w",
+					return nil, fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use lifecycle.apply: Force to take ownership): %w",
 						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, graph.GetName(), ErrFieldConflict)
 				}
 			}
@@ -524,6 +508,28 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	readBack.SetGroupVersionKind(obj.GroupVersionKind())
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(applied), readBack); err != nil {
 		return nil, fmt.Errorf("reading back %s: %w", obj.GetName(), err)
+	}
+
+	// Eviction release: after a force-apply on a template, evict all third-party
+	// Apply-type field managers. Per 003-ownership.md § Release Apply (eviction
+	// release): issue a full release impersonating each third-party manager so
+	// their managedFields entry is garbage-collected and their solely-owned fields
+	// (e.g., identity labels) are deleted from the object.
+	if forceApply && nodeType == NodeTypeTemplate {
+		ownManager := string(fieldOwner)
+		if managers := thirdPartyFieldManagers(readBack, ownManager); len(managers) > 0 {
+			hasStatus := templateHasStatus(evalMap)
+			for _, mgr := range managers {
+				if err := releaseApply(ctx, r.Client, obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName(), client.FieldOwner(mgr), hasStatus); err != nil {
+					return nil, fmt.Errorf("eviction release for manager %q on %s: %w", mgr, obj.GetName(), err)
+				}
+				log.FromContext(ctx).Info("evicted field manager", "node", nodeID, "manager", mgr, "name", obj.GetName())
+			}
+			// Re-read after eviction to reflect the cleaned-up state.
+			if err := r.Client.Get(ctx, client.ObjectKeyFromObject(applied), readBack); err != nil {
+				return nil, fmt.Errorf("reading back %s after eviction: %w", obj.GetName(), err)
+			}
+		}
 	}
 
 	r.Resources.set(cacheKey, &cachedObject{

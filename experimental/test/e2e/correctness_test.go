@@ -2,6 +2,7 @@ package graphcontroller_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // ---------------------------------------------------------------------------
@@ -729,37 +731,50 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 	t.Log("Cross-Graph ownership conflict correctly detected and blocked")
 }
 
-// TestForceApplyOverridesKroLabelCheck proves that kro.run/apply: Force on a
-// template takes ownership of a resource labeled as owned by a different Graph.
+// TestForceApplyOverridesKroLabelCheck proves that lifecycle.apply: Force on a
+// template takes ownership of a resource labeled as owned by a different Graph
+// and evicts the old field manager via eviction release.
 // This is the import/migration mechanism from design 003-ownership.
 //
 // Setup:
-//   - Pre-create a resource owned by "other-graph" (has graph-name label).
-//   - Create a Graph that targets the same resource WITH kro.run/apply: Force.
-//   - Verify the Graph succeeds and takes ownership (label changes).
+//   - Pre-create a resource via SSA under a fake kro field manager with identity labels.
+//   - Create a Graph that targets the same resource WITH lifecycle.apply: Force.
+//   - Verify the Graph succeeds, takes ownership, old labels are removed,
+//     and old field manager is evicted from managedFields.
 func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Pre-create a resource labeled as owned by a different Graph.
-	// Uses the DNS subdomain identity label format.
-	preexisting := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "v1",
-			"kind":       "ConfigMap",
-			"metadata": map[string]any{
-				"name":      "force-target",
-				"namespace": ns,
-				"labels": map[string]any{
-					"somenode.other-graph." + ns + ".internal.kro.run/type": "template",
-				},
-			},
-			"data": map[string]any{
-				"original": "data",
+	oldManager := "other-graph." + ns + ".internal.kro.run"
+	oldLabelKey := "somenode.other-graph." + ns + ".internal.kro.run/type"
+
+	// Pre-create a resource via SSA under the old graph's field manager,
+	// with identity labels — simulates a resource owned by another kro Graph.
+	payload := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":      "force-target",
+			"namespace": ns,
+			"labels": map[string]any{
+				oldLabelKey: "template",
 			},
 		},
+		"data": map[string]any{
+			"original": "data",
+		},
 	}
-	require.NoError(t, k8sClient.Create(ctx, preexisting))
+	raw, err := json.Marshal(payload)
+	require.NoError(t, err)
+	preexisting := &unstructured.Unstructured{}
+	preexisting.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
+	preexisting.SetName("force-target")
+	preexisting.SetNamespace(ns)
+	require.NoError(t, k8sClient.Patch(ctx, preexisting, client.RawPatch(
+		types.ApplyPatchType, raw),
+		client.ForceOwnership,
+		client.FieldOwner(oldManager),
+	))
 
 	// Create a Graph that uses Force to take ownership
 	graph := &unstructured.Unstructured{
@@ -774,14 +789,14 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "imported",
+						"lifecycle": map[string]any{
+							"apply": "Force",
+						},
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
 								"name": "force-target",
-								"annotations": map[string]any{
-									"kro.run/apply": "Force",
-								},
 							},
 							"data": map[string]any{
 								"owner": "test-force-apply",
@@ -810,18 +825,125 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "force-target", Namespace: ns}, result))
 
 	resultLabels := result.GetLabels()
-	// The new graph's identity label should exist
 	newLabelKey := "imported.test-force-apply." + ns + ".internal.kro.run/type"
-	t.Logf("Looking for label key: %s", newLabelKey)
-	t.Logf("All labels on resource: %v", resultLabels)
 	assert.Equal(t, "template", resultLabels[newLabelKey],
 		"new graph's identity label should be present after Force apply")
+
+	// Verify old graph's identity label was removed by eviction release
+	_, oldLabelPresent := resultLabels[oldLabelKey]
+	assert.False(t, oldLabelPresent,
+		"old graph's identity label should be removed by eviction release")
+
+	// Verify old field manager was evicted from managedFields
+	managedFields := result.GetManagedFields()
+	for _, mf := range managedFields {
+		assert.NotEqual(t, oldManager, mf.Manager,
+			"old field manager should be evicted from managedFields")
+	}
 
 	// Verify the data was overwritten
 	data, _, _ := unstructured.NestedStringMap(result.Object, "data")
 	assert.Equal(t, "test-force-apply", data["owner"],
 		"data should reflect the new owner's template")
 	t.Log("Force apply correctly overrides kro label check — import/migration mechanism works")
+}
+
+// TestForceApplyEvictsNonKroManager proves that lifecycle.apply: Force evicts
+// non-kro field managers (e.g., Helm, Flux) from the resource. The pre-existing
+// resource has no kro identity labels — the identity label check is never
+// triggered. The eviction release fires after force SSA and removes the old
+// manager's residual fields and managedFields entry.
+//
+// Setup:
+//   - Two SSA managers ("helm-controller", "flux-controller") each apply fields
+//     to the same ConfigMap. The Graph's template declares only a subset of
+//     those fields.
+//   - Create a Graph with lifecycle.apply: Force targeting that ConfigMap.
+//   - Verify both managers are evicted from managedFields and their
+//     solely-owned fields are deleted.
+func TestForceApplyEvictsNonKroManager(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// helm-controller owns data.helm-key and data.shared-key
+	applyConfigMapAs(t, ns, "evict-target", "helm-controller", map[string]string{
+		"helm-key":   "helm-value",
+		"shared-key": "helm-set",
+	})
+	// flux-controller owns data.flux-key (and co-owns nothing with helm since different keys)
+	applyConfigMapAs(t, ns, "evict-target", "flux-controller", map[string]string{
+		"flux-key": "flux-value",
+	})
+
+	// Verify both managers are present before the Graph
+	pre := &unstructured.Unstructured{}
+	pre.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "evict-target", Namespace: ns}, pre))
+	preManagers := map[string]bool{}
+	for _, mf := range pre.GetManagedFields() {
+		preManagers[mf.Manager] = true
+	}
+	require.True(t, preManagers["helm-controller"], "helm-controller should be present before test")
+	require.True(t, preManagers["flux-controller"], "flux-controller should be present before test")
+
+	// Graph declares only data.owner — helm-key, flux-key, shared-key are NOT declared
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-evict-nonkro",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "target",
+						"lifecycle": map[string]any{
+							"apply": "Force",
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "evict-target",
+							},
+							"data": map[string]any{
+								"owner": "kro-graph",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-evict-nonkro", Namespace: ns}))
+
+	result := &unstructured.Unstructured{}
+	result.SetGroupVersionKind(gvk)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "evict-target", Namespace: ns}, result))
+
+	// Both non-kro managers should be evicted from managedFields
+	for _, mf := range result.GetManagedFields() {
+		assert.NotEqual(t, "helm-controller", mf.Manager,
+			"helm-controller should be evicted from managedFields")
+		assert.NotEqual(t, "flux-controller", mf.Manager,
+			"flux-controller should be evicted from managedFields")
+	}
+
+	// Fields solely owned by evicted managers should be deleted
+	data, _, _ := unstructured.NestedStringMap(result.Object, "data")
+	assert.Equal(t, "kro-graph", data["owner"], "Graph's declared field should be present")
+	assert.Empty(t, data["helm-key"], "helm-controller's solely-owned field should be deleted")
+	assert.Empty(t, data["flux-key"], "flux-controller's solely-owned field should be deleted")
+	assert.Empty(t, data["shared-key"], "shared-key solely owned by helm should be deleted")
+
+	t.Log("Force apply evicted both non-kro managers — eviction release works for non-kro owners")
 }
 
 // ---------------------------------------------------------------------------

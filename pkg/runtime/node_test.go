@@ -3558,7 +3558,7 @@ func TestNode_ShouldRetain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			retain, err := tt.node.ShouldRetain()
+			policy, err := tt.node.Policy()
 			if tt.wantErr {
 				require.Error(t, err)
 				if tt.wantErrContain != "" {
@@ -3567,7 +3567,7 @@ func TestNode_ShouldRetain(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantRetain, retain)
+			assert.Equal(t, tt.wantRetain, policy.ShouldRetain())
 		})
 	}
 }

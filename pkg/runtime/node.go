@@ -174,10 +174,20 @@ func (n *Node) IsIgnored() (bool, error) {
 	return false, nil
 }
 
-// ShouldRetain evaluates the lifecycle policy and returns true if the resource should be retained on deletion.
-func (n *Node) ShouldRetain() (bool, error) {
+// Policy represents an evaluated lifecycle policy decision.
+type Policy struct {
+	deletePolicy string
+}
+
+// ShouldRetain returns true if the resource should be retained (not deleted) on instance deletion.
+func (p Policy) ShouldRetain() bool {
+	return p.deletePolicy == "retain"
+}
+
+// Policy evaluates the lifecycle policy and returns the policy decision.
+func (n *Node) Policy() (Policy, error) {
 	if n.Spec.Lifecycle == nil {
-		return false, nil
+		return Policy{}, nil
 	}
 
 	// Lifecycle expressions can only reference schema
@@ -186,30 +196,30 @@ func (n *Node) ShouldRetain() (bool, error) {
 	// Evaluate the lifecycle expression
 	val, err := evalExprAny(&expressionEvaluationState{Expression: n.Spec.Lifecycle}, ctx)
 	if err != nil {
-		return false, fmt.Errorf("evaluate lifecycle expression: %w", err)
+		return Policy{}, fmt.Errorf("evaluate lifecycle expression: %w", err)
 	}
 
 	if val == nil {
-		return false, nil
+		return Policy{}, nil
 	}
 
 	// Extract deletePolicy from the result map
 	policyMap, ok := val.(map[string]interface{})
 	if !ok {
-		return false, fmt.Errorf("unmarshal lifecycle: expression must evaluate to a map, got %T", val)
+		return Policy{}, fmt.Errorf("unmarshal lifecycle: expression must evaluate to a map, got %T", val)
 	}
 
 	deletePolicy, ok := policyMap["deletePolicy"]
 	if !ok {
-		return false, nil
+		return Policy{}, nil
 	}
 
 	deletePolicyStr, ok := deletePolicy.(string)
 	if !ok {
-		return false, fmt.Errorf("deletePolicy must be a string, got %T", deletePolicy)
+		return Policy{}, fmt.Errorf("deletePolicy must be a string, got %T", deletePolicy)
 	}
 
-	return deletePolicyStr == "retain", nil
+	return Policy{deletePolicy: deletePolicyStr}, nil
 }
 
 // GetDesired computes and returns the desired state(s) for this node.

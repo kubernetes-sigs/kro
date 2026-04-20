@@ -364,13 +364,13 @@ func (c *Controller) processRegularNode(
 	}
 
 	// Evaluate lifecycle policy for this resource
-	shouldRetain, err := node.ShouldRetain()
+	policy, err := node.Policy()
 	if err != nil {
 		return nil, errorState(err), err
 	}
 
 	// Apply decorator labels and lifecycle annotation to desired object
-	c.applyDecoratorLabels(rcx, desired, id, nil, shouldRetain)
+	c.applyDecoratorLabels(rcx, desired, id, nil, policy.ShouldRetain())
 
 	resource := applyset.Resource{
 		ID:      id,

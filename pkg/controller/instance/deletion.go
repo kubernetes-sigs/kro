@@ -181,7 +181,7 @@ func (c *Controller) deleteTarget(
 	}
 
 	// Check if the resource should be retained based on its lifecycle policy
-	shouldRetain, err := node.ShouldRetain()
+	policy, err := node.Policy()
 	if err != nil {
 		state.SetError(err)
 		return err
@@ -193,7 +193,7 @@ func (c *Controller) deleteTarget(
 	for _, target := range targets {
 		rc := resourceClientFor(rcx, node.Spec.Meta, target.GetNamespace())
 
-		if shouldRetain {
+		if policy.ShouldRetain() {
 			// Orphan instead of delete
 			if err := applyset.RemoveKroLabelsToRetainResource(rcx.Ctx, rcx.Client, node.Spec.Meta.GVR, target.GetNamespace(), target.GetName()); err != nil {
 				state.SetError(err)

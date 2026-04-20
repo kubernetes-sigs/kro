@@ -235,7 +235,27 @@ spec:
                   "namespace": instance.metadata.namespace
                 }
               }}]
-              + schema.spec.resources.map(r, r.merge({
+              + schema.spec.resources.filter(r, has(r.externalRef) && !has(r.externalRef.metadata.selector)).map(r,
+                {"id": r.id, "ref": {
+                  "apiVersion": r.externalRef.apiVersion,
+                  "kind": r.externalRef.kind,
+                  "metadata": {"name": r.externalRef.metadata.name}.merge(
+                    has(r.externalRef.metadata.namespace) && r.externalRef.metadata.namespace != ""
+                      ? {"namespace": r.externalRef.metadata.namespace}
+                      : {}
+                  )
+                }})
+              + schema.spec.resources.filter(r, has(r.externalRef) && has(r.externalRef.metadata.selector)).map(r,
+                {"id": r.id, "watch": {
+                  "apiVersion": r.externalRef.apiVersion,
+                  "kind": r.externalRef.kind,
+                  "selector": r.externalRef.metadata.selector
+                }.merge(
+                  has(r.externalRef.metadata.namespace) && r.externalRef.metadata.namespace != ""
+                    ? {"metadata": {"namespace": r.externalRef.metadata.namespace}}
+                    : {}
+                )})
+              + schema.spec.resources.filter(r, !has(r.externalRef)).map(r, r.merge({
                 "propagateWhen": has(r.propagateWhen) ? r.propagateWhen : ["${" + r.id + ".dependencies().all(d, d.ready())}"],
                 "forceApply": true,
                 "template": r.template.merge({

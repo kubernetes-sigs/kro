@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -153,16 +154,23 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 	var labelSelector labels.Selector
 	switch sel := selectorRaw.(type) {
 	case map[string]any:
-		matchLabels := map[string]string{}
-		for k, v := range sel {
-			if vs, ok := v.(string); ok {
-				matchLabels[k] = vs
-			}
-		}
-		if len(matchLabels) > 0 {
-			labelSelector = labels.SelectorFromSet(matchLabels)
+		// Detect structured selector (matchLabels/matchExpressions) vs flat key=value map.
+		_, hasMatchLabels := sel["matchLabels"]
+		_, hasMatchExpressions := sel["matchExpressions"]
+		if hasMatchLabels || hasMatchExpressions {
+			labelSelector = parseLabelSelector(sel)
 		} else {
-			labelSelector = labels.Everything()
+			matchLabels := map[string]string{}
+			for k, v := range sel {
+				if vs, ok := v.(string); ok {
+					matchLabels[k] = vs
+				}
+			}
+			if len(matchLabels) > 0 {
+				labelSelector = labels.SelectorFromSet(matchLabels)
+			} else {
+				labelSelector = labels.Everything()
+			}
 		}
 	default:
 		labelSelector = labels.Everything()
@@ -427,4 +435,67 @@ func removeItem(items []any, namespace, name string) []any {
 		return items
 	}
 	return append(items[:idx], items[idx+1:]...)
+}
+
+// parseLabelSelector converts a structured selector map (with matchLabels
+// and/or matchExpressions) into a labels.Selector. This supports the full
+// Kubernetes LabelSelector semantics used by ExternalRef collections.
+func parseLabelSelector(sel map[string]any) labels.Selector {
+	var reqs []labels.Requirement
+
+	// Parse matchLabels: {"matchLabels": {"key": "value", ...}}
+	if ml, ok := sel["matchLabels"].(map[string]any); ok {
+		for k, v := range ml {
+			if vs, ok := v.(string); ok {
+				req, err := labels.NewRequirement(k, selection.Equals, []string{vs})
+				if err == nil {
+					reqs = append(reqs, *req)
+				}
+			}
+		}
+	}
+
+	// Parse matchExpressions: [{"key": "k", "operator": "In", "values": ["v1","v2"]}]
+	if me, ok := sel["matchExpressions"].([]any); ok {
+		for _, expr := range me {
+			em, ok := expr.(map[string]any)
+			if !ok {
+				continue
+			}
+			key, _ := em["key"].(string)
+			opStr, _ := em["operator"].(string)
+			var values []string
+			if vals, ok := em["values"].([]any); ok {
+				for _, v := range vals {
+					if vs, ok := v.(string); ok {
+						values = append(values, vs)
+					}
+				}
+			}
+
+			var op selection.Operator
+			switch opStr {
+			case "In":
+				op = selection.In
+			case "NotIn":
+				op = selection.NotIn
+			case "Exists":
+				op = selection.Exists
+			case "DoesNotExist":
+				op = selection.DoesNotExist
+			default:
+				continue
+			}
+
+			req, err := labels.NewRequirement(key, op, values)
+			if err == nil {
+				reqs = append(reqs, *req)
+			}
+		}
+	}
+
+	if len(reqs) == 0 {
+		return labels.Everything()
+	}
+	return labels.NewSelector().Add(reqs...)
 }

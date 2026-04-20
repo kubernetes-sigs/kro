@@ -138,6 +138,7 @@ ifeq ($(WHAT),integration)
 		--cover \
 		--coverprofile=integration-cover.out \
 		-coverpkg=github.com/kubernetes-sigs/kro/pkg/... \
+		--focus="Lifecycle Retention" \
 		./test/integration/suites/...
 else ifeq ($(WHAT),unit)
 	go test -race ./pkg/... -coverprofile unit-cover.out

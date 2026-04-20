@@ -125,6 +125,8 @@ func (c *Controller) planNodesForDeletion(
 			//
 			// Differently from single resources, we do not do GETs per-item here because
 			// that would be inefficient and cause many API calls during deletion.
+			// listCollectionItems already filters by instance ID + node ID labels,
+			// so orphaned resources won't be returned.
 			items, err := c.listCollectionItems(rcx, nodeMeta.GVR, rid)
 			if err != nil {
 				state.SetError(err)
@@ -187,21 +189,25 @@ func (c *Controller) deleteTarget(
 		return err
 	}
 
-	// Track whether any delete request was accepted. a successful Delete does NOT
-	// mean the object is gone yet, just that deletion is in progress.
-	anyDeleted := false
-	for _, target := range targets {
-		rc := resourceClientFor(rcx, node.Spec.Meta, target.GetNamespace())
-
-		if policy.ShouldRetain() {
-			// Orphan instead of delete
+	// If policy says to retain, orphan all targets and mark node as deleted.
+	if policy.ShouldRetain() {
+		for _, target := range targets {
 			if err := applyset.RemoveKroLabelsToRetainResource(rcx.Ctx, rcx.Client, node.Spec.Meta.GVR, target.GetNamespace(), target.GetName()); err != nil {
 				state.SetError(err)
 				return err
 			}
 			rcx.Log.Info("Orphaned resource due to lifecycle policy", "resource", node.Spec.Meta.ID, "name", target.GetName())
-			continue
 		}
+		// All resources orphaned - mark as deleted (from KRO's perspective)
+		state.SetDeleted()
+		return nil
+	}
+
+	// Track whether any delete request was accepted. a successful Delete does NOT
+	// mean the object is gone yet, just that deletion is in progress.
+	anyDeleted := false
+	for _, target := range targets {
+		rc := resourceClientFor(rcx, node.Spec.Meta, target.GetNamespace())
 
 		err := rc.Delete(rcx.Ctx, target.GetName(), metav1.DeleteOptions{})
 		if apierrors.IsNotFound(err) {

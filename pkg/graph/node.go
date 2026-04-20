@@ -164,6 +164,7 @@ func (n *Node) DeepCopy() *Node {
 		IncludeWhen: slices.Clone(n.IncludeWhen),
 		ReadyWhen:   slices.Clone(n.ReadyWhen),
 		ForEach:     slices.Clone(n.ForEach),
+		Lifecycle:   n.Lifecycle,
 	}
 
 	if n.Template != nil {

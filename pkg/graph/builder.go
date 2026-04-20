@@ -488,7 +488,7 @@ func (b *Builder) buildRGResource(
 	}
 
 	// 10. Parse lifecycle expression
-	lifecycleExpr, err := parseLifecycleExpression(rgResource.Lifecycle.Raw, rgResource.ID)
+	lifecycleExpr, err := parseLifecycleExpression(rgResource.Lifecycle, rgResource.ID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1415,17 +1415,15 @@ func collectNodeSchemas(c *schema.Cache, nodes map[string]*Node, nodeSchemas map
 	return result
 }
 
-// validateLifecycleMap validates that a lifecycle map has valid structure and values.
-// parseLifecycleExpression parses a lifecycle field from raw YAML into a CEL expression.
-func parseLifecycleExpression(raw []byte, resourceID string) (*krocel.Expression, error) {
-	if len(raw) == 0 {
+// parseLifecycleExpression parses a lifecycle CEL expression string.
+func parseLifecycleExpression(lifecycleStr string, resourceID string) (*krocel.Expression, error) {
+	if lifecycleStr == "" {
 		return nil, nil
 	}
 
-	// Unmarshal as string - could be CEL expression or direct YAML map
-	var lifecycleStr string
-	if err := yaml.Unmarshal(raw, &lifecycleStr); err != nil {
-		return nil, fmt.Errorf("unmarshal lifecycle for resource %s: %w", resourceID, err)
+	// Wrap in ${} if not already wrapped - parser requires standalone expressions
+	if !strings.HasPrefix(lifecycleStr, "${") {
+		lifecycleStr = "${" + lifecycleStr + "}"
 	}
 
 	// Parse as CEL expression

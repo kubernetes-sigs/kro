@@ -370,7 +370,7 @@ func (c *Controller) processRegularNode(
 	}
 
 	// Apply decorator labels and lifecycle annotation to desired object
-	c.applyDecoratorLabels(rcx, desired, id, nil, policy.ShouldRetain())
+	c.applyDecoratorLabels(rcx, desired, id, nil, policy)
 
 	resource := applyset.Resource{
 		ID:      id,
@@ -382,13 +382,13 @@ func (c *Controller) processRegularNode(
 }
 
 // applyDecoratorLabels merges tool labels and adds node/collection identifiers.
-// Sets lifecycle-policy annotation based on shouldRetain (true="retain", false=null).
+// Sets lifecycle-policy annotation based on policy.
 func (c *Controller) applyDecoratorLabels(
 	rcx *ReconcileContext,
 	obj *unstructured.Unstructured,
 	nodeID string,
 	collectionInfo *CollectionInfo,
-	shouldRetain bool,
+	policy runtime.Policy,
 ) {
 	labels := obj.GetLabels()
 	if labels == nil {
@@ -424,14 +424,14 @@ func (c *Controller) applyDecoratorLabels(
 
 	obj.SetLabels(labels)
 
-	// Set lifecycle policy annotation based on shouldRetain
+	// Set lifecycle policy annotation
 	// For SSA semantics, we always set the annotation (never delete from map)
 	// so the field manager owns it and can explicitly set/unset it
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
-	if shouldRetain {
+	if policy.ShouldRetain() {
 		annotations[metadata.LifecyclePolicyAnnotation] = "retain"
 	} else {
 		annotations[metadata.LifecyclePolicyAnnotation] = "delete"

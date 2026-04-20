@@ -224,6 +224,12 @@ type Resource struct {
 	//
 	// +kubebuilder:validation:Optional
 	ForEach []ForEachDimension `json:"forEach,omitempty"`
+	// Lifecycle controls the lifecycle behavior of this resource.
+	// Use CEL expressions with the policy() builder to configure deletion policies.
+	// Example: "${policy().withRetain()}" to keep the resource when the ResourceGroup is deleted.
+	//
+	// +kubebuilder:validation:Optional
+	Lifecycle runtime.RawExtension `json:"lifecycle,omitempty"`
 }
 
 // ResourceScope defines whether the generated instance CRD is Namespaced or Cluster scoped.

@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -179,11 +180,29 @@ func (c *Controller) deleteTarget(
 		return nil
 	}
 
+	// Check if the resource should be retained based on its lifecycle policy
+	shouldRetain, err := node.ShouldRetain()
+	if err != nil {
+		state.SetError(err)
+		return err
+	}
+
 	// Track whether any delete request was accepted. a successful Delete does NOT
 	// mean the object is gone yet, just that deletion is in progress.
 	anyDeleted := false
 	for _, target := range targets {
 		rc := resourceClientFor(rcx, node.Spec.Meta, target.GetNamespace())
+
+		if shouldRetain {
+			// Orphan instead of delete
+			if err := applyset.RemoveKroLabelsToRetainResource(rcx.Ctx, rcx.Client, node.Spec.Meta.GVR, target.GetNamespace(), target.GetName()); err != nil {
+				state.SetError(err)
+				return err
+			}
+			rcx.Log.Info("Orphaned resource due to lifecycle policy", "resource", node.Spec.Meta.ID, "name", target.GetName())
+			continue
+		}
+
 		err := rc.Delete(rcx.Ctx, target.GetName(), metav1.DeleteOptions{})
 		if apierrors.IsNotFound(err) {
 			// Already gone: leave anyDeleted as is and keep checking others.

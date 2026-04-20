@@ -487,6 +487,12 @@ func (b *Builder) buildRGResource(
 		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
 	}
 
+	// 10. Parse lifecycle expression
+	lifecycleExpr, err := parseLifecycleExpression(rgResource.Lifecycle.Raw, rgResource.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// Determine node type.
 	nodeType := NodeTypeResource
 	if rgResource.ExternalRef != nil {
@@ -514,6 +520,7 @@ func (b *Builder) buildRGResource(
 		IncludeWhen: includeWhen,
 		ReadyWhen:   readyWhen,
 		ForEach:     forEachDimensions,
+		Lifecycle:   lifecycleExpr,
 	}
 	return node, resourceSchema, nil
 }
@@ -1108,6 +1115,7 @@ func lookupSchemaAtField(c *schema.Cache, s *spec.Schema, field string) *spec.Sc
 // - Template expressions (resource field values)
 // - includeWhen expressions (conditional resource creation)
 // - readyWhen expressions (resource readiness conditions)
+// - lifecycle expression (resource deletion policy)
 //
 // Uses the shared inspectorEnv for AST inspection and typed env for compilation.
 func validateAndCompileNode(bc *buildContext, node *Node, inspector *ast.Inspector, nodeSchema *spec.Schema) error {
@@ -1172,6 +1180,20 @@ func validateAndCompileNode(bc *buildContext, node *Node, inspector *ast.Inspect
 
 		if err := validateAndCompileReadyWhen(bc, readyEnv, node); err != nil {
 			return err
+		}
+	}
+
+	// Validate and compile lifecycle expression if present
+	if node.Lifecycle != nil {
+		// lifecycle expressions can only reference schema
+		allowedVars := []string{SchemaVarName}
+		if _, err := inspectExpressionRestricted(inspector, node.Lifecycle.Original, allowedVars); err != nil {
+			return fmt.Errorf("resource %q lifecycle: %w", node.Meta.ID, err)
+		}
+
+		// Compile lifecycle using the shared typed environment
+		if _, err := bc.compile(bc.env, node.Lifecycle); err != nil {
+			return fmt.Errorf("resource %q: failed to compile lifecycle expression: %w", node.Meta.ID, err)
 		}
 	}
 
@@ -1391,4 +1413,28 @@ func collectNodeSchemas(c *schema.Cache, nodes map[string]*Node, nodeSchemas map
 		}
 	}
 	return result
+}
+
+// validateLifecycleMap validates that a lifecycle map has valid structure and values.
+// parseLifecycleExpression parses a lifecycle field from raw YAML into a CEL expression.
+func parseLifecycleExpression(raw []byte, resourceID string) (*krocel.Expression, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	// Unmarshal as string - could be CEL expression or direct YAML map
+	var lifecycleStr string
+	if err := yaml.Unmarshal(raw, &lifecycleStr); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal lifecycle for resource %s: %w", resourceID, err)
+	}
+
+	// Parse as CEL expression
+	lifecycleExprs, err := parser.ParseConditionExpressions([]string{lifecycleStr})
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse lifecycle expression for resource %s: %w", resourceID, err)
+	}
+	if len(lifecycleExprs) > 0 {
+		return lifecycleExprs[0], nil
+	}
+	return nil, nil
 }

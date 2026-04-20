@@ -209,6 +209,13 @@ spec:
                       items:
                         type: string
                       type: array
+                    lifecycle:
+                      description: |-
+                        Lifecycle controls the lifecycle behavior of this resource.
+                        Use CEL expressions with the policy() builder to configure deletion policies.
+                        Example: "${policy().withRetain()}" to keep the resource when the ResourceGroup is deleted.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
                     readyWhen:
                       description: |-
                         ReadyWhen is a list of CEL expressions that determine when this resource is considered ready.

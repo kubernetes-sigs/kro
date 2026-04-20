@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
 
+	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
@@ -60,6 +61,19 @@ const (
 	ResourceGraphDefinitionVersionLabel   = LabelKROPrefix + "resource-graph-definition-version"
 	// GraphRevisionHashLabel stores a label-safe representation of the GraphRevision spec hash.
 	GraphRevisionHashLabel = LabelKROPrefix + "graph-revision-hash"
+)
+
+const (
+	// LifecyclePolicyAnnotation stores the evaluated lifecycle policy decision (e.g., "retain").
+	// This annotation is required because:
+	// 1. CEL evaluation depends on runtime context (dependencies, CEL vars) that may not be
+	//    available during prune (e.g., when RGD is deleted or dependencies are gone)
+	// 2. We cannot re-evaluate lifecycle expressions during prune without full graph context
+	// 3. The decision must persist on the resource to survive RGD changes and instance deletion
+	//
+	// The annotation is set during apply when lifecycle policy evaluates to "retain", allowing
+	// prune to orphan (remove KRO labels) rather than delete these resources.
+	LifecyclePolicyAnnotation = internalv1alpha1.InternalKRODomainName + "/lifecycle-policy"
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.

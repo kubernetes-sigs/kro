@@ -174,6 +174,44 @@ func (n *Node) IsIgnored() (bool, error) {
 	return false, nil
 }
 
+// ShouldRetain evaluates the lifecycle policy and returns true if the resource should be retained on deletion.
+func (n *Node) ShouldRetain() (bool, error) {
+	if n.Spec.Lifecycle == nil {
+		return false, nil
+	}
+
+	// Lifecycle expressions can only reference schema
+	ctx := n.buildContext(graph.SchemaVarName)
+
+	// Evaluate the lifecycle expression
+	val, err := evalExprAny(&expressionEvaluationState{Expression: n.Spec.Lifecycle}, ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to evaluate lifecycle expression: %w", err)
+	}
+
+	if val == nil {
+		return false, nil
+	}
+
+	// Extract deletePolicy from the result map
+	policyMap, ok := val.(map[string]interface{})
+	if !ok {
+		return false, fmt.Errorf("lifecycle expression must evaluate to a map, got %T", val)
+	}
+
+	deletePolicy, ok := policyMap["deletePolicy"]
+	if !ok {
+		return false, nil
+	}
+
+	deletePolicyStr, ok := deletePolicy.(string)
+	if !ok {
+		return false, fmt.Errorf("deletePolicy must be a string, got %T", deletePolicy)
+	}
+
+	return deletePolicyStr == "retain", nil
+}
+
 // GetDesired computes and returns the desired state(s) for this node.
 // Results are cached - subsequent calls return the cached value.
 // Behavior varies by node type:

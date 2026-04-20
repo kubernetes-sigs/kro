@@ -58,6 +58,14 @@ type instanceState struct {
 	// prune diffing); these track what is pending deletion (for retry).
 	deferredPruneKeys map[string]bool
 
+	// activeFinalization tracks in-flight finalization sequences. Maps the
+	// target resource key → finalization state (phase + child keys). The prune
+	// walk consults this before deleting anything: keys that appear as child
+	// keys are protected from pruning. Cleared when the target is successfully
+	// deleted (finalization complete). Persists across reconciles so
+	// subsequent prune cycles don't race with in-progress finalization.
+	activeFinalization map[string]*finalizationEntry
+
 	// Per-node drift timer expiry times. When expired, the node is triggered
 	// unconditionally — the consistency floor. Reset on successful evaluation.
 	// On restart, all timers start fresh with random jitter.

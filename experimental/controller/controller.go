@@ -1341,7 +1341,30 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			var deferred []string
 			var pruneBlockedReasons []string
 			var pruneNotes []string
-			deferred, pruneBlockedReasons, pruneNotes, err = r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
+
+			// Phase 1: Advance finalization state machines.
+			// Produces completedTargets (safe to delete) and protectedKeys
+			// (must not prune). Runs BEFORE the prune walk's deletion loop.
+			pruneCandidates := collectPruneCandidates(allPreviousKeys, appliedKeys)
+			keyToNodeID, nodeIDToKey := buildKeyMaps(dag, supersededDAGs, graph.GetNamespace(), r.Scope)
+			finResult, finErr := r.advanceFinalization(ctx, graph, pruneCandidates, keyToNodeID, nodeIDToKey, collectAllDAGs(dag, supersededDAGs), eval, watcher, state)
+			if finErr != nil {
+				err = finErr
+			} else {
+				// Merge finalization results.
+				pruneBlockedReasons = append(pruneBlockedReasons, finResult.BlockedReasons...)
+				pruneNotes = append(pruneNotes, finResult.Notes...)
+				deferred = append(deferred, finResult.DeferredTargets...)
+
+				// Phase 2: Pure deletion decisions (no finalization logic).
+				var pruneDeferred []string
+				var pruneBR []string
+				var pruneN []string
+				pruneDeferred, pruneBR, pruneN, err = r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher, finResult)
+				deferred = append(deferred, pruneDeferred...)
+				pruneBlockedReasons = append(pruneBlockedReasons, pruneBR...)
+				pruneNotes = append(pruneNotes, pruneN...)
+			}
 			// Route structured results:
 			//   - blocked reasons become error text and gate Ready (HasBlocked set below)
 			//   - notes (FinalizerSkipped) become informational text, Ready stays True

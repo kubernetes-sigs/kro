@@ -117,244 +117,54 @@ func (r *GraphReconciler) deleteByKeys(ctx context.Context, keys []string) {
 	}
 }
 
-// runFinalization executes the finalization sequence for a prune candidate.
-// Returns (true, nil) when all finalizer resources are ready and the target
-// can be deleted. Returns (false, nil) when finalizers are in progress.
-// Returns (false, err) when a finalizer can't be created.
-//
-// targetNodeID is the node ID whose template produces the target — the caller
-// has already matched the target's resource key to a node, so we don't
-// re-discover it here. Passing the nodeID explicitly removes the dependence
-// on name/namespace being statically resolvable (templated names would have
-// failed the previous match-by-template loop silently).
-//
-// The sequence is recoverable — no state machine. Each call derives position
-// from cluster state:
-//  1. Finalizer resource doesn't exist → create it
-//  2. Finalizer resource exists, readyWhen false → in progress
-//  3. Finalizer resource exists, readyWhen true → this finalizer is done
-//  4. All finalizers done → target can be deleted
-//
-// Finalizer nodes are processed in topological order — inter-finalizer CEL
-// references produce edges in the main DAG, and the DAG's topological
-// position is the sort key. This ensures that if finalizer B references
-// finalizer A's output, A is created and populated into scope before B
-// evaluates. Per 005-reconciliation.md § Finalization: "dependencies
-// among them determine ordering."
-func (r *GraphReconciler) runFinalization(
-	ctx context.Context,
-	graph *unstructured.Unstructured,
-	target *unstructured.Unstructured,
-	targetNodeID string,
-	finalizerNodeIDs []string,
-	dag *DAG,
-	eval *evaluator,
-	watcher *graphWatcher,
-) (bool, []string, error) {
-	logger := log.FromContext(ctx)
-	// keys tracks all finalizer resource keys — both newly created and
-	// already existing. The caller uses these for deferred cleanup after
-	// the target is successfully deleted.
-	var keys []string
-
-	// Put the target's data in scope under its node ID so finalizer
-	// templates can reference it (e.g., to embed the target's name/uid
-	// in the finalizer resource). The target is still alive (no
-	// deletionTimestamp).
-	if targetNodeID != "" {
-		eval.scope[targetNodeID] = normalizeTypes(target.Object)
-	}
-
-	// Sort finalizer nodes by their topological position in the main DAG.
-	// Inter-finalizer CEL references produce DAG edges, so the main DAG's
-	// topological order is a valid ordering for the induced subgraph of
-	// finalizer nodes. This invariant holds because all dependency edges
-	// are derived from CEL expression references during compilation.
-	ordered := make([]string, len(finalizerNodeIDs))
-	copy(ordered, finalizerNodeIDs)
-	// Build position map: node index → topological position.
-	topoPos := make(map[string]int, len(dag.TopologicalOrder))
-	for pos, nodeIdx := range dag.TopologicalOrder {
-		topoPos[dag.Nodes[nodeIdx].ID] = pos
-	}
-	sort.Slice(ordered, func(i, j int) bool {
-		return topoPos[ordered[i]] < topoPos[ordered[j]]
-	})
-
-	allReady := true
-	for _, finNodeID := range ordered {
-		idx, ok := dag.Index[finNodeID]
-		if !ok {
-			return false, keys, fmt.Errorf("finalizer node %q not found in DAG", finNodeID)
-		}
-		finNode := &dag.Nodes[idx]
-
-		// forEach + finalizes: expand the collection and create one resource per item.
-		if finNode.ForEach != nil {
-			ready, fKeys, err := r.runForEachFinalization(ctx, graph, finNode, dag, eval, watcher)
-			keys = append(keys, fKeys...)
-			if err != nil {
-				return false, keys, err
-			}
-			if !ready {
-				allReady = false
-			}
-			continue
-		}
-
-		// Single-resource finalizer (original path).
-		evalMap, err := eval.toMapNode(*finNode)
-		if err != nil {
-			return false, keys, fmt.Errorf("evaluating finalizer template %s: %w", finNodeID, err)
-		}
-
-		// Check if the finalizer resource already exists.
-		finObj := &unstructured.Unstructured{Object: evalMap}
-		if finObj.GetNamespace() == "" {
-			finObj.SetNamespace(graph.GetNamespace())
-		}
-		existing := &unstructured.Unstructured{}
-		existing.SetGroupVersionKind(finObj.GroupVersionKind())
-		err = r.Client.Get(ctx, client.ObjectKey{
-			Namespace: finObj.GetNamespace(),
-			Name:      finObj.GetName(),
-		}, existing)
-
-		if err != nil {
-			if !apierrors.IsNotFound(err) {
-				return false, keys, fmt.Errorf("checking finalizer resource %s: %w", finNodeID, err)
-			}
-			// Step 1: Finalizer resource doesn't exist — create it.
-			logger.Info("creating finalizer resource", "finalizer", finNodeID,
-				"target", target.GetName())
-			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, NodeTypeTemplate, eval.effectiveGeneration, false)
-			if applyErr != nil {
-				return false, keys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
-			}
-			keys = append(keys, resourceKey(applied))
-			eval.scope[finNodeID] = applied.Object
-			allReady = false
-			continue
-		}
-
-		// Finalizer resource exists — put it in scope and check readyWhen.
-		eval.scope[finNodeID] = normalizeTypes(existing.Object)
-		keys = append(keys, resourceKey(existing))
-
-		if len(finNode.ReadyWhen) > 0 {
-			if err := eval.checkReadiness(finNode.ReadyWhen, finNodeID); err != nil {
-				// Step 2: readyWhen not satisfied — in progress.
-				logger.V(1).Info("finalizer not ready", "finalizer", finNodeID)
-				allReady = false
-				continue
-			}
-		}
-		// Step 3: Finalizer is ready.
-		logger.V(1).Info("finalizer ready", "finalizer", finNodeID)
-	}
-
-	return allReady, keys, nil
-}
-
-// runForEachFinalization handles the forEach + finalizes case: expand a
-// collection and create one finalizer resource per item. All children must
-// reach readyWhen before the target can be deleted.
-//
-// Finalization children are self-contained and intentionally do not participate
-// in the coordinator's forEach state tracking (forEachNewKeys, forEachNewScope,
-// etc.). They are ephemeral artifacts of the finalization protocol — created to
-// gate target deletion and cleaned up after. Their lifecycle is bounded by the
-// finalization sequence, not by ongoing reconciliation.
-func (r *GraphReconciler) runForEachFinalization(
-	ctx context.Context,
-	graph *unstructured.Unstructured,
-	finNode *Node,
-	dag *DAG,
-	eval *evaluator,
-	watcher *graphWatcher,
-) (bool, []string, error) {
-	logger := log.FromContext(ctx)
-	var createdKeys []string
-	allReady := true
-
-	varName := finNode.ForEach.VarName
-	collectionExpr := finNode.ForEach.Expr
-
-	collection, err := eval.evalString(collectionExpr)
-	if err != nil {
-		return false, createdKeys, fmt.Errorf("forEach finalizer %s: evaluating collection %q: %w", finNode.ID, collectionExpr, err)
-	}
-
-	items, ok := collection.([]any)
-	if !ok {
-		items = []any{collection}
-	}
-	logger.Info("forEach finalization expanding", "finalizer", finNode.ID, "var", varName, "count", len(items))
-
-	for _, item := range items {
-		innerScope := copyScope(eval.scope)
-		innerScope[varName] = item
-		innerEval := eval.withScope(innerScope)
-
-		evalMap, err := innerEval.toMapNode(*finNode)
-		if err != nil {
-			return false, createdKeys, fmt.Errorf("forEach finalizer %s item: %w", finNode.ID, err)
-		}
-
-		// Set namespace default.
-		childObj := &unstructured.Unstructured{Object: evalMap}
-		if childObj.GetNamespace() == "" {
-			childObj.SetNamespace(graph.GetNamespace())
-		}
-
-		// Stamp forEach child identity labels using the reconcile-scoped
-		// effective generation (falls back to graph generation when unset).
-		stampForEachChildLabels(childObj, finNode.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, NodeTypeTemplate)
-		evalMap = childObj.Object
-
-		// Check if this child already exists.
-		existing := &unstructured.Unstructured{}
-		existing.SetGroupVersionKind(childObj.GroupVersionKind())
-		getErr := r.Client.Get(ctx, client.ObjectKey{
-			Namespace: childObj.GetNamespace(),
-			Name:      childObj.GetName(),
-		}, existing)
-
-		if getErr != nil {
-			if !apierrors.IsNotFound(getErr) {
-				return false, createdKeys, fmt.Errorf("checking forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), getErr)
-			}
-			// Child doesn't exist — create it.
-			logger.Info("creating forEach finalizer child",
-				"finalizer", finNode.ID, "name", childObj.GetName())
-			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, NodeTypeTemplate, eval.effectiveGeneration, false)
-			if applyErr != nil {
-				return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
-			}
-			createdKeys = append(createdKeys, resourceKey(applied))
-			allReady = false
-			continue
-		}
-
-		// Child exists — check readyWhen.
-		createdKeys = append(createdKeys, resourceKey(existing))
-		if len(finNode.ReadyWhen) > 0 {
-			innerEval.scope[finNode.ID] = normalizeTypes(existing.Object)
-			if err := innerEval.checkReadiness(finNode.ReadyWhen, finNode.ID); err != nil {
-				logger.V(1).Info("forEach finalizer child not ready",
-					"finalizer", finNode.ID, "name", existing.GetName())
-				allReady = false
-				continue
-			}
-		}
-		logger.V(1).Info("forEach finalizer child ready",
-			"finalizer", finNode.ID, "name", existing.GetName())
-	}
-
-	return allReady, createdKeys, nil
-}
-
 // ---------------------------------------------------------------------------
+// Apply / SSA
+// ---------------------------------------------------------------------------
+
+// collectPruneCandidates returns keys in previousKeys but not in currentKeys.
+func collectPruneCandidates(previousKeys map[string]bool, currentKeys []string) []string {
+	currentSet := map[string]bool{}
+	for _, k := range currentKeys {
+		currentSet[k] = true
+	}
+	var candidates []string
+	for key := range previousKeys {
+		if !currentSet[key] {
+			candidates = append(candidates, key)
+		}
+	}
+	return candidates
+}
+
+// buildKeyMaps creates bidirectional node-ID ↔ resource-key mappings from all DAGs.
+func buildKeyMaps(dag *DAG, supersededDAGs map[string]*DAG, namespace string, scope GVKScopeResolver) (keyToNodeID map[string]string, nodeIDToKey map[string]string) {
+	keyToNodeID = map[string]string{}
+	nodeIDToKey = map[string]string{}
+	for _, d := range collectAllDAGs(dag, supersededDAGs) {
+		for _, node := range d.Nodes {
+			if node.Identity() != nil {
+				if rk := staticResourceKey(node.Identity(), namespace, scope); rk != "" {
+					keyToNodeID[rk] = node.ID
+					nodeIDToKey[node.ID] = rk
+				}
+			}
+		}
+	}
+	return
+}
+
+// collectAllDAGs returns the active DAG plus all superseded DAGs.
+func collectAllDAGs(dag *DAG, supersededDAGs map[string]*DAG) []*DAG {
+	allDAGs := []*DAG{}
+	if dag != nil {
+		allDAGs = append(allDAGs, dag)
+	}
+	for _, d := range supersededDAGs {
+		allDAGs = append(allDAGs, d)
+	}
+	return allDAGs
+}
+
 // Applied set key format
 // ---------------------------------------------------------------------------
 //
@@ -744,7 +554,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 //     Ready. Routed to reconcileState.nodeNotes at the caller so healthy
 //     graphs with notes still report Ready=True with the note in the message.
 //   - err: hard error from an API call; sets pruneOK=false at the call site.
-func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, supersededDAGs map[string]*DAG, eval *evaluator, watcher *graphWatcher) ([]string, []string, []string, error) {
+func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, supersededDAGs map[string]*DAG, eval *evaluator, watcher *graphWatcher, finResult *finalizationResult) ([]string, []string, []string, error) {
 	logger := log.FromContext(ctx)
 	var deferredKeys []string
 	var blockedReasons []string // TeardownBlocked messages — gates Ready
@@ -790,53 +600,9 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		}
 	}
 
-	// findFinalizers looks up finalizer node IDs for a target across all DAGs.
-	// Returns the first DAG that declares finalizers for this target, plus the IDs.
-	findFinalizers := func(nodeID string) (*DAG, []string) {
-		for _, d := range allDAGs {
-			if fins, ok := d.Finalizers[nodeID]; ok && len(fins) > 0 {
-				return d, fins
-			}
-		}
-		return nil, nil
-	}
-
-	// Build the set of keys that must be deferred because an in-flight
-	// finalizer references them. If a prune target has finalizer nodes,
-	// each finalizer node's direct dependencies (other than the target
-	// itself) are deferred — they must remain alive while the finalizer
-	// is running.
-	// finalizerProtected: resources the finalization flow has claimed — both
-	// the finalizer resources themselves and their dependencies. Prune must
-	// not touch these.
-	finalizerProtected := map[string]bool{}
-	for key := range previousKeys {
-		if currentSet[key] {
-			continue
-		}
-		nodeID := keyToNodeID[key]
-		finDAG, finalizerNodeIDs := findFinalizers(nodeID)
-		if finDAG == nil {
-			continue
-		}
-		for _, finNodeID := range finalizerNodeIDs {
-			finIdx, exists := finDAG.Index[finNodeID]
-			if !exists {
-				continue
-			}
-			for depID := range finDAG.Nodes[finIdx].Dependencies {
-				if depID == nodeID {
-					continue // skip the target itself
-				}
-				if dk, ok := nodeIDToKey[depID]; ok {
-					finalizerProtected[dk] = true
-				}
-			}
-			if dk, ok := nodeIDToKey[finNodeID]; ok {
-				finalizerProtected[dk] = true
-			}
-		}
-	}
+	// finalizerProtected: resources that must not be pruned. Computed by
+	// advanceFinalization which ran before this function.
+	finalizerProtected := finResult.ProtectedKeys
 
 	fieldOwner := graphFieldOwner(graph)
 
@@ -885,17 +651,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 		// Check if it exists and is ours before deleting.
 		if err := r.Client.Get(ctx, nn, obj); err != nil {
-			// Per 005-reconciliation.md § Finalization: "If the target resource
-			// does not exist in the cluster (creation failed, already deleted
-			// externally), there is nothing to finalize. The controller skips
-			// finalization and proceeds with cleanup."
-			if nodeID := keyToNodeID[key]; nodeID != "" {
-				if _, finalizerNodeIDs := findFinalizers(nodeID); len(finalizerNodeIDs) > 0 {
-					logger.Info("finalization skipped: target resource does not exist",
-						"key", key, "finalizers", finalizerNodeIDs)
-					notes = append(notes, fmt.Sprintf("FinalizerSkipped: %s (target absent)", key))
-				}
-			}
+			// Target already gone — nothing to delete.
 			r.Resources.remove(key)
 			continue // already gone
 		}
@@ -933,33 +689,19 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue // resource stays in applied set — retry next reconcile
 		}
 
-		// Finalization: if this target has finalizer nodes (from any revision),
-		// run the finalization sequence before deleting. Per
-		// 005-reconciliation.md § Finalization, creation failure and
-		// readyWhen failure are distinct TeardownBlocked causes — operators
-		// need to tell them apart to pick the right remediation.
-		var targetFinalizerKeys []string // keys from THIS target's finalization only
+		// Finalization check: if this target has finalizers, only delete if
+		// advanceFinalization marked it complete. Otherwise skip — finalization
+		// handles deferral and blocking reasons.
 		nodeID := keyToNodeID[key]
-		if finDAG, finalizerNodeIDs := findFinalizers(nodeID); finDAG != nil {
-			ready, fKeys, err := r.runFinalization(ctx, graph, obj, nodeID, finalizerNodeIDs, finDAG, eval, watcher)
-			targetFinalizerKeys = fKeys
-			if err != nil {
-				logger.Error(err, "finalization failed", "key", key)
-				blockedReasons = append(blockedReasons, fmt.Sprintf(
-					"TeardownBlocked: %s (finalizer creation failed: %s)", key, err))
-				deferredKeys = append(deferredKeys, key)
-				continue // block deletion — TeardownBlocked
+		hasFinalizers := false
+		for _, d := range allDAGs {
+			if fins, ok := d.Finalizers[nodeID]; ok && len(fins) > 0 {
+				hasFinalizers = true
+				break
 			}
-			if !ready {
-				logger.Info("finalization in progress — deletion deferred",
-					"key", key, "finalizers", finalizerNodeIDs)
-				blockedReasons = append(blockedReasons, fmt.Sprintf(
-					"TeardownBlocked: %s (finalizer not ready: %s)",
-					key, strings.Join(finalizerNodeIDs, ", ")))
-				deferredKeys = append(deferredKeys, key)
-				continue // block deletion until all finalizers ready
-			}
-			logger.Info("finalization complete", "key", key)
+		}
+		if hasFinalizers && !finResult.CompletedTargets[key] {
+			continue // finalization not complete — already deferred by advanceFinalization
 		}
 
 		if err := r.Client.Delete(ctx, obj); err != nil {
@@ -969,19 +711,16 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		} else {
 			logger.Info("pruned resource", "key", key)
 			r.Resources.remove(key)
-			// If this target had finalizer resources, they are now safe to
-			// clean up — the target is gone and finalization completed.
-			// Only include keys from THIS target's finalization, not from
-			// other targets that may still be in progress.
-			deferredDeletes = append(deferredDeletes, targetFinalizerKeys...)
+			// Clean up finalization children now that target is deleted.
+			if childKeys, ok := finResult.ChildKeysToCleanup[key]; ok {
+				deferredDeletes = append(deferredDeletes, childKeys...)
+			}
 		}
 	}
 
-	// Process deferred deletes: finalizer resources whose targets were
-	// successfully deleted above. Per 005-reconciliation.md §
-	// Finalization: "The finalizer resources are in the applied set but
-	// not in the desired state — they are prune candidates."
-	r.deleteByKeys(ctx, deferredDeletes)
+	// Clean up finalization children whose targets were successfully deleted.
+	// Failures are non-fatal — children become normal prune candidates next cycle.
+	r.cleanupFinalizationChildren(ctx, deferredDeletes)
 
 	return deferredKeys, blockedReasons, notes, nil
 }

@@ -317,10 +317,14 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				// Carry forward to new state.
 				newItemScope[id] = prevScope
 				newItemKeys[id] = prevItemKeys[id]
-				// Carry forward cached hash (already context-prefixed), or
-				// bootstrap the cache for future reconciles.
+				// Carry forward cached hash or bootstrap the cache for
+				// future reconciles. The cached hash is already in
+				// composite format (contextHash/itemHash) — carry it
+				// forward as-is. Re-prefixing would double the context
+				// prefix, causing alternating cache hit/miss on every
+				// subsequent reconcile.
 				if h := prevItemHashes[id]; h != "" {
-					newItemHashes[id] = contextHash + "/" + h
+					newItemHashes[id] = h
 				} else if currMap, ok := item.(map[string]any); ok {
 					if h, err := hashDesiredState(currMap); err == nil {
 						newItemHashes[id] = contextHash + "/" + h

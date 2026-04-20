@@ -31,7 +31,16 @@ const (
 func (a Atomic) Deps() []string { return nil }
 
 func (a Atomic) Schema(_ Resolver) (*extv1.JSONSchemaProps, error) {
-	return &extv1.JSONSchemaProps{Type: string(a)}, nil
+	// The simpleschema DSL uses "float" as a friendly name, but OpenAPI v3
+	// (and therefore CRD validation and CEL) only recognizes "number" for
+	// floating-point values. Without this mapping, CEL expressions that
+	// reference float fields fail with "undefined field" because the
+	// generated CRD has an invalid schema type.
+	t := string(a)
+	if a == Float {
+		t = "number"
+	}
+	return &extv1.JSONSchemaProps{Type: t}, nil
 }
 
 // IsAtomic returns true if s is an atomic type name.

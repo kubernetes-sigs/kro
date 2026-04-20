@@ -163,7 +163,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 							Schema: &extv1.JSONSchemaProps{
 								Type: "array",
 								Items: &extv1.JSONSchemaPropsOrArray{
-									Schema: &extv1.JSONSchemaProps{Type: "float"},
+									Schema: &extv1.JSONSchemaProps{Type: "number"},
 								},
 							},
 						},
@@ -226,6 +226,19 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			},
 			want:    nil,
 			wantErr: true,
+		},
+		{
+			name: "Schema with float field maps to number",
+			obj: map[string]interface{}{
+				"ratio": "float",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"ratio": {Type: "number"},
+				},
+			},
+			wantErr: false,
 		},
 		{
 			name: "Nested slices",

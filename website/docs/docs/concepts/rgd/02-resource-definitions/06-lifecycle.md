@@ -4,11 +4,15 @@ sidebar_position: 6
 
 # Lifecycle
 
-The `lifecycle` field controls what happens to resources when an instance is deleted. By default, all resources are deleted with the instance. You can override this behavior per-resource using the `policy()` CEL builder.
+The `lifecycle` field controls how KRO handles certain actions on resources. You can configure per-resource behavior using the `policy()` CEL builder.
 
-## Default Behavior
+## Delete Policy
 
-When you delete a KRO instance, all resources it created are automatically deleted:
+The delete policy determines what happens to resources when an instance is deleted.
+
+### Default Behavior
+
+By default, all resources are deleted with the instance:
 
 ```yaml
 resources:
@@ -22,7 +26,7 @@ resources:
 
 This is the standard Kubernetes ownership pattern - when you delete the parent, the children are cleaned up.
 
-## Retention
+### Retention
 
 Use `lifecycle: "${policy().withRetain()}"` to keep a resource even after the instance is deleted:
 
@@ -44,7 +48,7 @@ resources:
 
 When the instance is deleted, the PVC is **orphaned** (KRO labels removed) rather than deleted, preserving the data.
 
-## Policy Methods
+### Policy Methods
 
 The `policy()` builder provides two methods:
 
@@ -59,7 +63,7 @@ lifecycle: "${policy().withRetain()}"
 lifecycle: "${policy().withDelete()}"
 ```
 
-## Conditional Retention
+### Conditional Retention
 
 Use CEL conditionals to make retention decisions based on instance data:
 
@@ -75,7 +79,7 @@ resources:
 
 Now production databases are retained, while dev/test databases are cleaned up.
 
-## How It Works
+### How It Works
 
 When a resource has `lifecycle: "${policy().withRetain()}"`:
 

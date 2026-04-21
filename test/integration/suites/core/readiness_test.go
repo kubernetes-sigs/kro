@@ -274,8 +274,8 @@ var _ = Describe("Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// validate service spec
-			g.Expect(service.Annotations).To(HaveLen(1))
-			g.Expect(service.Annotations["app"]).To(Equal("service"))
+			g.Expect(service.Annotations).To(HaveKeyWithValue("app", "service"))
+			g.Expect(service.Annotations).To(HaveKeyWithValue("internal.kro.run/lifecycle-policy", "delete"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete instance

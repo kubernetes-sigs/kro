@@ -108,6 +108,60 @@ var _ = Describe("Lifecycle Retention Policy", func() {
 			Expect(env.Client.Delete(ctx, instance2)).To(Succeed())
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
+
+		It("should orphan config map when resource is removed from RGD (pruned)", func(ctx SpecContext) {
+			rgd := createLifecycleRGD("lifecycle-prune-rgd", testGroupLifecycle, "LifecyclePruneTest", "v1alpha1", true)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
+
+			By("Creating instance with both configmap and secret")
+			instance := createLifecycleInstance(testGroupLifecycle, "LifecyclePruneTest", "v1alpha1", "test-prune", ns.Name, "prune-test-app")
+			Expect(env.Client.Create(ctx, instance)).To(Succeed())
+			waitForInstanceActive(ctx, ns.Name, "test-prune", instance)
+
+			By("Verifying both resources exist with KRO labels")
+			cm := &corev1.ConfigMap{}
+			verifyResourceExists(ctx, ns.Name, "test-prune-config", cm)
+			Expect(cm.Labels).To(HaveKey(metadata.InstanceIDLabel))
+			Expect(cm.Labels).To(HaveKey(metadata.ManagedByLabelKey))
+			originalCMUID := string(cm.UID)
+
+			secret := &corev1.Secret{}
+			verifyResourceExists(ctx, ns.Name, "test-prune-secret", secret)
+			Expect(secret.Labels).To(HaveKey(metadata.InstanceIDLabel))
+
+			By("Updating RGD to remove configMap resource")
+			Eventually(func(g Gomega) {
+				updatedRGD := &krov1alpha1.ResourceGraphDefinition{}
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, updatedRGD)).To(Succeed())
+
+				// Keep only the secret resource
+				updatedRGD.Spec.Resources = []*krov1alpha1.Resource{rgd.Spec.Resources[1]}
+				g.Expect(env.Client.Update(ctx, updatedRGD)).To(Succeed())
+			}, 10*time.Second, time.Second).Should(Succeed())
+
+			waitForRGDActive(ctx, rgd.Name)
+
+			By("Verifying configMap was orphaned (retained without KRO labels)")
+			Eventually(func(g Gomega) {
+				cm := &corev1.ConfigMap{}
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "test-prune-config", Namespace: ns.Name}, cm)).To(Succeed())
+				// Should still exist with same UID
+				g.Expect(string(cm.UID)).To(Equal(originalCMUID))
+				// But KRO labels should be removed
+				g.Expect(cm.Labels).ToNot(HaveKey(metadata.InstanceIDLabel))
+				g.Expect(cm.Labels).ToNot(HaveKey(metadata.NodeIDLabel))
+				g.Expect(cm.Labels).ToNot(HaveKey(metadata.ManagedByLabelKey))
+			}, 30*time.Second, time.Second).Should(Succeed())
+
+			By("Verifying secret still has KRO labels")
+			secret = &corev1.Secret{}
+			verifyResourceExists(ctx, ns.Name, "test-prune-secret", secret)
+			Expect(secret.Labels).To(HaveKey(metadata.InstanceIDLabel))
+
+			Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
 	})
 
 	Context("with CEL expression syntax", func() {

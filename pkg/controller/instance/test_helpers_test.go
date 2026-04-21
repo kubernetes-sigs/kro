@@ -317,6 +317,21 @@ func newDeploymentObject(name, namespace string) *unstructured.Unstructured {
 	return obj
 }
 
+// withKROLabels adds KRO ownership labels to a test object to simulate a resource managed by KRO.
+func withKROLabels(obj *unstructured.Unstructured, instanceID, nodeID string) *unstructured.Unstructured {
+	labels := obj.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	labels[metadata.OwnedLabel] = "true"
+	labels[metadata.InstanceIDLabel] = instanceID
+	if nodeID != "" {
+		labels[metadata.NodeIDLabel] = nodeID
+	}
+	obj.SetLabels(labels)
+	return obj
+}
+
 func newConfigMapObject(name, namespace string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{

@@ -1191,7 +1191,6 @@ func validateAndCompileNode(bc *buildContext, node *Node, inspector *ast.Inspect
 			return fmt.Errorf("resource %q lifecycle: %w", node.Meta.ID, err)
 		}
 
-		// Compile lifecycle using the shared typed environment
 		if _, err := bc.compile(bc.env, node.Lifecycle); err != nil {
 			return fmt.Errorf("resource %q: compile lifecycle expression: %w", node.Meta.ID, err)
 		}
@@ -1421,12 +1420,6 @@ func parseLifecycleExpression(lifecycleStr string, resourceID string) (*krocel.E
 		return nil, nil
 	}
 
-	// Wrap in ${} if not already wrapped - parser requires standalone expressions
-	if !strings.HasPrefix(lifecycleStr, "${") {
-		lifecycleStr = "${" + lifecycleStr + "}"
-	}
-
-	// Parse as CEL expression
 	lifecycleExprs, err := parser.ParseConditionExpressions([]string{lifecycleStr})
 	if err != nil {
 		return nil, fmt.Errorf("parse lifecycle expression for resource %s: %w", resourceID, err)

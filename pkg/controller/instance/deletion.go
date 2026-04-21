@@ -24,7 +24,6 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -125,8 +124,6 @@ func (c *Controller) planNodesForDeletion(
 			//
 			// Differently from single resources, we do not do GETs per-item here because
 			// that would be inefficient and cause many API calls during deletion.
-			// listCollectionItems already filters by instance ID + node ID labels,
-			// so orphaned resources won't be returned.
 			items, err := c.listCollectionItems(rcx, nodeMeta.GVR, rid)
 			if err != nil {
 				state.SetError(err)
@@ -153,6 +150,12 @@ func (c *Controller) planNodesForDeletion(
 				}
 				state.SetError(err)
 				return nil, err
+			}
+			// If resource exists but has no KRO labels, it was orphaned and should be
+			// considered deleted from KRO's perspective.
+			if !metadata.IsKROOwned(observed) {
+				state.SetDeleted()
+				continue
 			}
 			node.SetObserved([]*unstructured.Unstructured{observed})
 			state.SetInProgress()
@@ -191,14 +194,18 @@ func (c *Controller) deleteTarget(
 
 	// If policy says to retain, orphan all targets and mark node as deleted.
 	if policy.ShouldRetain() {
+		rcx.Log.Info("Lifecycle policy says retain, orphaning resources", "resource", node.Spec.Meta.ID, "targetCount", len(targets))
 		for _, target := range targets {
-			if err := applyset.RemoveKroLabelsToRetainResource(rcx.Ctx, rcx.Client, node.Spec.Meta.GVR, target.GetNamespace(), target.GetName()); err != nil {
+			rcx.Log.Info("Removing KRO labels from resource", "resource", node.Spec.Meta.ID, "name", target.GetName(), "namespace", target.GetNamespace())
+			if err := metadata.RemoveKroLabelsToRetainResource(rcx.Ctx, rcx.Client, node.Spec.Meta.GVR, target.GetNamespace(), target.GetName()); err != nil {
+				rcx.Log.Error(err, "Failed to orphan resource", "resource", node.Spec.Meta.ID, "name", target.GetName())
 				state.SetError(err)
 				return err
 			}
-			rcx.Log.Info("Orphaned resource due to lifecycle policy", "resource", node.Spec.Meta.ID, "name", target.GetName())
+			rcx.Log.Info("Successfully orphaned resource", "resource", node.Spec.Meta.ID, "name", target.GetName())
 		}
 		// All resources orphaned - mark as deleted (from KRO's perspective)
+		rcx.Log.Info("All resources orphaned, marking node as deleted", "resource", node.Spec.Meta.ID)
 		state.SetDeleted()
 		return nil
 	}
@@ -208,7 +215,6 @@ func (c *Controller) deleteTarget(
 	anyDeleted := false
 	for _, target := range targets {
 		rc := resourceClientFor(rcx, node.Spec.Meta, target.GetNamespace())
-
 		err := rc.Delete(rcx.Ctx, target.GetName(), metav1.DeleteOptions{})
 		if apierrors.IsNotFound(err) {
 			// Already gone: leave anyDeleted as is and keep checking others.

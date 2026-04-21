@@ -69,6 +69,12 @@ const (
 	// so the decision must persist on the resource. When set to "retain", prune will
 	// orphan (remove KRO labels) rather than delete the resource.
 	LifecyclePolicyAnnotation = internalv1alpha1.InternalKRODomainName + "/lifecycle-policy"
+
+	// LifecyclePolicyRetain indicates the resource should be retained (orphaned) on instance deletion.
+	LifecyclePolicyRetain = "retain"
+
+	// LifecyclePolicyDelete indicates the resource should be deleted on instance deletion (default behavior).
+	LifecyclePolicyDelete = "delete"
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package applyset
+package metadata
 
 import (
 	"context"
@@ -27,7 +27,6 @@ import (
 	"k8s.io/client-go/util/retry"
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // RemoveKroLabelsToRetainResource removes KRO management labels from a resource.
@@ -63,9 +62,10 @@ func RemoveKroLabelsToRetainResource(
 
 		labelsToRemove := make(map[string]interface{})
 		for key := range labels {
-			if strings.HasPrefix(key, metadata.LabelKROPrefix) ||
+			if strings.HasPrefix(key, LabelKROPrefix) ||
 				strings.HasPrefix(key, internalv1alpha1.InternalKRODomainName+"/") ||
-				key == ApplysetPartOfLabel {
+				key == "applyset.kubernetes.io/part-of" ||
+				key == ManagedByLabelKey {
 				labelsToRemove[key] = nil
 			}
 		}

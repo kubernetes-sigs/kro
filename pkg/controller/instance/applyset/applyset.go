@@ -37,6 +37,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/dynamic"
+
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // Compile-time check that ApplySet implements Interface.
@@ -563,8 +565,8 @@ func (a *ApplySet) prune(
 		eg.Go(func() error {
 			// Patch to remove labels if resource has lifecycle-policy=retain annotation
 			annotations := c.obj.GetAnnotations()
-			if annotations != nil && annotations["internal.kro.run/lifecycle-policy"] == "retain" {
-				if err := RemoveKroLabelsToRetainResource(egCtx, a.client, c.gvr, c.obj.GetNamespace(), c.obj.GetName()); err != nil {
+			if annotations != nil && annotations[metadata.LifecyclePolicyAnnotation] == metadata.LifecyclePolicyRetain {
+				if err := metadata.RemoveKroLabelsToRetainResource(egCtx, a.client, c.gvr, c.obj.GetNamespace(), c.obj.GetName()); err != nil {
 					a.log.Error(err, "failed to orphan resource with retain policy",
 						"name", c.obj.GetName(),
 						"namespace", c.obj.GetNamespace(),

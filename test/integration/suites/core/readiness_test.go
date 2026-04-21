@@ -225,7 +225,8 @@ var _ = Describe("Readiness", func() {
 			// Verify deployment specs
 			g.Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(replicas)))
-			g.Expect(deployment.Annotations).To(HaveLen(0))
+			// Lifecycle annotation is added by default
+			g.Expect(deployment.Annotations).To(HaveKeyWithValue("internal.kro.run/lifecycle-policy", "delete"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify Service is not created yet

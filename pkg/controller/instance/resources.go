@@ -144,7 +144,6 @@ func (c *Controller) pruneIfSafe(rcx *ReconcileContext, r *reconcileResult) erro
 	if r.unresolvedErr != nil || r.applyResult.Errors() != nil {
 		return nil
 	}
-
 	pruned, needsRetry, err := c.pruneOrphans(rcx, r.applier, r.applyResult, r.supersetPatch, r.batchMeta)
 	if err != nil {
 		return err
@@ -382,7 +381,6 @@ func (c *Controller) processRegularNode(
 }
 
 // applyDecoratorLabels merges tool labels and adds node/collection identifiers.
-// Sets lifecycle-policy annotation based on policy.
 func (c *Controller) applyDecoratorLabels(
 	rcx *ReconcileContext,
 	obj *unstructured.Unstructured,
@@ -424,17 +422,14 @@ func (c *Controller) applyDecoratorLabels(
 
 	obj.SetLabels(labels)
 
-	// Set lifecycle policy annotation
-	// For SSA semantics, we always set the annotation (never delete from map)
-	// so the field manager owns it and can explicitly set/unset it
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
 	if policy.ShouldRetain() {
-		annotations[metadata.LifecyclePolicyAnnotation] = "retain"
+		annotations[metadata.LifecyclePolicyAnnotation] = metadata.LifecyclePolicyRetain
 	} else {
-		annotations[metadata.LifecyclePolicyAnnotation] = "delete"
+		annotations[metadata.LifecyclePolicyAnnotation] = metadata.LifecyclePolicyDelete
 	}
 	obj.SetAnnotations(annotations)
 }

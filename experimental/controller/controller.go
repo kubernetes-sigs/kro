@@ -27,6 +27,7 @@ import (
 
 	"github.com/gobuffalo/flect"
 	"github.com/prometheus/client_golang/prometheus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -707,6 +708,19 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		if err := r.Client.Update(ctx, graph); err != nil {
 			return ctrl.Result{}, err
 		}
+	}
+
+	// If any owner is being deleted (has deletionTimestamp), self-delete
+	// to initiate teardown. This participates in the standard K8s
+	// finalizer contract: the owner is held in Terminating by a patch
+	// node's finalizer (placed during normal reconciliation), and this
+	// detection bridges the gap since K8s GC can't cascade while the
+	// owner is still in etcd.
+	if r.ownerDeleting(ctx, graph) {
+		if err := r.Client.Delete(ctx, graph); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("self-deleting graph for owner teardown: %w", err)
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Set up watch tracking for this reconcile cycle.

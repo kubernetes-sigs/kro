@@ -290,10 +290,10 @@ re-reconcile for this transition. The periodic drift timer (default 30m, configu
 `--drift-interval`) re-evaluates the `includeWhen` gate and advances the bootstrap. In production
 this is acceptable — bootstrap happens once. Tests use a shorter interval (5s).
 
-**Deletion lifecycle.** Kind deletion cascades: the Graph controller deletes the compiled Graph,
-which owns the CRD, which cascades to all instances. Decorators watching those instances lose their
-targets — the Decorator's sub-Graphs are cleaned up through normal ownership. A finalizer on Kind
-to block deletion until confirmed is not yet implemented.
+**Deletion lifecycle.** Each per-instance Graph has an ownerReference pointing to the instance and
+a `patch:` node that places a finalizer on the instance. When the instance is deleted, the
+finalizer holds it in Terminating; the controller detects the owner's `deletionTimestamp` and
+self-deletes the Graph; teardown prunes the patch node, releasing the finalizer.
 
 ## What Would Force a Fourth Primitive
 

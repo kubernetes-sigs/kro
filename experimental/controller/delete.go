@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -126,25 +127,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		r.Watcher.removeGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
 	}
 
-	// Release Patch fields first via release apply.
-	// Per the design (003-ownership): Patch never deletes — it releases
-	// field ownership so the actual owner retains the resource.
 	fieldOwner := graphFieldOwner(graph)
-	for key := range patchKeys {
-		resKey, hasStatus := parsePatchKey(key)
-		if resKey == "" {
-			continue
-		}
-		gvk, nn := parseResourceKey(resKey)
-		if gvk.Kind == "" {
-			continue
-		}
-		if err := releaseApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
-			logger.Error(err, "releasing patch fields during teardown", "key", resKey)
-		} else {
-			logger.Info("released patch fields during teardown", "key", resKey)
-		}
-	}
 
 	// Convert template keys to slice for ordered deletion.
 	var keys []string
@@ -412,6 +395,27 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		logger.Info("teardown note", "note", note)
 	}
 
+	// Release Patch fields via SSA release apply. Runs AFTER template
+	// deletion so that lifecycle patches (e.g., a finalizer on an owner
+	// object) are released only after managed resources are gone.
+	// Per 003-ownership: Patch never deletes — it releases field
+	// ownership so the actual owner retains the resource.
+	for key := range patchKeys {
+		resKey, hasStatus := parsePatchKey(key)
+		if resKey == "" {
+			continue
+		}
+		gvk, nn := parseResourceKey(resKey)
+		if gvk.Kind == "" {
+			continue
+		}
+		if err := releaseApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
+			logger.Error(err, "releasing patch fields during teardown", "key", resKey)
+		} else {
+			logger.Info("released patch fields during teardown", "key", resKey)
+		}
+	}
+
 	// Pass 3: Delete all GraphRevisions.
 	for _, rev := range revisions {
 		if err := deleteRevision(ctx, r.Client, rev); err != nil {
@@ -436,4 +440,40 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Owner lifecycle
+// ---------------------------------------------------------------------------
+//
+// When a Graph has ownerReferences, the controller participates in the
+// owner's deletion lifecycle. If any owner enters Terminating (has a
+// deletionTimestamp), the controller self-deletes the Graph to initiate
+// ordered teardown. This bridges the gap between K8s GC cascade (which
+// requires the owner to be fully gone) and the blocking finalizer pattern
+// (where a patch node holds the owner in Terminating).
+
+// ownerDeleting returns true if any of the Graph's owners has a non-zero
+// deletionTimestamp. This triggers self-deletion so the Graph can tear
+// down managed resources via its normal reconcileDelete path.
+func (r *GraphReconciler) ownerDeleting(ctx context.Context, graph *unstructured.Unstructured) bool {
+	for _, ref := range graph.GetOwnerReferences() {
+		gv, err := schema.ParseGroupVersion(ref.APIVersion)
+		if err != nil {
+			continue
+		}
+		owner := &unstructured.Unstructured{}
+		owner.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   gv.Group,
+			Version: gv.Version,
+			Kind:    ref.Kind,
+		})
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: graph.GetNamespace()}, owner); err != nil {
+			continue // Owner gone or unreachable — not our trigger
+		}
+		if !owner.GetDeletionTimestamp().IsZero() {
+			return true
+		}
+	}
+	return false
 }

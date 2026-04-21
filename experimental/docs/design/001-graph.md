@@ -472,3 +472,37 @@ status:
 The Graph's status contains only controller-managed conditions. There are no user-defined status
 fields on the Graph itself. User-defined status (e.g., `deploymentReady`, `address`) lives on custom
 resource types and is written via `patch:` nodes targeting the custom resource's status subresource.
+
+## Owner References
+
+The controller does not cascade-delete — teardown is ordered by the DAG. A Graph with
+`metadata.ownerReferences` inherits standard K8s cascade: when any owner is Terminating, the
+controller self-deletes the Graph. The resulting teardown runs the full ordered path — `finalizes`
+sequences fire, prune walks the reverse DAG.
+
+To hold the owner in Terminating during teardown, combine ownerReferences with a `patch:` node
+that places a finalizer on the owner:
+
+```yaml
+metadata:
+  ownerReferences:
+    - apiVersion: kro.run/v1alpha1
+      kind: WebApp
+      name: my-instance
+      uid: ...
+spec:
+  nodes:
+    - id: lifecycle
+      patch:
+        apiVersion: kro.run/v1alpha1
+        kind: WebApp
+        metadata:
+          name: my-instance
+          finalizers:
+            - experimental.kro.run/graph
+    - id: deployment
+      template: ...
+```
+
+The ownerReference triggers self-deletion. The patch holds the owner until teardown prunes it —
+SSA releases the finalizer, the owner completes deletion.

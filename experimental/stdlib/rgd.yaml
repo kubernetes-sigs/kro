@@ -161,6 +161,13 @@ spec:
           # kro's behavior (resources in instance's namespace).
           name: '${(has(instance.metadata.namespace) && instance.metadata.namespace != "" ? instance.metadata.namespace + "-" : "") + instance.metadata.name + "-" + schema.spec.schema.kind.lowerAscii()}'
           namespace: '${has(instance.metadata.namespace) && instance.metadata.namespace != "" ? instance.metadata.namespace : "kro-system"}'
+          ownerReferences:
+            - apiVersion: '${schema.spec.schema.group + "/" + schema.spec.schema.apiVersion}'
+              kind: '${schema.spec.schema.kind}'
+              name: '${instance.metadata.name}'
+              uid: '${instance.metadata.uid}'
+              controller: true
+              blockOwnerDeletion: true
         spec:
           # Per-instance Graph nodes: schema watch + user resources + status.
           #
@@ -293,6 +300,15 @@ spec:
                     }
                   ]
                 }.merge(has(schema.spec.schema.status) ? schema.spec.schema.status : {})
+              }}]
+              + [{"id": "instanceLifecycle", "patch": {
+                "apiVersion": schema.spec.schema.group + "/" + schema.spec.schema.apiVersion,
+                "kind": schema.spec.schema.kind,
+                "metadata": {
+                  "name": instance.metadata.name,
+                  "namespace": instance.metadata.namespace,
+                  "finalizers": ["experimental.kro.run/graph"]
+                }
               }}]
             }
 

@@ -180,12 +180,13 @@ revision's metadata still applies to resources being pruned from it.
 
 #### Teardown
 
-When a Graph is deleted, every node becomes a prune candidate — the prune algorithm above runs in
-full. Ordering comes from the active revision's DAG (distinct from reconcile-time prune, where
-ordering comes from the superseded revision that defined the pruned resources). If the revision was
-deleted (ownerReference cascade race), the controller regenerates the DAG from spec. Teardown is
-blocked until ordering is available — never degrade to unordered deletion. If resources persist
-(finalizers), requeue. Once all managed resources are pruned, remove the Graph's finalizer.
+When a Graph is deleted — by its owner, by GC, or directly — every node becomes a prune
+candidate — the prune algorithm above runs in full. Ordering comes from the active revision's DAG
+(distinct from reconcile-time prune, where ordering comes from the superseded revision that defined
+the pruned resources). If the revision was deleted (ownerReference cascade race), the controller
+regenerates the DAG from spec. Teardown is blocked until ordering is available — never degrade to
+unordered deletion. If nodes persist (finalizers), requeue. Once all nodes are pruned, remove the
+Graph's finalizer.
 
 #### Finalization
 

@@ -17,9 +17,11 @@ package graphcontroller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -459,8 +461,19 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	// Compile to verify validity before creating the revision.
 	// Phase 1-2: resolve types (I/O) before pure compilation.
 	typeInfo := resolveNodeTypes(graphSpec.Nodes, r.SchemaResolver)
-	_, err = compileGraphSpec(graphSpec, typeInfo)
+	compiled, err := compileGraphSpec(graphSpec, typeInfo)
 	if err != nil {
+		return nil, nil, err
+	}
+
+	// Phase 5: Pre-compile child graphs with expression-valued spec.nodes.
+	// When a forEach node stamps child Graphs whose node list is a CEL
+	// expression (e.g., ${schema.spec.resources...}), the normal pre-compilation
+	// in deferred.go bails because it can't extract scope statically. Here we
+	// resolve referenced ref nodes from the API and evaluate the expression to
+	// get the child node list, then compile it. This catches cycles and other
+	// structural errors at the parent's compile time.
+	if err := r.precompileExpressionChildGraphs(ctx, graph, graphSpec, compiled); err != nil {
 		return nil, nil, err
 	}
 
@@ -498,6 +511,153 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	}
 
 	return active, superseded, nil
+}
+
+// precompileExpressionChildGraphs resolves expression-valued spec.nodes in
+// forEach Graph templates by fetching referenced ref node targets from the API
+// and evaluating the expression. The resulting child node list is compiled to
+// catch cycles and structural errors at the parent's compile time.
+//
+// This extends the pre-compilation mechanism in deferred.go which handles
+// literal spec.nodes. When spec.nodes is an expression (e.g., referencing
+// schema.spec.resources), deferred.go bails. This function fills that gap by
+// resolving the ref targets that the expression depends on.
+func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, graph *unstructured.Unstructured, spec *GraphSpec, compiled *compiledGraph) error {
+	for _, node := range spec.Nodes {
+		if node.ForEach == nil {
+			continue
+		}
+		body := node.Payload()
+		if body == nil {
+			continue
+		}
+
+		// Check if the body is a Graph CR template.
+		apiVersion, _ := body["apiVersion"].(string)
+		kind, _ := body["kind"].(string)
+		if !isGraphCRLiteral(apiVersion, kind) {
+			continue
+		}
+
+		// Check if spec.nodes is expression-valued.
+		specMap, ok := body["spec"].(map[string]any)
+		if !ok {
+			continue
+		}
+		nodesRaw, ok := specMap["nodes"]
+		if !ok {
+			continue
+		}
+		nodesExpr, ok := nodesRaw.(string)
+		if !ok {
+			continue // literal []any — already handled by deferred.go
+		}
+
+		// Extract the inner CEL expression from the ${...} wrapper.
+		dollars, innerExpr, _, _ := findExpr(nodesExpr, 0)
+		if innerExpr == "" || len(dollars) != 1 {
+			continue // not a single-dollar expression, skip
+		}
+
+		// Build a scope with resolved ref nodes referenced by the expression.
+		scope := map[string]any{
+			reservedNodeReadyVar: map[string]bool{},
+		}
+		for _, n := range spec.Nodes {
+			if n.Ref == nil {
+				continue
+			}
+			if !strings.Contains(innerExpr, n.ID+".") && !strings.Contains(innerExpr, n.ID+"[") {
+				continue
+			}
+			// Resolve this ref's target from the API.
+			obj, err := r.resolveRefForPrecompilation(ctx, graph, n)
+			if err != nil {
+				// Best effort — if we can't resolve, skip pre-compilation.
+				return nil
+			}
+			scope[n.ID] = obj
+		}
+		if len(scope) == 1 {
+			// No refs resolved (only __kroNodeReady in scope) — can't evaluate.
+			continue
+		}
+
+		// Add a dummy forEach variable. Only metadata fields are needed;
+		// these affect resource names but not dependency topology.
+		scope[node.ForEach.VarName] = map[string]any{
+			"metadata": map[string]any{
+				"name":              "__precompile__",
+				"namespace":         "default",
+				"uid":               "00000000-0000-0000-0000-000000000000",
+				"generation":        int64(0),
+				"creationTimestamp": "2000-01-01T00:00:00Z",
+			},
+		}
+
+		// Add remaining scope nodes as empty maps (best effort for expressions
+		// that reference non-ref nodes like watchInstances).
+		for _, n := range spec.Nodes {
+			if _, exists := scope[n.ID]; !exists {
+				scope[n.ID] = []any{}
+			}
+		}
+
+		// Evaluate the spec.nodes expression.
+		result, err := compiled.eval(innerExpr, scope)
+		if err != nil {
+			// Expression evaluation failed — can't pre-compile. Skip gracefully.
+			continue
+		}
+		nodeList, ok := result.([]any)
+		if !ok {
+			continue
+		}
+
+		// Parse and compile the child graph spec.
+		childNodes, err := parseNodeList(nodeList)
+		if err != nil {
+			// Parse errors (invalid IDs, duplicates, forEach conflicts) are
+			// caught by the runtime validation node with user-facing messages.
+			// Pre-compilation only needs successful parsing for cycle detection,
+			// so skip gracefully when parsing fails.
+			continue
+		}
+		childSpec := &GraphSpec{Nodes: childNodes}
+		if _, err := compileGraphSpec(childSpec, nil); err != nil {
+			// Only surface cycle errors (DependencyError). Other compilation
+			// errors (expression validation, label keys, type errors) are
+			// caught by the runtime validation node in rgd.yaml which
+			// produces user-facing error messages. Pre-compilation's purpose
+			// is cycle detection — don't hijack the validation path.
+			if errors.Is(err, ErrDependencyError) {
+				return fmt.Errorf("node %q: child graph: %w", node.ID, err)
+			}
+		}
+	}
+	return nil
+}
+
+// resolveRefForPrecompilation fetches a ref node's target object for use in
+// pre-compilation scope. Similar to reconcileRef but without watcher setup
+// or scope mutation.
+func (r *GraphReconciler) resolveRefForPrecompilation(ctx context.Context, graph *unstructured.Unstructured, node Node) (map[string]any, error) {
+	ref := node.Ref
+	gvk := gvkFromMap(ref)
+	md, _ := ref["metadata"].(map[string]any)
+	name, _ := md["name"].(string)
+	namespace, _ := md["namespace"].(string)
+	if namespace == "" {
+		namespace = graph.GetNamespace()
+	}
+
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvk)
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, obj); err != nil {
+		return nil, err
+	}
+	normalized, _ := normalizeTypes(obj.Object).(map[string]any)
+	return normalized, nil
 }
 
 // findSupersededRevisions returns all revisions for a Graph with generation

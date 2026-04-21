@@ -775,6 +775,7 @@ func celSimpleSchemaFunction() []cel.EnvOption {
 				"status": map[string]any{
 					"type":                                 "object",
 					"x-kubernetes-preserve-unknown-fields": true,
+					"properties":                           conditionsSchemaProperties(),
 				},
 			},
 		}
@@ -801,6 +802,9 @@ func celSimpleSchemaFunction() []cel.EnvOption {
 				if err := json.Unmarshal(statusJSON, &statusResult); err != nil {
 					return types.NewErr("simpleSchema.toOpenAPI: unmarshaling status: %v", err)
 				}
+				// Inject conditions schema into user-declared status for
+				// proper SSA list-type semantics.
+				injectConditionsSchema(statusResult)
 				fullSchema["properties"].(map[string]any)["status"] = statusResult
 			}
 		}
@@ -815,6 +819,52 @@ func celSimpleSchemaFunction() []cel.EnvOption {
 				cel.BinaryBinding(impl),
 			),
 		),
+	}
+}
+
+// conditionsSchemaProperties returns a properties map containing a typed
+// conditions array with x-kubernetes-list-type: map keyed by "type". This
+// enables SSA to handle individual conditions independently rather than
+// treating the entire array as atomic — allowing separate field owners to
+// manage different condition types (e.g., Compiled vs Ready) without conflict.
+func conditionsSchemaProperties() map[string]any {
+	return map[string]any{
+		"conditions": map[string]any{
+			"type":                        "array",
+			"x-kubernetes-list-type":      "map",
+			"x-kubernetes-list-map-keys":  []any{"type"},
+			"x-kubernetes-preserve-unknown-fields": true,
+			"items": map[string]any{
+				"type":                                 "object",
+				"x-kubernetes-preserve-unknown-fields": true,
+				"properties": map[string]any{
+					"type":   map[string]any{"type": "string"},
+					"status": map[string]any{"type": "string"},
+				},
+				"required": []any{"type"},
+			},
+		},
+	}
+}
+
+// injectConditionsSchema adds the conditions array schema with proper list-type
+// annotations into an existing status schema. If conditions is already declared,
+// it merges the list annotations without overwriting item definitions.
+func injectConditionsSchema(statusSchema map[string]any) {
+	props, ok := statusSchema["properties"].(map[string]any)
+	if !ok {
+		props = map[string]any{}
+		statusSchema["properties"] = props
+	}
+	if _, exists := props["conditions"]; !exists {
+		props["conditions"] = conditionsSchemaProperties()["conditions"]
+	} else {
+		// Conditions already declared — inject list annotations.
+		cond, ok := props["conditions"].(map[string]any)
+		if ok {
+			cond["x-kubernetes-list-type"] = "map"
+			cond["x-kubernetes-list-map-keys"] = []any{"type"}
+		}
 	}
 }
 

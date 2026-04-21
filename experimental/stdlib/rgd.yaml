@@ -73,9 +73,11 @@ spec:
     # Definition-time validation — pure CEL, no Go functions.
     # Checks resource IDs, forEach iterators, template structure,
     # and status expressions. Gates CRD creation and flips rgdStatus
-    # between Active/Inactive. Cycle detection is deferred to
-    # per-instance Graph compilation (requires graph algorithms
-    # CEL cannot express).
+    # between Active/Inactive. Cycle detection runs at compile time
+    # via pre-compilation of per-instance Graphs (see
+    # precompileExpressionChildGraphs in revision.go). Compilation
+    # status is propagated to the RGD as a Compiled condition by the
+    # graph controller.
     - id: checks
       def:
         resources: '${has(schema.spec.resources) ? schema.spec.resources : []}'

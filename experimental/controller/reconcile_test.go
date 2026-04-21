@@ -1770,3 +1770,67 @@ func TestPath2_SelfRefresh_StampsReady(t *testing.T) {
 	assert.True(t, result3.(bool),
 		"after markReady, crd.ready() should be true again")
 }
+
+// TestBareIdentifierForEachDependency verifies that a forEach node referencing
+// a bare identifier (e.g., forEach: ${items} with no field access) correctly
+// establishes a DAG dependency on the referenced node. Without this, the
+// dependent node won't appear in dag.Dependents and will never receive a
+// propagation trigger from the coordinator.
+//
+// Regression test for: forEach expressions that are bare identifiers (no .field
+// access) produce no AST field paths, causing processExpr to bail via the
+// exprPaths[expr] miss path without registering the dependency.
+func TestBareIdentifierForEachDependency(t *testing.T) {
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{ID: "source", nodeType: NodeTypeTemplate, Template: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": "src"},
+			}},
+			{ID: "items", nodeType: NodeTypeWatch, Watch: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "Pod",
+				"selector":   map[string]any{},
+			}},
+			{ID: "consumer", nodeType: NodeTypeTemplate,
+				ForEach: &ForEachBinding{VarName: "item", Expr: "${items}"},
+				Template: map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]any{"name": "${item.metadata.name}-copy"},
+					"data":       map[string]any{"ref": "${source.metadata.name}"},
+				},
+			},
+		},
+	}
+
+	compiled, err := compileGraphSpec(spec, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, compiled)
+
+	// Find the consumer node in the DAG.
+	dag := compiled.topology
+	consumerIdx, ok := dag.Index["consumer"]
+	assert.True(t, ok, "consumer node must exist in DAG")
+
+	consumerNode := compiled.topology.nodeDeps[consumerIdx]
+
+	// The consumer node must depend on both "items" (bare forEach reference)
+	// and "source" (field access in template body).
+	assert.True(t, consumerNode["items"],
+		"consumer must depend on 'items' (bare identifier in forEach expression)")
+	assert.True(t, consumerNode["source"],
+		"consumer must depend on 'source' (field access in template body)")
+
+	// Verify the reverse: items.Dependents must include consumer.
+	found := false
+	for _, depIdx := range dag.Dependents["items"] {
+		if spec.Nodes[depIdx].ID == "consumer" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"dag.Dependents['items'] must include 'consumer' for propagation triggers to work")
+}

@@ -497,11 +497,8 @@ func (w *walkState) tryDispatch(idx int) {
 					w.watcher.retainWatches(node.ID)
 				}
 				nodeState := NodeReady
-				scopeData := w.eval.scope[node.ID]
-				if len(node.ReadyWhen) > 0 && scopeData != nil {
-					if err := w.eval.checkReadiness(node.ReadyWhen, node.ID); err != nil {
-						nodeState = NodeNotReady
-					}
+				if err := w.eval.evalReadiness(node.ID, node.ReadyWhen); err != nil {
+					nodeState = NodeNotReady
 				}
 				w.plan.States[node.ID] = nodeState
 				w.state.previousPlanStates[node.ID] = nodeState

@@ -250,7 +250,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 	// nothing to attach to.
 	ready := true
 	if len(node.ReadyWhen) > 0 {
-		if err := eval.checkReadiness(node.ReadyWhen, node.ID); err != nil {
+		if err := eval.evalReadinessConditions(node.ReadyWhen, node.ID); err != nil {
 			ready = false
 			// Set __ready on items (preserves scalar/forEach semantics
 			// for code paths that still consult per-item readiness),

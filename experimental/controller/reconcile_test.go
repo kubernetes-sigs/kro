@@ -1698,3 +1698,75 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 			"stale v1 should not appear after config change")
 	}
 }
+
+// TestPath2_SelfRefresh_StampsReady proves that when Path 2 (hash-match +
+// self-state changed) replaces a node's scope with a fresh GET, the __ready
+// flag is re-stamped so downstream .ready() calls return the correct value.
+//
+// Regression: Path 2 called evalReadinessConditions (which doesn't call markReady)
+// instead of evalReadiness. The fresh GET replaced the scope object, wiping
+// the __ready flag from the previous reconcile. Downstream nodes using
+// .ready() found __ready missing and returned false — even when the node
+// was actually ready. This caused CRD nodes (which have no readyWhen and
+// are vacuously ready) to appear not-ready after any self-state change,
+// blocking rgdStatus propagation and preventing RGDs from staying Active.
+func TestPath2_SelfRefresh_StampsReady(t *testing.T) {
+	// Build: crd (template, no readyWhen) → downstream (def, uses crd.ready())
+	spec := &GraphSpec{
+		Nodes: []Node{
+			{ID: "crd", Template: map[string]any{
+				"apiVersion": "apiextensions.k8s.io/v1",
+				"kind":       "CustomResourceDefinition",
+				"metadata":   map[string]any{"name": "test.kro.run"},
+			}},
+			{ID: "downstream", Def: map[string]any{
+				"result": "${crd.ready()}",
+			}},
+		},
+	}
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+
+	// Phase 1: Normal dispatch stamps __ready via evalReadiness.
+	scopeWithReady := map[string]any{
+		"apiVersion": "apiextensions.k8s.io/v1",
+		"kind":       "CustomResourceDefinition",
+		"metadata":   map[string]any{"name": "test.kro.run", "resourceVersion": "1"},
+		"status":     map[string]any{"conditions": []any{map[string]any{"type": "Established", "status": "True"}}},
+	}
+	eval1 := &evaluator{
+		scope:    map[string]any{"crd": scopeWithReady},
+		compiled: compiled,
+	}
+	// evalReadiness with no readyWhen stamps __ready = true
+	require.NoError(t, eval1.evalReadiness("crd", nil))
+	result1, err := compiled.eval("crd.ready()", eval1.scope)
+	require.NoError(t, err)
+	assert.True(t, result1.(bool), "after evalReadiness, crd.ready() should be true")
+
+	// Phase 2: Simulate Path 2 — fresh GET replaces scope (no __ready).
+	// This is what controller.go:488 does: w.eval.scope[node.ID] = readBack.Object
+	freshGET := map[string]any{
+		"apiVersion": "apiextensions.k8s.io/v1",
+		"kind":       "CustomResourceDefinition",
+		"metadata":   map[string]any{"name": "test.kro.run", "resourceVersion": "2"},
+		"status":     map[string]any{"conditions": []any{map[string]any{"type": "Established", "status": "True"}}},
+	}
+	eval1.scope["crd"] = freshGET // Path 2 scope replacement
+
+	// BUG: without markReady, __ready is missing from the fresh scope.
+	// Verify .ready() returns false — this is the regression.
+	result2, err := compiled.eval("crd.ready()", eval1.scope)
+	require.NoError(t, err)
+	assert.False(t, result2.(bool),
+		"REGRESSION: after Path 2 scope replacement without markReady, "+
+			"crd.ready() should be false because __ready is missing")
+
+	// FIX: Path 2 must call markReady after readiness evaluation.
+	// For nodes with no readyWhen, nodeState is NodeReady, so markReady(true).
+	eval1.markReady("crd", true)
+	result3, err := compiled.eval("crd.ready()", eval1.scope)
+	require.NoError(t, err)
+	assert.True(t, result3.(bool),
+		"after markReady, crd.ready() should be true again")
+}

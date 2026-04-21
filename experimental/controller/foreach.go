@@ -546,7 +546,7 @@ func forEachStampReadyWhen(scope map[string]any, nodeID string, readyWhen []stri
 			savedSelf := scope["self"]
 			scope[nodeID] = applied
 			scope["self"] = applied
-			err := eval.checkReadiness(readyWhen, nodeID)
+			err := eval.evalReadinessConditions(readyWhen, nodeID)
 			scope[nodeID] = saved
 			scope["self"] = savedSelf
 			if err != nil {
@@ -595,7 +595,7 @@ func stampSingleItemReady(eval *evaluator, nodeID string, item any, readyWhen []
 	savedSelf := eval.scope["self"]
 	eval.scope[nodeID] = item
 	eval.scope["self"] = item
-	err := eval.checkReadiness(readyWhen, nodeID)
+	err := eval.evalReadinessConditions(readyWhen, nodeID)
 	eval.scope[nodeID] = saved
 	eval.scope["self"] = savedSelf
 	if err != nil {

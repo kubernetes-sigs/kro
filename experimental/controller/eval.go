@@ -235,7 +235,7 @@ func isForEachItemUpdated(item map[string]any, parentID, graphName, graphNS stri
 // NodeNotReady (not NodeError), preserving the design invariant.
 func (e *evaluator) evalReadiness(nodeID string, readyWhen []string) error {
 	if len(readyWhen) > 0 {
-		if err := e.checkReadiness(readyWhen, nodeID); err != nil {
+		if err := e.evalReadinessConditions(readyWhen, nodeID); err != nil {
 			e.markReady(nodeID, false)
 			// ErrWaitingForReadiness and ErrPending are transient — pass through.
 			// All other errors are permanent expression failures that must not
@@ -251,11 +251,15 @@ func (e *evaluator) evalReadiness(nodeID string, readyWhen []string) error {
 	return nil
 }
 
-// checkReadiness evaluates readyWhen conditions against the full scope.
-// Returns nil if all conditions pass, ErrWaitingForReadiness if any are false
-// or data-pending. Evaluates against the full scope so readyWhen can reference
-// other nodes (e.g., readyWhen: ["${workers.ready()}"]).
-func (e *evaluator) checkReadiness(conditions []string, nodeID string) error {
+// evalReadinessConditions evaluates readyWhen boolean conditions against the
+// full scope. Returns nil if all conditions pass, ErrWaitingForReadiness if
+// any are false or data-pending.
+//
+// This is the evaluation primitive — it does NOT stamp __ready. Callers that
+// need readiness recorded in scope should use evalReadiness instead. Direct
+// callers of this function (Watch, forEach) have custom per-item stamping
+// logic that differs from the node-level __ready flag.
+func (e *evaluator) evalReadinessConditions(conditions []string, nodeID string) error {
 	if len(conditions) == 0 {
 		return nil
 	}

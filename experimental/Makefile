@@ -25,7 +25,8 @@ PASSING_COMPAT_FILES := \
   schema_aware_cel_test.go \
   readiness_test.go \
   dependency_readiness_test.go \
-  instance_conflict_test.go
+  instance_conflict_test.go \
+  validation_test.go
 
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec

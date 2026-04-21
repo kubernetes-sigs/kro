@@ -24,11 +24,11 @@ resources:
   # No lifecycle field = resource deleted with instance
 ```
 
-This is the standard Kubernetes ownership pattern - when you delete the parent, the children are cleaned up.
-
 ### Retention
 
-Use `lifecycle: "${policy().withRetain()}"` to keep a resource even after the instance is deleted:
+Use `lifecycle: "${policy().withRetain()}"` to avoid deleting a resource if the instance or RGD is deleted.
+
+This also will avoid deleting the resource if you update your RGD to no longer include the resource.
 
 ```yaml
 resources:
@@ -50,7 +50,7 @@ When the instance is deleted, the PVC is **orphaned** (KRO labels removed) rathe
 
 ### Policy Methods
 
-The `policy()` builder provides two methods:
+The `policy()` builder currently provides two methods:
 
 - **`withRetain()`** - Resource is orphaned when instance is deleted
 - **`withDelete()`** - Resource is deleted (default behavior, explicit form)
@@ -61,50 +61,7 @@ lifecycle: "${policy().withRetain()}"
 
 # Delete the resource (explicit, same as omitting lifecycle field)
 lifecycle: "${policy().withDelete()}"
+
+# Conditionally set policy
+lifecycle: "${schema.spec.prod ? policy().withRetain() : policy().withDelete()}"
 ```
-
-### Conditional Retention
-
-Use CEL conditionals to make retention decisions based on instance data:
-
-```yaml
-resources:
-  - id: database
-    template:
-      apiVersion: v1
-      kind: PersistentVolumeClaim
-      # ...
-    lifecycle: "${schema.spec.environment == 'production' ? policy().withRetain() : policy().withDelete()}"
-```
-
-Now production databases are retained, while dev/test databases are cleaned up.
-
-### How It Works
-
-When a resource has `lifecycle: "${policy().withRetain()}"`:
-
-1. **During creation/updates**: KRO manages the resource normally with ownership labels
-2. **During instance deletion**: KRO removes its ownership labels but leaves the resource in the cluster
-3. **After deletion**: The resource continues to exist without KRO labels
-
-### Resource Adoption
-
-Orphaned resources can be re-adopted by a new instance with the same name:
-
-```bash
-# Delete instance (retains database PVC)
-kubectl delete myapp my-instance
-
-# Recreate instance with same name
-kubectl apply -f my-instance.yaml
-```
-
-The new instance will adopt the existing PVC and continue using it, preserving data across instance recreations.
-
-## Important Notes
-
-- Lifecycle policies only affect behavior during **instance deletion**
-- Resources without KRO labels are not tracked by KRO
-- Orphaned resources can be manually deleted with `kubectl delete`
-- Only schema variables can be referenced in lifecycle expressions
-- The policy cannot be changed multiple times (e.g., `.withRetain().withDelete()` is an error)

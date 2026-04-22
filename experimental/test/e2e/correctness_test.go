@@ -3050,6 +3050,116 @@ func TestSelfStateChangePropagates(t *testing.T) {
 	t.Log("Self-state change propagation proved: child status → def → template")
 }
 
+// TestCompilationStatusForEachPropagation proves the compilation-status
+// mirroring pattern used by the stdlib rgd.yaml. A parent Graph stamps child
+// Graphs via forEach, one of which has a cycle. A sibling forEach node
+// iterates the same collection and patches a ConfigMap with each child's
+// Compiled status. This exercises the exact mechanics of the compilationStatus
+// node: forEach over stamped Graphs → read Compiled condition → patch target.
+//
+// This replaces the topology_test.go cycle assertion from the compat suite,
+// which asserted Ready=False on the RGD. The new architecture surfaces cycles
+// as Compiled=False.
+func TestCompilationStatusForEachPropagation(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Parent Graph:
+	// - watches ConfigMaps with label "test-input=true" (our input source)
+	// - forEach stamps a child Graph per ConfigMap
+	// - forEach reads child Graph status and patches a result ConfigMap
+	parent := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-compilation-foreach",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// Child Graph with cyclic resources — will fail compilation.
+					map[string]any{
+						"id": "child",
+						"template": map[string]any{
+							"apiVersion": "experimental.kro.run/v1alpha1",
+							"kind":       "Graph",
+							"metadata": map[string]any{
+								"name": "cyclic-child",
+								"labels": map[string]any{
+									"test-target": "cyclic",
+								},
+							},
+							"spec": map[string]any{
+								"nodes": []any{
+									map[string]any{
+										"id": "a",
+										"template": map[string]any{
+											"apiVersion": "v1",
+											"kind":       "ConfigMap",
+											"metadata":   map[string]any{"name": "fe-cycle-a"},
+											"data":       map[string]any{"dep": "$${b.data.val}"},
+										},
+									},
+									map[string]any{
+										"id": "b",
+										"template": map[string]any{
+											"apiVersion": "v1",
+											"kind":       "ConfigMap",
+											"metadata":   map[string]any{"name": "fe-cycle-b"},
+											"data":       map[string]any{"dep": "$${a.data.val}"},
+										},
+									},
+								},
+							},
+						},
+					},
+					// Read Compiled condition from the child Graph and write
+					// to a result ConfigMap — same pattern as compilationStatus.
+					map[string]any{
+						"id": "statusMirror",
+						"propagateWhen": []any{
+							`${has(child.status) && has(child.status.conditions) && child.status.conditions.exists(c, c.type == "Compiled")}`,
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "compilation-mirror"},
+							"data": map[string]any{
+								"compiledStatus": `${child.status.conditions.filter(c, c.type == "Compiled")[0].status}`,
+								"compiledReason": `${child.status.conditions.filter(c, c.type == "Compiled")[0].reason}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, parent))
+
+	// Wait for the result ConfigMap.
+	result := &unstructured.Unstructured{}
+	result.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 1*time.Second, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			if err := k8sClient.Get(ctx, types.NamespacedName{
+				Name: "compilation-mirror", Namespace: ns,
+			}, result); err != nil {
+				return false, nil
+			}
+			return true, nil
+		}))
+
+	data, _ := result.Object["data"].(map[string]any)
+	require.NotNil(t, data, "result ConfigMap should have data")
+
+	assert.Equal(t, "False", data["compiledStatus"],
+		"child Graph's Compiled should be False (cyclic dependency)")
+	assert.Equal(t, "DependencyError", data["compiledReason"],
+		"reason should be DependencyError for cyclic dependencies")
+	t.Log("Compilation status forEach propagation proved: child Compiled=False → parent reads and writes to ConfigMap")
+}
+
 // TestCompilationValidation is a table-driven test that verifies the
 // controller rejects invalid Graph specs at compile time with the correct
 // Compiled condition reason. Each case submits a Graph with a specific

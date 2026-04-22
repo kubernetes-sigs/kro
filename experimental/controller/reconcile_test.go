@@ -348,11 +348,10 @@ func TestClassifyAPIErrorDefault(t *testing.T) {
 	})
 }
 
-// TestParseNodeListEnforcesValidDNSLabels verifies that parseNodeList rejects
-// node IDs that are not valid DNS-1123 labels. Node IDs are embedded in
-// identity label key prefixes as DNS subdomain segments — invalid IDs would
-// cause the API server to reject resources at apply time.
-func TestParseNodeListEnforcesValidDNSLabels(t *testing.T) {
+// TestParseNodeListEnforcesValidNodeIDs verifies that parseNodeList rejects
+// node IDs that are not valid lower camelCase identifiers. Node IDs must
+// start with a lowercase letter and contain only alphanumeric characters.
+func TestParseNodeListEnforcesValidNodeIDs(t *testing.T) {
 	tests := []struct {
 		name    string
 		id      string
@@ -361,18 +360,20 @@ func TestParseNodeListEnforcesValidDNSLabels(t *testing.T) {
 		// Valid cases — must not be rejected
 		{name: "simple alphanumeric", id: "deploy", wantErr: false},
 		{name: "single character", id: "a", wantErr: false},
-		{name: "numbers only", id: "123", wantErr: false},
-		{name: "alphanumeric mix", id: "app2v3", wantErr: false},
-		{name: "max length 63", id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", wantErr: false},
+		{name: "camelCase", id: "myApp2v3", wantErr: false},
+		{name: "long but valid", id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", wantErr: false},
 
 		// Invalid cases — must be rejected
 		{name: "empty string", id: "", wantErr: true},
+		{name: "starts with uppercase", id: "MyResource", wantErr: true},
+		{name: "starts with digit", id: "123resource", wantErr: true},
 		{name: "underscore", id: "foo_bar", wantErr: true},
 		{name: "multiple underscores", id: "prstatus_test_app_uat", wantErr: true},
 		{name: "dot", id: "foo.bar", wantErr: true},
 		{name: "space", id: "foo bar", wantErr: true},
-		{name: "exceeds 63 chars", id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", wantErr: true},
+		{name: "hyphen", id: "my-app", wantErr: true},
 		{name: "leading dot", id: ".foo", wantErr: true},
+		{name: "special character", id: "resource!", wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

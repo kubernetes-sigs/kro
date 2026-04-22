@@ -151,6 +151,8 @@ func plural(kind string) string {
 		return "decorators"
 	case "Singleton":
 		return "singletons"
+	case "ResourceGraphDefinition":
+		return "resourcegraphdefinitions"
 	default:
 		panic("stdlib: unknown kind " + kind)
 	}

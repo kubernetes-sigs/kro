@@ -126,7 +126,7 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 			resolved := false
 			if node.ForEach == nil {
 				gvk := extractLiteralGVK(node.Identity())
-				if gvk != nil && !isUpstreamKroGroup(gvk.Group) {
+				if gvk != nil && !isUpstreamKroInfra(gvk) {
 					s, err := schemaResolver.ResolveSchema(*gvk)
 					if err == nil && s != nil {
 						ts.resourceSchemas[node.ID] = s
@@ -149,7 +149,7 @@ func resolveNodeTypes(nodes []Node, schemaResolver resolver.SchemaResolver) *typ
 				// validation but DON'T add to typed declarations. Store
 				// in forEachSchemas for the Phase 4a-3 inner-scope check.
 				gvk := extractLiteralGVK(node.Identity())
-				if gvk != nil && !isUpstreamKroGroup(gvk.Group) {
+				if gvk != nil && !isUpstreamKroInfra(gvk) {
 					s, err := schemaResolver.ResolveSchema(*gvk)
 					if err == nil && s != nil {
 						ts.forEachSchemas[node.ID] = s
@@ -387,17 +387,30 @@ func schemaHasPreserveUnknown(s *spec.Schema) bool {
 }
 
 // upstreamKroAPIGroup is the API group for upstream kro CRDs. Schema
-// resolution is skipped for this group because the API server may normalize
-// the OpenAPI schema in ways that differ from the CRD YAML (e.g., stripping
-// nested "metadata" properties). The experimental controller consumes but
-// does not own these CRDs, and their stdlib templates (rgd.yaml) are
-// authored against dyn semantics.
+// resolution is skipped for infrastructure CRDs in this group because the
+// API server may normalize the OpenAPI schema in ways that differ from the
+// CRD YAML (e.g., stripping nested "metadata" properties). These CRDs use
+// x-kubernetes-preserve-unknown-fields, making their resolved schemas
+// misleadingly untyped.
+//
+// User-defined CRDs created by the RGD system may also use this group, but
+// they have proper OpenAPI schemas generated from simple-schema declarations.
+// Only the infrastructure kinds are excluded.
 const upstreamKroAPIGroup = "kro.run"
 
-// isUpstreamKroGroup reports whether a GVK group belongs to the upstream
-// kro API. These CRDs skip schema resolution — see upstreamKroAPIGroup.
-func isUpstreamKroGroup(group string) bool {
-	return group == upstreamKroAPIGroup
+// kroInfraKinds are the infrastructure CRD kinds in the kro.run group that
+// skip schema resolution. User-defined CRDs (created by the RGD system)
+// with other kinds in the same group get normal schema resolution.
+var kroInfraKinds = map[string]bool{
+	"Graph":                     true,
+	"GraphRevision":             true,
+	"ResourceGraphDefinition":   true,
+}
+
+// isUpstreamKroInfra reports whether a GVK belongs to the upstream kro
+// infrastructure (not user-defined CRDs that happen to use the kro.run group).
+func isUpstreamKroInfra(gvk *runtimeschema.GroupVersionKind) bool {
+	return gvk.Group == upstreamKroAPIGroup && kroInfraKinds[gvk.Kind]
 }
 
 // ---------------------------------------------------------------------------

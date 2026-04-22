@@ -17,7 +17,6 @@ package graphcontroller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -473,7 +472,7 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	// resolve referenced ref nodes from the API and evaluate the expression to
 	// get the child node list, then compile it. This catches cycles and other
 	// structural errors at the parent's compile time.
-	if err := r.precompileExpressionChildGraphs(ctx, graph, graphSpec, compiled); err != nil {
+	if err := r.precompileExpressionChildGraphs(ctx, graph.GetNamespace(), graphSpec, compiled); err != nil {
 		return nil, nil, err
 	}
 
@@ -515,14 +514,18 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 
 // precompileExpressionChildGraphs resolves expression-valued spec.nodes in
 // forEach Graph templates by fetching referenced ref node targets from the API
-// and evaluating the expression. The resulting child node list is compiled to
-// catch cycles and structural errors at the parent's compile time.
+// and evaluating the expression. The resulting child node list is compiled with
+// real type information to catch cycles, structural errors, and type errors
+// (e.g., forEach over a non-list field) at the parent's compile time.
 //
 // This extends the pre-compilation mechanism in deferred.go which handles
 // literal spec.nodes. When spec.nodes is an expression (e.g., referencing
 // schema.spec.resources), deferred.go bails. This function fills that gap by
-// resolving the ref targets that the expression depends on.
-func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, graph *unstructured.Unstructured, spec *GraphSpec, compiled *compiledGraph) error {
+// resolving the ref targets that the expression depends on. Because it runs
+// after the parent has created its CRDs, the schema resolver can look up the
+// child's ref node types — enabling full type checking including forEach
+// list-type validation (Phase 4b).
+func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, namespace string, spec *GraphSpec, compiled *compiledGraph) error {
 	for _, node := range spec.Nodes {
 		if node.ForEach == nil {
 			continue
@@ -571,7 +574,7 @@ func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, g
 				continue
 			}
 			// Resolve this ref's target from the API.
-			obj, err := r.resolveRefForPrecompilation(ctx, graph, n)
+			obj, err := r.resolveRefForPrecompilation(ctx, namespace, n)
 			if err != nil {
 				// Best effort — if we can't resolve, skip pre-compilation.
 				return nil
@@ -617,22 +620,17 @@ func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, g
 		// Parse and compile the child graph spec.
 		childNodes, err := parseNodeList(nodeList)
 		if err != nil {
-			// Parse errors (invalid IDs, duplicates, forEach conflicts) are
-			// caught by the runtime validation node with user-facing messages.
-			// Pre-compilation only needs successful parsing for cycle detection,
-			// so skip gracefully when parsing fails.
-			continue
+			// Parse errors (invalid IDs, duplicates, reserved keywords,
+			// forEach conflicts, invalid apiVersion) surface directly.
+			return fmt.Errorf("node %q: child graph: %w", node.ID, err)
 		}
 		childSpec := &GraphSpec{Nodes: childNodes}
-		if _, err := compileGraphSpec(childSpec, nil); err != nil {
-			// Only surface cycle errors (DependencyError). Other compilation
-			// errors (expression validation, label keys, type errors) are
-			// caught by the runtime validation node in rgd.yaml which
-			// produces user-facing error messages. Pre-compilation's purpose
-			// is cycle detection — don't hijack the validation path.
-			if errors.Is(err, ErrDependencyError) {
-				return fmt.Errorf("node %q: child graph: %w", node.ID, err)
-			}
+		childTypeInfo := resolveNodeTypes(childNodes, r.SchemaResolver)
+		if _, err := compileGraphSpec(childSpec, childTypeInfo); err != nil {
+			// All compilation errors surface — cycles, expression
+			// validation, type errors, etc. The compiler is the single
+			// source of truth for structural correctness.
+			return fmt.Errorf("node %q: child graph: %w", node.ID, err)
 		}
 	}
 	return nil
@@ -641,14 +639,14 @@ func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, g
 // resolveRefForPrecompilation fetches a ref node's target object for use in
 // pre-compilation scope. Similar to reconcileRef but without watcher setup
 // or scope mutation.
-func (r *GraphReconciler) resolveRefForPrecompilation(ctx context.Context, graph *unstructured.Unstructured, node Node) (map[string]any, error) {
+func (r *GraphReconciler) resolveRefForPrecompilation(ctx context.Context, defaultNamespace string, node Node) (map[string]any, error) {
 	ref := node.Ref
 	gvk := gvkFromMap(ref)
 	md, _ := ref["metadata"].(map[string]any)
 	name, _ := md["name"].(string)
 	namespace, _ := md["namespace"].(string)
 	if namespace == "" {
-		namespace = graph.GetNamespace()
+		namespace = defaultNamespace
 	}
 
 	obj := &unstructured.Unstructured{}
@@ -734,7 +732,7 @@ func diffRevisionNodes(active *GraphSpec, superseded []*unstructured.Unstructure
 //
 // For N identical child graphs (common in nested graph patterns with forEach),
 // this means 1 compilation + N-1 key lookups instead of N compilations.
-func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (*GraphSpec, *instanceState, error) {
+func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string, revision *unstructured.Unstructured) (*GraphSpec, *instanceState, error) {
 	instanceKey := revision.GetNamespace() + "/" + revision.GetName()
 
 	// Retrieve existing instance state (may have resolvedDynamicGVKs from
@@ -794,6 +792,13 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 		}
 		compiled, err = compileGraphSpec(spec, typeInfo)
 		if err != nil {
+			return nil, nil, err
+		}
+		// Pre-compile child graphs with expression-valued spec.nodes.
+		// On staleness recompilation (CRD installed since last compile),
+		// the schema resolver can now resolve child ref node types,
+		// enabling forEach list-type validation in the child.
+		if err := r.precompileExpressionChildGraphs(ctx, namespace, spec, compiled); err != nil {
 			return nil, nil, err
 		}
 		compiled.typeCacheGen = cacheGen

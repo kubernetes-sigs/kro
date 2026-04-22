@@ -552,7 +552,7 @@ func TestForEachVarCollision_RegressionLaterNodeID(t *testing.T) {
 
 	_, err := parseNodeList(raw)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "collides with node ID",
+	assert.Contains(t, err.Error(), "conflicts with resource ID",
 		"forEach variable matching a later node ID should be rejected")
 	assert.Contains(t, err.Error(), "target",
 		"error message should name the colliding variable/ID")
@@ -581,7 +581,7 @@ func TestForEachVarCollision_RegressionCaseInsensitive(t *testing.T) {
 
 	_, err := parseNodeList(raw)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "collides with node ID",
+	assert.Contains(t, err.Error(), "conflicts with resource ID",
 		"case-insensitive forEach variable collision should be rejected")
 }
 

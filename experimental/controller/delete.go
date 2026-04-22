@@ -165,7 +165,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	var teardownCompileErr error
 	if len(revisions) > 0 {
 		active := revisions[len(revisions)-1]
-		if _, state, compileErr := r.compileRevision(active); compileErr == nil {
+		if _, state, compileErr := r.compileRevision(ctx, graph.GetNamespace(), active); compileErr == nil {
 			teardownDAG = state.dag
 			teardownEval = newEvaluator(state)
 			// During teardown, the effective generation is the active

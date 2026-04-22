@@ -1,6 +1,7 @@
 package graphcontroller
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -94,7 +95,7 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 	}
 
 	// First call: compiles from scratch.
-	spec1, state1, err := r.compileRevision(revision)
+	spec1, state1, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	require.NotNil(t, spec1)
 	require.NotNil(t, state1)
@@ -102,7 +103,7 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 	firstCompiled := state1.compiled
 
 	// Second call: returns cached (fast path).
-	_, state2, err := r.compileRevision(revision)
+	_, state2, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	assert.Same(t, firstCompiled, state2.compiled,
 		"steady-state reconcile should return same compiledGraph pointer")
@@ -111,7 +112,7 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 	tc.AdvanceGeneration()
 
 	// Third call: detects staleness and recompiles.
-	_, state3, err := r.compileRevision(revision)
+	_, state3, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	require.NotNil(t, state3.compiled)
 	assert.NotSame(t, firstCompiled, state3.compiled,
@@ -122,7 +123,7 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 		"recompiled artifact should record the current type cache generation")
 
 	// Subsequent call returns the new cached artifact (no further recompilation).
-	_, state4, err := r.compileRevision(revision)
+	_, state4, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	assert.Same(t, state3.compiled, state4.compiled,
 		"steady-state after recompilation should cache the new artifact")
@@ -191,7 +192,7 @@ func TestCompileRevision_SchemaUpdateViaGenerationAdvance(t *testing.T) {
 	}}
 
 	// Phase 1: compile with schema v1 — should resolve Widget's schema.
-	_, state1, err := r.compileRevision(revision)
+	_, state1, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	require.NotNil(t, state1.compiled)
 	firstCompiled := state1.compiled
@@ -224,7 +225,7 @@ func TestCompileRevision_SchemaUpdateViaGenerationAdvance(t *testing.T) {
 	tc.AdvanceGeneration()
 
 	// Phase 3: next compileRevision detects stale generation, recompiles.
-	_, state2, err := r.compileRevision(revision)
+	_, state2, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	require.NotNil(t, state2.compiled)
 	assert.NotSame(t, firstCompiled, state2.compiled,
@@ -316,7 +317,7 @@ func TestCRDUpdate_AdvanceGenerationInvalidatesArtifact(t *testing.T) {
 	}}
 
 	// Phase 1: compile with schema v1.
-	_, state1, err := r.compileRevision(revision)
+	_, state1, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	require.NotNil(t, state1.compiled)
 	firstCompiled := state1.compiled
@@ -350,7 +351,7 @@ func TestCRDUpdate_AdvanceGenerationInvalidatesArtifact(t *testing.T) {
 	sg.AdvanceGeneration()
 
 	// Phase 3: compileRevision detects staleness → recompiles with v2.
-	_, state2, err := r.compileRevision(revision)
+	_, state2, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	require.NotNil(t, state2.compiled)
 	assert.NotSame(t, firstCompiled, state2.compiled,

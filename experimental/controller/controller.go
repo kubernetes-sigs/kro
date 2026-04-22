@@ -759,14 +759,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		graphName := graph.GetName()
 		namespace := graph.GetNamespace()
 
-		// Always propagate compilation failure to the schema ref target.
-		// Sets Compiled=False on the target (e.g., RGD instance). Uses a
-		// dedicated field owner (graph-compiler) that only owns the Compiled
-		// condition — no conflict with the Ready condition owned by rgdStatus.
-		// This works because CRD conditions arrays have x-kubernetes-list-type:
-		// map keyed by "type", so SSA manages each condition independently.
-		r.propagateCompilationStatus(ctx, graph, err)
-
 		revisions, listErr := listRevisions(ctx, r.Client, graphName, namespace)
 		if listErr != nil || len(revisions) == 0 {
 			// No previous revision to fall back to — truly stuck.
@@ -801,7 +793,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// -----------------------------------------------------------------------
 
 	// Parse and compile the active revision's spec (cached by revision name).
-	revisionSpec, state, err := r.compileRevision(activeRevision)
+	revisionSpec, state, err := r.compileRevision(ctx, graph.GetNamespace(), activeRevision)
 	if err != nil {
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{compiled: false, compiledErr: err}); statusErr != nil {
 			logger.Error(statusErr, "updating status after compilation error")
@@ -996,6 +988,16 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// dependencies are satisfied. Workers are pure functions — they receive
 	// a read-only scope snapshot and return results. The coordinator is the
 	// single writer to shared state (scope, plan, applied keys).
+	//
+	// Record the schema generation before the walk. If a CRD is created
+	// during node reconciliation (e.g., the `crd` template node), the
+	// generation advances. After the walk, we re-validate compilation to
+	// catch child graph type errors immediately — without waiting for a
+	// second reconcile cycle.
+	var preWalkGen int64
+	if r.SchemaGen != nil {
+		preWalkGen = r.SchemaGen.Generation()
+	}
 	walk := &walkState{
 		r:                    r,
 		ctx:                  ctx,
@@ -1273,6 +1275,19 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	nodeErrors := walk.nodeErrors
 	var nodeNotes []string // informational messages (e.g., FinalizerSkipped) routed to status without gating Ready
 
+	// If the schema generation advanced during the walk (a CRD was created
+	// by a template node), re-validate compilation immediately. The schema
+	// resolver can now resolve types that were dyn at the start of this
+	// reconcile. This catches child graph type errors (e.g., forEach over a
+	// non-list field) within the same cycle that creates the CRD, rather
+	// than waiting for the next reconcile to detect staleness.
+	if r.SchemaGen != nil && r.SchemaGen.Generation() > preWalkGen && compilationErr == nil {
+		if _, _, err := r.compileRevision(ctx, graph.GetNamespace(), activeRevision); err != nil {
+			compilationErr = err
+			logger.Error(err, "post-walk recompilation detected error")
+		}
+	}
+
 	// Derive aggregate state from the DAG plan
 	summary := plan.Summary()
 
@@ -1346,7 +1361,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				}
 			}
 			// Compile superseded revisions to access their finalizer relationships.
-			if _, revState, compileErr := r.compileRevision(rev); compileErr == nil {
+			if _, revState, compileErr := r.compileRevision(ctx, graph.GetNamespace(), rev); compileErr == nil {
 				supersededDAGs[rev.GetName()] = revState.dag
 			}
 		}
@@ -1805,111 +1820,4 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 	}
 
 	return watchMgr.shutdown, reconciler.Caches, nil
-}
-
-// propagateCompilationStatus patches the schema ref target's Compiled condition
-// when a Graph compiles (or fails to compile). This surfaces compilation state
-// on the user-facing resource (e.g., RGD instance) immediately.
-//
-// Uses a dedicated field owner ("graph-compiler") for the Compiled condition.
-// This coexists with the Ready condition managed by rgdStatus (which uses the
-// graph's own field owner) because CRD conditions arrays are annotated with
-// x-kubernetes-list-type: map keyed by "type" — SSA manages each condition
-// type independently.
-//
-// On failure, additionally patches Ready=False and state=Inactive using the
-// graph's own field owner (matching rgdStatus). This ensures upstream compat
-// for the no-fallback case where rgdStatus never fires. When the issue is
-// fixed and rgdStatus fires with Ready=True, it cleanly overwrites (same owner).
-func (r *GraphReconciler) propagateCompilationStatus(ctx context.Context, graph *unstructured.Unstructured, compilationErr error) {
-	logger := log.FromContext(ctx)
-
-	spec, ok := graph.Object["spec"].(map[string]any)
-	if !ok {
-		return
-	}
-	nodesList, ok := spec["nodes"].([]any)
-	if !ok || len(nodesList) == 0 {
-		return
-	}
-	firstNode, ok := nodesList[0].(map[string]any)
-	if !ok {
-		return
-	}
-	ref, ok := firstNode["ref"].(map[string]any)
-	if !ok {
-		return
-	}
-
-	apiVersion, _ := ref["apiVersion"].(string)
-	kind, _ := ref["kind"].(string)
-	md, _ := ref["metadata"].(map[string]any)
-	name, _ := md["name"].(string)
-	namespace, _ := md["namespace"].(string)
-	if apiVersion == "" || kind == "" || name == "" {
-		return
-	}
-
-	// Patch 1: Compiled condition with dedicated field owner.
-	// This condition is exclusively owned by graph-compiler — never
-	// pruned by rgdStatus because they use different field owners.
-	compiledStatus := "True"
-	compiledReason := "Compiled"
-	compiledMessage := ""
-	if compilationErr != nil {
-		compiledStatus = "False"
-		compiledReason = "CompilationFailed"
-		compiledMessage = compilationErr.Error()
-	}
-
-	target := &unstructured.Unstructured{}
-	target.SetAPIVersion(apiVersion)
-	target.SetKind(kind)
-	target.SetName(name)
-	target.SetNamespace(namespace)
-	target.Object["status"] = map[string]any{
-		"conditions": []any{
-			map[string]any{
-				"type":               "Compiled",
-				"status":             compiledStatus,
-				"reason":             compiledReason,
-				"message":            compiledMessage,
-				"lastTransitionTime": metav1.Now().Format(time.RFC3339),
-			},
-		},
-	}
-
-	if err := r.Client.Status().Patch(ctx, target, client.Apply, client.FieldOwner("graph-compiler"), client.ForceOwnership); err != nil {
-		logger.V(1).Info("failed to propagate compilation status",
-			"target", fmt.Sprintf("%s/%s %s/%s", apiVersion, kind, namespace, name),
-			"error", err)
-	}
-
-	// Patch 2 (failure only): Ready=False + state=Inactive using the
-	// graph's own field owner. Same owner as rgdStatus, so when the issue
-	// is fixed and rgdStatus fires with Ready=True, it overwrites cleanly.
-	if compilationErr != nil {
-		readyTarget := &unstructured.Unstructured{}
-		readyTarget.SetAPIVersion(apiVersion)
-		readyTarget.SetKind(kind)
-		readyTarget.SetName(name)
-		readyTarget.SetNamespace(namespace)
-		readyTarget.Object["status"] = map[string]any{
-			"state": "Inactive",
-			"conditions": []any{
-				map[string]any{
-					"type":               "Ready",
-					"status":             "False",
-					"reason":             "CompilationFailed",
-					"message":            compilationErr.Error(),
-					"lastTransitionTime": metav1.Now().Format(time.RFC3339),
-				},
-			},
-		}
-		if err := r.Client.Status().Patch(ctx, readyTarget, client.Apply, graphFieldOwner(graph), client.ForceOwnership); err != nil {
-			logger.V(1).Info("failed to propagate ready status",
-				"target", fmt.Sprintf("%s/%s %s/%s", apiVersion, kind, namespace, name),
-				"error", err)
-		}
-	}
 }

@@ -1,6 +1,7 @@
 package graphcontroller
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -155,7 +156,7 @@ func TestDynamicGVK_ProgressionFromDynToTyped(t *testing.T) {
 	}
 
 	// Phase 1: first compileRevision — no hints, bootstrap artifact (dyn).
-	_, state1, err := r.compileRevision(revision)
+	_, state1, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	require.NotNil(t, state1.compiled)
 	bootstrapArtifact := state1.compiled
@@ -169,7 +170,7 @@ func TestDynamicGVK_ProgressionFromDynToTyped(t *testing.T) {
 	assert.True(t, stale, "first resolution should signal requeue")
 
 	// Phase 3: second compileRevision — hints available, typed artifact.
-	_, state2, err := r.compileRevision(revision)
+	_, state2, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	require.NotNil(t, state2.compiled)
 	assert.NotSame(t, bootstrapArtifact, state2.compiled,
@@ -184,7 +185,7 @@ func TestDynamicGVK_ProgressionFromDynToTyped(t *testing.T) {
 		"resolved schema should be Widget's with spec.name field")
 
 	// Phase 4: steady-state — same hints, cache hit.
-	_, state3, err := r.compileRevision(revision)
+	_, state3, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	assert.Same(t, state2.compiled, state3.compiled,
 		"steady-state should return same typed artifact (cache hit)")

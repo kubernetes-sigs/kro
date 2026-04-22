@@ -1,353 +1,347 @@
-# ResourceGraphDefinition — backwards-compatible alias for Kind.
+# ResourceGraphDefinition Controller
 #
-# Maps the upstream kro API shape (spec.schema + spec.resources) to
-# the same infrastructure Kind uses: CRD creation, instance watching,
-# per-instance Graphs. The `schema` scope variable works identically.
+# Raw Graph that implements the RGD type. Each RGD gets a sub-Graph
+# (created by the rgds forEach) that handles validation and CRD creation.
+# The sub-Graph's rgdStatus node is the single writer for Ready, state,
+# GraphAccepted, KindReady, and ControllerReady on the RGD — keeping
+# the status pipeline to a single hop for fast convergence.
 ---
 apiVersion: experimental.kro.run/v1alpha1
-kind: Kind
+kind: Graph
 metadata:
-  name: resourcegraphdefinition
+  name: rgd
+  namespace: kro-system
 spec:
-  kind: ResourceGraphDefinition
-  group: kro.run
-  version: v1alpha1
-  scope: Cluster
-  additionalPrinterColumns:
-    - name: APIVERSION
-      type: string
-      jsonPath: .spec.schema.apiVersion
-    - name: KIND
-      type: string
-      jsonPath: .spec.schema.kind
-    - name: STATE
-      type: string
-      jsonPath: .status.state
-    - name: TOPOLOGICALORDER
-      type: string
-      priority: 1
-      jsonPath: .status.topologicalOrder
-    - name: AGE
-      type: date
-      jsonPath: .metadata.creationTimestamp
-  schema:
-    types:
-      ExternalRefMetadata:
-        name: string
-        namespace: string
-        selector: object
-      ExternalRef:
-        apiVersion: string
-        kind: string
-        metadata: ExternalRefMetadata
-      Resource:
-        id: string | required=true
-        template: any
-        patch: any
-        ref: any
-        watch: any
-        def: any
-        externalRef: ExternalRef
-        readyWhen: "[]string"
-        includeWhen: "[]string"
-        propagateWhen: "[]string"
-        forEach: "[]map[string]string"
-      PrinterColumn:
-        name: string | required=true
-        type: string | required=true
-        jsonPath: string | required=true
-        description: string
-        format: string
-        priority: integer
-    spec:
-      schema:
-        kind: 'string | required=true pattern="^[A-Z][a-zA-Z0-9]{0,62}$"'
-        apiVersion: string
-        group: string | default=kro.run
-        scope: string | default=Namespaced
-        spec: object
-        status: object
-        additionalPrinterColumns: "[]PrinterColumn"
-      resources: "[]Resource"
   nodes:
-    # Definition-time validation — pure CEL, no Go functions.
-    # Checks resource IDs, forEach iterators, template structure,
-    # and status expressions. Gates CRD creation and flips rgdStatus
-    # between Active/Inactive. Cycle detection runs at compile time
-    # via pre-compilation of per-instance Graphs (see
-    # precompileExpressionChildGraphs in revision.go). Compilation
-    # status is propagated to the RGD as a Compiled condition by the
-    # graph controller.
-    - id: checks
-      def:
-        resources: '${has(schema.spec.resources) ? schema.spec.resources : []}'
-        ids: '${(has(schema.spec.resources) ? schema.spec.resources : []).map(r, r.id)}'
-        reserved: '${["apiVersion","context","dependency","dependencies","each","externalRef","externalReference","externalRefs","externalReferences","graph","instance","item","items","kind","kro","metadata","namespace","object","resource","resourcegraphdefinition","resourceGraphDefinition","resources","root","runtime","schema","self","serviceAccountName","spec","status","this","variables","vars","version","true","false","null","in","as","break","const","continue","else","for","function","if","import","let","loop","package","return","var","void","while"]}'
-
-    - id: validation
-      def:
-        result: >-
-          ${
-            checks.resources.exists(r, checks.reserved.exists(w, r.id == w))
-            ? {"valid": false, "message": "naming convention violation: id " + checks.resources.filter(r, checks.reserved.exists(w, r.id == w))[0].id + " is a reserved keyword in KRO"}
-            : checks.resources.exists(r, !r.id.matches("^[a-z][a-zA-Z0-9]*$"))
-            ? {"valid": false, "message": "naming convention violation: id " + checks.resources.filter(r, !r.id.matches("^[a-z][a-zA-Z0-9]*$"))[0].id + " is not a valid KRO resource id: must be lower camelCase"}
-            : checks.resources.exists(r, checks.resources.filter(r2, r2.id == r.id).size() > 1)
-            ? {"valid": false, "message": "found duplicate resource IDs " + checks.resources.filter(r, checks.resources.filter(r2, r2.id == r.id).size() > 1)[0].id}
-            : checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(d, checks.reserved.exists(w, w in d)))
-            ? {"valid": false, "message": "forEach iterator is a reserved keyword"}
-            : checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(d, checks.ids.exists(id, id in d)))
-            ? {"valid": false, "message": "forEach iterator conflicts with resource ID"}
-            : checks.resources.exists(r, has(r.template) && (!has(r.template.apiVersion) || !has(r.template.kind) || !has(r.template.metadata)))
-            ? {"valid": false, "message": "invalid kubernetes object structure"}
-            : checks.resources.exists(r, has(r.template) && has(r.template.apiVersion) && !string(r.template.apiVersion).contains("${") && (string(r.template.apiVersion).split("/").size() > 2 || !(string(r.template.apiVersion).contains("/") ? string(r.template.apiVersion).split("/")[1].matches("^v[0-9]+([a-z]+[0-9]+)?$") : string(r.template.apiVersion).matches("^v[0-9]+([a-z]+[0-9]+)?$"))))
-            ? {"valid": false, "message": "invalid kubernetes object structure: invalid apiVersion"}
-            : has(schema.spec.schema.status) && schema.spec.schema.status.size() > 0 && schema.spec.schema.status.exists(k, !string(schema.spec.schema.status[k]).contains("${"))
-            ? {"valid": false, "message": "failed to build instance status schema: status fields without expressions are not supported"}
-            : has(schema.spec.schema) && has(schema.spec.schema.spec) && checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(dim, dim.exists(iterVar, type(dim[iterVar]) == type("") && string(dim[iterVar]).contains("${schema.spec.") && schema.spec.schema.spec.exists(field, dim[iterVar] == '${schema.spec.' + field + '}' && type(schema.spec.schema.spec[field]) == type("") && !string(schema.spec.schema.spec[field]).startsWith('[')))))
-            ? {"valid": false, "message": "forEach collection expression must return a list, got non-list schema field"}
-            : checks.resources.exists(r, has(r.template) && has(r.template.metadata) && has(r.template.metadata.name) && type(r.template.metadata.name) == type("") && string(r.template.metadata.name).contains("${") && !string(r.template.metadata.name).matches('.*\\$\\{(schema|' + checks.ids.join("|") + ')([.}]).*'))
-            ? {"valid": false, "message": "invalid expression in resource template: expression references unknown scope variable"}
-            : {"valid": true, "message": ""}
-          }
-
-    - id: crd
-      includeWhen:
-        - ${validation.result.valid}
+    - id: rgdCrd
       template:
         apiVersion: apiextensions.k8s.io/v1
         kind: CustomResourceDefinition
         metadata:
-          name: ${plural(schema.spec.schema.kind).lowerAscii()}.${schema.spec.schema.group}
-          labels: '${has(schema.spec.schema.metadata) && has(schema.spec.schema.metadata.labels) ? schema.spec.schema.metadata.labels : {}}'
-          annotations: '${has(schema.spec.schema.metadata) && has(schema.spec.schema.metadata.annotations) ? schema.spec.schema.metadata.annotations : {}}'
+          name: resourcegraphdefinitions.kro.run
         spec:
-          group: ${schema.spec.schema.group}
+          group: kro.run
           names:
-            kind: ${schema.spec.schema.kind}
-            plural: ${plural(schema.spec.schema.kind).lowerAscii()}
-          scope: ${schema.spec.schema.scope}
+            plural: resourcegraphdefinitions
+            singular: resourcegraphdefinition
+            kind: ResourceGraphDefinition
+            listKind: ResourceGraphDefinitionList
+          scope: Cluster
           versions:
-            - name: ${schema.spec.schema.apiVersion}
+            - name: v1alpha1
               served: true
               storage: true
+              schema:
+                openAPIV3Schema: >-
+                  ${simpleSchema.toOpenAPI({"types": {"ExternalRefMetadata": {"name": "string", "namespace": "string", "selector": "object"}, "ExternalRef": {"apiVersion": "string", "kind": "string", "metadata": "ExternalRefMetadata"}, "Resource": {"id": "string | required=true", "template": "any", "patch": "any", "ref": "any", "watch": "any", "def": "any", "externalRef": "ExternalRef", "readyWhen": "[]string", "includeWhen": "[]string", "propagateWhen": "[]string", "forEach": "[]map[string]string"}, "PrinterColumn": {"name": "string | required=true", "type": "string | required=true", "jsonPath": "string | required=true", "description": "string", "format": "string", "priority": "integer"}}, "spec": {"schema": {"kind": "string | required=true pattern=\"^[A-Z][a-zA-Z0-9]{0,62}$\"", "apiVersion": "string", "group": "string | default=kro.run", "scope": "string | default=Namespaced", "spec": "object", "status": "object", "additionalPrinterColumns": "[]PrinterColumn"}, "resources": "[]Resource"}, "status": {"state": "string", "topologicalOrder": "[]string"}}, [])}
               subresources:
                 status: {}
-              schema:
-                openAPIV3Schema: '${simpleSchema.toOpenAPI(schema.spec.schema, has(schema.spec.resources) ? schema.spec.resources : [])}'
-              additionalPrinterColumns: '${has(schema.spec.schema.additionalPrinterColumns) ? schema.spec.schema.additionalPrinterColumns : []}'
+              additionalPrinterColumns:
+                - name: APIVERSION
+                  type: string
+                  jsonPath: .spec.schema.apiVersion
+                - name: KIND
+                  type: string
+                  jsonPath: .spec.schema.kind
+                - name: STATE
+                  type: string
+                  jsonPath: .status.state
+                - name: TOPOLOGICALORDER
+                  type: string
+                  priority: 1
+                  jsonPath: .status.topologicalOrder
+                - name: AGE
+                  type: date
+                  jsonPath: .metadata.creationTimestamp
 
-    - id: watchInstances
+    - id: watchRgds
       includeWhen:
-        - ${has(crd.status) && has(crd.status.conditions) && crd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
-      # No metadata.namespace: watch custom resource instances across all
-      # namespaces (k8s list/watch semantics — absent namespace = all).
+        - ${has(rgdCrd.status) && has(rgdCrd.status.conditions) && rgdCrd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
       watch:
-        apiVersion: ${schema.spec.schema.group}/${schema.spec.schema.apiVersion}
-        kind: ${schema.spec.schema.kind}
-        metadata:
-          selector: {}
+        apiVersion: kro.run/v1alpha1
+        kind: ResourceGraphDefinition
+        selector: {}
 
-    - id: instances
+    - id: rgds
       forEach:
-        - instance: ${watchInstances}
+        - rgd: ${watchRgds}
       template:
         apiVersion: experimental.kro.run/v1alpha1
         kind: Graph
         metadata:
-          # Per-instance Graph lives in the instance's namespace (or
-          # kro-system for cluster-scoped instances). Resources inside
-          # the Graph default to the Graph's namespace — matches upstream
-          # kro's behavior (resources in instance's namespace).
-          name: '${(has(instance.metadata.namespace) && instance.metadata.namespace != "" ? instance.metadata.namespace + "-" : "") + instance.metadata.name + "-" + schema.spec.schema.kind.lowerAscii()}'
-          namespace: '${has(instance.metadata.namespace) && instance.metadata.namespace != "" ? instance.metadata.namespace : "kro-system"}'
+          name: rgd-${rgd.metadata.name}
+          namespace: kro-system
+          labels:
+            kro.run/instance-name: ${rgd.metadata.name}
           ownerReferences:
-            - apiVersion: '${schema.spec.schema.group + "/" + schema.spec.schema.apiVersion}'
-              kind: '${schema.spec.schema.kind}'
-              name: '${instance.metadata.name}'
-              uid: '${instance.metadata.uid}'
+            - apiVersion: kro.run/v1alpha1
+              kind: ResourceGraphDefinition
+              name: ${rgd.metadata.name}
+              uid: ${rgd.metadata.uid}
               controller: true
               blockOwnerDeletion: true
         spec:
-          # Per-instance Graph nodes: schema watch + user resources + status.
-          #
-          # Single status node computes state from observed resource readiness.
-          # No propagateWhen gate — the node always fires, and the CEL ternary
-          # produces the correct value: ACTIVE when all resources are ready,
-          # IN_PROGRESS otherwise. Apply-hash changes only on state transitions,
-          # so steady-state reconciles are no-ops.
-          #
-          # The readiness check is built dynamically: for each resource in the
-          # RGD spec, generate "${<id>.ready()}" and join with " && ". Empty
-          # resource lists produce "true" (vacuously ready).
-          #
-          # propagateWhen injection:
-          #   The upstream controller gates on readyWhen; the Graph controller uses
-          #   propagateWhen for the same purpose. The .map() injects propagateWhen
-          #   into every resource — resources with readyWhen get that expression,
-          #   resources without get ["true"] (always-ready, but still classified as
-          #   managed rather than watch-only).
-          #
-          # rgdInstanceStatus.readyWhen:
-          #   Load-bearing for DAG construction, not just readiness reporting.
-          #   extractFieldPathsFromAST skips .ready() calls in template strings —
-          #   it only registers them via gate expressions (readyWhen / propagateWhen).
-          #   Without this gate, rgdInstanceStatus would have zero Dependencies
-          #   and dispatch BEFORE upstream resources exist in scope, failing
-          #   "data pending" forever. The gate is also semantically correct:
-          #   the instance is Ready iff every managed resource is Ready.
-          #
-          #   Do not "simplify" by folding .ready() calls into the template and
-          #   dropping this gate — the DAG bug survives until upstream fixes it.
-          #   Tracking: https://github.com/kubernetes-sigs/kro/issues/1256
-          #
-          # Instance GVK labels (kro.run/instance-*):
-          #   Upstream kro stamps these on every managed child resource (see
-          #   pkg/metadata/labels.go NewInstanceLabeler). They make managed
-          #   resources selectable by parent instance — e.g. a user querying
-          #   "all resources belonging to instance foo" uses these labels.
-          #   The Graph controller is instance-agnostic, so the RGD stdlib
-          #   injects them at render time by deep-merging into each resource's
-          #   template.metadata.labels. The .merge() CEL function is shallow,
-          #   hence the nested merge expression.
-          #
-          # Force-apply (forceApply: true / lifecycle.apply: Force):
-          #   RGD semantics are "declared state is the source of truth." When
-          #   an external actor mutates a managed field, the next reconcile
-          #   must stomp that mutation back to declared state. Upstream kro
-          #   implements this by using Force on every SSA apply (see
-          #   pkg/controller/instance/applyset/applyset.go). The Graph
-          #   controller supports force SSA via lifecycle.apply: Force (for
-          #   human-authored YAML) or forceApply: true (for CEL-generated
-          #   node maps where nested maps may not survive JSON round-trip).
-          #   The RGD stdlib uses forceApply because its nodes are
-          #   CEL-generated. Per 003-ownership.md § lifecycle.
-          #
-          # rgdInstanceStatus:
-          #   A reporter, not a gate. Has zero DAG dependencies — the only CEL
-          #   expressions in its template are .ready() calls on resource IDs,
-          #   which the field path extractor explicitly skips (they are runtime
-          #   readiness checks, not data dependencies). This lets the status
-          #   node dispatch on every reconcile regardless of which resources
-          #   are gated by propagateWhen. For gated resources with no prior
-          #   scope, the controller seeds an empty map so .ready() returns
-          #   false instead of "data pending". The result: status.state
-          #   transitions correctly from IN_PROGRESS → ACTIVE as resources
-          #   satisfy their readyWhen conditions.
-          nodes: >-
-            ${
-              [{"id": "schema", "ref": {
-                "apiVersion": schema.spec.schema.group + "/" + schema.spec.schema.apiVersion,
-                "kind": schema.spec.schema.kind,
-                "metadata": {
-                  "name": instance.metadata.name,
-                  "namespace": instance.metadata.namespace
-                }
-              }}]
-              + schema.spec.resources.filter(r, has(r.externalRef) && !has(r.externalRef.metadata.selector)).map(r,
-                {"id": r.id, "ref": {
-                  "apiVersion": r.externalRef.apiVersion,
-                  "kind": r.externalRef.kind,
-                  "metadata": {"name": r.externalRef.metadata.name}.merge(
-                    has(r.externalRef.metadata.namespace) && r.externalRef.metadata.namespace != ""
-                      ? {"namespace": r.externalRef.metadata.namespace}
-                      : {}
-                  )
-                }})
-              + schema.spec.resources.filter(r, has(r.externalRef) && has(r.externalRef.metadata.selector)).map(r,
-                {"id": r.id, "watch": {
-                  "apiVersion": r.externalRef.apiVersion,
-                  "kind": r.externalRef.kind,
-                  "selector": r.externalRef.metadata.selector
-                }.merge(
-                  has(r.externalRef.metadata.namespace) && r.externalRef.metadata.namespace != ""
-                    ? {"metadata": {"namespace": r.externalRef.metadata.namespace}}
-                    : {}
-                )})
-              + schema.spec.resources.filter(r, !has(r.externalRef)).map(r, r.merge({
-                "propagateWhen": has(r.propagateWhen) ? r.propagateWhen : ["${" + r.id + ".dependencies().all(d, d.ready())}"],
-                "forceApply": true,
-                "template": r.template.merge({
-                  "metadata": (has(r.template.metadata) ? r.template.metadata : {}).merge({
-                    "labels": (has(r.template.metadata) && has(r.template.metadata.labels) ? r.template.metadata.labels : {}).merge({
-                      "kro.run/instance-id": string(instance.metadata.uid),
-                      "kro.run/instance-name": instance.metadata.name,
-                      "kro.run/instance-namespace": instance.metadata.namespace,
-                      "kro.run/instance-group": schema.spec.schema.group,
-                      "kro.run/instance-version": schema.spec.schema.apiVersion,
-                      "kro.run/instance-kind": schema.spec.schema.kind
-                    })
-                  })
-                })
-              }))
-              + [{"id": "rgdInstanceStatus",
-                 "patch": {
-                "apiVersion": schema.spec.schema.group + "/" + schema.spec.schema.apiVersion,
-                "kind": schema.spec.schema.kind,
-                "metadata": {
-                  "name": instance.metadata.name,
-                  "namespace": instance.metadata.namespace
-                },
-                "status": {
-                  "state": "${" + (schema.spec.resources.size() == 0 ? "true" : schema.spec.resources.map(r, r.id + ".ready()").join(" && ")) + " ? 'ACTIVE' : 'IN_PROGRESS'}",
-                  "conditions": [
-                    {
-                      "type": "Ready",
-                      "status": "${" + (schema.spec.resources.size() == 0 ? "true" : schema.spec.resources.map(r, r.id + ".ready()").join(" && ")) + " ? 'True' : 'False'}",
-                      "reason": "Ready",
-                      "observedGeneration": instance.metadata.generation,
-                      "lastTransitionTime": instance.metadata.creationTimestamp
-                    }
-                  ]
-                }.merge(has(schema.spec.schema.status) ? schema.spec.schema.status : {})
-              }}]
-              + [{"id": "instanceLifecycle", "patch": {
-                "apiVersion": schema.spec.schema.group + "/" + schema.spec.schema.apiVersion,
-                "kind": schema.spec.schema.kind,
-                "metadata": {
-                  "name": instance.metadata.name,
-                  "namespace": instance.metadata.namespace,
-                  "finalizers": ["experimental.kro.run/graph"]
-                }
-              }}]
-            }
+          nodes:
+            - id: schema
+              ref:
+                apiVersion: kro.run/v1alpha1
+                kind: ResourceGraphDefinition
+                metadata:
+                  name: ${rgd.metadata.name}
 
-    - id: rgdStatus
-      propagateWhen:
-        # Fire when: (1) validation failed (report Inactive immediately), OR
-        # (2) validation passed AND CRD is ready (report Active).
-        # When validation passes but CRD isn't ready yet, wait.
-        - '${!validation.result.valid || crd.ready()}'
-      patch:
-        apiVersion: kro.run/v1alpha1
-        kind: ResourceGraphDefinition
-        metadata:
-          name: ${schema.metadata.name}
-        status:
-          state: '${validation.result.valid ? "Active" : "Inactive"}'
-          topologicalOrder: '${validation.result.valid ? (has(schema.spec.resources) ? schema.spec.resources.map(r, r.id) : []) : []}'
-          conditions:
-            - type: Ready
-              status: '${validation.result.valid ? "True" : "False"}'
-              reason: '${validation.result.valid ? "Ready" : "Invalid"}'
-              message: '${validation.result.valid ? "resource graph and schema are valid" : validation.result.message}'
-              observedGeneration: ${schema.metadata.generation}
-              lastTransitionTime: ${schema.metadata.creationTimestamp}
-            - type: GraphAccepted
-              status: '${validation.result.valid ? "True" : "False"}'
-              reason: '${validation.result.valid ? "Valid" : "Invalid"}'
-              message: '${validation.result.valid ? "resource graph and schema are valid" : validation.result.message}'
-              observedGeneration: ${schema.metadata.generation}
-              lastTransitionTime: ${schema.metadata.creationTimestamp}
-            - type: KindReady
-              status: '${validation.result.valid ? "True" : "False"}'
-              reason: '${validation.result.valid ? "Ready" : "Invalid"}'
-              message: '${validation.result.valid ? "" : validation.result.message}'
-              observedGeneration: ${schema.metadata.generation}
-              lastTransitionTime: ${schema.metadata.creationTimestamp}
-            - type: ControllerReady
-              status: "True"
-              reason: Running
-              message: controller is running
-              observedGeneration: ${schema.metadata.generation}
-              lastTransitionTime: ${schema.metadata.creationTimestamp}
+            - id: checks
+              def:
+                resources: '$${has(schema.spec) && has(schema.spec.resources) ? schema.spec.resources : []}'
+                reserved: '$${["apiVersion","context","dependency","dependencies","each","externalRef","externalReference","externalRefs","externalReferences","graph","instance","item","items","kind","kro","metadata","namespace","object","resource","resourcegraphdefinition","resourceGraphDefinition","resources","root","runtime","schema","self","serviceAccountName","spec","status","this","variables","vars","version"]}'
+                allIDs: '$${has(schema.spec) && has(schema.spec.resources) ? schema.spec.resources.map(r, r.id) : []}'
+
+            - id: validation
+              def:
+                result: >-
+                  $${
+                    checks.resources.exists(r, checks.reserved.exists(w, r.id == w))
+                    ? {"valid": false, "message": "naming convention violation: id " + checks.resources.filter(r, checks.reserved.exists(w, r.id == w))[0].id + " is a reserved keyword in KRO"}
+                    : checks.resources.exists(r, !r.id.matches("^[a-z][a-zA-Z0-9]*$"))
+                    ? {"valid": false, "message": "naming convention violation: id " + checks.resources.filter(r, !r.id.matches("^[a-z][a-zA-Z0-9]*$"))[0].id + " is not a valid KRO resource id: must be lower camelCase"}
+                    : checks.resources.exists(r, checks.resources.filter(s, s.id == r.id).size() > 1)
+                    ? {"valid": false, "message": "found duplicate resource IDs \"" + checks.resources.filter(r, checks.resources.filter(s, s.id == r.id).size() > 1)[0].id + "\""}
+                    : checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(d, d.exists(k, checks.reserved.exists(w, k == w))))
+                    ? {"valid": false, "message": "forEach iterator is a reserved keyword"}
+                    : checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(d, d.exists(k, checks.allIDs.exists(id, id == k))))
+                    ? {"valid": false, "message": "forEach iterator conflicts with resource ID"}
+                    : has(schema.spec) && has(schema.spec.schema) && has(schema.spec.schema.status) && schema.spec.schema.status.size() > 0 && schema.spec.schema.status.exists(k, !string(schema.spec.schema.status[k]).contains("${"))
+                    ? {"valid": false, "message": "failed to build instance status schema: status fields without expressions are not supported"}
+                    : {"valid": true, "message": ""}
+                  }
+
+            - id: crd
+              includeWhen:
+                - $${validation.result.valid}
+              template:
+                apiVersion: apiextensions.k8s.io/v1
+                kind: CustomResourceDefinition
+                metadata:
+                  name: $${plural(schema.spec.schema.kind).lowerAscii()}.$${schema.spec.schema.group}
+                  labels: '$${has(schema.spec.schema.metadata) && has(schema.spec.schema.metadata.labels) ? schema.spec.schema.metadata.labels : {}}'
+                  annotations: '$${has(schema.spec.schema.metadata) && has(schema.spec.schema.metadata.annotations) ? schema.spec.schema.metadata.annotations : {}}'
+                spec:
+                  group: $${schema.spec.schema.group}
+                  names:
+                    kind: $${schema.spec.schema.kind}
+                    plural: $${plural(schema.spec.schema.kind).lowerAscii()}
+                  scope: $${schema.spec.schema.scope}
+                  versions:
+                    - name: $${schema.spec.schema.apiVersion}
+                      served: true
+                      storage: true
+                      subresources:
+                        status: {}
+                      schema:
+                        openAPIV3Schema: '$${simpleSchema.toOpenAPI(schema.spec.schema, has(schema.spec.resources) ? schema.spec.resources : [])}'
+                      additionalPrinterColumns: '$${has(schema.spec.schema.additionalPrinterColumns) ? schema.spec.schema.additionalPrinterColumns : []}'
+
+            - id: watchInstances
+              includeWhen:
+                - $${has(crd.status) && has(crd.status.conditions) && crd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
+              watch:
+                apiVersion: $${schema.spec.schema.group}/$${schema.spec.schema.apiVersion}
+                kind: $${schema.spec.schema.kind}
+                metadata:
+                  selector: {}
+
+            - id: instances
+              forEach:
+                - instance: $${watchInstances}
+              template:
+                apiVersion: experimental.kro.run/v1alpha1
+                kind: Graph
+                metadata:
+                  name: >-
+                    $${(has(instance.metadata.namespace) && instance.metadata.namespace != ""
+                    ? instance.metadata.namespace + "-" : "")
+                    + instance.metadata.name + "-" + schema.spec.schema.kind.lowerAscii()}
+                  namespace: '$${has(instance.metadata.namespace) && instance.metadata.namespace != "" ? instance.metadata.namespace : "kro-system"}'
+                  ownerReferences:
+                    - apiVersion: '$${schema.spec.schema.group + "/" + schema.spec.schema.apiVersion}'
+                      kind: '$${schema.spec.schema.kind}'
+                      name: '$${instance.metadata.name}'
+                      uid: '$${instance.metadata.uid}'
+                      controller: true
+                      blockOwnerDeletion: true
+                spec:
+                  nodes: >-
+                    $${
+                      [{"id": "schema", "ref": {
+                        "apiVersion": schema.spec.schema.group + "/" + schema.spec.schema.apiVersion,
+                        "kind": schema.spec.schema.kind,
+                        "metadata": {
+                          "name": instance.metadata.name,
+                          "namespace": instance.metadata.namespace
+                        }
+                      }}]
+                      + schema.spec.resources.filter(r, has(r.externalRef) && !has(r.externalRef.metadata.selector)).map(r,
+                        {"id": r.id, "ref": {
+                          "apiVersion": r.externalRef.apiVersion,
+                          "kind": r.externalRef.kind,
+                          "metadata": {"name": r.externalRef.metadata.name}.merge(
+                            has(r.externalRef.metadata.namespace) && r.externalRef.metadata.namespace != ""
+                              ? {"namespace": r.externalRef.metadata.namespace}
+                              : {}
+                          )
+                        }})
+                      + schema.spec.resources.filter(r, has(r.externalRef) && has(r.externalRef.metadata.selector)).map(r,
+                        {"id": r.id, "watch": {
+                          "apiVersion": r.externalRef.apiVersion,
+                          "kind": r.externalRef.kind,
+                          "selector": r.externalRef.metadata.selector
+                        }.merge(
+                          has(r.externalRef.metadata.namespace) && r.externalRef.metadata.namespace != ""
+                            ? {"metadata": {"namespace": r.externalRef.metadata.namespace}}
+                            : {}
+                        )})
+                      + schema.spec.resources.filter(r, !has(r.externalRef)).map(r, r.merge({
+                        "propagateWhen": has(r.propagateWhen) ? r.propagateWhen : ["${" + r.id + ".dependencies().all(d, d.ready())}"],
+                        "forceApply": true,
+                        "template": r.template.merge({
+                          "metadata": (has(r.template.metadata) ? r.template.metadata : {}).merge({
+                            "labels": (has(r.template.metadata) && has(r.template.metadata.labels) ? r.template.metadata.labels : {}).merge({
+                              "kro.run/instance-id": string(instance.metadata.uid),
+                              "kro.run/instance-name": instance.metadata.name,
+                              "kro.run/instance-namespace": instance.metadata.namespace,
+                              "kro.run/instance-group": schema.spec.schema.group,
+                              "kro.run/instance-version": schema.spec.schema.apiVersion,
+                              "kro.run/instance-kind": schema.spec.schema.kind
+                            })
+                          })
+                        })
+                      }))
+                      + [{"id": "rgdInstanceStatus",
+                         "patch": {
+                        "apiVersion": schema.spec.schema.group + "/" + schema.spec.schema.apiVersion,
+                        "kind": schema.spec.schema.kind,
+                        "metadata": {
+                          "name": instance.metadata.name,
+                          "namespace": instance.metadata.namespace,
+                          "finalizers": ["experimental.kro.run/graph"]
+                        },
+                        "status": {
+                          "state": "${" + (schema.spec.resources.size() == 0 ? "true" : schema.spec.resources.map(r, r.id + ".ready()").join(" && ")) + " ? 'ACTIVE' : 'IN_PROGRESS'}",
+                          "conditions": [
+                            {
+                              "type": "Ready",
+                              "status": "${" + (schema.spec.resources.size() == 0 ? "true" : schema.spec.resources.map(r, r.id + ".ready()").join(" && ")) + " ? 'True' : 'False'}",
+                              "reason": "Ready",
+                              "observedGeneration": instance.metadata.generation,
+                              "lastTransitionTime": instance.metadata.creationTimestamp
+                            }
+                          ]
+                        }.merge(has(schema.spec.schema.status) ? schema.spec.schema.status : {})
+                      }}]
+                    }
+
+            - id: rgdStatus
+              propagateWhen:
+                - '$${!validation.result.valid || crd.ready()}'
+              forceApply: true
+              patch:
+                apiVersion: kro.run/v1alpha1
+                kind: ResourceGraphDefinition
+                metadata:
+                  name: $${schema.metadata.name}
+                status:
+                  state: '$${validation.result.valid ? "Active" : "Inactive"}'
+                  topologicalOrder: '$${validation.result.valid ? (has(schema.spec.resources) ? schema.spec.resources.map(r, r.id) : []) : []}'
+                  conditions:
+                    - type: Ready
+                      status: '$${validation.result.valid ? "True" : "False"}'
+                      reason: '$${validation.result.valid ? "Ready" : "Invalid"}'
+                      message: '$${validation.result.valid ? "" : validation.result.message}'
+                      observedGeneration: $${schema.metadata.generation}
+                      lastTransitionTime: $${schema.metadata.creationTimestamp}
+                    - type: GraphAccepted
+                      status: '$${validation.result.valid ? "True" : "False"}'
+                      reason: '$${validation.result.valid ? "Valid" : "Invalid"}'
+                      message: '$${validation.result.valid ? "resource graph and schema are valid" : validation.result.message}'
+                      observedGeneration: $${schema.metadata.generation}
+                      lastTransitionTime: $${schema.metadata.creationTimestamp}
+                    - type: KindReady
+                      status: '$${validation.result.valid ? "True" : "False"}'
+                      reason: '$${validation.result.valid ? "Ready" : "Invalid"}'
+                      message: '$${validation.result.valid ? "" : validation.result.message}'
+                      observedGeneration: $${schema.metadata.generation}
+                      lastTransitionTime: $${schema.metadata.creationTimestamp}
+                    - type: ControllerReady
+                      status: "True"
+                      reason: Running
+                      message: controller is running
+                      observedGeneration: $${schema.metadata.generation}
+                      lastTransitionTime: $${schema.metadata.creationTimestamp}
+
+    # compilationStatus mirrors the sub-Graph's Compiled condition to the RGD.
+    # When compilation fails, this node also claims Ready and state (with
+    # Inactive / False) because the sub-Graph is inert and rgdStatus can't
+    # fire. When compilation succeeds, the patch includes only Compiled —
+    # SSA relinquishes Ready and state for rgdStatus to claim.
+    - id: compilationStatus
+      forEach:
+        - graph: ${rgds}
+      forceApply: true
+      patch: >-
+        ${
+          has(graph.status) && has(graph.status.conditions)
+          && graph.status.conditions.exists(c, c.type == "Compiled" && c.status == "False")
+          ? {
+              "apiVersion": "kro.run/v1alpha1",
+              "kind": "ResourceGraphDefinition",
+              "metadata": {"name": graph.metadata.labels["kro.run/instance-name"]},
+              "status": {
+                "state": "Inactive",
+                "conditions": [
+                  {
+                    "type": "Compiled",
+                    "status": "False",
+                    "reason": graph.status.conditions.filter(c, c.type == "Compiled")[0].reason,
+                    "message": graph.status.conditions.filter(c, c.type == "Compiled")[0].message
+                  },
+                  {
+                    "type": "Ready",
+                    "status": "False",
+                    "reason": "CompilationFailed",
+                    "message": graph.status.conditions.filter(c, c.type == "Compiled")[0].message
+                  }
+                ]
+              }
+            }
+          : has(graph.status) && has(graph.status.conditions)
+            && graph.status.conditions.exists(c, c.type == "Compiled" && c.status == "True")
+          ? {
+              "apiVersion": "kro.run/v1alpha1",
+              "kind": "ResourceGraphDefinition",
+              "metadata": {"name": graph.metadata.labels["kro.run/instance-name"]},
+              "status": {
+                "conditions": [
+                  {
+                    "type": "Compiled",
+                    "status": "True",
+                    "reason": "Compiled",
+                    "message": "Spec is valid"
+                  }
+                ]
+              }
+            }
+          : {
+              "apiVersion": "kro.run/v1alpha1",
+              "kind": "ResourceGraphDefinition",
+              "metadata": {"name": graph.metadata.labels["kro.run/instance-name"]},
+              "status": {
+                "conditions": [
+                  {
+                    "type": "Compiled",
+                    "status": "Unknown",
+                    "reason": "Reconciling",
+                    "message": "Waiting for graph compilation"
+                  }
+                ]
+              }
+            }
+        }

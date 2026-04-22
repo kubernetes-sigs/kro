@@ -723,3 +723,91 @@ func TestRGDLifecyclePort(t *testing.T) {
 
 	t.Log("RGD LIFECYCLE PORT PASSED: create → verify → update → converge → delete → cleanup")
 }
+
+// TestRGDForEachNonListFieldCompilationError proves that the compiler catches
+// forEach expressions over non-list schema fields during pre-compilation.
+//
+// When an RGD resource uses forEach with a field typed as "string" (not "[]..."),
+// the per-RGD sub-Graph's pre-compilation resolves the CRD's OpenAPI schema and
+// Phase 4b rejects the non-list forEach. The error propagates:
+//
+//	L1 sub-Graph Compiled=False → compilationStatus → RGD Compiled=False
+//
+// This is a compiler-level check, not a validation-node check. The CRD is
+// created (schema is valid), but the child graph fails to compile because
+// the forEach expression doesn't return a list.
+func TestRGDForEachNonListFieldCompilationError(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+	group := uniqueGroup()
+
+	// L0 Graph: the RGD controller
+	l0Graph := buildRGDControllerGraph(ns)
+	require.NoError(t, k8sClient.Create(ctx, l0Graph))
+	t.Log("L0 Graph created: rgd-controller")
+
+	// Create an RGD where a resource uses forEach over a string field.
+	// schema.spec.name is typed as "string", not "[]string" — forEach
+	// over it should fail compilation.
+	rgd := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "test.kro.run/v1alpha1",
+			"kind":       "ResourceGraphDefinition",
+			"metadata": map[string]any{
+				"name":      "bad-foreach",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"schema": map[string]any{
+					"kind":       "BadForEach",
+					"apiVersion": "v1alpha1",
+					"group":      group,
+					"spec": map[string]any{
+						"name": "string",
+					},
+				},
+				"nodes": []any{
+					map[string]any{
+						"id": "items",
+						"forEach": map[string]any{
+							"item": "${schema.spec.name}",
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "${item}-cm",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, rgd))
+	t.Log("RGD created: bad-foreach (forEach over string field)")
+
+	// Wait for the L1 controller Graph to be stamped by the L0.
+	l1Key := types.NamespacedName{Name: "bad-foreach-controller", Namespace: ns}
+	l1Graph := &unstructured.Unstructured{}
+	l1Graph.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient, l1Key, l1Graph))
+	t.Log("L1 Graph created: bad-foreach-controller")
+
+	// The L1 sub-Graph compiles initially (types are dyn), creates the CRD,
+	// then recompiles with real types. Phase 4b catches the non-list forEach
+	// and sets Compiled=False on the L1 Graph.
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient, l1Key, "False"))
+
+	// Verify the error message contains the Phase 4b error.
+	require.NoError(t, k8sClient.Get(ctx, l1Key, l1Graph))
+	status, _ := l1Graph.Object["status"].(map[string]any)
+	conditions, _ := status["conditions"].([]any)
+	compiled, ok := findCondition(conditions, "Compiled")
+	require.True(t, ok, "L1 Graph should have Compiled condition")
+	assert.Equal(t, "False", compiled["status"])
+	msg, _ := compiled["message"].(string)
+	assert.Contains(t, msg, "must return a list",
+		"Compiled message should contain the Phase 4b error")
+	t.Logf("L1 Graph Compiled=False, message=%s", msg)
+}

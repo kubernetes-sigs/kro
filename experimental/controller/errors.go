@@ -7,6 +7,7 @@
 package graphcontroller
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strings"
@@ -119,4 +120,31 @@ var networkErrorPatterns = []string{
 	"i/o timeout",
 	"TLS handshake",
 	"unexpected EOF",
+}
+
+// isTransientError reports whether an error is transient — i.e., might
+// succeed if retried without any input change. Context cancellation, API
+// server responses (apierrors.StatusError), and network errors are
+// transient. Everything else — compilation failures, CEL validation,
+// cycle detection, parse errors — is deterministic: same input always
+// produces the same failure.
+//
+// Used by Reconcile to decide whether to return an error to
+// controller-runtime (triggering exponential backoff) or return nil
+// (relying on watch events to re-enqueue when input changes).
+func isTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// In compilation paths, API errors are typically 404 (CRD not yet
+	// registered) or 409 (conflict) — both transient. Deterministic
+	// API errors (400, 422) would indicate a code bug, not user input.
+	var statusErr *apierrors.StatusError
+	if errors.As(err, &statusErr) {
+		return true
+	}
+	return isNetworkError(err)
 }

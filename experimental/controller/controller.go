@@ -359,9 +359,20 @@ func (w *walkState) tryDispatch(idx int) {
 		}
 	}
 	if hasExcluded {
-		w.plan.SetState(w.dag, node.ID, NodeExcluded)
-		w.notifyDependents(node.ID)
-		return
+		// Nodes with propagateWhen can handle excluded dependencies —
+		// the gate expression decides whether to proceed despite
+		// exclusion. Example: rgdStatus has propagateWhen:
+		// ${!validation.result.valid || crd.ready()}. When crd is
+		// excluded (invalid spec), the gate short-circuits to true
+		// and rgdStatus fires to write the error status. Without
+		// this check, Excluded propagates unconditionally and the
+		// status patch never happens.
+		if len(node.PropagateWhen) == 0 || node.ForEach != nil {
+			w.plan.SetState(w.dag, node.ID, NodeExcluded)
+			w.notifyDependents(node.ID)
+			return
+		}
+		// Fall through to propagateWhen evaluation.
 	}
 	if hasBlocked {
 		w.plan.SetState(w.dag, node.ID, NodeBlocked)
@@ -763,9 +774,26 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		if listErr != nil || len(revisions) == 0 {
 			// No previous revision to fall back to — truly stuck.
 			if statusErr := r.updateStatus(ctx, graph, &reconcileState{compiled: false, compiledErr: err}); statusErr != nil {
-				logger.Error(statusErr, "updating status after revision error")
+				// Status write failed (transient) — return the status
+				// error so controller-runtime retries the write.
+				return ctrl.Result{}, fmt.Errorf("updating status after revision error: %w", statusErr)
 			}
-			return ctrl.Result{}, fmt.Errorf("ensuring revision: %w", err)
+			// Transient API/network errors (server 5xx, connection
+			// refused) justify retry — the operation may succeed on the
+			// next attempt. Return error so controller-runtime retries
+			// with backoff.
+			if isTransientError(err) {
+				return ctrl.Result{}, fmt.Errorf("ensuring revision: %w", err)
+			}
+			// Deterministic business logic failure (invalid CEL, cycle,
+			// parse error). Same input always produces the same failure.
+			// Status has been written; the next reconcile is triggered by
+			// a watch event when the spec changes. Returning error here
+			// would cause exponential backoff, delaying status
+			// propagation to parent graphs that read this graph's
+			// conditions.
+			logger.Info("deterministic compilation error; status written, awaiting spec change", "error", err)
+			return ctrl.Result{}, nil
 		}
 		// Use the most recent revision (listRevisions returns sorted by
 		// generation ascending, so the last element is the latest).
@@ -796,9 +824,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	revisionSpec, state, err := r.compileRevision(ctx, graph.GetNamespace(), activeRevision)
 	if err != nil {
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{compiled: false, compiledErr: err}); statusErr != nil {
-			logger.Error(statusErr, "updating status after compilation error")
+			return ctrl.Result{}, fmt.Errorf("updating status after compilation error: %w", statusErr)
 		}
-		return ctrl.Result{}, fmt.Errorf("compiling revision: %w", err)
+		if isTransientError(err) {
+			return ctrl.Result{}, fmt.Errorf("compiling revision: %w", err)
+		}
+		logger.Info("deterministic compilation error; status written, awaiting spec change", "error", err)
+		return ctrl.Result{}, nil
 	}
 
 	eval := newEvaluator(state)

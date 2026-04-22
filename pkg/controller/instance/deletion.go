@@ -196,8 +196,8 @@ func (c *Controller) deleteTarget(
 	if policy.ShouldRetain() {
 		rcx.Log.Info("Lifecycle policy says retain, orphaning resources", "resource", node.Spec.Meta.ID, "targetCount", len(targets))
 		for _, target := range targets {
-			rcx.Log.Info("Removing KRO labels from resource", "resource", node.Spec.Meta.ID, "name", target.GetName(), "namespace", target.GetNamespace())
-			if err := metadata.RemoveKroLabelsToRetainResource(rcx.Ctx, rcx.Client, node.Spec.Meta.GVR, target.GetNamespace(), target.GetName()); err != nil {
+			rcx.Log.Info("Removing KRO labels and field managers from resource", "resource", node.Spec.Meta.ID, "name", target.GetName(), "namespace", target.GetNamespace())
+			if err := metadata.RemoveKroLabelsAndFieldManagersToRetainResource(rcx.Ctx, rcx.Client, node.Spec.Meta.GVR, target.GetNamespace(), target.GetName()); err != nil {
 				rcx.Log.Error(err, "Failed to orphan resource", "resource", node.Spec.Meta.ID, "name", target.GetName())
 				state.SetError(err)
 				return err

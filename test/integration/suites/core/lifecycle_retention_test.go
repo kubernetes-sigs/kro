@@ -164,6 +164,70 @@ var _ = Describe("Lifecycle Retention Policy", func() {
 		})
 	})
 
+	Context("with field manager removal", func() {
+		It("should remove both labels and field managers when orphaning resources", func(ctx SpecContext) {
+			rgd := createLifecycleRGD("lifecycle-fm-rgd", testGroupLifecycle, "LifecycleFMTest", "v1alpha1", true)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
+
+			By("Creating instance")
+			instance := createLifecycleInstance(testGroupLifecycle, "LifecycleFMTest", "v1alpha1", "test-fm", ns.Name, "fm-app")
+			Expect(env.Client.Create(ctx, instance)).To(Succeed())
+			waitForInstanceActive(ctx, ns.Name, "test-fm", instance)
+
+			By("Verifying resource has KRO labels and field managers before deletion")
+			cm := &corev1.ConfigMap{}
+			verifyResourceExists(ctx, ns.Name, "test-fm-config", cm)
+			Expect(cm.Labels).To(HaveKey(metadata.InstanceIDLabel))
+			Expect(cm.Labels).To(HaveKey(metadata.NodeIDLabel))
+
+			managedFields := cm.GetManagedFields()
+			var foundApplySet bool
+			var allManagers []string
+			for _, mf := range managedFields {
+				allManagers = append(allManagers, mf.Manager)
+				if mf.Manager == "kro.run/applyset" {
+					foundApplySet = true
+				}
+			}
+			Expect(foundApplySet).To(BeTrue(), "kro.run/applyset field manager should be present, found managers: %v", allManagers)
+			originalUID := cm.UID
+
+			By("Deleting instance to trigger orphaning")
+			Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+			waitForResourceDeleted(ctx, ns.Name, "test-fm", instance)
+
+			By("Verifying resource retained without KRO labels or field managers")
+			Eventually(func(g Gomega) {
+				cm := &corev1.ConfigMap{}
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{
+					Name:      "test-fm-config",
+					Namespace: ns.Name,
+				}, cm)).To(Succeed())
+
+				// Verify UID unchanged (not recreated)
+				g.Expect(cm.UID).To(Equal(originalUID))
+
+				// Verify labels removed
+				g.Expect(cm.Labels).ToNot(HaveKey(metadata.InstanceIDLabel))
+				g.Expect(cm.Labels).ToNot(HaveKey(metadata.NodeIDLabel))
+				g.Expect(cm.Labels).ToNot(HaveKey(metadata.ManagedByLabelKey))
+				g.Expect(cm.Labels).ToNot(HaveKey("applyset.kubernetes.io/part-of"))
+
+				// Verify KRO field managers removed
+				managedFields := cm.GetManagedFields()
+				for _, mf := range managedFields {
+					g.Expect(mf.Manager).ToNot(Equal("kro.run/applyset"),
+						"kro.run/applyset should be removed")
+					g.Expect(mf.Manager).ToNot(Equal("kro.run/labeller"),
+						"kro.run/labeller should be removed (if it was present)")
+				}
+			}, 30*time.Second, time.Second).Should(Succeed())
+
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+	})
+
 	Context("with CEL expression syntax", func() {
 		It("should retain resources on instance deletion and allow adoption by new instance", func(ctx SpecContext) {
 			rgd := createLifecycleRGD("lifecycle-cel-rgd", testGroupLifecycle, "LifecycleCELTest", "v1alpha1", false)

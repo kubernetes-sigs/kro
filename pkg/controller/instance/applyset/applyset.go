@@ -563,10 +563,10 @@ func (a *ApplySet) prune(
 
 	for _, c := range candidates {
 		eg.Go(func() error {
-			// Patch to remove labels if resource has lifecycle-policy=retain annotation
+			// Patch to remove labels and field managers if resource has lifecycle-policy=retain annotation
 			annotations := c.obj.GetAnnotations()
 			if annotations != nil && annotations[metadata.LifecyclePolicyAnnotation] == metadata.LifecyclePolicyRetain {
-				if err := metadata.RemoveKroLabelsToRetainResource(egCtx, a.client, c.gvr, c.obj.GetNamespace(), c.obj.GetName()); err != nil {
+				if err := metadata.RemoveKroLabelsAndFieldManagersToRetainResource(egCtx, a.client, c.gvr, c.obj.GetNamespace(), c.obj.GetName()); err != nil {
 					a.log.Error(err, "failed to orphan resource with retain policy",
 						"name", c.obj.GetName(),
 						"namespace", c.obj.GetNamespace(),

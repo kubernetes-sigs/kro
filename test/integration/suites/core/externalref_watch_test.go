@@ -444,25 +444,29 @@ var _ = Describe("ExternalRef Watch", func() {
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
+		expectSelection := func(expectedCount, expectedNames string) {
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      instance.GetName(),
+					Namespace: namespace,
+				}, instance)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+				configCount, found, err := unstructured.NestedString(instance.Object, "status", "configCount")
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(found).To(BeTrue())
+				g.Expect(configCount).To(Equal(expectedCount))
+
+				matchedNames, found, err := unstructured.NestedString(instance.Object, "status", "matchedNames")
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(found).To(BeTrue())
+				g.Expect(matchedNames).To(Equal(expectedNames))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}
+
 		By("waiting for the alpha selection to be reflected in status")
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      instance.GetName(),
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
-
-			configCount, found, err := unstructured.NestedString(instance.Object, "status", "configCount")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(configCount).To(Equal("2"))
-
-			matchedNames, found, err := unstructured.NestedString(instance.Object, "status", "matchedNames")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(matchedNames).To(Equal("alpha-team-1,alpha-team-2"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		expectSelection("2", "alpha-team-1,alpha-team-2")
 
 		By("updating the instance selector input from alpha to beta")
 		Expect(env.Client.Get(ctx, types.NamespacedName{
@@ -475,24 +479,7 @@ var _ = Describe("ExternalRef Watch", func() {
 		Expect(env.Client.Update(ctx, instance)).To(Succeed())
 
 		By("waiting for status to rebind to the beta selection")
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      instance.GetName(),
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
-
-			configCount, found, err := unstructured.NestedString(instance.Object, "status", "configCount")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(configCount).To(Equal("1"))
-
-			matchedNames, found, err := unstructured.NestedString(instance.Object, "status", "matchedNames")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(matchedNames).To(Equal("beta-team-1"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		expectSelection("1", "beta-team-1")
 	})
 
 	It("external collection watch reacts to new matching resources", func(ctx SpecContext) {

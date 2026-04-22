@@ -30,7 +30,8 @@ PASSING_COMPAT_FILES := \
   topology_test.go \
   externalref_test.go \
   externalref_watch_test.go \
-  externalref_deletion_test.go
+  externalref_deletion_test.go \
+  unknown_fields_test.go
 
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec

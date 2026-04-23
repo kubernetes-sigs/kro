@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -38,7 +40,7 @@ type reconcileState struct {
 	compiled    bool
 	compiledErr error // non-nil when compiled=false
 
-	PlanSummary
+	PlanSummary dagpkg.PlanSummary
 	// nodeErrors carries error messages ("nodeID: reason") surfaced when any
 	// of the HasX flags fire. These are the reason text for NotReady/Error/
 	// Blocked conditions.
@@ -62,10 +64,10 @@ func (s *reconcileState) deriveCompiledCondition() (status ConditionStatus, reas
 	}
 	if s.compiledErr != nil {
 		// Classify the error
-		if errors.Is(s.compiledErr, ErrInvalidExpression) {
+		if errors.Is(s.compiledErr, compiler.ErrInvalidExpression) {
 			return ConditionFalse, "ExpressionError", s.compiledErr.Error()
 		}
-		if errors.Is(s.compiledErr, ErrDependencyError) {
+		if errors.Is(s.compiledErr, compiler.ErrDependencyError) {
 			return ConditionFalse, "DependencyError", s.compiledErr.Error()
 		}
 		return ConditionFalse, "DeclarationError", s.compiledErr.Error()
@@ -96,24 +98,24 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	if !s.compiled {
 		return ConditionFalse, "NotCompiled", "Spec is not valid; resources cannot be reconciled"
 	}
-	if s.HasSystemError {
+	if s.PlanSummary.HasSystemError {
 		return ConditionFalse, "SystemError",
 			fmt.Sprintf("Resources with server/infrastructure errors: %s",
 				strings.Join(s.nodeErrors, "; "))
 	}
-	if s.HasError {
+	if s.PlanSummary.HasError {
 		return ConditionFalse, "Error",
 			fmt.Sprintf("Resources with errors: %s",
 				strings.Join(s.nodeErrors, "; "))
 	}
-	if s.HasConflict {
+	if s.PlanSummary.HasConflict {
 		msg := "One or more resources have SSA field ownership conflicts"
 		if len(s.nodeErrors) > 0 {
 			msg += ": " + strings.Join(s.nodeErrors, "; ")
 		}
 		return ConditionFalse, "Conflict", msg
 	}
-	if s.HasBlocked {
+	if s.PlanSummary.HasBlocked {
 		msg := "One or more resources blocked by upstream errors"
 		// Surface TeardownBlocked reasons (third-party field managers,
 		// finalizer creation failure, finalizer not ready) so operators can
@@ -125,14 +127,14 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 		}
 		return ConditionUnknown, "Blocked", msg
 	}
-	if s.HasPending {
+	if s.PlanSummary.HasPending {
 		msg := "One or more resources waiting for upstream data"
 		if len(s.nodeErrors) > 0 {
 			msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
 		}
 		return ConditionUnknown, "Pending", msg
 	}
-	if s.HasNotReady {
+	if s.PlanSummary.HasNotReady {
 		msg := "One or more resources have not satisfied their readyWhen conditions"
 		// Surface readyWhen expression errors so operators can distinguish
 		// "waiting for Deployment to roll out" from "your CEL expression
@@ -143,7 +145,7 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 		}
 		return ConditionUnknown, "NotReady", msg
 	}
-	msg := fmt.Sprintf("All %d resources reconciled", s.ReadyCount)
+	msg := fmt.Sprintf("All %d resources reconciled", s.PlanSummary.ReadyCount)
 	// Surface informational notes (e.g., FinalizerSkipped) that don't
 	// constitute errors but are operationally useful. Per 005-reconciliation.md
 	// § Finalization: "The Graph's status surfaces this: FinalizerSkipped

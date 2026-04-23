@@ -3,6 +3,7 @@ package graphcontroller
 import (
 	"fmt"
 
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -178,18 +179,18 @@ var nodeStateLabels = []string{
 func init() {
 	// _nodeStateCount includes nodeUnvisited (the zero value), so the
 	// number of exported states is _nodeStateCount - 1.
-	if expected := int(_nodeStateCount) - 1; len(nodeStateLabels) != expected {
+	if expected := int(dagpkg.NodeStateCount()) - 1; len(nodeStateLabels) != expected {
 		panic(fmt.Sprintf("nodeStateLabels has %d entries but there are %d exported NodeState values; update nodeStateLabels in metrics.go", len(nodeStateLabels), expected))
 	}
 }
 
 // updateNodeStateMetrics sets the node state gauge for all nodes in a graph.
 // Each node gets value 1 for its current state and 0 for all other states.
-func updateNodeStateMetrics(graphName, graphNamespace string, plan *PlanState, dag *DAG) {
+func updateNodeStateMetrics(graphName, graphNamespace string, plan *dagpkg.PlanState, dag *dagpkg.DAG) {
 	for _, node := range dag.Nodes {
 		currentState := plan.States[node.ID].String()
 		// Skip unvisited nodes — they haven't been processed by the walk.
-		if plan.States[node.ID] == nodeUnvisited {
+		if plan.States[node.ID] == dagpkg.NodeUnvisited {
 			continue
 		}
 		for _, state := range nodeStateLabels {

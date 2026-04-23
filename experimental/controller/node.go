@@ -15,6 +15,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
 )
 
 // ---------------------------------------------------------------------------
@@ -37,20 +41,20 @@ import (
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, nodeType NodeType, eval *evaluator, watcher *graphWatcher, resyncCorrection bool) ([]string, error) {
+func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, nodeType graphpkg.NodeType, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool) ([]string, error) {
 	if node.ForEach != nil {
 		return r.reconcileForEach(ctx, graph, node, eval, watcher, resyncCorrection)
 	}
 
 	switch nodeType {
-	case NodeTypeDef:
+	case graphpkg.NodeTypeDef:
 		if err := r.reconcileDefinition(ctx, node, eval); err != nil {
 			return nil, err
 		}
-	case NodeTypeWatch:
+	case graphpkg.NodeTypeWatch:
 		err := r.reconcileWatch(ctx, graph, node, eval, watcher)
 		return nil, err // Watch handles its own readiness
-	case NodeTypeRef:
+	case graphpkg.NodeTypeRef:
 		if err := r.reconcileRef(ctx, graph, node, eval, watcher); err != nil {
 			return nil, err
 		}
@@ -72,7 +76,7 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 // reconcileDefinition evaluates a definition node — resolves values from the template
 // (literals and/or CEL expressions) and enters the result into scope as
 // map[string]any. No Kubernetes API calls are made.
-func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node Node, eval *evaluator) error {
+func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node graphpkg.Node, eval *evaluator) error {
 	result, err := eval.toMapNode(node)
 	if err != nil {
 		return fmt.Errorf("definition %s: %w", node.ID, err)
@@ -87,7 +91,7 @@ func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node Node, ev
 // reconcileRef reads a single existing object from the API server into
 // scope. Serves a ref: node — a named dereference into the shared
 // kind-scoped informer.
-func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
+func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, watcher *watches.GraphWatcher) error {
 	logger := log.FromContext(ctx)
 
 	tmpl, err := eval.toMapNode(node)
@@ -95,7 +99,7 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 		return fmt.Errorf("ref %s: %w", node.ID, err)
 	}
 
-	gvk := gvkFromMap(tmpl)
+	gvk := graphpkg.GVKFromMap(tmpl)
 	md, _ := tmpl["metadata"].(map[string]any)
 
 	name, _ := md["name"].(string)
@@ -105,19 +109,19 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 	}
 
 	if watcher != nil {
-		watcher.watchScalar(node.ID, gvkToGVR(gvk), gvk.Kind, name, namespace)
+		watcher.WatchScalar(node.ID, gvkToGVR(gvk), gvk.Kind, name, namespace)
 	}
 
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
 	if err := r.apiReader().Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("ref %s: resource %s %s/%s not found: %w", node.ID, gvk, namespace, name, ErrPending)
+			return fmt.Errorf("ref %s: resource %s %s/%s not found: %w", node.ID, gvk, namespace, name, compiler.ErrPending)
 		}
 		return fmt.Errorf("reading %s %s/%s: %w", gvk, namespace, name, err)
 	}
 
-	eval.scope[node.ID] = normalizeTypes(obj.Object)
+	eval.scope[node.ID] = graphpkg.NormalizeTypes(obj.Object)
 	// Refs are external observations — vacuously updated. They have no
 	// graph-managed desired state to be "behind" on.
 	eval.markUpdated(node.ID, true)
@@ -134,7 +138,7 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 // collection changes from the coordinator. On incremental path, only changed
 // items are GET'd and merged. On resync or first reconcile, a full List is
 // performed and the cache is replaced.
-func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
+func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, watcher *watches.GraphWatcher) error {
 	logger := log.FromContext(ctx)
 
 	tmpl, err := eval.toMapNode(node)
@@ -142,7 +146,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 		return fmt.Errorf("watch %s: %w", node.ID, err)
 	}
 
-	gvk := gvkFromMap(tmpl)
+	gvk := graphpkg.GVKFromMap(tmpl)
 
 	var selectorRaw any
 	if sel, ok := tmpl["selector"]; ok {
@@ -192,7 +196,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 	}
 
 	if watcher != nil {
-		watcher.watchCollection(node.ID, gvkToGVR(gvk), gvk.Kind, watchNamespace, labelSelector)
+		watcher.WatchCollection(node.ID, gvkToGVR(gvk), gvk.Kind, watchNamespace, labelSelector)
 	}
 
 	var items []any
@@ -228,7 +232,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 
 		items = make([]any, len(list.Items))
 		for i, item := range list.Items {
-			items[i] = normalizeTypes(item.Object)
+			items[i] = graphpkg.NormalizeTypes(item.Object)
 		}
 		// Mark that this worker took the full-List path. The coordinator
 		// uses this to clear the collectionDirty flag — only a successful
@@ -292,7 +296,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 // (prune → delete), Patch keys use patchKey (prune → release apply to
 // release fields). See applySSA for the full type-dependent behavior.
 // resyncCorrection bypasses the apply-hash check in applySSA.
-func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, nodeType NodeType, eval *evaluator, watcher *graphWatcher, resyncCorrection bool) (string, error) {
+func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, nodeType graphpkg.NodeType, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMapNode(node)
@@ -312,7 +316,7 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 		eval.dynamicGVKResolved[node.ID] = applied.GroupVersionKind()
 	}
 
-	eval.scope[node.ID] = normalizeTypes(applied.Object)
+	eval.scope[node.ID] = graphpkg.NormalizeTypes(applied.Object)
 	// Just applied with effectiveGeneration — resource is on the latest generation.
 	eval.markUpdated(node.ID, true)
 	// Side effects (apply, delete, create) log at V(0) so operators see
@@ -320,7 +324,7 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 	logger.Info("applied resource", "node", node.ID, "nodeType", nodeType,
 		"gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
-	if nodeType == NodeTypePatch {
+	if nodeType == graphpkg.NodeTypePatch {
 		// Track the patch in the applied set with a "patch:" prefix.
 		// This lets prune and teardown distinguish patch keys (release apply
 		// to release fields) from template keys (delete).
@@ -346,7 +350,7 @@ func mergeCollectionChanges(
 	ctx context.Context,
 	k8s client.Reader,
 	cached []any,
-	changes []CollectionChange,
+	changes []watches.CollectionChange,
 	gvk schema.GroupVersionKind,
 	selector labels.Selector,
 ) ([]any, error) {
@@ -362,13 +366,13 @@ func mergeCollectionChanges(
 	// for each resource matters. Multiple events between reconciles
 	// collapse into one GET.
 	type changeKey struct{ namespace, name string }
-	deduped := make(map[changeKey]CollectionChange, len(changes))
+	deduped := make(map[changeKey]watches.CollectionChange, len(changes))
 	for _, change := range changes {
 		deduped[changeKey{change.Namespace, change.Name}] = change
 	}
 
 	for ck, change := range deduped {
-		if change.EventType == WatchEventDelete {
+		if change.EventType == watches.WatchEventDelete {
 			items = removeItem(items, ck.namespace, ck.name)
 			continue
 		}
@@ -399,7 +403,7 @@ func mergeCollectionChanges(
 			continue
 		}
 
-		normalized := normalizeTypes(obj.Object)
+		normalized := graphpkg.NormalizeTypes(obj.Object)
 		if idx := findIndex(items, ck.namespace, ck.name); idx >= 0 {
 			items[idx] = normalized
 		} else {

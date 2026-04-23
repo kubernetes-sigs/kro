@@ -22,6 +22,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
 )
 
 // ---------------------------------------------------------------------------
@@ -123,7 +128,7 @@ func collectPruneCandidates(previousKeys map[string]bool, currentKeys []string) 
 }
 
 // buildKeyMaps creates bidirectional node-ID ↔ resource-key mappings from all DAGs.
-func buildKeyMaps(dag *DAG, supersededDAGs map[string]*DAG, namespace string, scope GVKScopeResolver) (keyToNodeID map[string]string, nodeIDToKey map[string]string) {
+func buildKeyMaps(dag *dagpkg.DAG, supersededDAGs map[string]*dagpkg.DAG, namespace string, scope GVKScopeResolver) (keyToNodeID map[string]string, nodeIDToKey map[string]string) {
 	keyToNodeID = map[string]string{}
 	nodeIDToKey = map[string]string{}
 	for _, d := range collectAllDAGs(dag, supersededDAGs) {
@@ -140,8 +145,8 @@ func buildKeyMaps(dag *DAG, supersededDAGs map[string]*DAG, namespace string, sc
 }
 
 // collectAllDAGs returns the active DAG plus all superseded DAGs.
-func collectAllDAGs(dag *DAG, supersededDAGs map[string]*DAG) []*DAG {
-	allDAGs := []*DAG{}
+func collectAllDAGs(dag *dagpkg.DAG, supersededDAGs map[string]*dagpkg.DAG) []*dagpkg.DAG {
+	allDAGs := []*dagpkg.DAG{}
 	if dag != nil {
 		allDAGs = append(allDAGs, dag)
 	}
@@ -203,7 +208,7 @@ func resourceKey(obj *unstructured.Unstructured) string {
 // When scopeResolver is nil, the old heuristic is preserved for backward
 // compat with callers that don't have access to a RESTMapper.
 func staticResourceKey(tmpl map[string]any, fallbackNamespace string, scope GVKScopeResolver) string {
-	gvk := gvkFromMap(tmpl)
+	gvk := graphpkg.GVKFromMap(tmpl)
 	md, _ := tmpl["metadata"].(map[string]any)
 	if md == nil {
 		return ""
@@ -257,14 +262,6 @@ func unstructuredFromKey(key string) (*unstructured.Unstructured, types.Namespac
 	obj.SetName(nn.Name)
 	obj.SetNamespace(nn.Namespace)
 	return obj, nn, true
-}
-
-// gvkFromMap extracts a GroupVersionKind from a template/identity map.
-func gvkFromMap(m map[string]any) schema.GroupVersionKind {
-	apiVersion, _ := m["apiVersion"].(string)
-	kind, _ := m["kind"].(string)
-	gv, _ := schema.ParseGroupVersion(apiVersion)
-	return gv.WithKind(kind)
 }
 
 // patchKey builds a Patch applied set key.
@@ -323,7 +320,7 @@ func templateHasStatus(tmpl map[string]any) bool {
 // defaulters and mutating webhooks can change fields without changing
 // the desired state hash. SSA is idempotent; the apply corrects drift
 // as a side effect."
-func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, nodeType NodeType, generation int64, resyncCorrection bool, forceApply bool) (*unstructured.Unstructured, error) {
+func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *watches.GraphWatcher, nodeID string, nodeType graphpkg.NodeType, generation int64, resyncCorrection bool, forceApply bool) (*unstructured.Unstructured, error) {
 	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
@@ -350,24 +347,24 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	if lbls == nil {
 		lbls = map[string]string{}
 	}
-	if nodeType == NodeTypeTemplate {
+	if nodeType == graphpkg.NodeTypeTemplate {
 		// Template: skip stamping if identity labels are already present (e.g., forEach
 		// children stamp their own child-scoped labels before calling applySSA).
-		if !hasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
-			lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, NodeTypeTemplate)
+		if !graphpkg.HasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
+			lbls = graphpkg.SetIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, graphpkg.NodeTypeTemplate)
 			obj.SetLabels(lbls)
 		}
 	} else {
 		// Patch: always stamp identity labels so resources are discoverable via
 		// deriveAppliedSet() after controller restart.
-		lbls = setIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, NodeTypePatch)
+		lbls = graphpkg.SetIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, graphpkg.NodeTypePatch)
 		obj.SetLabels(lbls)
 	}
 
 	// Buffer a watch for this resource (flushed at done(true)).
 	gvr := gvkToGVR(obj.GroupVersionKind())
 	if watcher != nil {
-		watcher.watchScalar(nodeID, gvr, obj.GroupVersionKind().Kind, obj.GetName(), obj.GetNamespace())
+		watcher.WatchScalar(nodeID, gvr, obj.GroupVersionKind().Kind, obj.GetName(), obj.GetNamespace())
 	}
 
 	// Content-addressed apply: hash the desired state to detect changes.
@@ -383,7 +380,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	if !resyncCorrection {
 		if cached, ok := r.Resources.get(cacheKey); ok && cached.applyHash == applyHash {
 			if watcher != nil {
-				liveRV := watcher.getResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
+				liveRV := watcher.GetResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
 				if liveRV != "" && liveRV == cached.resourceVersion {
 					return &unstructured.Unstructured{Object: cached.object}, nil
 				}
@@ -398,7 +395,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	} // !resyncCorrection
 
 	// Template: set the apply hash annotation for future comparisons.
-	if nodeType == NodeTypeTemplate {
+	if nodeType == graphpkg.NodeTypeTemplate {
 		annotations := obj.GetAnnotations()
 		if annotations == nil {
 			annotations = map[string]string{}
@@ -408,7 +405,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	}
 
 	// Pre-apply check differs by node type.
-	if nodeType == NodeTypeTemplate {
+	if nodeType == graphpkg.NodeTypeTemplate {
 		// kro label check: if the existing resource has a different Graph's identity
 		// label, require Force to proceed. Prevents accidental cross-Graph ownership.
 		// Read labels from the metadata informer first (fast path, no API call).
@@ -417,7 +414,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		// informer startup or watch reconnect.
 		var existingLabels map[string]string
 		if watcher != nil {
-			existingLabels, _ = watcher.getLabels(gvr, obj.GetNamespace(), obj.GetName())
+			existingLabels, _ = watcher.GetLabels(gvr, obj.GetNamespace(), obj.GetName())
 		}
 		if existingLabels == nil {
 			existing := &unstructured.Unstructured{}
@@ -427,10 +424,10 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 			}
 		}
 		if existingLabels != nil {
-			if otherGraph, conflict := hasOtherGraphIdentityLabel(existingLabels, graph.GetName(), graph.GetNamespace()); conflict {
+			if otherGraph, conflict := graphpkg.HasOtherGraphIdentityLabel(existingLabels, graph.GetName(), graph.GetNamespace()); conflict {
 				if !forceApply {
 					return nil, fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use lifecycle.apply: Force to take ownership): %w",
-						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, graph.GetName(), ErrFieldConflict)
+						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, graph.GetName(), compiler.ErrFieldConflict)
 				}
 			}
 		}
@@ -441,7 +438,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
 		if err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
 			if apierrors.IsNotFound(err) {
-				return nil, fmt.Errorf("patch target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), ErrPending)
+				return nil, fmt.Errorf("patch target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), compiler.ErrPending)
 			}
 			return nil, fmt.Errorf("checking patch target %s: %w", obj.GetName(), err)
 		}
@@ -477,7 +474,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 
 	if err := r.Client.Patch(ctx, applied, client.RawPatch(types.ApplyPatchType, data), patchOpts...); err != nil {
 		if apierrors.IsConflict(err) {
-			return nil, fmt.Errorf("SSA conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
+			return nil, fmt.Errorf("SSA conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), compiler.ErrFieldConflict, err)
 		}
 		return nil, fmt.Errorf("applying %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
 	}
@@ -514,7 +511,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		if err := r.Client.Status().Patch(ctx, statusApplied, client.RawPatch(types.ApplyPatchType, sData), statusOpts...); err != nil {
 			r.Resources.remove(cacheKey)
 			if apierrors.IsConflict(err) {
-				return nil, fmt.Errorf("SSA status conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
+				return nil, fmt.Errorf("SSA status conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), compiler.ErrFieldConflict, err)
 			}
 			return nil, fmt.Errorf("applying status %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
 		}
@@ -528,7 +525,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	// release): issue a full release impersonating each third-party manager so
 	// their managedFields entry is garbage-collected and their solely-owned fields
 	// (e.g., identity labels) are deleted from the object.
-	if forceApply && nodeType == NodeTypeTemplate {
+	if forceApply && nodeType == graphpkg.NodeTypeTemplate {
 		ownManager := string(fieldOwner)
 		if managers := thirdPartyFieldManagers(readBack, ownManager); len(managers) > 0 {
 			hasStatus := templateHasStatus(evalMap)
@@ -575,7 +572,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 //     Ready. Routed to reconcileState.nodeNotes at the caller so healthy
 //     graphs with notes still report Ready=True with the note in the message.
 //   - err: hard error from an API call; sets pruneOK=false at the call site.
-func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, supersededDAGs map[string]*DAG, eval *evaluator, watcher *graphWatcher, finResult *finalizationResult) ([]string, []string, []string, error) {
+func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *dagpkg.DAG, supersededDAGs map[string]*dagpkg.DAG, eval *evaluator, watcher *watches.GraphWatcher, finResult *finalizationResult) ([]string, []string, []string, error) {
 	logger := log.FromContext(ctx)
 	var deferredKeys []string
 	var blockedReasons []string // TeardownBlocked messages — gates Ready
@@ -599,7 +596,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 	// Collect all DAGs (active + superseded) for finalizer lookups.
 	// The old revision's finalizes declarations govern prune of its resources.
-	allDAGs := []*DAG{}
+	allDAGs := []*dagpkg.DAG{}
 	if dag != nil {
 		allDAGs = append(allDAGs, dag)
 	}
@@ -683,7 +680,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		hasOurLabel := false
 		if objLabels != nil {
 			for key := range objLabels {
-				if isGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
+				if graphpkg.IsGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
 					hasOurLabel = true
 					break
 				}
@@ -771,11 +768,11 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 				continue
 			}
 			nodeType := node.Type()
-			if nodeType == NodeTypeRef || nodeType == NodeTypeWatch {
+			if nodeType == graphpkg.NodeTypeRef || nodeType == graphpkg.NodeTypeWatch {
 				continue // read-only references don't create resources
 			}
 			id := node.Identity()
-			gvk := gvkFromMap(id)
+			gvk := graphpkg.GVKFromMap(id)
 			if gvk.Kind == "" {
 				continue
 			}
@@ -784,7 +781,7 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 	}
 
 	var keys []string
-	suffix := graphLabelSuffix(graph.GetName(), graph.GetNamespace())
+	suffix := graphpkg.GraphLabelSuffix(graph.GetName(), graph.GetNamespace())
 	for gvk := range gvkSet {
 		list := &unstructured.UnstructuredList{}
 		listGVK := gvk
@@ -817,7 +814,7 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 // available DAGs (active + superseded). Dependents are deleted before
 // their dependencies. Keys that don't match any DAG node are placed first
 // (highest position — deleted first).
-func pruneOrder(keys []string, dags []*DAG, defaultNS string, scope GVKScopeResolver) []string {
+func pruneOrder(keys []string, dags []*dagpkg.DAG, defaultNS string, scope GVKScopeResolver) []string {
 	// Build a map from resource key → topological position across all DAGs.
 	// Use the highest position found across all DAGs for each key.
 	keyPosition := map[string]int{}
@@ -895,19 +892,19 @@ func pruneOrder(keys []string, dags []*DAG, defaultNS string, scope GVKScopeReso
 //
 // Per the design: "Teardown is blocked until ordering is available —
 // never degrade to unordered deletion."
-func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys []string, preferredDAG *DAG) ([]string, error) {
+func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys []string, preferredDAG *dagpkg.DAG) ([]string, error) {
 	if preferredDAG != nil {
-		return pruneOrder(keys, []*DAG{preferredDAG}, graph.GetNamespace(), r.Scope), nil
+		return pruneOrder(keys, []*dagpkg.DAG{preferredDAG}, graph.GetNamespace(), r.Scope), nil
 	}
-	graphSpec, err := extractGraphSpec(graph.Object)
+	graphSpec, err := graphpkg.ExtractGraphSpec(graph.Object)
 	if err != nil {
 		return nil, fmt.Errorf("extracting graph spec for deletion order: %w", err)
 	}
-	dag, err := BuildDAG(graphSpec.Nodes, nil)
+	dag, err := dagpkg.BuildDAG(graphSpec.Nodes, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building DAG for deletion order: %w", err)
 	}
-	return pruneOrder(keys, []*DAG{dag}, graph.GetNamespace(), r.Scope), nil
+	return pruneOrder(keys, []*dagpkg.DAG{dag}, graph.GetNamespace(), r.Scope), nil
 }
 
 // ---------------------------------------------------------------------------

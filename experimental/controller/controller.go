@@ -39,6 +39,10 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
 	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -110,8 +114,8 @@ type GraphReconciler struct {
 	Client         client.Client
 	APIReader      client.Reader           // direct API server reader — bypasses cache for managed resources
 	SchemaResolver resolver.SchemaResolver // nil = all resource nodes fall back to dyn
-	SchemaGen      *SchemaGeneration       // nil = no generation tracking; never triggers recompilation
-	Watcher        *WatchCoordinator       // nil = no dynamic watches (backward compat with existing tests)
+	SchemaGen      *compiler.SchemaGeneration       // nil = no generation tracking; never triggers recompilation
+	Watcher        *watches.WatchCoordinator       // nil = no dynamic watches (backward compat with existing tests)
 	Caches         *graphCaches            // per-revision compiled expression caches
 	Resources      *resourceCache          // per-resource full object cache
 	ResyncInterval  time.Duration           // per-node resync timer interval; 0 = use DefaultResyncInterval
@@ -133,7 +137,7 @@ func (r *GraphReconciler) apiReader() client.Reader {
 type nodeResult struct {
 	idx          int
 	keys         []string
-	state        NodeState
+	state        dagpkg.NodeState
 	err          error
 	scopeKey     string        // node ID to set in scope
 	scopeValue   any           // value to set (the full K8s object or collection)
@@ -171,11 +175,11 @@ type walkState struct {
 	r       *GraphReconciler
 	ctx     context.Context
 	graph   *unstructured.Unstructured
-	dag     *DAG
+	dag     *dagpkg.DAG
 	eval    *evaluator
 	state   *instanceState
-	plan    *PlanState
-	watcher *graphWatcher
+	plan    *dagpkg.PlanState
+	watcher *watches.GraphWatcher
 
 	// Trigger maps
 	triggered            map[string]bool
@@ -184,7 +188,7 @@ type walkState struct {
 
 	// Watch incremental cache — drained once at walk start.
 	// Per 005-reconciliation.md § Propagation.
-	collectionChanges map[string][]CollectionChange // nodeID → changes
+	collectionChanges map[string][]watches.CollectionChange // nodeID → changes
 
 	// Walk-local tracking
 	dispatched        map[int]bool
@@ -230,7 +234,7 @@ func (w *walkState) carryForwardKeys(nodeID string) {
 //  2. Not resync-triggered or directly triggered (watch event on forEach itself)
 //  3. CollectionSource has CollectionChanges (incremental Watch path)
 //  4. Every non-CollectionSource dependency was skipped (output unchanged)
-func (w *walkState) resolveForEachChangedItems(node *Node) map[string]bool {
+func (w *walkState) resolveForEachChangedItems(node *graphpkg.Node) map[string]bool {
 	src := node.ForEach.CollectionSource
 
 	// Direct trigger (watch event) or resync → full rehash.
@@ -268,11 +272,11 @@ func (w *walkState) resolveForEachChangedItems(node *Node) map[string]bool {
 	return changedIDs
 }
 
-func (w *walkState) populateDepsMap(node *Node) {
-	depsMap, _ := w.eval.scope[reservedDepsMapVar].(map[string]any)
+func (w *walkState) populateDepsMap(node *graphpkg.Node) {
+	depsMap, _ := w.eval.scope[compiler.ReservedDepsMapVar].(map[string]any)
 	if depsMap == nil {
 		depsMap = make(map[string]any, len(w.dag.Nodes))
-		w.eval.scope[reservedDepsMapVar] = depsMap
+		w.eval.scope[compiler.ReservedDepsMapVar] = depsMap
 	}
 	depValues := make([]any, 0, len(node.Dependencies))
 	for depID := range node.Dependencies {
@@ -286,13 +290,13 @@ func (w *walkState) populateDepsMap(node *Node) {
 // skipNode retains a node's previous state without re-evaluation. Used when
 // no external trigger fired and propagation didn't reach the node, or when
 // evaluation hashing proves inputs are unchanged.
-func (w *walkState) skipNode(node *Node) {
+func (w *walkState) skipNode(node *graphpkg.Node) {
 	if prev, ok := w.state.previousScope[node.ID]; ok {
 		w.eval.scope[node.ID] = prev
 	}
 	w.carryForwardKeys(node.ID)
 	if w.watcher != nil {
-		w.watcher.retainWatches(node.ID)
+		w.watcher.RetainWatches(node.ID)
 	}
 	w.outputsReady[node.ID] = true
 	for _, depIdx := range w.dag.Dependents[node.ID] {
@@ -308,7 +312,7 @@ func (w *walkState) tryDispatch(idx int) {
 	node := &w.dag.Nodes[idx]
 	logger := log.FromContext(w.ctx)
 
-	if w.plan.States[node.ID] != nodeUnvisited {
+	if w.plan.States[node.ID] != dagpkg.NodeUnvisited {
 		return // already processed or excluded
 	}
 	if w.dispatched[idx] {
@@ -318,7 +322,7 @@ func (w *walkState) tryDispatch(idx int) {
 	// Finalizer nodes are dormant during normal operation — they only
 	// materialize during prune/teardown. Skip them in the walk.
 	if node.Finalizes != "" {
-		w.plan.SetState(w.dag, node.ID, NodeReady)
+		w.plan.SetState(w.dag, node.ID, dagpkg.NodeReady)
 		return
 	}
 
@@ -339,18 +343,18 @@ func (w *walkState) tryDispatch(idx int) {
 			continue
 		}
 		switch depState {
-		case NodeReady, NodeNotReady:
+		case dagpkg.NodeReady, dagpkg.NodeNotReady:
 			continue
-		case nodeUnvisited:
+		case dagpkg.NodeUnvisited:
 			if w.outputsReady[depID] {
 				if prevState, ok := w.state.previousPlanStates[depID]; ok {
 					switch prevState {
-					case NodeReady, NodeNotReady:
+					case dagpkg.NodeReady, dagpkg.NodeNotReady:
 						continue
-					case NodeExcluded:
+					case dagpkg.NodeExcluded:
 						hasExcluded = true
 						continue
-					case NodePending:
+					case dagpkg.NodePending:
 						hasPending = true
 						continue
 					default:
@@ -361,9 +365,9 @@ func (w *walkState) tryDispatch(idx int) {
 				continue
 			}
 			hasInflight = true
-		case NodeExcluded:
+		case dagpkg.NodeExcluded:
 			hasExcluded = true
-		case NodePending:
+		case dagpkg.NodePending:
 			hasPending = true
 		default:
 			hasBlocked = true
@@ -379,8 +383,8 @@ func (w *walkState) tryDispatch(idx int) {
 		// this check, Excluded propagates unconditionally and the
 		// status patch never happens.
 		if len(node.PropagateWhen) == 0 || node.ForEach != nil {
-			w.plan.SetState(w.dag, node.ID, NodeExcluded)
-			w.state.previousPlanStates[node.ID] = NodeExcluded
+			w.plan.SetState(w.dag, node.ID, dagpkg.NodeExcluded)
+			w.state.previousPlanStates[node.ID] = dagpkg.NodeExcluded
 			delete(w.state.previousEvalHashes, node.ID)
 			w.notifyDependents(node.ID)
 			return
@@ -388,15 +392,15 @@ func (w *walkState) tryDispatch(idx int) {
 		// Fall through to propagateWhen evaluation.
 	}
 	if hasBlocked {
-		w.plan.SetState(w.dag, node.ID, NodeBlocked)
-		w.state.previousPlanStates[node.ID] = NodeBlocked
+		w.plan.SetState(w.dag, node.ID, dagpkg.NodeBlocked)
+		w.state.previousPlanStates[node.ID] = dagpkg.NodeBlocked
 		delete(w.state.previousEvalHashes, node.ID)
 		w.notifyDependents(node.ID)
 		return
 	}
 	if hasPending {
-		w.plan.SetState(w.dag, node.ID, NodePending)
-		w.state.previousPlanStates[node.ID] = NodePending
+		w.plan.SetState(w.dag, node.ID, dagpkg.NodePending)
+		w.state.previousPlanStates[node.ID] = dagpkg.NodePending
 		delete(w.state.previousEvalHashes, node.ID)
 		w.notifyDependents(node.ID)
 		return
@@ -423,8 +427,8 @@ func (w *walkState) tryDispatch(idx int) {
 			// Contagious exclusion should proceed: the gate didn't actively
 			// decide "no," it failed to decide at all.
 			if hasExcluded && gate == gateError {
-				w.plan.SetState(w.dag, node.ID, NodeExcluded)
-				w.state.previousPlanStates[node.ID] = NodeExcluded
+				w.plan.SetState(w.dag, node.ID, dagpkg.NodeExcluded)
+				w.state.previousPlanStates[node.ID] = dagpkg.NodeExcluded
 				delete(w.state.previousEvalHashes, node.ID)
 				w.notifyDependents(node.ID)
 				return
@@ -440,7 +444,7 @@ func (w *walkState) tryDispatch(idx int) {
 			if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
 				w.plan.States[node.ID] = prevState
 			} else {
-				w.plan.States[node.ID] = NodePending
+				w.plan.States[node.ID] = dagpkg.NodePending
 			}
 			for _, depIdx := range w.dag.Dependents[node.ID] {
 				w.tryDispatch(depIdx)
@@ -451,7 +455,7 @@ func (w *walkState) tryDispatch(idx int) {
 
 	// Step 4: Evaluation check — section-scoped evaluation hashing.
 	declaredNodeType := node.Type()
-	canHashSkip := declaredNodeType != NodeTypeRef && declaredNodeType != NodeTypeWatch && !w.resyncTriggered[node.ID]
+	canHashSkip := declaredNodeType != graphpkg.NodeTypeRef && declaredNodeType != graphpkg.NodeTypeWatch && !w.resyncTriggered[node.ID]
 	if canHashSkip {
 		if _, hasPrevHash := w.state.previousEvalHashes[node.ID]; hasPrevHash {
 			evalHash, hashErr := hashNodeInputs(node, w.eval.scope)
@@ -481,7 +485,7 @@ func (w *walkState) tryDispatch(idx int) {
 						if prevRV != "" && prevAPIVersion != "" && prevKind != "" {
 							gv, _ := schema.ParseGroupVersion(prevAPIVersion)
 							gvr := gvkToGVR(gv.WithKind(prevKind))
-							liveRV := w.watcher.getResourceVersion(gvr, prevNS, prevName)
+							liveRV := w.watcher.GetResourceVersion(gvr, prevNS, prevName)
 							if liveRV != "" && liveRV != prevRV {
 								selfChanged = true
 							}
@@ -551,11 +555,11 @@ func (w *walkState) tryDispatch(idx int) {
 				}
 				w.carryForwardKeys(node.ID)
 				if w.watcher != nil {
-					w.watcher.retainWatches(node.ID)
+					w.watcher.RetainWatches(node.ID)
 				}
-				nodeState := NodeReady
+				nodeState := dagpkg.NodeReady
 				if err := w.eval.evalReadiness(node.ID, node.ReadyWhen); err != nil {
-					nodeState = NodeNotReady
+					nodeState = dagpkg.NodeNotReady
 				}
 				w.plan.States[node.ID] = nodeState
 				w.state.previousPlanStates[node.ID] = nodeState
@@ -584,7 +588,7 @@ func (w *walkState) tryDispatch(idx int) {
 						}
 					}
 					if hashErr == nil && propagateHash != "" {
-						if nodeState == NodeReady {
+						if nodeState == dagpkg.NodeReady {
 							propagateHash += ":ready=true"
 						} else {
 							propagateHash += ":ready=false"
@@ -624,12 +628,12 @@ func (w *walkState) tryDispatch(idx int) {
 			// retention makes correctness structural rather than relying on
 			// a distant safety net.
 			w.carryForwardKeys(node.ID)
-			if errors.Is(err, ErrPending) {
-				w.plan.SetState(w.dag, node.ID, NodePending)
-				w.state.previousPlanStates[node.ID] = NodePending
+			if errors.Is(err, compiler.ErrPending) {
+				w.plan.SetState(w.dag, node.ID, dagpkg.NodePending)
+				w.state.previousPlanStates[node.ID] = dagpkg.NodePending
 			} else {
-				w.plan.SetState(w.dag, node.ID, NodeError)
-				w.state.previousPlanStates[node.ID] = NodeError
+				w.plan.SetState(w.dag, node.ID, dagpkg.NodeError)
+				w.state.previousPlanStates[node.ID] = dagpkg.NodeError
 			}
 			// Clear stale eval hash — the node was not evaluated this cycle,
 			// so the hash from a prior successful evaluation is invalid. Without
@@ -641,12 +645,8 @@ func (w *walkState) tryDispatch(idx int) {
 			return
 		}
 		if !included {
-			// Excluded is definitive absence — the node's previous resources
-			// are a legitimate prune candidate, so keys are NOT carried
-			// forward. Per 005-reconciliation.md § Prune: "Excluded
-			// propagates as Excluded (definitive absence — safe to prune)."
-			w.plan.SetState(w.dag, node.ID, NodeExcluded)
-			w.state.previousPlanStates[node.ID] = NodeExcluded
+			w.plan.SetState(w.dag, node.ID, dagpkg.NodeExcluded)
+			w.state.previousPlanStates[node.ID] = dagpkg.NodeExcluded
 			delete(w.state.previousEvalHashes, node.ID)
 			w.notifyDependents(node.ID)
 			return
@@ -658,7 +658,7 @@ func (w *walkState) tryDispatch(idx int) {
 
 	// Watch incremental cache: pass cached list and collection changes
 	// to the worker so reconcileWatch can GET only changed items.
-	if node.Type() == NodeTypeWatch {
+	if node.Type() == graphpkg.NodeTypeWatch {
 		workerEval.collectionNodeID = node.ID
 		cached, hasCached := w.state.collectionCache[node.ID]
 		// dirty: a previous incremental reconcile errored mid-merge,
@@ -697,27 +697,27 @@ func (w *walkState) tryDispatch(idx int) {
 	// Dispatch to worker goroutine.
 	w.dispatched[idx] = true
 	isResync := w.resyncTriggered[node.ID]
-	go func(n Node, we *evaluator, nodeType NodeType, resyncCorrection bool) {
+	go func(n graphpkg.Node, we *evaluator, nodeType graphpkg.NodeType, resyncCorrection bool) {
 		evalStart := time.Now()
 		keys, err := w.r.reconcileNode(w.ctx, w.graph, n, nodeType, we, w.watcher, resyncCorrection)
 		evalDuration := time.Since(evalStart)
-		state := NodeReady
+		state := dagpkg.NodeReady
 		if err != nil {
 			switch {
-			case errors.Is(err, ErrPending):
-				state = NodePending
-			case errors.Is(err, ErrWaitingForReadiness):
-				state = NodeNotReady
-			case errors.Is(err, ErrReadyWhenFailed):
+			case errors.Is(err, compiler.ErrPending):
+				state = dagpkg.NodePending
+			case errors.Is(err, compiler.ErrWaitingForReadiness):
+				state = dagpkg.NodeNotReady
+			case errors.Is(err, compiler.ErrReadyWhenFailed):
 				// Per 001-graph.md: "readyWhen is a health signal — it does
 				// not gate downstream execution." A broken readyWhen expression
 				// (wrong return type, CEL error) must not produce NodeError
 				// (which blocks dependents). NodeNotReady preserves the invariant.
-				state = NodeNotReady
-			case errors.Is(err, ErrFieldConflict):
-				state = NodeConflict
+				state = dagpkg.NodeNotReady
+			case errors.Is(err, compiler.ErrFieldConflict):
+				state = dagpkg.NodeConflict
 			default:
-				state = NodeError
+				state = dagpkg.NodeError
 			}
 		}
 		// Extract the worker's node-readiness verdict (Watch-only).
@@ -835,10 +835,10 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// index entries and releasing informers. Any walk attempt counts —
 	// including partial walks that error — because visited nodes consume
 	// watch events and register new watches.
-	var watcher *graphWatcher
+	var watcher *watches.GraphWatcher
 	var walkAttempted bool
 	if r.Watcher != nil {
-		watcher = r.Watcher.forGraph(req.NamespacedName)
+		watcher = r.Watcher.ForGraph(req.NamespacedName)
 		defer func() {
 			// Commit watches whenever the walk ran, regardless of
 			// reconcileErr. A post-walk error (e.g., optimistic lock
@@ -848,7 +848,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			// are silently dropped — the root cause of timer-dependent
 			// convergence for CRD Establishment and other status
 			// propagation patterns.
-			watcher.done(walkAttempted)
+			watcher.Done(walkAttempted)
 		}()
 	}
 
@@ -937,7 +937,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	eval := newEvaluator(state)
 	eval.effectiveGeneration = effectiveGeneration
 	dag := state.dag
-	plan := NewPlanState(dag)
+	plan := dagpkg.NewPlanState(dag)
 
 	// Determine which nodes are triggered this reconcile.
 	// Per 005-reconciliation.md § Reconcile: nodes evaluate on external
@@ -950,7 +950,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// because the question is "does live state match desired state?" not
 	// "did inputs change?" — different questions with different cache semantics.
 	resyncTriggered := make(map[string]bool, len(dag.Nodes))
-	var collectionChanges map[string][]CollectionChange // Watch incremental cache
+	var collectionChanges map[string][]watches.CollectionChange // Watch incremental cache
 	isRevisionTransition := len(supersededRevisions) > 0
 	isFirstReconcile := len(state.previousPlanStates) == 0
 	if isFirstReconcile || isRevisionTransition {
@@ -1037,14 +1037,14 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 	} else if watcher != nil {
 		// Watch triggers: specific nodes that received events.
-		watchTriggers := watcher.drainTriggers()
+		watchTriggers := watcher.DrainTriggers()
 		for nodeID := range watchTriggers {
 			triggered[nodeID] = true
 		}
 		// Watch collection changes: buffered resource keys for
 		// incremental cache updates. Drained alongside triggers so the
 		// coordinator knows which specific items changed.
-		collectionChanges = watcher.drainCollectionChanges()
+		collectionChanges = watcher.DrainCollectionChanges()
 		// Drift timer triggers: nodes whose consistency timer expired.
 		// Per 005-reconciliation.md § Reconcile: "Each node has an
 		// in-memory resync timer with a jittered interval (default 30
@@ -1062,7 +1062,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 		// SystemError nodes retry (transient error backoff).
 		for nodeID, prevState := range state.previousPlanStates {
-			if prevState == NodeSystemError {
+			if prevState == dagpkg.NodeSystemError {
 				triggered[nodeID] = true
 				SystemErrorRetriesTotal.With(graphMetricLabels(
 					graph.GetName(), graph.GetNamespace(), nodeID,
@@ -1184,7 +1184,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// state from the API server. Without this, stale cache can
 		// persist for up to the resync interval (default 30m). Per
 		// 005-reconciliation.md § Propagation.
-		if res.err != nil && node.Type() == NodeTypeWatch &&
+		if res.err != nil && node.Type() == graphpkg.NodeTypeWatch &&
 			len(res.collectionCacheUpdate) == 0 {
 			state.collectionDirty[node.ID] = true
 		}
@@ -1194,7 +1194,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// for client errors (4xx), NodeSystemError for server/infra
 		// failures (5xx/timeout/network). Both retry; the distinction
 		// flows into the status condition for operator triage.
-		if res.state == NodeError {
+		if res.state == dagpkg.NodeError {
 			info := classifyAPIError(res.err)
 			plan.SetState(dag, node.ID, info.state)
 			state.previousPlanStates[node.ID] = info.state
@@ -1210,9 +1210,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			}
 			continue
 		}
-		if res.state == NodeConflict {
-			plan.SetState(dag, node.ID, NodeConflict)
-			state.previousPlanStates[node.ID] = NodeConflict
+		if res.state == dagpkg.NodeConflict {
+			plan.SetState(dag, node.ID, dagpkg.NodeConflict)
+			state.previousPlanStates[node.ID] = dagpkg.NodeConflict
 			state.previousScope[node.ID] = res.scopeValue
 			state.previousKeys[node.ID] = res.keys
 			walk.nodeErrors = append(walk.nodeErrors, fmt.Sprintf("%s: field conflict", node.ID))
@@ -1223,12 +1223,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			}
 			continue
 		}
-		if res.state == NodePending {
-			plan.SetState(dag, node.ID, NodePending)
+		if res.state == dagpkg.NodePending {
+			plan.SetState(dag, node.ID, dagpkg.NodePending)
 			// Under declared-keyword classification, patch→template is an
 			// authoring event (patch: → template: spec edit) handled by
 			// revision supersession. No runtime reclassification reset.
-			state.previousPlanStates[node.ID] = NodePending
+			state.previousPlanStates[node.ID] = dagpkg.NodePending
 			state.previousScope[node.ID] = res.scopeValue
 			state.previousKeys[node.ID] = res.keys
 			logger.V(1).Info("data pending for node", "node", node.ID, "error", res.err)
@@ -1244,7 +1244,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			eval.scope[res.scopeKey] = res.scopeValue
 		}
 
-		if r.SchemaGen != nil && node.Type() == NodeTypeTemplate {
+		if r.SchemaGen != nil && node.Type() == graphpkg.NodeTypeTemplate {
 			if scopeMap, ok := res.scopeValue.(map[string]any); ok {
 				if scopeMap["apiVersion"] == "apiextensions.k8s.io/v1" && scopeMap["kind"] == "CustomResourceDefinition" {
 					r.SchemaGen.AdvanceGeneration()
@@ -1259,7 +1259,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			if res.nodeReadyUpdate != nil {
 				eval.nodeReady[res.scopeKey] = *res.nodeReadyUpdate
 			} else {
-				eval.nodeReady[res.scopeKey] = (res.state == NodeReady)
+				eval.nodeReady[res.scopeKey] = (res.state == dagpkg.NodeReady)
 			}
 		}
 
@@ -1297,16 +1297,16 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// errors produce NodeNotReady (not NodeError), so they don't gate
 		// dependents. But the user needs to know their expression is broken
 		// and won't self-heal — log it and include in nodeErrors for status.
-		if res.state == NodeNotReady && res.err != nil && errors.Is(res.err, ErrReadyWhenFailed) {
+		if res.state == dagpkg.NodeNotReady && res.err != nil && errors.Is(res.err, compiler.ErrReadyWhenFailed) {
 			walk.nodeErrors = append(walk.nodeErrors, fmt.Sprintf("%s: %s", node.ID, res.err.Error()))
 			logger.V(0).Info("readyWhen expression error (not gating dependents)",
 				"node", node.ID, "error", res.err)
 		}
 
-		if res.state == NodeReady || res.state == NodeNotReady {
+		if res.state == dagpkg.NodeReady || res.state == dagpkg.NodeNotReady {
 			walk.appliedKeys = append(walk.appliedKeys, res.keys...)
 		} else {
-			// Non-success states that reach here (e.g., NodeNotReady with keys) —
+			// Non-success states that reach here (e.g., dagpkg.NodeNotReady with keys) —
 			// retain previous keys since the resource may still exist.
 			walk.carryForwardKeys(node.ID)
 		}
@@ -1316,7 +1316,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// state. If the hash differs from the previous reconcile, mark
 		// dependents as having a propagation trigger.
 		// Per 005-reconciliation.md § Propagation.
-		if res.state == NodeReady || res.state == NodeNotReady {
+		if res.state == dagpkg.NodeReady || res.state == dagpkg.NodeNotReady {
 			if observed := eval.scope[node.ID]; observed != nil {
 				propagateHash, err := hashSelfPaths(node, observed)
 				if err == nil && propagateHash == "" {
@@ -1355,7 +1355,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					// detection is incomplete (e.g., comprehension
 					// variables). Correct-by-construction over
 					// correct-by-analysis-completeness.
-					if res.state == NodeReady {
+					if res.state == dagpkg.NodeReady {
 						propagateHash += ":ready=true"
 					} else {
 						propagateHash += ":ready=false"
@@ -1403,7 +1403,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// re-dispatched via propagation trigger still have plan.States = Pending.
 	// Restore their previous state for the plan summary (status reporting).
 	walkAttempted = true
-	finalizeSkippedStates(plan, walk.outputsReady, state.previousPlanStates, func(nodeID string) {
+	dagpkg.FinalizeSkippedStates(plan, walk.outputsReady, state.previousPlanStates, func(nodeID string) {
 		logger.V(1).Info("skipped node with no prior state — marking Pending", "node", nodeID)
 	})
 
@@ -1416,7 +1416,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Belt-and-suspenders: the prune gate also blocks on these states, but key
 	// retention is the surgical fallback if the gate logic ever changes.
 	for _, node := range dag.Nodes {
-		if plan.States[node.ID] == NodeBlocked || plan.States[node.ID] == NodePending {
+		if plan.States[node.ID] == dagpkg.NodeBlocked || plan.States[node.ID] == dagpkg.NodePending {
 			walk.carryForwardKeys(node.ID)
 		}
 	}
@@ -1433,7 +1433,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	if watcher != nil {
 		for i, node := range dag.Nodes {
 			if !walk.dispatched[i] && !walk.outputsReady[node.ID] {
-				watcher.retainWatches(node.ID)
+				watcher.RetainWatches(node.ID)
 			}
 		}
 	}
@@ -1484,7 +1484,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 		// Derive the applied set from the watch cache.
 		if r.Watcher != nil {
-			appliedSet := r.Watcher.watches.deriveAppliedSet(graph.GetName(), graph.GetNamespace())
+			appliedSet := r.Watcher.Watches.DeriveAppliedSet(graph.GetName(), graph.GetNamespace())
 			for key := range appliedSet {
 				allPreviousKeys[key] = true
 			}
@@ -1515,7 +1515,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// that may not yet be in the informer cache. Skip finalizer nodes —
 		// they're dormant during normal operation and only appear in the
 		// applied set when finalization actually creates them.
-		supersededDAGs := map[string]*DAG{}
+		supersededDAGs := map[string]*dagpkg.DAG{}
 		for _, rev := range supersededRevisions {
 			if revSpec, err := extractRevisionSpec(rev); err == nil {
 				for _, node := range revSpec.Nodes {
@@ -1596,9 +1596,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				pruneOK = false
 				info := classifyAPIError(err)
 				switch info.state {
-				case NodeSystemError:
+				case dagpkg.NodeSystemError:
 					summary.HasSystemError = true
-				case NodeConflict:
+				case dagpkg.NodeConflict:
 					summary.HasConflict = true
 				default:
 					summary.HasError = true
@@ -1625,8 +1625,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// The graph is fully converged when every node is Ready and the spec is
 	// compiled. Everything else — errors, conflicts, pending data, not-ready
 	// — retries via watch events, not periodic requeue.
-	allReady := rstate.compiled && !rstate.HasPending && !rstate.HasNotReady &&
-		!rstate.HasBlocked && !rstate.HasConflict && !rstate.HasError && !rstate.HasSystemError
+	allReady := rstate.compiled && !rstate.PlanSummary.HasPending && !rstate.PlanSummary.HasNotReady &&
+		!rstate.PlanSummary.HasBlocked && !rstate.PlanSummary.HasConflict && !rstate.PlanSummary.HasError && !rstate.PlanSummary.HasSystemError
 	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK && !prunePending)
 
 	// Reset resync timers for nodes that were dispatched to workers.
@@ -1659,7 +1659,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	for i, node := range dag.Nodes {
 		nodeState := plan.States[node.ID]
 		switch nodeState {
-		case NodeReady, NodeNotReady:
+		case dagpkg.NodeReady, dagpkg.NodeNotReady:
 			if walk.dispatched[i] {
 				state.resetResyncTimer(node.ID, r.resyncInterval(), r.resyncJitter())
 			}
@@ -1668,10 +1668,10 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			// success. If a node transitions from SystemError to Error,
 			// the backoff should reset because the failure mode changed."
 			delete(state.systemErrorBackoff, node.ID)
-		case NodePending:
+		case dagpkg.NodePending:
 			state.resetResyncTimer(node.ID, r.resyncInterval(), r.resyncJitter())
 			delete(state.systemErrorBackoff, node.ID)
-		case NodeSystemError:
+		case dagpkg.NodeSystemError:
 			// Per 005-reconciliation.md § Trigger: "Transient errors
 			// (5xx) retry with exponential backoff [1s, resyncInterval]."
 			// Double the backoff duration on each consecutive SystemError,
@@ -1688,7 +1688,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			}
 			state.systemErrorBackoff[node.ID] = backoff
 			state.resetResyncTimer(node.ID, backoff, 0)
-		case NodeError:
+		case dagpkg.NodeError:
 			// Per 005-reconciliation.md § Trigger: "Deterministic
 			// errors (4xx) are not retried — same inputs produce the same
 			// failure. They resolve via changes or resync." The resync timer
@@ -1751,7 +1751,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 //
 // Called synchronously in SetupWithManager before the controller is registered,
 // so there is no window where a reconcile fires before hydration completes.
-func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchManager) {
+func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *watches.WatchManager) {
 	logger := log.Log.WithName("startup-hydration")
 
 	dynClient, err := dynamic.NewForConfig(restConfig)
@@ -1776,7 +1776,7 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchMan
 
 	// Collect unique (graph, gvr) pairs across all revisions.
 	type hydrateKey struct {
-		graph graphKey
+		graph watches.GraphKey
 		gvr   schema.GroupVersionResource
 		kind  string
 	}
@@ -1784,11 +1784,11 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchMan
 
 	for i := range list.Items {
 		rev := &list.Items[i]
-		graphName := rev.GetLabels()[LabelRevisionGraphName]
+		graphName := rev.GetLabels()[graphpkg.LabelRevisionGraphName]
 		if graphName == "" {
 			continue
 		}
-		graph := graphKey{Name: graphName, Namespace: rev.GetNamespace()}
+		graph := watches.GraphKey{Name: graphName, Namespace: rev.GetNamespace()}
 
 		spec, err := extractRevisionSpec(rev)
 		if err != nil {
@@ -1826,10 +1826,10 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchMan
 	var wg sync.WaitGroup
 	for k := range toHydrate {
 		wg.Add(1)
-		go func(graph graphKey, gvr schema.GroupVersionResource, kind string) {
+		go func(graph watches.GraphKey, gvr schema.GroupVersionResource, kind string) {
 			defer wg.Done()
-			ownerID := graphOwnerID(graph)
-			if err := watchMgr.ensureWatch(gvr, kind, ownerID); err != nil {
+			ownerID := watches.GraphOwnerID(graph)
+			if err := watchMgr.EnsureWatch(gvr, kind, ownerID); err != nil {
 				logger.Error(err, "failed to hydrate watch", "gvr", gvr, "graph", graph.Name)
 			} else {
 				logger.V(1).Info("hydrated watch from revision", "gvr", gvr, "graph", graph.Name)
@@ -1868,14 +1868,14 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 
 	watchChan := make(chan event.GenericEvent, 256)
 
-	watchMgr := newWatchManager(metadataClient, 12*time.Hour, nil, log.Log)
-	coordinator := newWatchCoordinator(watchMgr, func(graph graphKey) {
+	watchMgr := watches.NewWatchManager(metadataClient, 12*time.Hour, nil, log.Log)
+	coordinator := watches.NewWatchCoordinator(watchMgr, func(graph watches.GraphKey) {
 		obj := &unstructured.Unstructured{}
 		obj.SetName(graph.Name)
 		obj.SetNamespace(graph.Namespace)
 		watchChan <- event.GenericEvent{Object: obj}
 	}, log.Log)
-	watchMgr.onEvent = coordinator.routeEvent
+	watchMgr.SetOnEvent(coordinator.RouteEvent)
 
 	// Create schema resolver for compile-time type checking.
 	// Core types resolve from compiled-in definitions, CRDs resolve via
@@ -1903,7 +1903,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 		Client:         mgr.GetClient(),
 		APIReader:      mgr.GetAPIReader(),
 		SchemaResolver: schemaResolver,
-		SchemaGen:      NewSchemaGeneration(),
+		SchemaGen:      compiler.NewSchemaGeneration(),
 		Watcher:        coordinator,
 		Caches:         newGraphCaches(),
 		Resources:      newResourceCache(),
@@ -1922,7 +1922,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 	// CRDs, aggregated APIs, and any other mechanism that makes a new type
 	// watchable. Filtering by GVR prevents thundering-herd recompilation when
 	// only one type becomes available.
-	watchMgr.onNewType = func(gvr schema.GroupVersionResource) {
+	watchMgr.SetOnNewType(func(gvr schema.GroupVersionResource) {
 		affected := reconciler.Caches.evictUnresolved(gvr)
 		if len(affected) == 0 {
 			return
@@ -1945,7 +1945,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 			default:
 			}
 		}
-	}
+	})
 
 	// Watch CRDs for schema changes. Per 004-compilation.md § Compilation Cache:
 	// "Any schema change (CRD installed, updated, removed) advances [the
@@ -1989,5 +1989,5 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 		return nil, nil, fmt.Errorf("building controller: %w", err)
 	}
 
-	return watchMgr.shutdown, reconciler.Caches, nil
+	return watchMgr.Shutdown, reconciler.Caches, nil
 }

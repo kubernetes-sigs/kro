@@ -13,6 +13,10 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
 )
 
 // gateResult represents the outcome of a propagateWhen evaluation.
@@ -29,7 +33,7 @@ const (
 // workers receive read-only snapshots and return results for the coordinator
 // to merge. No locking needed.
 type evaluator struct {
-	compiled *compiledGraph
+	compiled *compiler.CompiledGraph
 	scope    map[string]any
 
 	// effectiveGeneration is the generation string to stamp on identity
@@ -77,7 +81,7 @@ type evaluator struct {
 	// — O(1) per event, not O(matching)."
 	collectionNodeID       string             // node ID for cache key (set by coordinator)
 	collectionCachedList   []any              // previous cached list (nil = no cache, full list needed)
-	collectionChanges      []CollectionChange // buffered changes since last reconcile
+	collectionChanges      []watches.CollectionChange // buffered changes since last reconcile
 	collectionUpdatedCache []any              // output: updated list for coordinator to store
 	collectionResyncOrFull bool               // true = bypass cache, do full list (resync or first reconcile)
 	// collectionDidFullList is set true by reconcileWatch when the
@@ -110,12 +114,12 @@ func newEvaluator(state *instanceState) *evaluator {
 		state.nodeReady = map[string]bool{}
 	}
 	scope := map[string]any{
-		reservedNodeReadyVar: state.nodeReady,
+		compiler.ReservedNodeReadyVar: state.nodeReady,
 	}
 	// Initialize dynamic GVK tracking if the compiled graph has dynamic nodes.
 	var dynamicGVKResolved map[string]schema.GroupVersionKind
-	if state.compiled != nil && len(state.compiled.dynamicGVKNodes) > 0 {
-		dynamicGVKResolved = make(map[string]schema.GroupVersionKind, len(state.compiled.dynamicGVKNodes))
+	if state.compiled != nil && len(state.compiled.DynamicGVKNodes) > 0 {
+		dynamicGVKResolved = make(map[string]schema.GroupVersionKind, len(state.compiled.DynamicGVKNodes))
 	}
 	return &evaluator{
 		compiled:           state.compiled,
@@ -131,8 +135,8 @@ func (e *evaluator) withScope(scope map[string]any) *evaluator {
 	// Preserve the node-readiness sidecar across scope substitutions so
 	// inner forEach evaluations see the same verdicts as the outer walk.
 	if e.nodeReady != nil {
-		if _, present := scope[reservedNodeReadyVar]; !present {
-			scope[reservedNodeReadyVar] = e.nodeReady
+		if _, present := scope[compiler.ReservedNodeReadyVar]; !present {
+			scope[compiler.ReservedNodeReadyVar] = e.nodeReady
 		}
 	}
 	return &evaluator{compiled: e.compiled, scope: scope, nodeReady: e.nodeReady, effectiveGeneration: e.effectiveGeneration}
@@ -223,11 +227,11 @@ func isForEachItemUpdated(item map[string]any, parentID, graphName, graphNS stri
 
 	name, _ := md["name"].(string)
 	namespace, _ := md["namespace"].(string)
-	gvk := gvkFromMap(item)
+	gvk := graph.GVKFromMap(item)
 	kind := gvk.Kind
 	group := gvk.Group
 
-	labelKey := forEachChildGenerationLabelKey(parentID, name, namespace, kind, group, graphName, graphNS)
+	labelKey := graph.ForEachChildGenerationLabelKey(parentID, name, namespace, kind, group, graphName, graphNS)
 	genVal, _ := lbls[labelKey].(string)
 	if genVal == "" {
 		return false
@@ -236,24 +240,24 @@ func isForEachItemUpdated(item map[string]any, parentID, graphName, graphNS stri
 }
 
 // evalReadiness evaluates readyWhen conditions and stamps __ready in scope.
-// Returns ErrWaitingForReadiness if any condition is false or data-pending.
-// Returns ErrReadyWhenFailed wrapping the underlying error if the expression
+// Returns compiler.ErrWaitingForReadiness if any condition is false or data-pending.
+// Returns compiler.ErrReadyWhenFailed wrapping the underlying error if the expression
 // itself is broken (wrong return type, CEL error). Per 001-graph.md:
 // "readyWhen is a health signal — it does not gate downstream execution."
-// The ErrReadyWhenFailed sentinel lets the coordinator classify this as
+// The compiler.ErrReadyWhenFailed sentinel lets the coordinator classify this as
 // NodeNotReady (not NodeError), preserving the design invariant.
 func (e *evaluator) evalReadiness(nodeID string, readyWhen []string) error {
 	if len(readyWhen) > 0 {
 		if err := e.evalReadinessConditions(readyWhen, nodeID); err != nil {
 			e.markReady(nodeID, false)
-			// ErrWaitingForReadiness and ErrPending are transient — pass through.
+			// compiler.ErrWaitingForReadiness and compiler.ErrPending are transient — pass through.
 			// All other errors are permanent expression failures that must not
 			// produce NodeError (which would gate dependents). Wrap with
-			// ErrReadyWhenFailed so the coordinator classifies as NodeNotReady.
-			if errors.Is(err, ErrWaitingForReadiness) || errors.Is(err, ErrPending) {
+			// compiler.ErrReadyWhenFailed so the coordinator classifies as NodeNotReady.
+			if errors.Is(err, compiler.ErrWaitingForReadiness) || errors.Is(err, compiler.ErrPending) {
 				return err
 			}
-			return fmt.Errorf("%w: %w", ErrReadyWhenFailed, err)
+			return fmt.Errorf("%w: %w", compiler.ErrReadyWhenFailed, err)
 		}
 	}
 	e.markReady(nodeID, true)
@@ -261,7 +265,7 @@ func (e *evaluator) evalReadiness(nodeID string, readyWhen []string) error {
 }
 
 // evalReadinessConditions evaluates readyWhen boolean conditions against the
-// full scope. Returns nil if all conditions pass, ErrWaitingForReadiness if
+// full scope. Returns nil if all conditions pass, compiler.ErrWaitingForReadiness if
 // any are false or data-pending.
 //
 // This is the evaluation primitive — it does NOT stamp __ready. Callers that
@@ -276,13 +280,13 @@ func (e *evaluator) evalReadinessConditions(conditions []string, nodeID string) 
 	for _, cond := range conditions {
 		ok, err := e.evalBoolCondition(cond)
 		if err != nil {
-			if isPending(err) {
-				return fmt.Errorf("node %q: readyWhen %q: data not yet available: %w", nodeID, cond, ErrWaitingForReadiness)
+			if compiler.IsPending(err) {
+				return fmt.Errorf("node %q: readyWhen %q: data not yet available: %w", nodeID, cond, compiler.ErrWaitingForReadiness)
 			}
 			return fmt.Errorf("node %q: readyWhen %q: %w", nodeID, cond, err)
 		}
 		if !ok {
-			return fmt.Errorf("node %q: readyWhen %q evaluated to false: %w", nodeID, cond, ErrWaitingForReadiness)
+			return fmt.Errorf("node %q: readyWhen %q evaluated to false: %w", nodeID, cond, compiler.ErrWaitingForReadiness)
 		}
 	}
 	return nil
@@ -339,20 +343,20 @@ func (e *evaluator) firstUnsatisfiedCondition(conditions []string) string {
 }
 
 // toMap evaluates a template and asserts the result is a map.
-// Normalizes data-pending errors to ErrPending. Non-pending evaluation
-// failures are wrapped with ErrEvaluation so classifyAPIError can
+// Normalizes data-pending errors to compiler.ErrPending. Non-pending evaluation
+// failures are wrapped with compiler.ErrEvaluation so classifyAPIError can
 // distinguish them from network errors with similar message text.
 func (e *evaluator) toMap(tmpl map[string]any) (map[string]any, error) {
 	evaluated, err := e.template(tmpl)
 	if err != nil {
-		if isPending(err) {
-			return nil, fmt.Errorf("%w: %v", ErrPending, err)
+		if compiler.IsPending(err) {
+			return nil, fmt.Errorf("%w: %v", compiler.ErrPending, err)
 		}
-		return nil, fmt.Errorf("%w: %w", ErrEvaluation, err)
+		return nil, fmt.Errorf("%w: %w", compiler.ErrEvaluation, err)
 	}
 	result, ok := evaluated.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("%w: evaluated to %T, want map", ErrEvaluation, evaluated)
+		return nil, fmt.Errorf("%w: evaluated to %T, want map", compiler.ErrEvaluation, evaluated)
 	}
 	return result, nil
 }
@@ -362,21 +366,21 @@ func (e *evaluator) toMap(tmpl map[string]any) (map[string]any, error) {
 // that yields the body map at runtime. For Ref/Watch (identity-only)
 // the identity map is evaluated — its fields may still contain CEL
 // expressions.
-func (e *evaluator) toMapNode(node Node) (map[string]any, error) {
+func (e *evaluator) toMapNode(node graph.Node) (map[string]any, error) {
 	if node.TemplateExpr != "" {
 		// Body came in as a CEL expression under the classification
 		// keyword (template/patch/def as a string). Use evalString
 		// which handles ${...} extraction and type coercion.
 		raw, err := e.evalString(node.TemplateExpr)
 		if err != nil {
-			if isPending(err) {
-				return nil, ErrPending
+			if compiler.IsPending(err) {
+				return nil, compiler.ErrPending
 			}
-			return nil, fmt.Errorf("%w: %s expression %q: %w", ErrEvaluation, node.ExprKeyword, node.TemplateExpr, err)
+			return nil, fmt.Errorf("%w: %s expression %q: %w", compiler.ErrEvaluation, node.ExprKeyword, node.TemplateExpr, err)
 		}
 		result, ok := raw.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("%w: %s expression evaluated to %T, want map", ErrEvaluation, node.ExprKeyword, raw)
+			return nil, fmt.Errorf("%w: %s expression evaluated to %T, want map", compiler.ErrEvaluation, node.ExprKeyword, raw)
 		}
 		return result, nil
 	}
@@ -423,9 +427,9 @@ func (e *evaluator) template(value any) (any, error) {
 // evalString processes a string value, handling ${...} and $${...} expressions.
 func (e *evaluator) evalString(s string) (any, error) {
 	// Check if the entire string is a single expression (standalone)
-	dollars, expr, start, end := findExpr(s, 0)
+	dollars, expr, start, end := graph.FindExpr(s, 0)
 	if start == 0 && end == len(s) && len(dollars) == 1 {
-		result, err := e.compiled.eval(expr, e.scope)
+		result, err := e.compiled.Eval(expr, e.scope)
 		if err != nil {
 			return nil, fmt.Errorf("evaluating %q: %w", expr, err)
 		}
@@ -436,7 +440,7 @@ func (e *evaluator) evalString(s string) (any, error) {
 	var result strings.Builder
 	pos := 0
 	for {
-		dollars, expr, start, end = findExpr(s, pos)
+		dollars, expr, start, end = graph.FindExpr(s, pos)
 		if start < 0 {
 			result.WriteString(s[pos:])
 			break
@@ -444,7 +448,7 @@ func (e *evaluator) evalString(s string) (any, error) {
 		result.WriteString(s[pos:start])
 
 		if len(dollars) == 1 {
-			val, err := e.compiled.eval(expr, e.scope)
+			val, err := e.compiled.Eval(expr, e.scope)
 			if err != nil {
 				return nil, fmt.Errorf("evaluating %q: %w", expr, err)
 			}
@@ -462,8 +466,8 @@ func (e *evaluator) includeWhen(conditions []string) (bool, error) {
 	for _, cond := range conditions {
 		ok, err := e.evalBoolCondition(cond)
 		if err != nil {
-			if isPending(err) {
-				return false, fmt.Errorf("includeWhen data pending: %w", ErrPending)
+			if compiler.IsPending(err) {
+				return false, fmt.Errorf("includeWhen data pending: %w", compiler.ErrPending)
 			}
 			return false, err
 		}
@@ -472,291 +476,4 @@ func (e *evaluator) includeWhen(conditions []string) (bool, error) {
 		}
 	}
 	return true, nil
-}
-
-// ---------------------------------------------------------------------------
-// Utilities (unchanged — not methods because they don't need the cache)
-// ---------------------------------------------------------------------------
-
-// findExpr finds the next $+{...} expression in input starting at pos,
-// handling balanced braces for nested CEL map/object literals.
-func findExpr(input string, pos int) (string, string, int, int) {
-	for i := pos; i < len(input); i++ {
-		if input[i] != '$' {
-			continue
-		}
-		start := i
-		for i < len(input) && input[i] == '$' {
-			i++
-		}
-		dollars := input[start:i]
-		if i >= len(input) || input[i] != '{' {
-			continue
-		}
-		depth := 0
-		inString := false
-		var stringChar byte
-		escapeNext := false
-		exprStart := i + 1
-		for j := i; j < len(input); j++ {
-			c := input[j]
-			if escapeNext {
-				escapeNext = false
-				continue
-			}
-			if inString && c == '\\' {
-				escapeNext = true
-				continue
-			}
-			if inString {
-				if c == stringChar {
-					inString = false
-				}
-				continue
-			}
-			if c == '\'' || c == '"' {
-				inString = true
-				stringChar = c
-				continue
-			}
-			switch c {
-			case '{':
-				depth++
-			case '}':
-				depth--
-				if depth == 0 {
-					return dollars, input[exprStart:j], start, j + 1
-				}
-			}
-		}
-	}
-	return "", "", -1, -1
-}
-
-// normalizeTypes converts JSON-style float64 numbers to int64 for CEL compatibility.
-// The Kubernetes API server returns numbers as float64 in unstructured objects.
-//
-// The full recursive copy is intentional. A check-first pass to avoid copying
-// objects without float64 integers would need to traverse the full tree anyway,
-// and CRD objects have arbitrary shapes — branching on object content adds
-// complexity without measurable benefit. This call is already gated behind the
-// skip-check: triggered nodes always need a fresh normalized copy because their
-// template has changed; skipped nodes never call this function.
-func normalizeTypes(v any) any {
-	switch val := v.(type) {
-	case map[string]any:
-		result := make(map[string]any, len(val))
-		for k, v := range val {
-			result[k] = normalizeTypes(v)
-		}
-		return result
-	case []any:
-		result := make([]any, len(val))
-		for i, v := range val {
-			result[i] = normalizeTypes(v)
-		}
-		return result
-	case float64:
-		if val == float64(int64(val)) {
-			return int64(val)
-		}
-		return val
-	case int:
-		return int64(val)
-	default:
-		return v
-	}
-}
-
-// copyScope creates a shallow copy of a scope map.
-func copyScope(scope map[string]any) map[string]any {
-	result := make(map[string]any, len(scope))
-	for k, v := range scope {
-		result[k] = v
-	}
-	return result
-}
-
-// extractReferencedPathsFromNode scans a Node's template and gate expressions
-// for ${...} blocks, looks up pre-extracted field paths from exprPaths, and
-// returns per-node dependency paths, self paths, readiness deps, and dependency IDs.
-//
-// When exprPaths is nil (e.g., BuildDAG called for deletion ordering without
-// going through compileGraphSpec), falls back to string-based dependency
-// detection. DepPaths/SelfPaths will be nil in this case — hashing won't be
-// available, but dependency detection for topological sort still works.
-//
-// The exprPaths map is computed from CEL ASTs during compilation in
-// compileGraphSpec. See 005-reconciliation.md § Hash Mechanics.
-func extractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][]FieldPath) (
-	dependencies map[string]bool,
-	depPaths map[string][]FieldPath,
-	selfPaths []FieldPath,
-	readinessDeps map[string]bool,
-) {
-	dependencies = map[string]bool{}
-	depPaths = map[string][]FieldPath{}
-	readinessDeps = map[string]bool{}
-
-	// Helper: process a CEL expression's pre-extracted paths.
-	// When exprPaths is nil, falls back to string-based identifier extraction
-	// for dependency detection (no field paths available).
-	processExpr := func(expr string, isGateExpr bool) {
-		if exprPaths == nil {
-			// Fallback: string-based dependency detection only.
-			id := extractFirstIdentifier(expr)
-			if id != "" && id != node.ID {
-				dependencies[id] = true
-			}
-			return
-		}
-		paths, ok := exprPaths[expr]
-		if !ok {
-			return
-		}
-		for scopeVar, fieldPaths := range paths {
-			if scopeVar == node.ID {
-				// Self-reference — only meaningful in gate expressions
-				if isGateExpr {
-					for _, fp := range fieldPaths {
-						addFieldPath(&selfPaths, fp)
-					}
-				}
-				continue
-			}
-			// Upstream dependency reference
-			dependencies[scopeVar] = true
-			for _, fp := range fieldPaths {
-				addPath(depPaths, scopeVar, fp)
-			}
-		}
-	}
-
-	// Helper: check if an expression contains a .ready() call on a non-self node.
-	// The field path walker skips ready() targets (no paths extracted), so we
-	// need a separate string-based check for ReadinessDeps. These are also
-	// dependencies — the node needs the upstream in scope to check readiness.
-	checkReadyRef := func(expr string) {
-		if !strings.Contains(expr, ".ready()") {
-			return
-		}
-		id := extractFirstIdentifier(expr)
-		if id != "" && id != node.ID {
-			readinessDeps[id] = true
-			dependencies[id] = true // ready() targets are dependencies too
-		}
-	}
-
-	// Process body + includeWhen + forEach expressions → depPaths.
-	// Walk every possible body map — Template/Patch/Def (Payload) plus
-	// Ref/Watch (Identity) — because identity fields on Ref and
-	// Watch may still carry CEL expressions (e.g., a dynamic name
-	// from an upstream node).
-	var templateStrs []string
-	if body := node.Body(); body != nil {
-		collectStrings(body, &templateStrs)
-	}
-	if node.TemplateExpr != "" {
-		templateStrs = append(templateStrs, node.TemplateExpr)
-	}
-	for _, s := range node.IncludeWhen {
-		templateStrs = append(templateStrs, s)
-	}
-	if node.ForEach != nil {
-		templateStrs = append(templateStrs, node.ForEach.Expr)
-	}
-
-	for _, s := range templateStrs {
-		pos := 0
-		for {
-			dollars, expr, start, _ := findExpr(s, pos)
-			if start < 0 {
-				break
-			}
-			pos = start + len(dollars) + len(expr) + 2
-			if len(dollars) != 1 {
-				continue
-			}
-			processExpr(expr, false)
-		}
-	}
-
-	// Process readyWhen + propagateWhen → depPaths + selfPaths + readinessDeps
-	var gateStrs []string
-	for _, s := range node.ReadyWhen {
-		gateStrs = append(gateStrs, s)
-	}
-	for _, s := range node.PropagateWhen {
-		gateStrs = append(gateStrs, s)
-	}
-
-	for _, s := range gateStrs {
-		pos := 0
-		for {
-			dollars, expr, start, _ := findExpr(s, pos)
-			if start < 0 {
-				break
-			}
-			pos = start + len(dollars) + len(expr) + 2
-			if len(dollars) != 1 {
-				continue
-			}
-			processExpr(expr, true)
-			checkReadyRef(expr)
-		}
-	}
-
-	return dependencies, depPaths, selfPaths, readinessDeps
-}
-
-// collectStrings recursively collects all string values from a value tree.
-func collectStrings(v any, out *[]string) {
-	switch val := v.(type) {
-	case string:
-		*out = append(*out, val)
-	case map[string]any:
-		for _, child := range val {
-			collectStrings(child, out)
-		}
-	case []any:
-		for _, child := range val {
-			collectStrings(child, out)
-		}
-	}
-}
-
-// extractFirstIdentifier extracts the first CEL identifier from an expression.
-// For "deployment.metadata.name" returns "deployment".
-// For "size(items)" returns "size" (a function, not a scope var — but harmless).
-// For literals like "'hello'" returns "".
-func extractFirstIdentifier(expr string) string {
-	expr = strings.TrimSpace(expr)
-	if len(expr) == 0 {
-		return ""
-	}
-	// Skip if starts with non-identifier char (quote, digit, operator, etc.)
-	if !isIdentStart(expr[0]) {
-		return ""
-	}
-	end := 0
-	for end < len(expr) && isIdentContinue(expr[end]) {
-		end++
-	}
-	id := expr[:end]
-	// Filter out CEL keywords/builtins that aren't scope variables
-	switch id {
-	case "true", "false", "null", "size", "has", "exists", "all",
-		"filter", "map", "int", "uint", "double", "string", "bool",
-		"bytes", "list", "type", "duration", "timestamp":
-		return ""
-	}
-	return id
-}
-
-func isIdentStart(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
-}
-
-func isIdentContinue(c byte) bool {
-	return isIdentStart(c) || (c >= '0' && c <= '9')
 }

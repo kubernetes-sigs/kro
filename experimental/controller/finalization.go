@@ -25,6 +25,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
 )
 
 // FinalizationPhase represents the current state of a finalization sequence.
@@ -77,9 +81,9 @@ func (r *GraphReconciler) advanceFinalization(
 	pruneCandidates []string,
 	keyToNodeID map[string]string,
 	nodeIDToKey map[string]string,
-	allDAGs []*DAG,
+	allDAGs []*dagpkg.DAG,
 	eval *evaluator,
-	watcher *graphWatcher,
+	watcher *watches.GraphWatcher,
 	state *instanceState,
 ) (*finalizationResult, error) {
 	logger := log.FromContext(ctx)
@@ -101,7 +105,7 @@ func (r *GraphReconciler) advanceFinalization(
 	}
 
 	// findFinalizers looks up finalizer node IDs for a target across all DAGs.
-	findFinalizers := func(nodeID string) (*DAG, []string) {
+	findFinalizers := func(nodeID string) (*dagpkg.DAG, []string) {
 		for _, d := range allDAGs {
 			if fins, ok := d.Finalizers[nodeID]; ok && len(fins) > 0 {
 				return d, fins
@@ -223,16 +227,16 @@ func (r *GraphReconciler) runFinalization(
 	target *unstructured.Unstructured,
 	targetNodeID string,
 	finalizerNodeIDs []string,
-	dag *DAG,
+	dag *dagpkg.DAG,
 	eval *evaluator,
-	watcher *graphWatcher,
+	watcher *watches.GraphWatcher,
 ) (bool, []string, error) {
 	logger := log.FromContext(ctx)
 	var keys []string
 
 	// Put the target in scope so finalizer templates can reference it.
 	if targetNodeID != "" {
-		eval.scope[targetNodeID] = normalizeTypes(target.Object)
+		eval.scope[targetNodeID] = graphpkg.NormalizeTypes(target.Object)
 	}
 
 	// Sort finalizer nodes by topological position.
@@ -283,7 +287,7 @@ func (r *GraphReconciler) runFinalization(
 			// Create finalizer resource.
 			logger.Info("creating finalizer resource", "finalizer", finNodeID,
 				"target", target.GetName())
-			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, NodeTypeTemplate, eval.effectiveGeneration, false, false)
+			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, false, false)
 			if applyErr != nil {
 				return false, keys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
 			}
@@ -294,7 +298,7 @@ func (r *GraphReconciler) runFinalization(
 		}
 
 		// Exists — check readyWhen.
-		eval.scope[finNodeID] = normalizeTypes(existing.Object)
+		eval.scope[finNodeID] = graphpkg.NormalizeTypes(existing.Object)
 		keys = append(keys, resourceKey(existing))
 		if len(finNode.ReadyWhen) > 0 {
 			if err := eval.evalReadinessConditions(finNode.ReadyWhen, finNodeID); err != nil {
@@ -313,10 +317,10 @@ func (r *GraphReconciler) runFinalization(
 func (r *GraphReconciler) runForEachFinalization(
 	ctx context.Context,
 	graph *unstructured.Unstructured,
-	finNode *Node,
-	dag *DAG,
+	finNode *graphpkg.Node,
+	dag *dagpkg.DAG,
 	eval *evaluator,
-	watcher *graphWatcher,
+	watcher *watches.GraphWatcher,
 ) (bool, []string, error) {
 	logger := log.FromContext(ctx)
 	var createdKeys []string
@@ -337,7 +341,7 @@ func (r *GraphReconciler) runForEachFinalization(
 	logger.Info("forEach finalization expanding", "finalizer", finNode.ID, "var", varName, "count", len(items))
 
 	for _, item := range items {
-		innerScope := copyScope(eval.scope)
+		innerScope := graphpkg.CopyScope(eval.scope)
 		innerScope[varName] = item
 		innerEval := eval.withScope(innerScope)
 
@@ -350,7 +354,7 @@ func (r *GraphReconciler) runForEachFinalization(
 		if childObj.GetNamespace() == "" {
 			childObj.SetNamespace(graph.GetNamespace())
 		}
-		stampForEachChildLabels(childObj, finNode.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, NodeTypeTemplate)
+		graphpkg.StampForEachChildLabels(childObj, finNode.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, graphpkg.NodeTypeTemplate)
 		evalMap = childObj.Object
 
 		existing := &unstructured.Unstructured{}
@@ -366,7 +370,7 @@ func (r *GraphReconciler) runForEachFinalization(
 			}
 			logger.Info("creating forEach finalizer child",
 				"finalizer", finNode.ID, "name", childObj.GetName())
-			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, NodeTypeTemplate, eval.effectiveGeneration, false, false)
+			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, false, false)
 			if applyErr != nil {
 				return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
 			}
@@ -377,7 +381,7 @@ func (r *GraphReconciler) runForEachFinalization(
 
 		createdKeys = append(createdKeys, resourceKey(existing))
 		if len(finNode.ReadyWhen) > 0 {
-			innerEval.scope[finNode.ID] = normalizeTypes(existing.Object)
+			innerEval.scope[finNode.ID] = graphpkg.NormalizeTypes(existing.Object)
 			if err := innerEval.evalReadinessConditions(finNode.ReadyWhen, finNode.ID); err != nil {
 				logger.V(1).Info("forEach finalizer child not ready",
 					"finalizer", finNode.ID, "name", existing.GetName())
@@ -418,7 +422,7 @@ func (r *GraphReconciler) cleanupFinalizationChildren(ctx context.Context, keys 
 }
 
 // sortFinalizerNodes returns finalizer node IDs sorted by topological position.
-func sortFinalizerNodes(finalizerNodeIDs []string, dag *DAG) []string {
+func sortFinalizerNodes(finalizerNodeIDs []string, dag *dagpkg.DAG) []string {
 	ordered := make([]string, len(finalizerNodeIDs))
 	copy(ordered, finalizerNodeIDs)
 	topoPos := make(map[string]int, len(dag.TopologicalOrder))

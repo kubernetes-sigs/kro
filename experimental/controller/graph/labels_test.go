@@ -1,4 +1,4 @@
-package graphcontroller
+package graph
 
 import (
 	"strings"
@@ -8,12 +8,12 @@ import (
 )
 
 func TestIdentityLabelKey(t *testing.T) {
-	key := identityLabelKey("deploy", "my-app", "default")
+	key := IdentityLabelKey("deploy", "my-app", "default")
 	assert.Equal(t, "deploy.my-app.default.internal.kro.run/type", key)
 }
 
 func TestGenerationLabelKey(t *testing.T) {
-	key := generationLabelKey("deploy", "my-app", "default")
+	key := GenerationLabelKey("deploy", "my-app", "default")
 	assert.Equal(t, "deploy.my-app.default.internal.kro.run/generation", key)
 }
 
@@ -55,7 +55,7 @@ func TestParseNodeIDFromLabel(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			nodeID, ok := parseNodeIDFromLabel(tc.key)
+			nodeID, ok := ParseNodeIDFromLabel(tc.key)
 			assert.Equal(t, tc.wantOK, ok)
 			if ok {
 				assert.Equal(t, tc.wantNode, nodeID)
@@ -94,20 +94,20 @@ func TestGraphNameFromLabel(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := graphNameFromLabel(tc.key)
+			got := GraphNameFromLabel(tc.key)
 			assert.Equal(t, tc.wantGraph, got)
 		})
 	}
 }
 
 func TestIsGraphIdentityLabel(t *testing.T) {
-	assert.True(t, isGraphIdentityLabel(
+	assert.True(t, IsGraphIdentityLabel(
 		"deploy.my-app.default.internal.kro.run/type", "my-app", "default"))
-	assert.False(t, isGraphIdentityLabel(
+	assert.False(t, IsGraphIdentityLabel(
 		"deploy.other-app.default.internal.kro.run/type", "my-app", "default"))
-	assert.False(t, isGraphIdentityLabel(
+	assert.False(t, IsGraphIdentityLabel(
 		"deploy.my-app.other-ns.internal.kro.run/type", "my-app", "default"))
-	assert.False(t, isGraphIdentityLabel(
+	assert.False(t, IsGraphIdentityLabel(
 		"app.kubernetes.io/name", "my-app", "default"))
 }
 
@@ -116,14 +116,14 @@ func TestHasOtherGraphIdentityLabel(t *testing.T) {
 	labels1 := map[string]string{
 		"deploy.my-app.default.internal.kro.run/type": "template",
 	}
-	_, found := hasOtherGraphIdentityLabel(labels1, "my-app", "default")
+	_, found := HasOtherGraphIdentityLabel(labels1, "my-app", "default")
 	assert.False(t, found)
 
 	// Resource with another graph's label — conflict
 	labels2 := map[string]string{
 		"deploy.other-app.default.internal.kro.run/type": "template",
 	}
-	otherGraph, found := hasOtherGraphIdentityLabel(labels2, "my-app", "default")
+	otherGraph, found := HasOtherGraphIdentityLabel(labels2, "my-app", "default")
 	assert.True(t, found)
 	assert.Equal(t, "other-app", otherGraph)
 
@@ -132,7 +132,7 @@ func TestHasOtherGraphIdentityLabel(t *testing.T) {
 		"deploy.my-app.default.internal.kro.run/type":    "template",
 		"deploy.other-app.default.internal.kro.run/type": "patch",
 	}
-	otherGraph, found = hasOtherGraphIdentityLabel(labels3, "my-app", "default")
+	otherGraph, found = HasOtherGraphIdentityLabel(labels3, "my-app", "default")
 	assert.True(t, found)
 	assert.Equal(t, "other-app", otherGraph)
 
@@ -140,7 +140,7 @@ func TestHasOtherGraphIdentityLabel(t *testing.T) {
 	labels4 := map[string]string{
 		"app": "my-app",
 	}
-	_, found = hasOtherGraphIdentityLabel(labels4, "my-app", "default")
+	_, found = HasOtherGraphIdentityLabel(labels4, "my-app", "default")
 	assert.False(t, found)
 }
 
@@ -156,13 +156,13 @@ func TestHasOtherGraphIdentityLabel_RegressionMixedCase(t *testing.T) {
 		// could be present from an edit or older stamping.
 		"Deploy.Other-App.Default.internal.kro.run/type": "template",
 	}
-	otherGraph, found := hasOtherGraphIdentityLabel(mixedCase, "my-app", "default")
+	otherGraph, found := HasOtherGraphIdentityLabel(mixedCase, "my-app", "default")
 	assert.True(t, found, "mixed-case identity label from another graph must be detected")
 	assert.Equal(t, "other-app", otherGraph, "graph name should be lowercased in the returned value")
 }
 
 func TestSetIdentityLabels(t *testing.T) {
-	labels := setIdentityLabels(nil, "deploy", "my-app", "default", "3", NodeTypeTemplate)
+	labels := SetIdentityLabels(nil, "deploy", "my-app", "default", "3", NodeTypeTemplate)
 	assert.Equal(t, "template", labels["deploy.my-app.default.internal.kro.run/type"])
 	assert.Equal(t, "3", labels["deploy.my-app.default.internal.kro.run/generation"])
 }
@@ -240,7 +240,7 @@ func TestIdentityLabelKeyProducesValidSubdomain(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateIdentityLabelKey(tc.nodeID, tc.graph, tc.ns)
+			err := ValidateIdentityLabelKey(tc.nodeID, tc.graph, tc.ns)
 			if tc.wantErr {
 				assert.Error(t, err,
 					"node ID %q should be rejected — produces invalid DNS subdomain label prefix",
@@ -268,20 +268,20 @@ func TestLabelSafeGraphName(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := labelSafeGraphName(tc.graphName)
-			assert.LessOrEqual(t, len(got), maxLabelValueLength,
+			got := LabelSafeGraphName(tc.graphName)
+			assert.LessOrEqual(t, len(got), 63,
 				"result must fit in a Kubernetes label value")
-			if len(tc.graphName) <= maxLabelValueLength {
+			if len(tc.graphName) <= 63 {
 				assert.Equal(t, tc.graphName, got, "short names pass through unchanged")
 			}
 		})
 	}
 
 	// Different long names must not collide after truncation.
-	a := labelSafeGraphName("test-instance-resource-reconcile-reactive-resourcegraphdefinition")
-	b := labelSafeGraphName("test-instance-resource-reconcile-alternate-resourcegraphdefinition")
+	a := LabelSafeGraphName("test-instance-resource-reconcile-reactive-resourcegraphdefinition")
+	b := LabelSafeGraphName("test-instance-resource-reconcile-alternate-resourcegraphdefinition")
 	assert.NotEqual(t, a, b, "distinct long names must produce distinct labels")
 
 	// Determinism: same input produces same output.
-	assert.Equal(t, a, labelSafeGraphName("test-instance-resource-reconcile-reactive-resourcegraphdefinition"))
+	assert.Equal(t, a, LabelSafeGraphName("test-instance-resource-reconcile-reactive-resourcegraphdefinition"))
 }

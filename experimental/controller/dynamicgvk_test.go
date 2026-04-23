@@ -9,6 +9,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	openapi "k8s.io/kube-openapi/pkg/validation/spec"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
 )
 
 // TestMergeDynamicGVK_FirstResolution verifies that first resolution reports stale.
@@ -67,21 +70,21 @@ func TestCompilationKeyWithHints(t *testing.T) {
 	structKey := "abc123"
 
 	// No hints → same key.
-	assert.Equal(t, structKey, compilationKeyWithHints(structKey, nil))
-	assert.Equal(t, structKey, compilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{}))
+	assert.Equal(t, structKey, graph.CompilationKeyWithHints(structKey, nil))
+	assert.Equal(t, structKey, graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{}))
 
 	// With hints → different key.
 	widgetGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Widget"}
 	gadgetGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Gadget"}
 
-	key1 := compilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": widgetGVK})
-	key2 := compilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": gadgetGVK})
+	key1 := graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": widgetGVK})
+	key2 := graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": gadgetGVK})
 
 	assert.NotEqual(t, structKey, key1, "hints should change the key")
 	assert.NotEqual(t, key1, key2, "different GVKs should produce different keys")
 
 	// Same hints → same key (deterministic).
-	key1b := compilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": widgetGVK})
+	key1b := graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": widgetGVK})
 	assert.Equal(t, key1, key1b, "same hints should produce same key")
 }
 
@@ -151,7 +154,7 @@ func TestDynamicGVK_ProgressionFromDynToTyped(t *testing.T) {
 
 	r := &GraphReconciler{
 		SchemaResolver: resolver,
-		SchemaGen:      NewSchemaGeneration(),
+		SchemaGen:      compiler.NewSchemaGeneration(),
 		Caches:         newGraphCaches(),
 	}
 
@@ -160,9 +163,9 @@ func TestDynamicGVK_ProgressionFromDynToTyped(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, state1.compiled)
 	bootstrapArtifact := state1.compiled
-	assert.Contains(t, bootstrapArtifact.dynamicGVKNodes, "schema",
+	assert.Contains(t, bootstrapArtifact.DynamicGVKNodes, "schema",
 		"first compilation should detect dynamic GVK node")
-	assert.NotContains(t, bootstrapArtifact.resourceSchemas, "schema",
+	assert.NotContains(t, bootstrapArtifact.ResourceSchemas, "schema",
 		"first compilation should NOT have schema for dynamic node (no hints)")
 
 	// Phase 2: simulate reconciler resolving the GVK (during DAG walk).
@@ -175,11 +178,11 @@ func TestDynamicGVK_ProgressionFromDynToTyped(t *testing.T) {
 	require.NotNil(t, state2.compiled)
 	assert.NotSame(t, bootstrapArtifact, state2.compiled,
 		"second compilation should produce a NEW artifact (different key)")
-	assert.Contains(t, state2.compiled.resourceSchemas, "schema",
+	assert.Contains(t, state2.compiled.ResourceSchemas, "schema",
 		"second compilation should have schema for dynamic node (hint used)")
 
 	// Verify the schema is Widget's schema.
-	schemaResolved := state2.compiled.resourceSchemas["schema"]
+	schemaResolved := state2.compiled.ResourceSchemas["schema"]
 	require.NotNil(t, schemaResolved)
 	assert.Contains(t, schemaResolved.Properties["spec"].Properties, "name",
 		"resolved schema should be Widget's with spec.name field")

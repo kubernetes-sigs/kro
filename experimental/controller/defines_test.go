@@ -7,6 +7,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
 )
 
 // ---------------------------------------------------------------------------
@@ -20,50 +24,45 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestDefinesCycleDetection(t *testing.T) {
-	nodes := []Node{
-		{
-			ID:       "naming",
-			Def:      map[string]any{"prefix": "${svc.metadata.name}"},
-			nodeType: NodeTypeDef,
-		},
-		{
+	nodes := []graphpkg.Node{
+		node(graphpkg.Node{
+			ID:  "naming",
+			Def: map[string]any{"prefix": "${svc.metadata.name}"},
+		}, graphpkg.NodeTypeDef),
+		node(graphpkg.Node{
 			ID: "svc",
 			Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${naming.prefix + '-svc'}"},
 			},
-			nodeType: NodeTypeTemplate,
-		},
+		}, graphpkg.NodeTypeTemplate),
 	}
-	_, err := BuildDAG(nodes, nil)
+	_, err := dagpkg.BuildDAG(nodes, nil)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrDependencyError)
+	assert.ErrorIs(t, err, compiler.ErrDependencyError)
 }
 
 func TestDefinesChain(t *testing.T) {
-	nodes := []Node{
-		{
-			ID:       "a",
-			Def:      map[string]any{"prefix": "app"},
-			nodeType: NodeTypeDef,
-		},
-		{
-			ID:       "b",
-			Def:      map[string]any{"fullName": "${a.prefix + '-service'}"},
-			nodeType: NodeTypeDef,
-		},
-		{
+	nodes := []graphpkg.Node{
+		node(graphpkg.Node{
+			ID:  "a",
+			Def: map[string]any{"prefix": "app"},
+		}, graphpkg.NodeTypeDef),
+		node(graphpkg.Node{
+			ID:  "b",
+			Def: map[string]any{"fullName": "${a.prefix + '-service'}"},
+		}, graphpkg.NodeTypeDef),
+		node(graphpkg.Node{
 			ID: "c",
 			Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${b.fullName}"},
 			},
-			nodeType: NodeTypeTemplate,
-		},
+		}, graphpkg.NodeTypeTemplate),
 	}
-	dag, err := BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, len(dag.Levels))
@@ -81,9 +80,9 @@ func TestDefinesChain(t *testing.T) {
 // an evaluator ready for reconcileDefinition calls.
 // ---------------------------------------------------------------------------
 
-func compileDefinesSpec(t *testing.T, spec *GraphSpec) *evaluator {
+func compileDefinesSpec(t *testing.T, spec *graphpkg.GraphSpec) *evaluator {
 	t.Helper()
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 	return &evaluator{
 		compiled: compiled,
@@ -96,20 +95,19 @@ func TestDefinesForEachReconcile(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("per-item CEL error is collected", func(t *testing.T) {
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "upstream", Template: map[string]any{
+		spec := &graphpkg.GraphSpec{Nodes: []graphpkg.Node{
+			node(graphpkg.Node{ID: "upstream", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
-			}, nodeType: NodeTypeTemplate},
-			{
-				ID:       "items",
-				ForEach:  &ForEachBinding{VarName: "w", Expr: "${['a', 'b']}"},
-				Def:      map[string]any{"val": "${upstream.data.key}"},
-				nodeType: NodeTypeDef,
-			},
+			}}, graphpkg.NodeTypeTemplate),
+			node(graphpkg.Node{
+				ID:      "items",
+				ForEach: &graphpkg.ForEachBinding{VarName: "w", Expr: "${['a', 'b']}"},
+				Def:     map[string]any{"val": "${upstream.data.key}"},
+			}, graphpkg.NodeTypeDef),
 		}}
-		compiled, err := compileGraphSpec(spec, nil)
+		compiled, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 
 		eval := &evaluator{
@@ -139,20 +137,19 @@ func TestDefinesForEachReconcile(t *testing.T) {
 	// set BEFORE the error check — dependents could observe a partial array
 	// if the coordinator's Block path was ever weakened.
 	t.Run("ForEach_RegressionScopeNotPublishedOnChildError", func(t *testing.T) {
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "upstream", Template: map[string]any{
+		spec := &graphpkg.GraphSpec{Nodes: []graphpkg.Node{
+			node(graphpkg.Node{ID: "upstream", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
-			}, nodeType: NodeTypeTemplate},
-			{
-				ID:       "items",
-				ForEach:  &ForEachBinding{VarName: "w", Expr: "${['a', 'b']}"},
-				Def:      map[string]any{"val": "${upstream.data.key}"},
-				nodeType: NodeTypeDef,
-			},
+			}}, graphpkg.NodeTypeTemplate),
+			node(graphpkg.Node{
+				ID:      "items",
+				ForEach: &graphpkg.ForEachBinding{VarName: "w", Expr: "${['a', 'b']}"},
+				Def:     map[string]any{"val": "${upstream.data.key}"},
+			}, graphpkg.NodeTypeDef),
 		}}
-		compiled, err := compileGraphSpec(spec, nil)
+		compiled, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 
 		eval := &evaluator{

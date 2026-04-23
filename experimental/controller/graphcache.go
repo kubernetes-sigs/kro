@@ -13,6 +13,9 @@ import (
 	"sync"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
 )
 
 // graphCaches manages two cache layers:
@@ -34,13 +37,13 @@ type graphCaches struct {
 	// mutate both maps and take Lock. The read path (one get per reconcile per
 	// graph) is the hot path under multi-worker controllers.
 	mu        sync.RWMutex
-	compiled  map[string]*compiledGraph // compilation key → shared compiled graph
+	compiled  map[string]*compiler.CompiledGraph // compilation key → shared compiled graph
 	instances map[string]*instanceState // namespace/revision-name → per-instance state
 }
 
 func newGraphCaches() *graphCaches {
 	return &graphCaches{
-		compiled:  make(map[string]*compiledGraph),
+		compiled:  make(map[string]*compiler.CompiledGraph),
 		instances: make(map[string]*instanceState),
 	}
 }
@@ -57,7 +60,7 @@ func (gc *graphCaches) set(key string, s *instanceState) {
 	gc.instances[key] = s
 	// Ensure the compiledGraph is also tracked.
 	if s.compiled != nil {
-		gc.compiled[s.compiled.compilationKey] = s.compiled
+		gc.compiled[s.compiled.CompilationKey] = s.compiled
 	}
 }
 
@@ -72,10 +75,10 @@ func (gc *graphCaches) remove(key string) {
 	// If this becomes hot (e.g., 10K+ forEach items tearing down), replace
 	// with a reference count or reverse index from compilationKey → instance keys.
 	if inst != nil && inst.compiled != nil {
-		hash := inst.compiled.compilationKey
+		hash := inst.compiled.CompilationKey
 		referenced := false
 		for _, other := range gc.instances {
-			if other.compiled != nil && other.compiled.compilationKey == hash {
+			if other.compiled != nil && other.compiled.CompilationKey == hash {
 				referenced = true
 				break
 			}
@@ -87,7 +90,7 @@ func (gc *graphCaches) remove(key string) {
 }
 
 // getCompiled returns a shared compiledGraph by compilation key, or nil if not cached.
-func (gc *graphCaches) getCompiled(compilationKey string) *compiledGraph {
+func (gc *graphCaches) getCompiled(compilationKey string) *compiler.CompiledGraph {
 	gc.mu.RLock()
 	defer gc.mu.RUnlock()
 	return gc.compiled[compilationKey]
@@ -116,7 +119,7 @@ func (gc *graphCaches) CacheSizes() (compiledCount, instanceCount int) {
 // next reconcile, compileRevision detects this and recompiles in-place,
 // preserving per-node mutable state (hashes, scopes, resync timers, applied
 // keys) that is valid across type-resolution recompilation.
-func (gc *graphCaches) evictUnresolved(gvr schema.GroupVersionResource) []graphKey {
+func (gc *graphCaches) evictUnresolved(gvr schema.GroupVersionResource) []watches.GraphKey {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()
 
@@ -125,7 +128,7 @@ func (gc *graphCaches) evictUnresolved(gvr schema.GroupVersionResource) []graphK
 	// pluralized kind. Use gvkToGVR for a single source of truth.
 	evictHashes := make(map[string]bool)
 	for hash, compiled := range gc.compiled {
-		for _, unresolved := range compiled.unresolvedGVKs {
+		for _, unresolved := range compiled.UnresolvedGVKs {
 			if gvkToGVR(unresolved) == gvr {
 				evictHashes[hash] = true
 				delete(gc.compiled, hash)
@@ -139,9 +142,9 @@ func (gc *graphCaches) evictUnresolved(gvr schema.GroupVersionResource) []graphK
 
 	// Nil out compiled pointers on affected instance states. The instance
 	// stays in the map — compileRevision will recompile in-place.
-	var affected []graphKey
+	var affected []watches.GraphKey
 	for key, state := range gc.instances {
-		if state.compiled != nil && evictHashes[state.compiled.compilationKey] {
+		if state.compiled != nil && evictHashes[state.compiled.CompilationKey] {
 			state.compiled = nil
 			// Instance key is "namespace/revision-name". The Graph name
 			// is the revision name minus the "-gNNNNN" suffix.
@@ -153,14 +156,14 @@ func (gc *graphCaches) evictUnresolved(gvr schema.GroupVersionResource) []graphK
 	return affected
 }
 
-// instanceKeyToGraphKey extracts a graphKey from an instance cache key.
+// instanceKeyToGraphKey extracts a watches.GraphKey from an instance cache key.
 // Instance keys are "namespace/graphname-gNNNNN". Returns false if the
 // key doesn't match the expected format.
-func instanceKeyToGraphKey(instanceKey string) (graphKey, bool) {
+func instanceKeyToGraphKey(instanceKey string) (watches.GraphKey, bool) {
 	// Split "namespace/revision-name"
 	slash := strings.Index(instanceKey, "/")
 	if slash < 0 {
-		return graphKey{}, false
+		return watches.GraphKey{}, false
 	}
 	ns := instanceKey[:slash]
 	revName := instanceKey[slash+1:]
@@ -168,14 +171,14 @@ func instanceKeyToGraphKey(instanceKey string) (graphKey, bool) {
 	// Revision name format: "graphname-gNNNNN" — find the last "-g" followed by digits.
 	lastDash := strings.LastIndex(revName, "-g")
 	if lastDash < 0 || lastDash+2 >= len(revName) {
-		return graphKey{}, false
+		return watches.GraphKey{}, false
 	}
 	// Verify the suffix after "-g" is all digits.
 	suffix := revName[lastDash+2:]
 	for _, c := range suffix {
 		if c < '0' || c > '9' {
-			return graphKey{}, false
+			return watches.GraphKey{}, false
 		}
 	}
-	return graphKey{Name: revName[:lastDash], Namespace: ns}, true
+	return watches.GraphKey{Name: revName[:lastDash], Namespace: ns}, true
 }

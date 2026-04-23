@@ -18,6 +18,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
 )
 
 func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructured.Unstructured) (ctrl.Result, error) {
@@ -77,7 +80,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			}
 			// Also extract static template keys (merged from separate loop).
 			nodeType := node.Type()
-			if nodeType == NodeTypeRef || nodeType == NodeTypeWatch {
+			if nodeType == graphpkg.NodeTypeRef || nodeType == graphpkg.NodeTypeWatch {
 				continue // read-only
 			}
 			if node.Finalizes != "" {
@@ -103,13 +106,13 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		normalizedToStatic[strings.ToLower(sk)] = sk
 	}
 	if r.Watcher != nil {
-		appliedSet := r.Watcher.watches.deriveAppliedSet(graph.GetName(), graph.GetNamespace())
+		appliedSet := r.Watcher.Watches.DeriveAppliedSet(graph.GetName(), graph.GetNamespace())
 		for key, entry := range appliedSet {
 			// Correct the key's Kind casing by matching against static keys.
 			if corrected, ok := normalizedToStatic[strings.ToLower(key)]; ok {
 				key = corrected
 			}
-			if entry.NodeType == NodeTypePatch {
+			if entry.NodeType == graphpkg.NodeTypePatch {
 				// For patch keys, encode hasStatus from revision spec scan.
 				cKey := patchKeyPrefix + key
 				if patchStatusMap[key] {
@@ -124,7 +127,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 
 	// Release watch state now that patch keys have been collected.
 	if r.Watcher != nil {
-		r.Watcher.removeGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
+		r.Watcher.RemoveGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
 	}
 
 	fieldOwner := graphFieldOwner(graph)
@@ -160,7 +163,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// active revision's DAG." Compiled BEFORE deletionOrder so the
 	// already-compiled DAG can drive ordering rather than re-parsing the
 	// live Graph spec.
-	var teardownDAG *DAG
+	var teardownDAG *dagpkg.DAG
 	var teardownEval *evaluator
 	var teardownCompileErr error
 	if len(revisions) > 0 {
@@ -382,7 +385,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{
 			compiled:    true,
-			PlanSummary: PlanSummary{HasBlocked: true},
+			PlanSummary: dagpkg.PlanSummary{HasBlocked: true},
 			nodeErrors:  nodeErrors,
 			nodeNotes:   teardownNotes, // FinalizerSkipped — informational
 		}); statusErr != nil {

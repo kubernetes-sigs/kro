@@ -9,23 +9,26 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
 )
 
 // templateNode builds a Template-classified Node from a template map. Test-only helper;
 // production code sets the classification via parseNodeList.
-func templateNode(id string, tmpl map[string]any) Node {
-	return Node{ID: id, Template: tmpl, nodeType: NodeTypeTemplate}
+func templateNode(id string, tmpl map[string]any) graph.Node {
+	return node(graph.Node{ID: id, Template: tmpl}, graph.NodeTypeTemplate)
 }
 
 // defNode builds a Definition-classified Node from a map of values.
-func defNode(id string, body map[string]any) Node {
-	return Node{ID: id, Def: body, nodeType: NodeTypeDef}
+func defNode(id string, body map[string]any) graph.Node {
+	return node(graph.Node{ID: id, Def: body}, graph.NodeTypeDef)
 }
 
 // watchNode builds a Watch-classified Node (collection) from a body.
-func watchNode(id string, body map[string]any) Node {
-	return Node{ID: id, Watch: body, nodeType: NodeTypeWatch}
+func watchNode(id string, body map[string]any) graph.Node {
+	return node(graph.Node{ID: id, Watch: body}, graph.NodeTypeWatch)
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +67,7 @@ func TestInferFieldType(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dt := inferFieldType("test.field", tt.value)
+			dt := compiler.InferFieldType("test.field", tt.value)
 			assert.Equal(t, tt.wantType, dt.CelType().String())
 		})
 	}
@@ -77,7 +80,7 @@ func TestInferObjectType(t *testing.T) {
 			"count":  int64(3),
 			"debug":  true,
 		}
-		dt := inferObjectType(krocel.TypeNamePrefix+"cfg", tmpl)
+		dt := compiler.InferObjectType(krocel.TypeNamePrefix+"cfg", tmpl)
 
 		assert.True(t, dt.IsObject())
 		assert.Equal(t, krocel.TypeNamePrefix+"cfg", dt.TypeName())
@@ -104,7 +107,7 @@ func TestInferObjectType(t *testing.T) {
 				"region": "us-west-2",
 			},
 		}
-		dt := inferObjectType(krocel.TypeNamePrefix+"naming", tmpl)
+		dt := compiler.InferObjectType(krocel.TypeNamePrefix+"naming", tmpl)
 
 		metadata, ok := dt.Fields["metadata"]
 		require.True(t, ok)
@@ -123,7 +126,7 @@ func TestInferObjectType(t *testing.T) {
 			"dynamic": "${spec.name}",
 			"mixed":   "prefix-${spec.name}",
 		}
-		dt := inferObjectType(krocel.TypeNamePrefix+"test", tmpl)
+		dt := compiler.InferObjectType(krocel.TypeNamePrefix+"test", tmpl)
 
 		literal := dt.Fields["literal"]
 		assert.Equal(t, "string", literal.Type.CelType().String())
@@ -142,7 +145,7 @@ func TestInferObjectType(t *testing.T) {
 			"empty":  []any{},
 			"nested": []any{map[string]any{"name": "x"}},
 		}
-		dt := inferObjectType(krocel.TypeNamePrefix+"test", tmpl)
+		dt := compiler.InferObjectType(krocel.TypeNamePrefix+"test", tmpl)
 
 		ports := dt.Fields["ports"]
 		assert.True(t, ports.Type.IsList())
@@ -164,59 +167,59 @@ func TestInferObjectType(t *testing.T) {
 
 func TestResolveNodeTypes(t *testing.T) {
 	t.Run("definition nodes are typed", func(t *testing.T) {
-		nodes := []Node{
-			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, nodeType: NodeTypeDef},
+		nodes := []graph.Node{
+			node(graph.Node{ID: "naming", Def: map[string]any{"prefix": "myapp"}}, graph.NodeTypeDef),
 		}
-		ts := resolveNodeTypes(nodes, nil)
+		ts := compiler.ResolveNodeTypes(nodes, nil)
 
-		assert.Len(t, ts.definitionTypes, 1)
-		assert.Contains(t, ts.definitionTypes, "naming")
-		assert.Empty(t, ts.untypedIDs)
+		assert.Len(t, ts.DefinitionTypes, 1)
+		assert.Contains(t, ts.DefinitionTypes, "naming")
+		assert.Empty(t, ts.UntypedIDs)
 	})
 
 	t.Run("resource nodes without resolver are untyped", func(t *testing.T) {
-		nodes := []Node{
-			{ID: "deploy", Template: map[string]any{
+		nodes := []graph.Node{
+			node(graph.Node{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "test"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}
-		ts := resolveNodeTypes(nodes, nil)
+		ts := compiler.ResolveNodeTypes(nodes, nil)
 
-		assert.Empty(t, ts.definitionTypes)
-		assert.Contains(t, ts.untypedIDs, "deploy")
+		assert.Empty(t, ts.DefinitionTypes)
+		assert.Contains(t, ts.UntypedIDs, "deploy")
 	})
 
 	t.Run("forEach iterator variables are untyped", func(t *testing.T) {
-		nodes := []Node{
-			{
-				ID:       "items",
-				ForEach:  &ForEachBinding{VarName: "item", Expr: "${spec.items}"},
-				Def:      map[string]any{"name": "${item}"},
-				nodeType: NodeTypeDef},
+		nodes := []graph.Node{
+			node(graph.Node{
+				ID:      "items",
+				ForEach: &graph.ForEachBinding{VarName: "item", Expr: "${spec.items}"},
+				Def:     map[string]any{"name": "${item}"},
+			}, graph.NodeTypeDef),
 		}
-		ts := resolveNodeTypes(nodes, nil)
+		ts := compiler.ResolveNodeTypes(nodes, nil)
 
-		assert.Contains(t, ts.definitionTypes, "items")
-		assert.True(t, ts.forEachDefinitions["items"])
-		assert.Contains(t, ts.untypedIDs, "item")
+		assert.Contains(t, ts.DefinitionTypes, "items")
+		assert.True(t, ts.ForEachDefinitions["items"])
+		assert.Contains(t, ts.UntypedIDs, "item")
 	})
 
 	t.Run("mixed definitions and resources", func(t *testing.T) {
-		nodes := []Node{
-			{ID: "naming", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
-			{ID: "deploy", Template: map[string]any{
+		nodes := []graph.Node{
+			node(graph.Node{ID: "naming", Def: map[string]any{"prefix": "app"}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.prefix}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}
-		ts := resolveNodeTypes(nodes, nil)
+		ts := compiler.ResolveNodeTypes(nodes, nil)
 
-		assert.Len(t, ts.definitionTypes, 1)
-		assert.Contains(t, ts.definitionTypes, "naming")
-		assert.Contains(t, ts.untypedIDs, "deploy")
+		assert.Len(t, ts.DefinitionTypes, 1)
+		assert.Contains(t, ts.DefinitionTypes, "naming")
+		assert.Contains(t, ts.UntypedIDs, "deploy")
 	})
 }
 
@@ -226,64 +229,64 @@ func TestResolveNodeTypes(t *testing.T) {
 
 func TestDefinitionFieldValidation(t *testing.T) {
 	t.Run("valid field access compiles", func(t *testing.T) {
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, nodeType: NodeTypeDef},
-			{ID: "deploy", Template: map[string]any{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "naming", Def: map[string]any{"prefix": "myapp"}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.prefix + '-deploy'}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 	})
 
 	t.Run("wrong field on definition fails compilation", func(t *testing.T) {
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "naming", Def: map[string]any{"prefix": "myapp"}, nodeType: NodeTypeDef},
-			{ID: "deploy", Template: map[string]any{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "naming", Def: map[string]any{"prefix": "myapp"}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${naming.typo}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "naming.typo")
 	})
 
 	t.Run("nested field access compiles", func(t *testing.T) {
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "cfg", Def: map[string]any{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "cfg", Def: map[string]any{
 				"metadata": map[string]any{
 					"env":    "prod",
 					"region": "us-west-2",
 				},
-			}, nodeType: NodeTypeDef},
-			{ID: "deploy", Template: map[string]any{
+			}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${cfg.metadata.env + '-deploy'}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 	})
 
 	t.Run("wrong nested field fails compilation", func(t *testing.T) {
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "cfg", Def: map[string]any{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "cfg", Def: map[string]any{
 				"metadata": map[string]any{
 					"env": "prod",
 				},
-			}, nodeType: NodeTypeDef},
-			{ID: "deploy", Template: map[string]any{
+			}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "${cfg.metadata.typo}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "typo")
 	})
@@ -291,46 +294,46 @@ func TestDefinitionFieldValidation(t *testing.T) {
 	t.Run("dyn expression fields allow any access", func(t *testing.T) {
 		// A definition with an expression-valued field should be dyn,
 		// allowing downstream expressions to access any sub-field.
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "upstream", Template: map[string]any{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "upstream", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "cfg"},
-			}, nodeType: NodeTypeTemplate},
-			{ID: "derived", Def: map[string]any{
+			}}, graph.NodeTypeTemplate),
+			node(graph.Node{ID: "derived", Def: map[string]any{
 				"data": "${upstream.data}",
-			}, nodeType: NodeTypeDef},
-			{ID: "consumer", Template: map[string]any{
+			}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "consumer", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "${derived.data.someKey}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 	})
 
 	t.Run("cross-definition validation", func(t *testing.T) {
 		// Definition A → Definition B → resource node.
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "a", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
-			{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}, nodeType: NodeTypeDef},
-			{ID: "svc", Template: map[string]any{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "a", Def: map[string]any{"prefix": "app"}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "svc", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${b.full}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 	})
 
 	t.Run("cross-definition wrong field fails", func(t *testing.T) {
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "a", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
-			{ID: "b", Def: map[string]any{"full": "${a.typo}"}, nodeType: NodeTypeDef},
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "a", Def: map[string]any{"prefix": "app"}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "b", Def: map[string]any{"full": "${a.typo}"}}, graph.NodeTypeDef),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "a.typo")
 	})
@@ -339,17 +342,17 @@ func TestDefinitionFieldValidation(t *testing.T) {
 		// b.full is ${a.prefix + '-svc'} which returns string.
 		// After refinement, b.full is typed as string, not dyn.
 		// Verify: .startsWith() is a string method, not available on dyn.
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "a", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
-			{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}, nodeType: NodeTypeDef},
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "a", Def: map[string]any{"prefix": "app"}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}}, graph.NodeTypeDef),
 		}}
-		compiled, err := compileGraphSpec(spec, nil)
+		compiled, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 
 		// The refined environment should type b.full as string.
-		parsed, issues := compiled.env.Parse("b.full.startsWith('app')")
+		parsed, issues := compiled.Env().Parse("b.full.startsWith('app')")
 		require.Nil(t, issues.Err())
-		ast, issues := compiled.env.Check(parsed)
+		ast, issues := compiled.Env().Check(parsed)
 		require.Nil(t, issues.Err(), "b.full should be string after refinement, supporting .startsWith()")
 		assert.Equal(t, "bool", ast.OutputType().String())
 	})
@@ -357,62 +360,62 @@ func TestDefinitionFieldValidation(t *testing.T) {
 	t.Run("type refinement catches field access error on narrowed string", func(t *testing.T) {
 		// b.full is narrowed to string. Accessing .nonExistentField is a
 		// type error on string that was invisible against dyn.
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "a", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
-			{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}, nodeType: NodeTypeDef},
-			{ID: "svc", Template: map[string]any{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "a", Def: map[string]any{"prefix": "app"}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "svc", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${b.full.nonExistentField}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.Error(t, err, "b.full is string after narrowing; field access should fail")
-		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.ErrorIs(t, err, compiler.ErrInvalidExpression)
 		assert.Contains(t, err.Error(), "type refinement")
 	})
 
 	t.Run("type refinement allows valid narrowed access", func(t *testing.T) {
 		// b.full is narrowed to string. Using string operations should work.
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "a", Def: map[string]any{"prefix": "app"}, nodeType: NodeTypeDef},
-			{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}, nodeType: NodeTypeDef},
-			{ID: "svc", Template: map[string]any{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "a", Def: map[string]any{"prefix": "app"}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "b", Def: map[string]any{"full": "${a.prefix + '-svc'}"}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "svc", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Service",
 				"metadata":   map[string]any{"name": "${b.full.upperAscii()}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err, "b.full is string after narrowing; string methods should work")
 	})
 
 	t.Run("readyWhen can access definition fields", func(t *testing.T) {
-		spec := &GraphSpec{Nodes: []Node{
-			{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{
 				ID:        "cfg",
 				Def:       map[string]any{"count": "3"},
 				ReadyWhen: []string{"${cfg.count == '3'}"},
-				nodeType:  NodeTypeDef},
+			}, graph.NodeTypeDef),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 	})
 
 	t.Run("forEach definition compiles as list type", func(t *testing.T) {
-		spec := &GraphSpec{Nodes: []Node{
-			{ID: "upstream", Template: map[string]any{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "upstream", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"data":       map[string]any{"items": "a,b,c"},
-			}, nodeType: NodeTypeTemplate},
-			{
-				ID:       "items",
-				ForEach:  &ForEachBinding{VarName: "item", Expr: "${upstream.data.items}"},
-				Def:      map[string]any{"name": "${item}", "port": int64(80)},
-				nodeType: NodeTypeDef},
+			}}, graph.NodeTypeTemplate),
+			node(graph.Node{
+				ID:      "items",
+				ForEach: &graph.ForEachBinding{VarName: "item", Expr: "${upstream.data.items}"},
+				Def:     map[string]any{"name": "${item}", "port": int64(80)},
+			}, graph.NodeTypeDef),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 	})
 }
@@ -424,34 +427,32 @@ func TestDefinitionFieldValidation(t *testing.T) {
 func TestForEachReturnTypeValidation(t *testing.T) {
 	t.Run("list expression accepted", func(t *testing.T) {
 		// A definition node producing a list, referenced by forEach.
-		spec := &GraphSpec{Nodes: []Node{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
 			defNode("data", map[string]any{"items": []any{"a", "b"}}),
-			{
-				ID:       "worker",
-				ForEach:  &ForEachBinding{VarName: "item", Expr: "${data.items}"},
-				Def:      map[string]any{"name": "${item}"},
-				nodeType: NodeTypeDef,
-			},
+			node(graph.Node{
+				ID:      "worker",
+				ForEach: &graph.ForEachBinding{VarName: "item", Expr: "${data.items}"},
+				Def:     map[string]any{"name": "${item}"},
+			}, graph.NodeTypeDef),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 	})
 
 	t.Run("string expression rejected", func(t *testing.T) {
 		// A definition node producing a string — forEach over a string
 		// is always wrong.
-		spec := &GraphSpec{Nodes: []Node{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
 			defNode("data", map[string]any{"name": "hello"}),
-			{
-				ID:       "worker",
-				ForEach:  &ForEachBinding{VarName: "item", Expr: "${data.name}"},
-				Def:      map[string]any{"v": "${item}"},
-				nodeType: NodeTypeDef,
-			},
+			node(graph.Node{
+				ID:      "worker",
+				ForEach: &graph.ForEachBinding{VarName: "item", Expr: "${data.name}"},
+				Def:     map[string]any{"v": "${item}"},
+			}, graph.NodeTypeDef),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.ErrorIs(t, err, compiler.ErrInvalidExpression)
 		assert.Contains(t, err.Error(), "must return a list")
 		assert.Contains(t, err.Error(), "worker")
 	})
@@ -459,93 +460,88 @@ func TestForEachReturnTypeValidation(t *testing.T) {
 	t.Run("dyn expression accepted", func(t *testing.T) {
 		// An unresolved template node — typed as dyn. The compiler
 		// can't prove it's wrong, so it must accept it.
-		spec := &GraphSpec{Nodes: []Node{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
 			templateNode("source", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 			}),
-			{
-				ID:       "worker",
-				ForEach:  &ForEachBinding{VarName: "item", Expr: "${source}"},
-				Def:      map[string]any{"v": "${item}"},
-				nodeType: NodeTypeDef,
-			},
+			node(graph.Node{
+				ID:      "worker",
+				ForEach: &graph.ForEachBinding{VarName: "item", Expr: "${source}"},
+				Def:     map[string]any{"v": "${item}"},
+			}, graph.NodeTypeDef),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 	})
 
 	t.Run("interpolated expression rejected", func(t *testing.T) {
 		// A forEach expression that's an interpolated string, not a
 		// standalone ${...}. Interpolation always produces a string.
-		spec := &GraphSpec{Nodes: []Node{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
 			defNode("data", map[string]any{"items": []any{"a", "b"}}),
-			{
-				ID:       "worker",
-				ForEach:  &ForEachBinding{VarName: "item", Expr: "prefix-${data.items}"},
-				Def:      map[string]any{"v": "${item}"},
-				nodeType: NodeTypeDef,
-			},
+			node(graph.Node{
+				ID:      "worker",
+				ForEach: &graph.ForEachBinding{VarName: "item", Expr: "prefix-${data.items}"},
+				Def:     map[string]any{"v": "${item}"},
+			}, graph.NodeTypeDef),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.ErrorIs(t, err, compiler.ErrInvalidExpression)
 		assert.Contains(t, err.Error(), "standalone")
 	})
 
 	t.Run("literal string rejected", func(t *testing.T) {
 		// A forEach expression with no ${...} at all.
-		spec := &GraphSpec{Nodes: []Node{
-			{
-				ID:       "worker",
-				ForEach:  &ForEachBinding{VarName: "item", Expr: "just a string"},
-				Def:      map[string]any{"v": "${item}"},
-				nodeType: NodeTypeDef,
-			},
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{
+				ID:      "worker",
+				ForEach: &graph.ForEachBinding{VarName: "item", Expr: "just a string"},
+				Def:     map[string]any{"v": "${item}"},
+			}, graph.NodeTypeDef),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.ErrorIs(t, err, compiler.ErrInvalidExpression)
 		assert.Contains(t, err.Error(), "must contain")
 	})
 
 	t.Run("deferred expression skipped", func(t *testing.T) {
 		// A $${...} forEach is deferred to the child graph. The parent
 		// compiler must not reject it.
-		spec := &GraphSpec{Nodes: []Node{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
 			defNode("data", map[string]any{"items": []any{"a", "b"}}),
-			{
-				ID:       "worker",
-				ForEach:  &ForEachBinding{VarName: "item", Expr: "$${data.items}"},
-				Def:      map[string]any{"v": "literal"},
-				nodeType: NodeTypeDef,
-			},
+			node(graph.Node{
+				ID:      "worker",
+				ForEach: &graph.ForEachBinding{VarName: "item", Expr: "$${data.items}"},
+				Def:     map[string]any{"v": "literal"},
+			}, graph.NodeTypeDef),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.NoError(t, err)
 	})
 
 	t.Run("map expression rejected", func(t *testing.T) {
 		// A definition producing a map — forEach over a map is wrong.
-		spec := &GraphSpec{Nodes: []Node{
+		spec := &graph.GraphSpec{Nodes: []graph.Node{
 			defNode("data", map[string]any{"kv": map[string]any{"a": "1"}}),
-			{
-				ID:       "worker",
-				ForEach:  &ForEachBinding{VarName: "item", Expr: "${data.kv}"},
-				Def:      map[string]any{"v": "${item}"},
-				nodeType: NodeTypeDef,
-			},
+			node(graph.Node{
+				ID:      "worker",
+				ForEach: &graph.ForEachBinding{VarName: "item", Expr: "${data.kv}"},
+				Def:     map[string]any{"v": "${item}"},
+			}, graph.NodeTypeDef),
 		}}
-		_, err := compileGraphSpec(spec, nil)
+		_, err := compiler.CompileGraphSpec(spec, nil)
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.ErrorIs(t, err, compiler.ErrInvalidExpression)
 		assert.Contains(t, err.Error(), "must return a list")
 	})
 }
 
 func TestExtractLiteralGVK(t *testing.T) {
 	t.Run("literal GVK", func(t *testing.T) {
-		gvk := extractLiteralGVK(map[string]any{
+		gvk := compiler.ExtractLiteralGVK(map[string]any{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
 		})
@@ -556,7 +552,7 @@ func TestExtractLiteralGVK(t *testing.T) {
 	})
 
 	t.Run("expression apiVersion returns nil", func(t *testing.T) {
-		gvk := extractLiteralGVK(map[string]any{
+		gvk := compiler.ExtractLiteralGVK(map[string]any{
 			"apiVersion": "${spec.apiVersion}",
 			"kind":       "Deployment",
 		})
@@ -564,19 +560,19 @@ func TestExtractLiteralGVK(t *testing.T) {
 	})
 
 	t.Run("missing kind returns nil", func(t *testing.T) {
-		gvk := extractLiteralGVK(map[string]any{
+		gvk := compiler.ExtractLiteralGVK(map[string]any{
 			"apiVersion": "v1",
 		})
 		assert.Nil(t, gvk)
 	})
 
 	t.Run("nil template returns nil", func(t *testing.T) {
-		gvk := extractLiteralGVK(nil)
+		gvk := compiler.ExtractLiteralGVK(nil)
 		assert.Nil(t, gvk)
 	})
 
 	t.Run("core type", func(t *testing.T) {
-		gvk := extractLiteralGVK(map[string]any{
+		gvk := compiler.ExtractLiteralGVK(map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
 		})
@@ -608,7 +604,7 @@ func TestInferStringType(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			dt := inferStringType(tt.input)
+			dt := compiler.InferStringType(tt.input)
 			assert.Equal(t, tt.want, dt.CelType().String())
 		})
 	}
@@ -621,17 +617,17 @@ func TestInferStringType(t *testing.T) {
 func TestPathBasedNamingPreventsCollisions(t *testing.T) {
 	// Two definitions with different nested structures should produce
 	// distinct types that don't shadow each other.
-	ts := resolveNodeTypes([]Node{
-		{ID: "alpha", Def: map[string]any{
+	ts := compiler.ResolveNodeTypes([]graph.Node{
+		node(graph.Node{ID: "alpha", Def: map[string]any{
 			"nested": map[string]any{"x": "hello"},
-		}, nodeType: NodeTypeDef},
-		{ID: "beta", Def: map[string]any{
+		}}, graph.NodeTypeDef),
+		node(graph.Node{ID: "beta", Def: map[string]any{
 			"nested": map[string]any{"y": int64(42)},
-		}, nodeType: NodeTypeDef},
+		}}, graph.NodeTypeDef),
 	}, nil)
 
-	alphaDT := ts.definitionTypes["alpha"]
-	betaDT := ts.definitionTypes["beta"]
+	alphaDT := ts.DefinitionTypes["alpha"]
+	betaDT := ts.DefinitionTypes["beta"]
 
 	// Root types have distinct names.
 	assert.NotEqual(t, alphaDT.TypeName(), betaDT.TypeName())
@@ -661,17 +657,17 @@ func TestDefinitionTypingRuntimeCompat(t *testing.T) {
 	r := &GraphReconciler{}
 	ctx := t.Context()
 
-	spec := &GraphSpec{Nodes: []Node{
-		{ID: "cfg", Def: map[string]any{
+	spec := &graph.GraphSpec{Nodes: []graph.Node{
+		node(graph.Node{ID: "cfg", Def: map[string]any{
 			"region": "us-west-2",
 			"count":  int64(3),
-		}, nodeType: NodeTypeDef},
-		{ID: "derived", Def: map[string]any{
+		}}, graph.NodeTypeDef),
+		node(graph.Node{ID: "derived", Def: map[string]any{
 			"name": "${cfg.region + '-app'}",
-		}, nodeType: NodeTypeDef},
+		}}, graph.NodeTypeDef),
 	}}
 
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	eval := &evaluator{compiled: compiled, scope: map[string]any{}}
@@ -742,62 +738,62 @@ func TestSchemaResolutionIntegration(t *testing.T) {
 	}
 
 	t.Run("resolved schema enables field validation", func(t *testing.T) {
-		nodes := []Node{
-			{ID: "cm", Template: map[string]any{
+		nodes := []graph.Node{
+			node(graph.Node{ID: "cm", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "test"},
 				"data":       map[string]any{"key": "value"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}
-		ts := resolveNodeTypes(nodes, resolver)
+		ts := compiler.ResolveNodeTypes(nodes, resolver)
 
 		// The ConfigMap node should be resolved via schema.
-		assert.Contains(t, ts.resourceSchemas, "cm")
-		assert.Empty(t, ts.untypedIDs)
+		assert.Contains(t, ts.ResourceSchemas, "cm")
+		assert.Empty(t, ts.UntypedIDs)
 	})
 
 	t.Run("mixed schema and definition types compile together", func(t *testing.T) {
-		graphSpec := &GraphSpec{Nodes: []Node{
-			{ID: "cm", Template: map[string]any{
+		graphSpec := &graph.GraphSpec{Nodes: []graph.Node{
+			node(graph.Node{ID: "cm", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "test"},
 				"data":       map[string]any{"key": "value"},
-			}, nodeType: NodeTypeTemplate},
-			{ID: "naming", Def: map[string]any{
+			}}, graph.NodeTypeTemplate),
+			node(graph.Node{ID: "naming", Def: map[string]any{
 				"prefix": "myapp",
-			}, nodeType: NodeTypeDef},
-			{ID: "consumer", Template: map[string]any{
+			}}, graph.NodeTypeDef),
+			node(graph.Node{ID: "consumer", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "${naming.prefix + '-cfg'}"},
 				"data":       map[string]any{"ref": "${cm.data}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		typeInfo := resolveNodeTypes(graphSpec.Nodes, resolver)
-		_, err := compileGraphSpec(graphSpec, typeInfo)
+		typeInfo := compiler.ResolveNodeTypes(graphSpec.Nodes, resolver)
+		_, err := compiler.CompileGraphSpec(graphSpec, typeInfo)
 		require.NoError(t, err)
 	})
 
 	t.Run("unresolved CRD falls back to dyn and tracks GVK", func(t *testing.T) {
-		nodes := []Node{
-			{ID: "custom", Template: map[string]any{
+		nodes := []graph.Node{
+			node(graph.Node{ID: "custom", Template: map[string]any{
 				"apiVersion": "custom.example.com/v1",
 				"kind":       "Widget",
 				"metadata":   map[string]any{"name": "test"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}
-		ts := resolveNodeTypes(nodes, resolver)
+		ts := compiler.ResolveNodeTypes(nodes, resolver)
 
 		// Widget is not in the stub resolver — should fall back to dyn.
-		assert.Empty(t, ts.resourceSchemas)
-		assert.Contains(t, ts.untypedIDs, "custom")
+		assert.Empty(t, ts.ResourceSchemas)
+		assert.Contains(t, ts.UntypedIDs, "custom")
 
 		// The unresolved GVK should be tracked for CRD watch.
-		require.Len(t, ts.unresolvedGVKs, 1)
-		assert.Equal(t, "Widget", ts.unresolvedGVKs[0].Kind)
-		assert.Equal(t, "custom.example.com", ts.unresolvedGVKs[0].Group)
+		require.Len(t, ts.UnresolvedGVKs, 1)
+		assert.Equal(t, "Widget", ts.UnresolvedGVKs[0].Kind)
+		assert.Equal(t, "custom.example.com", ts.UnresolvedGVKs[0].Group)
 	})
 }
 
@@ -810,16 +806,16 @@ func TestEvictUnresolved(t *testing.T) {
 		caches := newGraphCaches()
 
 		// Create a compiled graph with unresolved GVKs.
-		unresolvedCompiled := &compiledGraph{
-			compilationKey: "hash-unresolved",
-			unresolvedGVKs: []schema.GroupVersionKind{{Group: "example.com", Version: "v1", Kind: "Foo"}},
+		unresolvedCompiled := &compiler.CompiledGraph{
+			CompilationKey: "hash-unresolved",
+			UnresolvedGVKs: []schema.GroupVersionKind{{Group: "example.com", Version: "v1", Kind: "Foo"}},
 		}
 		state := &instanceState{compiled: unresolvedCompiled}
 		caches.set("default/my-graph-g00001", state)
 
 		// Create a compiled graph without unresolved GVKs.
-		resolvedCompiled := &compiledGraph{
-			compilationKey: "hash-resolved",
+		resolvedCompiled := &compiler.CompiledGraph{
+			CompilationKey: "hash-resolved",
 		}
 		resolvedState := &instanceState{compiled: resolvedCompiled}
 		caches.set("default/other-graph-g00001", resolvedState)
@@ -859,7 +855,7 @@ func TestEvictUnresolved(t *testing.T) {
 	t.Run("no-op when no unresolved compilations", func(t *testing.T) {
 		caches := newGraphCaches()
 
-		resolvedCompiled := &compiledGraph{compilationKey: "hash-resolved"}
+		resolvedCompiled := &compiler.CompiledGraph{CompilationKey: "hash-resolved"}
 		caches.set("default/graph-g00001", &instanceState{compiled: resolvedCompiled})
 
 		// No unresolved compilations → no-op regardless of GVR.
@@ -880,17 +876,17 @@ func TestEvictUnresolved(t *testing.T) {
 	t.Run("RegressionGVRFilter_onlyEvictsMatchingGVR", func(t *testing.T) {
 		caches := newGraphCaches()
 
-		fooCompiled := &compiledGraph{
-			compilationKey: "hash-foo",
-			unresolvedGVKs: []schema.GroupVersionKind{
+		fooCompiled := &compiler.CompiledGraph{
+			CompilationKey: "hash-foo",
+			UnresolvedGVKs: []schema.GroupVersionKind{
 				{Group: "example.com", Version: "v1", Kind: "Foo"},
 			},
 		}
 		caches.set("default/foo-graph-g00001", &instanceState{compiled: fooCompiled})
 
-		barCompiled := &compiledGraph{
-			compilationKey: "hash-bar",
-			unresolvedGVKs: []schema.GroupVersionKind{
+		barCompiled := &compiler.CompiledGraph{
+			CompilationKey: "hash-bar",
+			UnresolvedGVKs: []schema.GroupVersionKind{
 				{Group: "example.com", Version: "v1", Kind: "Bar"},
 			},
 		}
@@ -948,28 +944,28 @@ func TestRecompilationOnSchemaChange(t *testing.T) {
 
 	emptyResolver := &stubResolver{schemas: map[schema.GroupVersionKind]*spec.Schema{}}
 
-	graphSpec := &GraphSpec{Nodes: []Node{
-		{ID: "widget", Template: map[string]any{
+	graphSpec := &graph.GraphSpec{Nodes: []graph.Node{
+		node(graph.Node{ID: "widget", Template: map[string]any{
 			"apiVersion": "example.com/v1",
 			"kind":       "Widget",
 			"metadata":   map[string]any{"name": "test"},
-		}, nodeType: NodeTypeTemplate},
+		}}, graph.NodeTypeTemplate),
 		// Consumer is a definition — no GVK to resolve, so the only
 		// unresolved GVK is Widget.
-		{ID: "consumer", Def: map[string]any{
+		node(graph.Node{ID: "consumer", Def: map[string]any{
 			"name": "${widget.status.typo}",
-		}, nodeType: NodeTypeDef},
+		}}, graph.NodeTypeDef),
 	}}
 
 	// Phase 1: compile with empty resolver — Widget falls back to dyn.
 	// "${widget.status.typo}" compiles fine because widget is dyn.
-	typeInfo := resolveNodeTypes(graphSpec.Nodes, emptyResolver)
-	require.Len(t, typeInfo.unresolvedGVKs, 1)
-	assert.Equal(t, widgetGVK, typeInfo.unresolvedGVKs[0])
+	typeInfo := compiler.ResolveNodeTypes(graphSpec.Nodes, emptyResolver)
+	require.Len(t, typeInfo.UnresolvedGVKs, 1)
+	assert.Equal(t, widgetGVK, typeInfo.UnresolvedGVKs[0])
 
-	compiled, err := compileGraphSpec(graphSpec, typeInfo)
+	compiled, err := compiler.CompileGraphSpec(graphSpec, typeInfo)
 	require.NoError(t, err, "should compile with dyn — no type checking on widget")
-	assert.Len(t, compiled.unresolvedGVKs, 1)
+	assert.Len(t, compiled.UnresolvedGVKs, 1)
 
 	// Phase 2: CRD is installed — Widget schema now available.
 	widgetSchema := &spec.Schema{
@@ -994,11 +990,11 @@ func TestRecompilationOnSchemaChange(t *testing.T) {
 
 	// Phase 3: recompile with the real schema — "widget.status.typo" should
 	// now fail because Widget's status only has "ready", not "typo".
-	newTypeInfo := resolveNodeTypes(graphSpec.Nodes, fullResolver)
-	assert.Empty(t, newTypeInfo.unresolvedGVKs, "Widget should now be resolved")
-	assert.Contains(t, newTypeInfo.resourceSchemas, "widget")
+	newTypeInfo := compiler.ResolveNodeTypes(graphSpec.Nodes, fullResolver)
+	assert.Empty(t, newTypeInfo.UnresolvedGVKs, "Widget should now be resolved")
+	assert.Contains(t, newTypeInfo.ResourceSchemas, "widget")
 
-	_, err = compileGraphSpec(graphSpec, newTypeInfo)
+	_, err = compiler.CompileGraphSpec(graphSpec, newTypeInfo)
 	require.Error(t, err, "should fail — 'typo' is not a field on Widget.status")
 	assert.Contains(t, err.Error(), "typo")
 }
@@ -1034,34 +1030,34 @@ func TestExprFieldCompat(t *testing.T) {
 	}}
 
 	t.Run("string expression into string field accepted", func(t *testing.T) {
-		graphSpec := &GraphSpec{Nodes: []Node{
+		graphSpec := &graph.GraphSpec{Nodes: []graph.Node{
 			defNode("data", map[string]any{"appName": "myapp"}),
-			{ID: "deploy", Template: map[string]any{
+			node(graph.Node{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "test"},
 				"spec":       map[string]any{"name": "${data.appName}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		ts := resolveNodeTypes(graphSpec.Nodes, resolver)
-		_, err := compileGraphSpec(graphSpec, ts)
+		ts := compiler.ResolveNodeTypes(graphSpec.Nodes, resolver)
+		_, err := compiler.CompileGraphSpec(graphSpec, ts)
 		require.NoError(t, err)
 	})
 
 	t.Run("string expression into integer field rejected", func(t *testing.T) {
-		graphSpec := &GraphSpec{Nodes: []Node{
+		graphSpec := &graph.GraphSpec{Nodes: []graph.Node{
 			defNode("data", map[string]any{"count": "three"}),
-			{ID: "deploy", Template: map[string]any{
+			node(graph.Node{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "test"},
 				"spec":       map[string]any{"replicas": "${data.count}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		ts := resolveNodeTypes(graphSpec.Nodes, resolver)
-		_, err := compileGraphSpec(graphSpec, ts)
+		ts := compiler.ResolveNodeTypes(graphSpec.Nodes, resolver)
+		_, err := compiler.CompileGraphSpec(graphSpec, ts)
 		require.Error(t, err, "string expression into integer field should fail")
-		assert.ErrorIs(t, err, ErrInvalidExpression)
+		assert.ErrorIs(t, err, compiler.ErrInvalidExpression)
 		assert.Contains(t, err.Error(), "replicas")
 		assert.Contains(t, err.Error(), "string")
 		assert.Contains(t, err.Error(), "integer")
@@ -1069,20 +1065,20 @@ func TestExprFieldCompat(t *testing.T) {
 
 	t.Run("dyn expression into integer field accepted permissively", func(t *testing.T) {
 		// When the expression type is dyn, we can't prove it wrong.
-		graphSpec := &GraphSpec{Nodes: []Node{
+		graphSpec := &graph.GraphSpec{Nodes: []graph.Node{
 			templateNode("source", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 			}),
-			{ID: "deploy", Template: map[string]any{
+			node(graph.Node{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata":   map[string]any{"name": "test"},
 				"spec":       map[string]any{"replicas": "${source.spec.replicas}"},
-			}, nodeType: NodeTypeTemplate},
+			}}, graph.NodeTypeTemplate),
 		}}
-		ts := resolveNodeTypes(graphSpec.Nodes, resolver)
-		_, err := compileGraphSpec(graphSpec, ts)
+		ts := compiler.ResolveNodeTypes(graphSpec.Nodes, resolver)
+		_, err := compiler.CompileGraphSpec(graphSpec, ts)
 		require.NoError(t, err, "dyn expression should be accepted permissively")
 	})
 }

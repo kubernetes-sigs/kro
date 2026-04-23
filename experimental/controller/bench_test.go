@@ -3,6 +3,10 @@ package graphcontroller
 import (
 	"fmt"
 	"testing"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
 )
 
 // ---------------------------------------------------------------------------
@@ -28,7 +32,7 @@ func TestCompiledGraphCacheLifecycle(t *testing.T) {
 	compilationKey := spec.CompilationKey()
 
 	// --- Phase 1: Two instances with identical specs share one compiledGraph ---
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +51,7 @@ func TestCompiledGraphCacheLifecycle(t *testing.T) {
 
 	// --- Phase 2: Different spec produces a separate compiledGraph ---
 	differentSpec := buildBenchSpec(10)
-	differentCompiled, err := compileGraphSpec(differentSpec, nil)
+	differentCompiled, err := compiler.CompileGraphSpec(differentSpec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +84,7 @@ func TestCompiledGraphCacheLifecycle(t *testing.T) {
 // This catches bugs where newInstanceState accidentally shares maps.
 func TestInstanceStateIsolation(t *testing.T) {
 	spec := buildBenchSpec(5)
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +95,7 @@ func TestInstanceStateIsolation(t *testing.T) {
 	// Mutate state1's mutable fields.
 	state1.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
 	state1.previousEvalHashes["node0"] = "hash-a"
-	state1.previousPlanStates["node0"] = NodeReady
+	state1.previousPlanStates["node0"] = dagpkg.NodeReady
 	state1.forEachItems["node0/item"] = []any{"a", "b"}
 
 	// state2 should be unaffected.
@@ -136,7 +140,7 @@ func BenchmarkCompileGraph(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				_, err := compileGraphSpec(spec, nil)
+				_, err := compiler.CompileGraphSpec(spec, nil)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -154,7 +158,7 @@ func BenchmarkBuildDAG(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				_, err := BuildDAG(nodes, nil)
+				_, err := dagpkg.BuildDAG(nodes, nil)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -187,7 +191,7 @@ func BenchmarkTemplateEvaluation(b *testing.B) {
 	for _, exprCount := range []int{1, 5, 10, 20} {
 		b.Run(fmt.Sprintf("exprs=%d", exprCount), func(b *testing.B) {
 			spec := buildBenchSpecWithExprs(exprCount)
-			compiled, err := compileGraphSpec(spec, nil)
+			compiled, err := compiler.CompileGraphSpec(spec, nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -262,14 +266,14 @@ func BenchmarkNormalizeTypes(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = normalizeTypes(obj)
+		_ = graph.NormalizeTypes(obj)
 	}
 }
 
 // BenchmarkExtractReferencedPaths measures field-path extraction from
 // pre-extracted CEL AST paths. This runs once per node during DAG construction.
 func BenchmarkExtractReferencedPaths(b *testing.B) {
-	node := Node{
+	node := graph.Node{
 		ID: "service",
 		Template: map[string]any{
 			"apiVersion": "v1",
@@ -293,7 +297,7 @@ func BenchmarkExtractReferencedPaths(b *testing.B) {
 	}
 
 	// Simulate pre-extracted paths (as would come from compileGraphSpec).
-	exprPaths := map[string]map[string][]FieldPath{
+	exprPaths := map[string]map[string][]graph.FieldPath{
 		"deploy.metadata.name":             {"deploy": {{"metadata", "name"}}},
 		"deploy.spec.selector.matchLabels": {"deploy": {{"spec", "selector", "matchLabels"}}},
 		"config.data.port":                 {"config": {{"data", "port"}}},
@@ -304,7 +308,7 @@ func BenchmarkExtractReferencedPaths(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _, _, _ = extractReferencedPathsFromNode(node, exprPaths)
+		_, _, _, _ = graph.ExtractReferencedPathsFromNode(node, exprPaths)
 	}
 }
 
@@ -315,11 +319,11 @@ func BenchmarkHashNodeInputs(b *testing.B) {
 	for _, depCount := range []int{1, 3, 5, 10} {
 		b.Run(fmt.Sprintf("deps=%d", depCount), func(b *testing.B) {
 			// Build a node with depCount dependencies, each referencing data.key1 and metadata.name.
-			depPaths := make(map[string][]FieldPath, depCount)
+			depPaths := make(map[string][]graph.FieldPath, depCount)
 			scope := make(map[string]any, depCount)
 			for i := 0; i < depCount; i++ {
 				depID := fmt.Sprintf("dep%d", i)
-				depPaths[depID] = []FieldPath{{"data", "key1"}, {"metadata", "name"}}
+				depPaths[depID] = []graph.FieldPath{{"data", "key1"}, {"metadata", "name"}}
 				scope[depID] = map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
@@ -336,7 +340,7 @@ func BenchmarkHashNodeInputs(b *testing.B) {
 					},
 				}
 			}
-			node := &Node{ID: "target", DepPaths: depPaths}
+			node := &graph.Node{ID: "target", DepPaths: depPaths}
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
@@ -353,17 +357,17 @@ func BenchmarkHashNodeInputs(b *testing.B) {
 // Benchmark data builders
 // ---------------------------------------------------------------------------
 
-// buildBenchSpec creates a GraphSpec with N nodes in a linear chain.
-// Node 0 is a standalone ConfigMap; nodes 1..N-1 each reference the previous.
-func buildBenchSpec(n int) *GraphSpec {
+// buildBenchSpec creates a graph.GraphSpec with N nodes in a linear chain.
+// graph.Node 0 is a standalone ConfigMap; nodes 1..N-1 each reference the previous.
+func buildBenchSpec(n int) *graph.GraphSpec {
 	nodes := buildBenchNodes(n)
-	return &GraphSpec{Nodes: nodes}
+	return &graph.GraphSpec{Nodes: nodes}
 }
 
 // buildBenchNodes creates N nodes forming a linear dependency chain.
-func buildBenchNodes(n int) []Node {
-	nodes := make([]Node, n)
-	nodes[0] = Node{
+func buildBenchNodes(n int) []graph.Node {
+	nodes := make([]graph.Node, n)
+	nodes[0] = graph.Node{
 		ID: "node0",
 		Template: map[string]any{
 			"apiVersion": "v1",
@@ -378,7 +382,7 @@ func buildBenchNodes(n int) []Node {
 	}
 	for i := 1; i < n; i++ {
 		prev := fmt.Sprintf("node%d", i-1)
-		nodes[i] = Node{
+		nodes[i] = graph.Node{
 			ID: fmt.Sprintf("node%d", i),
 			Template: map[string]any{
 				"apiVersion": "v1",
@@ -414,7 +418,7 @@ func buildBenchObject(fieldCount int) map[string]any {
 
 // buildBenchSpecWithExprs creates a 2-node spec where node 1 has N
 // CEL expressions referencing node 0.
-func buildBenchSpecWithExprs(exprCount int) *GraphSpec {
+func buildBenchSpecWithExprs(exprCount int) *graph.GraphSpec {
 	// Source data must have at least exprCount keys.
 	sourceData := make(map[string]any, exprCount)
 	for i := 0; i < exprCount; i++ {
@@ -426,8 +430,8 @@ func buildBenchSpecWithExprs(exprCount int) *GraphSpec {
 		targetData[fmt.Sprintf("field%d", i)] = fmt.Sprintf("${source.data.key%d}", i)
 	}
 
-	return &GraphSpec{
-		Nodes: []Node{
+	return &graph.GraphSpec{
+		Nodes: []graph.Node{
 			{
 				ID: "source",
 				Template: map[string]any{
@@ -475,7 +479,7 @@ func BenchmarkCompileRevisionSharing(b *testing.B) {
 						compiled := caches.getCompiled(specHash)
 						if compiled == nil {
 							var err error
-							compiled, err = compileGraphSpec(spec, nil)
+							compiled, err = compiler.CompileGraphSpec(spec, nil)
 							if err != nil {
 								b.Fatal(err)
 							}
@@ -490,7 +494,7 @@ func BenchmarkCompileRevisionSharing(b *testing.B) {
 }
 
 // BenchmarkPropagateState measures the cost of propagateState — the function
-// that marks all downstream dependents of an erroring node with NodeBlocked.
+// that marks all downstream dependents of an erroring node with dagpkg.NodeBlocked.
 //
 // This is the fix benchmark. The old implementation was O(V²): a linear scan
 // over all nodes at every recursive call level, producing O(V) work per level
@@ -506,17 +510,17 @@ func BenchmarkPropagateState(b *testing.B) {
 	for _, nodeCount := range []int{10, 100, 1000} {
 		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
 			nodes := buildBenchNodes(nodeCount)
-			dag, err := BuildDAG(nodes, nil)
+			dag, err := dagpkg.BuildDAG(nodes, nil)
 			if err != nil {
 				b.Fatal(err)
 			}
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				ps := NewPlanState(dag)
+				ps := dagpkg.NewPlanState(dag)
 				// Trigger propagation from the root — worst case: all V nodes
 				// end up Blocked via chain traversal.
-				ps.SetState(dag, "node0", NodeError)
+				ps.SetState(dag, "node0", dagpkg.NodeError)
 			}
 		})
 	}
@@ -524,9 +528,9 @@ func BenchmarkPropagateState(b *testing.B) {
 
 // propagateStateLinearScan is the pre-fix O(V²) implementation, inlined here
 // so BenchmarkPropagateStateLinearScan can measure the before-state directly.
-func propagateStateLinearScan(ps *PlanState, dag *DAG, sourceID string, targetState NodeState) {
+func propagateStateLinearScan(ps *dagpkg.PlanState, dag *dagpkg.DAG, sourceID string, targetState dagpkg.NodeState) {
 	for _, node := range dag.Nodes {
-		if ps.States[node.ID] != nodeUnvisited {
+		if ps.States[node.ID] != dagpkg.NodeUnvisited {
 			continue
 		}
 		if node.Dependencies[sourceID] {
@@ -545,16 +549,16 @@ func BenchmarkPropagateStateLinearScan(b *testing.B) {
 	for _, nodeCount := range []int{10, 100, 1000} {
 		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
 			nodes := buildBenchNodes(nodeCount)
-			dag, err := BuildDAG(nodes, nil)
+			dag, err := dagpkg.BuildDAG(nodes, nil)
 			if err != nil {
 				b.Fatal(err)
 			}
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				ps := NewPlanState(dag)
-				ps.States["node0"] = NodeError
-				propagateStateLinearScan(ps, dag, "node0", NodeBlocked)
+				ps := dagpkg.NewPlanState(dag)
+				ps.States["node0"] = dagpkg.NodeError
+				propagateStateLinearScan(ps, dag, "node0", dagpkg.NodeBlocked)
 			}
 		})
 	}
@@ -572,7 +576,7 @@ func BenchmarkHashSelfPaths(b *testing.B) {
 	for _, pathCount := range []int{1, 3, 5, 10} {
 		b.Run(fmt.Sprintf("paths=%d", pathCount), func(b *testing.B) {
 			// Build a node with pathCount self-paths, each at depth 2.
-			selfPaths := make([]FieldPath, pathCount)
+			selfPaths := make([]graph.FieldPath, pathCount)
 			observed := map[string]any{
 				"metadata": map[string]any{
 					"name":      "test",
@@ -582,11 +586,11 @@ func BenchmarkHashSelfPaths(b *testing.B) {
 			statusFields := make(map[string]any, pathCount)
 			for i := 0; i < pathCount; i++ {
 				field := fmt.Sprintf("field%d", i)
-				selfPaths[i] = FieldPath{"status", field}
+				selfPaths[i] = graph.FieldPath{"status", field}
 				statusFields[field] = fmt.Sprintf("value%d", i)
 			}
 			observed["status"] = statusFields
-			node := &Node{ID: "target", SelfPaths: selfPaths}
+			node := &graph.Node{ID: "target", SelfPaths: selfPaths}
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
@@ -608,17 +612,17 @@ func BenchmarkHashSelfPaths(b *testing.B) {
 // The benchmark exercises the skip path only (no trigger, no propagation) —
 // the hot path during steady-state reconciliation where no events have fired.
 //
-// The 9 constant allocs per iteration are map creation for NewPlanState (States)
+// The 9 constant allocs per iteration are map creation for dagpkg.NewPlanState (States)
 // and the scope map — pure setup, not walk-path overhead.
 func BenchmarkWalkSkip(b *testing.B) {
 	for _, nodeCount := range []int{10, 50, 100, 500} {
 		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
 			spec := buildBenchSpec(nodeCount)
-			compiled, err := compileGraphSpec(spec, nil)
+			compiled, err := compiler.CompileGraphSpec(spec, nil)
 			if err != nil {
 				b.Fatal(err)
 			}
-			dag := assembleDAG(spec.Nodes, compiled.topology)
+			dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
 
 			// Pre-build steady-state data once — not part of the measured path.
 			prevScope := make(map[string]any, len(dag.Nodes))
@@ -635,7 +639,7 @@ func BenchmarkWalkSkip(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				// Allocate only the per-walk state (plan + scope map).
-				plan := NewPlanState(dag)
+				plan := dagpkg.NewPlanState(dag)
 				scope := make(map[string]any, len(dag.Nodes))
 
 				// Walk all nodes — every node hits the skip path.
@@ -647,10 +651,10 @@ func BenchmarkWalkSkip(b *testing.B) {
 
 // walkSkipBench simulates the skip path of tryDispatch for all nodes.
 // Extracted so the benchmark measures only the walk, not setup.
-func walkSkipBench(dag *DAG, plan *PlanState, scope, prevScope map[string]any, triggered, propagationTriggered map[string]bool) {
+func walkSkipBench(dag *dagpkg.DAG, plan *dagpkg.PlanState, scope, prevScope map[string]any, triggered, propagationTriggered map[string]bool) {
 	for _, idx := range dag.TopologicalOrder {
 		node := &dag.Nodes[idx]
-		if plan.States[node.ID] != nodeUnvisited {
+		if plan.States[node.ID] != dagpkg.NodeUnvisited {
 			continue
 		}
 		// This is the skip check from tryDispatch step 1:
@@ -938,15 +942,15 @@ func TestResolveCollectionSource(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		node     Node
+		node     graph.Node
 		wantSrc  string
 		wantDesc string
 	}{
 		{
 			name: "single scope var, not in template",
-			node: Node{
+			node: graph.Node{
 				ID:      "deploys",
-				ForEach: &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				ForEach: &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
 				Template: map[string]any{
 					"apiVersion": "apps/v1",
 					"kind":       "Deployment",
@@ -958,9 +962,9 @@ func TestResolveCollectionSource(t *testing.T) {
 		},
 		{
 			name: "scope var also in template body",
-			node: Node{
+			node: graph.Node{
 				ID:      "deploys",
-				ForEach: &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				ForEach: &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
 				Template: map[string]any{
 					"apiVersion": "apps/v1",
 					"kind":       "Deployment",
@@ -973,9 +977,9 @@ func TestResolveCollectionSource(t *testing.T) {
 		},
 		{
 			name: "scope var in readyWhen",
-			node: Node{
+			node: graph.Node{
 				ID:        "deploys",
-				ForEach:   &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				ForEach:   &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
 				Template:  map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
 				ReadyWhen: []string{"${wk.size() > 0}"},
 			},
@@ -984,9 +988,9 @@ func TestResolveCollectionSource(t *testing.T) {
 		},
 		{
 			name: "scope var in propagateWhen",
-			node: Node{
+			node: graph.Node{
 				ID:            "deploys",
-				ForEach:       &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				ForEach:       &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
 				Template:      map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
 				PropagateWhen: []string{"${wk != null}"},
 			},
@@ -995,9 +999,9 @@ func TestResolveCollectionSource(t *testing.T) {
 		},
 		{
 			name: "scope var in includeWhen",
-			node: Node{
+			node: graph.Node{
 				ID:          "deploys",
-				ForEach:     &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				ForEach:     &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
 				Template:    map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
 				IncludeWhen: []string{"${wk.size() > 0}"},
 			},
@@ -1006,9 +1010,9 @@ func TestResolveCollectionSource(t *testing.T) {
 		},
 		{
 			name: "collection expr with dot access, single scope var",
-			node: Node{
+			node: graph.Node{
 				ID:       "deploys",
-				ForEach:  &ForEachBinding{VarName: "app", Expr: "${wk.items}"},
+				ForEach:  &graph.ForEachBinding{VarName: "app", Expr: "${wk.items}"},
 				Template: map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
 			},
 			wantSrc:  "wk",
@@ -1016,9 +1020,9 @@ func TestResolveCollectionSource(t *testing.T) {
 		},
 		{
 			name: "multiple deps, only collection source in forEach",
-			node: Node{
+			node: graph.Node{
 				ID:      "deploys",
-				ForEach: &ForEachBinding{VarName: "app", Expr: "${wk}"},
+				ForEach: &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
 				Template: map[string]any{
 					"apiVersion": "apps/v1",
 					"kind":       "Deployment",
@@ -1034,19 +1038,19 @@ func TestResolveCollectionSource(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Compile to get exprPaths (AST-extracted field paths).
-			spec := &GraphSpec{Nodes: []Node{
+			spec := &graph.GraphSpec{Nodes: []graph.Node{
 				{ID: "wk", Watch: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}},
 				{ID: "config", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}},
 				tt.node,
 			}}
-			compiled, err := compileGraphSpec(spec, nil)
+			compiled, err := compiler.CompileGraphSpec(spec, nil)
 			if err != nil {
 				t.Fatalf("compileGraphSpec: %v", err)
 			}
-			// Build a full DAG to access CollectionSource (set during BuildDAG).
-			dag, err := BuildDAG(spec.Nodes, compiled.exprPaths)
+			// Build a full DAG to access CollectionSource (set during dagpkg.BuildDAG).
+			dag, err := dagpkg.BuildDAG(spec.Nodes, compiled.ExprPaths)
 			if err != nil {
-				t.Fatalf("BuildDAG: %v", err)
+				t.Fatalf("dagpkg.BuildDAG: %v", err)
 			}
 			nodeIdx := dag.Index[tt.node.ID]
 			got := dag.Nodes[nodeIdx].ForEach.CollectionSource

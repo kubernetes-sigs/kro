@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
+	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
 	"github.com/kubernetes-sigs/kro/experimental/deploy"
 )
 
@@ -716,9 +717,9 @@ func waitForRevisionCondition(ctx context.Context, c client.Client, key types.Na
 func assertRevisionLabels(t *testing.T, rev *unstructured.Unstructured, graphName string, generation int64) {
 	t.Helper()
 	labels := rev.GetLabels()
-	assert.Equal(t, graphName, labels[graphcontroller.LabelRevisionGraphName],
+	assert.Equal(t, graphName, labels[graphpkg.LabelRevisionGraphName],
 		"revision should have graph-name label")
-	assert.Equal(t, fmt.Sprintf("%d", generation), labels[graphcontroller.LabelGraphGeneration],
+	assert.Equal(t, fmt.Sprintf("%d", generation), labels[graphpkg.LabelGraphGeneration],
 		"revision should have graph-generation label")
 }
 

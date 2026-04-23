@@ -9,11 +9,14 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
 )
 
 func TestSchemaGeneration_Advances(t *testing.T) {
 	t.Parallel()
-	tc := NewSchemaGeneration()
+	tc := compiler.NewSchemaGeneration()
 
 	assert.Equal(t, int64(0), tc.Generation())
 	tc.AdvanceGeneration()
@@ -29,7 +32,7 @@ func TestSchemaGeneration_Advances(t *testing.T) {
 func TestCompileRevision_GenerationStaleness(t *testing.T) {
 	t.Parallel()
 
-	spec := &GraphSpec{Nodes: []Node{
+	spec := &graph.GraphSpec{Nodes: []graph.Node{
 		{ID: "cm", Template: map[string]any{
 			"apiVersion": "v1", "kind": "ConfigMap",
 			"metadata": map[string]any{"name": "test"},
@@ -37,20 +40,20 @@ func TestCompileRevision_GenerationStaleness(t *testing.T) {
 	}}
 
 	// Compile at generation 0.
-	tc := NewSchemaGeneration()
-	compiled, err := compileGraphSpec(spec, nil)
+	tc := compiler.NewSchemaGeneration()
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
-	compiled.typeCacheGen = tc.Generation()
+	compiled.TypeCacheGen = tc.Generation()
 
 	// Verify not stale at generation 0.
-	assert.False(t, compiled.typeCacheGen < tc.Generation(),
+	assert.False(t, compiled.TypeCacheGen < tc.Generation(),
 		"artifact should not be stale at same generation")
 
 	// Advance generation (simulates CRD install).
 	tc.AdvanceGeneration()
 
 	// Artifact is now stale.
-	assert.True(t, compiled.typeCacheGen < tc.Generation(),
+	assert.True(t, compiled.TypeCacheGen < tc.Generation(),
 		"artifact should be stale after generation advance")
 }
 
@@ -88,7 +91,7 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 		},
 	}}
 
-	tc := NewSchemaGeneration()
+	tc := compiler.NewSchemaGeneration()
 	r := &GraphReconciler{
 		SchemaGen: tc,
 		Caches:    newGraphCaches(),
@@ -119,7 +122,7 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 		"after generation advance, compileRevision must return a NEW compiledGraph")
 
 	// The new artifact records the current generation.
-	assert.Equal(t, tc.Generation(), state3.compiled.typeCacheGen,
+	assert.Equal(t, tc.Generation(), state3.compiled.TypeCacheGen,
 		"recompiled artifact should record the current type cache generation")
 
 	// Subsequent call returns the new cached artifact (no further recompilation).
@@ -162,7 +165,7 @@ func TestCompileRevision_SchemaUpdateViaGenerationAdvance(t *testing.T) {
 	resolverSchemas := map[schema.GroupVersionKind]*spec.Schema{widgetGVK: schemaV1}
 	mutableResolver := &stubSchemaResolver{schemas: resolverSchemas}
 
-	tc := NewSchemaGeneration()
+	tc := compiler.NewSchemaGeneration()
 	r := &GraphReconciler{
 		SchemaResolver: mutableResolver,
 		SchemaGen:      tc,
@@ -198,7 +201,7 @@ func TestCompileRevision_SchemaUpdateViaGenerationAdvance(t *testing.T) {
 	firstCompiled := state1.compiled
 
 	// Verify Widget was resolved (not in unresolvedGVKs).
-	for _, gvk := range firstCompiled.unresolvedGVKs {
+	for _, gvk := range firstCompiled.UnresolvedGVKs {
 		assert.NotEqual(t, widgetGVK, gvk, "Widget should be resolved with v1 schema")
 	}
 
@@ -232,7 +235,7 @@ func TestCompileRevision_SchemaUpdateViaGenerationAdvance(t *testing.T) {
 		"after generation advance, compileRevision must recompile")
 
 	// The new compilation used schemaV2 — verify by checking resourceSchemas.
-	widgetSchema := state2.compiled.resourceSchemas["widget"]
+	widgetSchema := state2.compiled.ResourceSchemas["widget"]
 	require.NotNil(t, widgetSchema, "widget should have resolved schema after recompilation")
 	specProps := widgetSchema.Properties["spec"]
 	assert.Contains(t, specProps.Properties, "maxReplicas",
@@ -287,7 +290,7 @@ func TestCRDUpdate_AdvanceGenerationInvalidatesArtifact(t *testing.T) {
 	resolverSchemas := map[schema.GroupVersionKind]*spec.Schema{widgetGVK: schemaV1}
 	mutableResolver := &stubSchemaResolver{schemas: resolverSchemas}
 
-	sg := NewSchemaGeneration()
+	sg := compiler.NewSchemaGeneration()
 	r := &GraphReconciler{
 		SchemaResolver: mutableResolver,
 		SchemaGen:      sg,
@@ -322,7 +325,7 @@ func TestCRDUpdate_AdvanceGenerationInvalidatesArtifact(t *testing.T) {
 	require.NotNil(t, state1.compiled)
 	firstCompiled := state1.compiled
 
-	widgetSchema := state1.compiled.resourceSchemas["widget"]
+	widgetSchema := state1.compiled.ResourceSchemas["widget"]
 	require.NotNil(t, widgetSchema)
 	assert.Contains(t, widgetSchema.Properties["spec"].Properties, "replicas")
 	assert.NotContains(t, widgetSchema.Properties["spec"].Properties, "maxReplicas",
@@ -357,7 +360,7 @@ func TestCRDUpdate_AdvanceGenerationInvalidatesArtifact(t *testing.T) {
 	assert.NotSame(t, firstCompiled, state2.compiled,
 		"after generation advance, compileRevision must recompile")
 
-	widgetSchemaV2 := state2.compiled.resourceSchemas["widget"]
+	widgetSchemaV2 := state2.compiled.ResourceSchemas["widget"]
 	require.NotNil(t, widgetSchemaV2)
 	assert.Contains(t, widgetSchemaV2.Properties["spec"].Properties, "maxReplicas",
 		"recompiled artifact should reflect v2 schema with maxReplicas field")

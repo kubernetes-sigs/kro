@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
 )
 
 // ---------------------------------------------------------------------------
@@ -24,9 +26,9 @@ import (
 // different hashes when a referenced path transitions from absent to
 // present. Without the sentinel, both cases hash identically.
 func TestHashNodeInputsAbsentSentinel(t *testing.T) {
-	node := &Node{
+	node := &graph.Node{
 		ID: "child",
-		DepPaths: map[string][]FieldPath{
+		DepPaths: map[string][]graph.FieldPath{
 			"parent": {{"status", "ready"}, {"spec", "replicas"}},
 		},
 	}
@@ -64,9 +66,9 @@ func TestHashNodeInputsAbsentSentinel(t *testing.T) {
 // deterministic — hashing the same absent state twice produces identical
 // results. This prevents spurious re-evaluations.
 func TestHashNodeInputsAbsentStable(t *testing.T) {
-	node := &Node{
+	node := &graph.Node{
 		ID: "child",
-		DepPaths: map[string][]FieldPath{
+		DepPaths: map[string][]graph.FieldPath{
 			"parent": {{"status", "ready"}},
 		},
 	}
@@ -92,9 +94,9 @@ func TestHashNodeInputsAbsentStable(t *testing.T) {
 // present. This triggers gate re-evaluation (readyWhen/propagateWhen) when
 // the resource gains a new field.
 func TestHashSelfPathsAbsentSentinel(t *testing.T) {
-	node := &Node{
+	node := &graph.Node{
 		ID:        "deploy",
-		SelfPaths: []FieldPath{{"status", "availableReplicas"}},
+		SelfPaths: []graph.FieldPath{{"status", "availableReplicas"}},
 	}
 
 	// Observed resource without status.
@@ -125,9 +127,9 @@ func TestHashSelfPathsAbsentSentinel(t *testing.T) {
 // TestHashSelfPathsAbsentStable proves the absent sentinel for
 // hashSelfPaths is deterministic.
 func TestHashSelfPathsAbsentStable(t *testing.T) {
-	node := &Node{
+	node := &graph.Node{
 		ID:        "deploy",
-		SelfPaths: []FieldPath{{"status", "availableReplicas"}},
+		SelfPaths: []graph.FieldPath{{"status", "availableReplicas"}},
 	}
 
 	observed := map[string]any{
@@ -150,9 +152,9 @@ func TestHashSelfPathsAbsentStable(t *testing.T) {
 // This is the core property: status.availableReplicas changes → hash changes;
 // status.conditions changes → hash does NOT change (if we only reference availableReplicas).
 func TestHashFieldPathGranularity(t *testing.T) {
-	node := &Node{
+	node := &graph.Node{
 		ID:        "deploy",
-		SelfPaths: []FieldPath{{"status", "availableReplicas"}},
+		SelfPaths: []graph.FieldPath{{"status", "availableReplicas"}},
 	}
 
 	observed1 := map[string]any{
@@ -288,29 +290,29 @@ func TestResourceCache(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Spec hash completeness guard
 //
-// Per cel.go § Hash: "If a new compilation input is added to GraphSpec
+// Per cel.go § Hash: "If a new compilation input is added to graph.GraphSpec
 // without updating this hash, content-addressed sharing will silently
 // reuse stale compiled graphs."
 //
-// This test mutates each compilation-relevant Node field independently
-// and asserts the hash changes. If a new field is added to Node that
+// This test mutates each compilation-relevant graph.Node field independently
+// and asserts the hash changes. If a new field is added to graph.Node that
 // affects compilation (CEL programs, DAG structure, or expression set)
 // without being included in Hash(), this test must be updated — the
 // field count assertion forces the maintainer to acknowledge the field.
 // ---------------------------------------------------------------------------
 
-// TestSpecHashCoversCompilationInputs proves that GraphSpec.Hash() is
+// TestSpecHashCoversCompilationInputs proves that graph.GraphSpec.Hash() is
 // sensitive to every field that feeds into compileGraphSpec. Mutating any
 // single compilation input must produce a different hash. Fields populated
 // by BuildDAG (Dependencies, DepPaths, SelfPaths, ReadinessDeps) are
 // derived outputs and intentionally excluded from the hash.
 func TestSpecHashCoversCompilationInputs(t *testing.T) {
 	// Baseline spec: one node with every compilation-relevant field populated.
-	baseline := &GraphSpec{
-		Nodes: []Node{{
+	baseline := &graph.GraphSpec{
+		Nodes: []graph.Node{{
 			ID:            "deploy",
 			Template:      map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "app"}},
-			ForEach:       &ForEachBinding{VarName: "ns", Expr: "${namespaces}"},
+			ForEach:       &graph.ForEachBinding{VarName: "ns", Expr: "${namespaces}"},
 			Finalizes:     "pvc",
 			IncludeWhen:   []string{"${config.data.enabled == 'true'}"},
 			ReadyWhen:     []string{"${deploy.status.availableReplicas > 0}"},
@@ -320,67 +322,67 @@ func TestSpecHashCoversCompilationInputs(t *testing.T) {
 	baselineHash := baseline.Hash()
 
 	// Each test case mutates exactly one compilation input and asserts the
-	// hash changes. The test names match the Node struct field names.
+	// hash changes. The test names match the graph.Node struct field names.
 	tests := []struct {
 		name   string
-		mutate func(n *Node)
+		mutate func(n *graph.Node)
 	}{
 		{
 			name:   "ID",
-			mutate: func(n *Node) { n.ID = "service" },
+			mutate: func(n *graph.Node) { n.ID = "service" },
 		},
 		{
 			name:   "Template",
-			mutate: func(n *Node) { n.Template["metadata"] = map[string]any{"name": "different"} },
+			mutate: func(n *graph.Node) { n.Template["metadata"] = map[string]any{"name": "different"} },
 		},
 		{
 			name:   "ForEach",
-			mutate: func(n *Node) { n.ForEach = &ForEachBinding{VarName: "pod", Expr: "${pods}"} },
+			mutate: func(n *graph.Node) { n.ForEach = &graph.ForEachBinding{VarName: "pod", Expr: "${pods}"} },
 		},
 		{
 			name:   "Finalizes",
-			mutate: func(n *Node) { n.Finalizes = "snapshot" },
+			mutate: func(n *graph.Node) { n.Finalizes = "snapshot" },
 		},
 		{
 			name:   "IncludeWhen",
-			mutate: func(n *Node) { n.IncludeWhen = []string{"${config.data.enabled == 'false'}"} },
+			mutate: func(n *graph.Node) { n.IncludeWhen = []string{"${config.data.enabled == 'false'}"} },
 		},
 		{
 			name:   "ReadyWhen",
-			mutate: func(n *Node) { n.ReadyWhen = []string{"${deploy.status.ready == true}"} },
+			mutate: func(n *graph.Node) { n.ReadyWhen = []string{"${deploy.status.ready == true}"} },
 		},
 		{
 			name:   "PropagateWhen",
-			mutate: func(n *Node) { n.PropagateWhen = []string{"${config.ready()}"} },
+			mutate: func(n *graph.Node) { n.PropagateWhen = []string{"${config.ready()}"} },
 		},
 		// Edge cases: nil/empty transitions must also change the hash.
 		{
 			name:   "ForEach nil→empty",
-			mutate: func(n *Node) { n.ForEach = &ForEachBinding{} },
+			mutate: func(n *graph.Node) { n.ForEach = &graph.ForEachBinding{} },
 		},
 		{
 			name:   "Template nil",
-			mutate: func(n *Node) { n.Template = nil },
+			mutate: func(n *graph.Node) { n.Template = nil },
 		},
 		{
 			name:   "IncludeWhen empty",
-			mutate: func(n *Node) { n.IncludeWhen = nil },
+			mutate: func(n *graph.Node) { n.IncludeWhen = nil },
 		},
 		{
 			name:   "ReadyWhen empty",
-			mutate: func(n *Node) { n.ReadyWhen = nil },
+			mutate: func(n *graph.Node) { n.ReadyWhen = nil },
 		},
 		{
 			name:   "PropagateWhen empty",
-			mutate: func(n *Node) { n.PropagateWhen = nil },
+			mutate: func(n *graph.Node) { n.PropagateWhen = nil },
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// Deep copy baseline to isolate mutations.
-			mutated := &GraphSpec{
-				Nodes: []Node{{
+			mutated := &graph.GraphSpec{
+				Nodes: []graph.Node{{
 					ID:            baseline.Nodes[0].ID,
 					Template:      deepCopyMap(baseline.Nodes[0].Template),
 					ForEach:       copyForEach(baseline.Nodes[0].ForEach),
@@ -399,7 +401,7 @@ func TestSpecHashCoversCompilationInputs(t *testing.T) {
 		})
 	}
 
-	// Structural guard: if a new field is added to Node that affects
+	// Structural guard: if a new field is added to graph.Node that affects
 	// compilation, this count must be updated. The 7 compilation inputs
 	// are: ID, Template, ForEach, Finalizes, IncludeWhen, ReadyWhen,
 	// PropagateWhen. The 4 derived fields (Dependencies, DepPaths,
@@ -408,7 +410,7 @@ func TestSpecHashCoversCompilationInputs(t *testing.T) {
 	const derivedFieldCount = 4
 	const totalNodeFields = compilationInputCount + derivedFieldCount
 	// This assertion uses the number of test cases that cover unique
-	// field names (not edge cases). If you add a field to Node, add a
+	// field names (not edge cases). If you add a field to graph.Node, add a
 	// test case above AND update this count.
 	uniqueFields := map[string]bool{}
 	for _, tc := range tests {
@@ -419,7 +421,7 @@ func TestSpecHashCoversCompilationInputs(t *testing.T) {
 		}
 	}
 	assert.Equal(t, compilationInputCount, len(uniqueFields),
-		"test must cover every compilation input field; if you added a new field to Node "+
+		"test must cover every compilation input field; if you added a new field to graph.Node "+
 			"that affects compilation, add a test case and update compilationInputCount")
 	_ = totalNodeFields // reference to prevent the constant from being unused
 }
@@ -480,8 +482,8 @@ func TestForEachHashCarryForward_RegressionDoublePrefix(t *testing.T) {
 	}
 }
 
-// copyForEach returns a shallow copy of a ForEachBinding pointer.
-func copyForEach(d *ForEachBinding) *ForEachBinding {
+// copyForEach returns a shallow copy of a graph.ForEachBinding pointer.
+func copyForEach(d *graph.ForEachBinding) *graph.ForEachBinding {
 	if d == nil {
 		return nil
 	}

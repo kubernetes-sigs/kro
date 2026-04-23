@@ -7,7 +7,7 @@
 // string that yields the body at runtime; Ref/Watch are identity-only and
 // accept only maps. Errors are parse-time — misclassification cannot leak
 // into reconcile.
-package graphcontroller
+package graph
 
 import (
 	"strings"
@@ -71,7 +71,7 @@ func TestParseKeyword_ExactlyOneKeywordRequired(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseNodeList([]any{tc.raw})
+			_, err := ParseNodeList([]any{tc.raw})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantMsg)
 		})
@@ -131,7 +131,7 @@ func TestParseKeyword_ClassificationMap(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			nodes, err := parseNodeList([]any{tc.raw})
+			nodes, err := ParseNodeList([]any{tc.raw})
 			require.NoError(t, err)
 			require.Len(t, nodes, 1)
 			assert.Equal(t, tc.want, nodes[0].Type())
@@ -172,7 +172,7 @@ func TestParseKeyword_ClassificationExpr(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			nodes, err := parseNodeList([]any{tc.raw})
+			nodes, err := ParseNodeList([]any{tc.raw})
 			require.NoError(t, err)
 			require.Len(t, nodes, 1)
 			n := nodes[0]
@@ -200,7 +200,7 @@ func TestParseKeyword_RefAndWatchRejectStrings(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseNodeList([]any{tc.raw})
+			_, err := ParseNodeList([]any{tc.raw})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "identity-only")
 		})
@@ -318,7 +318,7 @@ func TestParseKeyword_ShapeValidation(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseNodeList([]any{tc.raw})
+			_, err := ParseNodeList([]any{tc.raw})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantMsg)
 		})
@@ -330,7 +330,7 @@ func TestParseKeyword_ShapeValidation(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseKeyword_LifecycleApplyForce(t *testing.T) {
-	nodes, err := parseNodeList([]any{
+	nodes, err := ParseNodeList([]any{
 		map[string]any{
 			"id": "a",
 			"lifecycle": map[string]any{
@@ -357,7 +357,7 @@ func TestParseKeyword_LifecycleApplyForce(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseKeyword_ZeroKeywordsLists(t *testing.T) {
-	_, err := parseNodeList([]any{map[string]any{"id": "a"}})
+	_, err := ParseNodeList([]any{map[string]any{"id": "a"}})
 	require.Error(t, err)
 	msg := err.Error()
 	for _, kw := range []string{"template", "patch", "ref", "watch", "def"} {
@@ -371,7 +371,7 @@ func TestParseKeyword_ZeroKeywordsLists(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseKeyword_PatchWithStatus(t *testing.T) {
-	nodes, err := parseNodeList([]any{
+	nodes, err := ParseNodeList([]any{
 		map[string]any{
 			"id": "a",
 			"patch": map[string]any{
@@ -384,11 +384,11 @@ func TestParseKeyword_PatchWithStatus(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
-	assert.True(t, nodes[0].hasStatusSubresource)
+	assert.True(t, nodes[0].HasStatusSubresource())
 }
 
 func TestParseKeyword_PatchWithoutStatus(t *testing.T) {
-	nodes, err := parseNodeList([]any{
+	nodes, err := ParseNodeList([]any{
 		map[string]any{
 			"id": "a",
 			"patch": map[string]any{
@@ -401,7 +401,7 @@ func TestParseKeyword_PatchWithoutStatus(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
-	assert.False(t, nodes[0].hasStatusSubresource)
+	assert.False(t, nodes[0].HasStatusSubresource())
 }
 
 // ---------------------------------------------------------------------------
@@ -420,48 +420,10 @@ func TestParseKeyword_PatchWithoutStatus(t *testing.T) {
 // Empty-string and wrong-type are parse-time and covered by
 // TestParseKeyword_ShapeValidation.
 
-func TestParseKeyword_ExprEvaluatesToNonMap(t *testing.T) {
-	cases := []struct {
-		name    string
-		keyword string
-		want    NodeType
-	}{
-		{"template expr → non-map", "template", NodeTypeTemplate},
-		{"patch expr → non-map", "patch", NodeTypePatch},
-		{"def expr → non-map", "def", NodeTypeDef},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			// An expression that evaluates to a string, not a map.
-			spec := &GraphSpec{Nodes: []Node{
-				{ID: "a", TemplateExpr: "${'not a map'}", ExprKeyword: tc.want, nodeType: tc.want},
-			}}
-			compiled, err := compileGraphSpec(spec, nil)
-			require.NoError(t, err, "compile should succeed; evaluation failure is runtime")
-			e := &evaluator{compiled: compiled, scope: map[string]any{}}
-			_, evalErr := e.toMapNode(spec.Nodes[0])
-			require.Error(t, evalErr)
-			// Error names the keyword in use (via ExprKeyword.String()).
-			assert.Contains(t, evalErr.Error(), tc.want.String(),
-				"eval error should name the keyword in use (got: %s)", evalErr.Error())
-			assert.Contains(t, evalErr.Error(), "want map",
-				"eval error should explain the type mismatch")
-		})
-	}
-}
-
-func TestParseKeyword_ExprReferencesUndefined(t *testing.T) {
-	// Compiling an expression that references an identifier not declared
-	// in the graph spec fails at compile time. The parser accepts the
-	// string; compileGraphSpec surfaces the error.
-	spec := &GraphSpec{Nodes: []Node{
-		{ID: "a", TemplateExpr: "${undeclaredThing.field}", ExprKeyword: NodeTypeTemplate, nodeType: NodeTypeTemplate},
-	}}
-	_, err := compileGraphSpec(spec, nil)
-	require.Error(t, err, "compile should reject expression referencing undeclared identifier")
-	assert.Contains(t, err.Error(), "undeclaredThing",
-		"compile error should name the unknown identifier")
-}
+// NOTE: TestParseKeyword_ExprEvaluatesToNonMap and
+// TestParseKeyword_ExprReferencesUndefined live in the controller package
+// because they depend on compileGraphSpec and evaluator which are internal
+// to the controller package.
 
 // TestParseKeyword_MutualExclusionAllPairs exercises every 2-keyword
 // combination so the parser's exactly-one guard is covered exhaustively
@@ -487,7 +449,7 @@ func TestParseKeyword_MutualExclusionAllPairs(t *testing.T) {
 					a:    bodies[a],
 					b:    bodies[b],
 				}
-				_, err := parseNodeList([]any{raw})
+				_, err := ParseNodeList([]any{raw})
 				require.Error(t, err)
 				msg := err.Error()
 				assert.Contains(t, msg, "exactly one of",
@@ -516,7 +478,7 @@ func TestForEachSingleVariableAccepted(t *testing.T) {
 			"ns": "${namespaces}",
 		},
 	}}
-	nodes, err := parseNodeList(raw)
+	nodes, err := ParseNodeList(raw)
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
 	assert.NotNil(t, nodes[0].ForEach)
@@ -550,7 +512,7 @@ func TestForEachVarCollision_RegressionLaterNodeID(t *testing.T) {
 		},
 	}
 
-	_, err := parseNodeList(raw)
+	_, err := ParseNodeList(raw)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "conflicts with resource ID",
 		"forEach variable matching a later node ID should be rejected")
@@ -579,7 +541,7 @@ func TestForEachVarCollision_RegressionCaseInsensitive(t *testing.T) {
 		},
 	}
 
-	_, err := parseNodeList(raw)
+	_, err := ParseNodeList(raw)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "conflicts with resource ID",
 		"case-insensitive forEach variable collision should be rejected")
@@ -638,7 +600,7 @@ func TestNonStringExpression_RegressionReadyWhen(t *testing.T) {
 				},
 			}
 
-			_, err := parseNodeList(raw)
+			_, err := ParseNodeList(raw)
 			require.Error(t, err, "non-string %s element should be rejected", tt.field)
 			assert.Contains(t, err.Error(), "must be a string",
 				"error should mention type requirement")

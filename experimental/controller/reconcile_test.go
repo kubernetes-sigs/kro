@@ -14,13 +14,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
 )
 
 // ---------------------------------------------------------------------------
 // Unit tests — design reconciliation regression suite
 //
 // These test mechanisms introduced in the design reconciliation:
-//   - NodeBlocked vs NodeExcluded propagation split
+//   - dagpkg.NodeBlocked vs dagpkg.NodeExcluded propagation split
 //   - pruneOrder reverse dependency ordering
 //   - classifyAPIError default flip
 //
@@ -39,44 +44,44 @@ import (
 // Excluded — an incorrect classification that prevented pruning.
 func TestSetStateDoesNotPropagate(t *testing.T) {
 	// Build a chain: A → B → C
-	nodes := []Node{
+	nodes := []graphpkg.Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"ref": "${b.metadata.name}"}}},
 	}
-	dag, err := BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
-	states := []NodeState{NodeExcluded, NodeError, NodePending, NodeConflict, NodeSystemError, NodeReady, NodeNotReady}
+	states := []dagpkg.NodeState{dagpkg.NodeExcluded, dagpkg.NodeError, dagpkg.NodePending, dagpkg.NodeConflict, dagpkg.NodeSystemError, dagpkg.NodeReady, dagpkg.NodeNotReady}
 	for _, sourceState := range states {
 		t.Run(sourceState.String(), func(t *testing.T) {
-			plan := NewPlanState(dag)
+			plan := dagpkg.NewPlanState(dag)
 			plan.SetState(dag, "a", sourceState)
 
 			assert.Equal(t, sourceState, plan.States["a"], "source should be set")
-			assert.Equal(t, nodeUnvisited, plan.States["b"], "direct dependent should remain unvisited")
-			assert.Equal(t, nodeUnvisited, plan.States["c"], "transitive dependent should remain unvisited")
+			assert.Equal(t, dagpkg.NodeUnvisited, plan.States["b"], "direct dependent should remain unvisited")
+			assert.Equal(t, dagpkg.NodeUnvisited, plan.States["c"], "transitive dependent should remain unvisited")
 		})
 	}
 }
 
-// TestSummaryCountsBlockedState proves that PlanSummary correctly reports
-// HasBlocked when a node is explicitly set to NodeBlocked. Since SetState
+// TestSummaryCountsBlockedState proves that dagpkg.PlanSummary correctly reports
+// HasBlocked when a node is explicitly set to dagpkg.NodeBlocked. Since SetState
 // no longer propagates, the test sets dependent state explicitly (matching
 // what tryDispatch would do during a real walk).
 func TestSummaryCountsBlockedState(t *testing.T) {
-	nodes := []Node{
+	nodes := []graphpkg.Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 	}
-	dag, err := BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
-	plan := NewPlanState(dag)
-	plan.SetState(dag, "a", NodeError)
+	plan := dagpkg.NewPlanState(dag)
+	plan.SetState(dag, "a", dagpkg.NodeError)
 	// Simulate what tryDispatch does: when b's dependency a is in error,
 	// tryDispatch marks b as Blocked.
-	plan.SetState(dag, "b", NodeBlocked)
+	plan.SetState(dag, "b", dagpkg.NodeBlocked)
 
 	summary := plan.Summary()
 	assert.True(t, summary.HasError, "should report error on the source node")
@@ -95,16 +100,14 @@ func TestSummaryCountsBlockedState(t *testing.T) {
 // newTestWalkState builds a minimal walkState for testing tryDispatch.
 // All nodes are marked as triggered so the skip check doesn't fire.
 // Dependency states can be pre-set via plan.States before calling tryDispatch.
-func newTestWalkState(t *testing.T, dag *DAG) *walkState {
+func newTestWalkState(t *testing.T, dag *dagpkg.DAG) *walkState {
 	t.Helper()
-	compiled := &compiledGraph{
-		env:          nil,
-		programs:     map[string]cel.Program{},
-		exprPaths:    map[string]map[string][]FieldPath{},
-		declaredVars: map[string]bool{},
-		topology:     dag.dagTopology,
+	compiled := &compiler.CompiledGraph{
+		Programs:     map[string]cel.Program{},
+		ExprPaths:    map[string]map[string][]graphpkg.FieldPath{},
+		Topology:     dag.Topology,
 	}
-	plan := NewPlanState(dag)
+	plan := dagpkg.NewPlanState(dag)
 	triggered := make(map[string]bool, len(dag.Nodes))
 	for i := range dag.Nodes {
 		triggered[dag.Nodes[i].ID] = true
@@ -135,37 +138,37 @@ func newTestWalkState(t *testing.T, dag *DAG) *walkState {
 //   - "Precedence where multiple apply: Excluded > Blocked > Pending"
 func TestTryDispatchPrecedence_ExcludedOverBlockedOverPending(t *testing.T) {
 	// Diamond: A and B are parents of C.
-	nodes := []Node{
+	nodes := []graphpkg.Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}}},
 		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"a": "${a.metadata.name}", "b": "${b.metadata.name}"}}},
 	}
-	dag, err := BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	tests := []struct {
 		name       string
-		stateA     NodeState
-		stateB     NodeState
-		wantChildC NodeState
+		stateA     dagpkg.NodeState
+		stateB     dagpkg.NodeState
+		wantChildC dagpkg.NodeState
 	}{
 		// Excluded > Blocked: Excluded parent takes precedence over Error parent.
-		{"Excluded+Error→Excluded", NodeExcluded, NodeError, NodeExcluded},
-		{"Error+Excluded→Excluded", NodeError, NodeExcluded, NodeExcluded},
+		{"Excluded+Error→Excluded", dagpkg.NodeExcluded, dagpkg.NodeError, dagpkg.NodeExcluded},
+		{"Error+Excluded→Excluded", dagpkg.NodeError, dagpkg.NodeExcluded, dagpkg.NodeExcluded},
 		// Excluded > Pending: Excluded parent takes precedence over Pending parent.
-		{"Excluded+Pending→Excluded", NodeExcluded, NodePending, NodeExcluded},
-		{"Pending+Excluded→Excluded", NodePending, NodeExcluded, NodeExcluded},
+		{"Excluded+Pending→Excluded", dagpkg.NodeExcluded, dagpkg.NodePending, dagpkg.NodeExcluded},
+		{"Pending+Excluded→Excluded", dagpkg.NodePending, dagpkg.NodeExcluded, dagpkg.NodeExcluded},
 		// Blocked > Pending: Error parent takes precedence over Pending parent.
-		{"Error+Pending→Blocked", NodeError, NodePending, NodeBlocked},
-		{"Pending+Error→Blocked", NodePending, NodeError, NodeBlocked},
+		{"Error+Pending→Blocked", dagpkg.NodeError, dagpkg.NodePending, dagpkg.NodeBlocked},
+		{"Pending+Error→Blocked", dagpkg.NodePending, dagpkg.NodeError, dagpkg.NodeBlocked},
 		// Same states: straightforward inheritance.
-		{"Excluded+Excluded→Excluded", NodeExcluded, NodeExcluded, NodeExcluded},
-		{"Error+Error→Blocked", NodeError, NodeError, NodeBlocked},
-		{"Pending+Pending→Pending", NodePending, NodePending, NodePending},
+		{"Excluded+Excluded→Excluded", dagpkg.NodeExcluded, dagpkg.NodeExcluded, dagpkg.NodeExcluded},
+		{"Error+Error→Blocked", dagpkg.NodeError, dagpkg.NodeError, dagpkg.NodeBlocked},
+		{"Pending+Pending→Pending", dagpkg.NodePending, dagpkg.NodePending, dagpkg.NodePending},
 		// All error variants map to Blocked.
-		{"Conflict+Pending→Blocked", NodeConflict, NodePending, NodeBlocked},
-		{"SystemError+Pending→Blocked", NodeSystemError, NodePending, NodeBlocked},
-		{"Blocked+Pending→Blocked", NodeBlocked, NodePending, NodeBlocked},
+		{"Conflict+Pending→Blocked", dagpkg.NodeConflict, dagpkg.NodePending, dagpkg.NodeBlocked},
+		{"SystemError+Pending→Blocked", dagpkg.NodeSystemError, dagpkg.NodePending, dagpkg.NodeBlocked},
+		{"Blocked+Pending→Blocked", dagpkg.NodeBlocked, dagpkg.NodePending, dagpkg.NodeBlocked},
 	}
 
 	for _, tc := range tests {
@@ -204,12 +207,12 @@ func TestTryDispatchPrecedence_ExcludedOverBlockedOverPending(t *testing.T) {
 func TestPruneOrderReverseDependency(t *testing.T) {
 	// Build A → B → C. Topological order: A(0), B(1), C(2).
 	// Reverse dependency order for deletion: C, B, A.
-	nodes := []Node{
+	nodes := []graphpkg.Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"ref": "${b.metadata.name}"}}},
 	}
-	dag, err := BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	keys := []string{
@@ -218,7 +221,7 @@ func TestPruneOrderReverseDependency(t *testing.T) {
 		"/v1/ConfigMap/default/c",
 	}
 
-	ordered := pruneOrder(keys, []*DAG{dag}, "default", nil)
+	ordered := pruneOrder(keys, []*dagpkg.DAG{dag}, "default", nil)
 
 	require.Len(t, ordered, 3)
 	// C depends on B depends on A. Reverse: C first, then B, then A.
@@ -231,10 +234,10 @@ func TestPruneOrderReverseDependency(t *testing.T) {
 // node are placed first (deleted before mapped resources). This is the safe
 // default for dynamic names (forEach, CEL-generated names).
 func TestPruneOrderUnmatchedKeysFirst(t *testing.T) {
-	nodes := []Node{
+	nodes := []graphpkg.Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 	}
-	dag, err := BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	keys := []string{
@@ -242,7 +245,7 @@ func TestPruneOrderUnmatchedKeysFirst(t *testing.T) {
 		"/v1/ConfigMap/default/unknown-dynamic",
 	}
 
-	ordered := pruneOrder(keys, []*DAG{dag}, "default", nil)
+	ordered := pruneOrder(keys, []*dagpkg.DAG{dag}, "default", nil)
 
 	require.Len(t, ordered, 2)
 	assert.Equal(t, "/v1/ConfigMap/default/unknown-dynamic", ordered[0], "unmatched key should be first")
@@ -252,11 +255,11 @@ func TestPruneOrderUnmatchedKeysFirst(t *testing.T) {
 // TestPruneOrderContributeKeysResolved proves that contribute-prefixed keys
 // are resolved to their underlying resource key for position lookup.
 func TestPruneOrderContributeKeysResolved(t *testing.T) {
-	nodes := []Node{
+	nodes := []graphpkg.Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 	}
-	dag, err := BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil)
 	require.NoError(t, err)
 
 	keys := []string{
@@ -264,7 +267,7 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 		"patch:/v1/ConfigMap/default/b",
 	}
 
-	ordered := pruneOrder(keys, []*DAG{dag}, "default", nil)
+	ordered := pruneOrder(keys, []*dagpkg.DAG{dag}, "default", nil)
 
 	require.Len(t, ordered, 2)
 	assert.Equal(t, "patch:/v1/ConfigMap/default/b", ordered[0], "dependent patch key should be first")
@@ -272,8 +275,8 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 }
 
 // TestClassifyAPIErrorDefault proves that unrecognized errors (raw Go errors
-// not wrapped as *StatusError) become NodeSystemError — the safe direction.
-// Misclassifying transient network failures as deterministic (NodeError) means
+// not wrapped as *StatusError) become dagpkg.NodeSystemError — the safe direction.
+// Misclassifying transient network failures as deterministic (dagpkg.NodeError) means
 // the system stops retrying when it should be retrying hardest (30-minute resync
 // timer vs 5s SystemError retry). Misclassifying a deterministic error as
 // transient means wasted retries — annoying but not an outage.
@@ -281,70 +284,70 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 // Client errors (4xx) are positively identified; everything else is
 // infrastructure until proven otherwise.
 func TestClassifyAPIErrorDefault(t *testing.T) {
-	t.Run("raw network error is NodeSystemError", func(t *testing.T) {
+	t.Run("raw network error is dagpkg.NodeSystemError", func(t *testing.T) {
 		err := &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("connection refused")}
 		info := classifyAPIError(err)
-		assert.Equal(t, NodeSystemError, info.state,
-			"network errors should be NodeSystemError — transient, needs retry")
+		assert.Equal(t, dagpkg.NodeSystemError, info.state,
+			"network errors should be dagpkg.NodeSystemError — transient, needs retry")
 	})
 
-	t.Run("generic wrapped error is NodeSystemError", func(t *testing.T) {
+	t.Run("generic wrapped error is dagpkg.NodeSystemError", func(t *testing.T) {
 		err := fmt.Errorf("unexpected EOF during API call")
 		info := classifyAPIError(err)
-		assert.Equal(t, NodeSystemError, info.state,
-			"unrecognized errors default to NodeSystemError — safe direction")
+		assert.Equal(t, dagpkg.NodeSystemError, info.state,
+			"unrecognized errors default to dagpkg.NodeSystemError — safe direction")
 	})
 
-	t.Run("forbidden is NodeError", func(t *testing.T) {
+	t.Run("forbidden is dagpkg.NodeError", func(t *testing.T) {
 		err := apierrors.NewForbidden(schema.GroupResource{Group: "", Resource: "configmaps"}, "test", fmt.Errorf("forbidden"))
 		info := classifyAPIError(err)
-		assert.Equal(t, NodeError, info.state)
+		assert.Equal(t, dagpkg.NodeError, info.state)
 		assert.Equal(t, "Forbidden", info.reason)
 	})
 
-	t.Run("unauthorized is NodeError", func(t *testing.T) {
+	t.Run("unauthorized is dagpkg.NodeError", func(t *testing.T) {
 		err := apierrors.NewUnauthorized("bad token")
 		info := classifyAPIError(err)
-		assert.Equal(t, NodeError, info.state)
+		assert.Equal(t, dagpkg.NodeError, info.state)
 		assert.Equal(t, "Unauthorized", info.reason)
 	})
 
-	t.Run("invalid is NodeError", func(t *testing.T) {
+	t.Run("invalid is dagpkg.NodeError", func(t *testing.T) {
 		err := apierrors.NewInvalid(schema.GroupKind{Group: "", Kind: "ConfigMap"}, "test", nil)
 		info := classifyAPIError(err)
-		assert.Equal(t, NodeError, info.state)
+		assert.Equal(t, dagpkg.NodeError, info.state)
 		assert.Equal(t, "ValidationFailed", info.reason)
 	})
 
-	t.Run("bad request is NodeError", func(t *testing.T) {
+	t.Run("bad request is dagpkg.NodeError", func(t *testing.T) {
 		err := apierrors.NewBadRequest("malformed")
 		info := classifyAPIError(err)
-		assert.Equal(t, NodeError, info.state)
+		assert.Equal(t, dagpkg.NodeError, info.state)
 		assert.Equal(t, "BadRequest", info.reason)
 	})
 
-	t.Run("internal server error is NodeSystemError", func(t *testing.T) {
+	t.Run("internal server error is dagpkg.NodeSystemError", func(t *testing.T) {
 		err := apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
 		info := classifyAPIError(err)
-		assert.Equal(t, NodeSystemError, info.state, "5xx should be NodeSystemError")
+		assert.Equal(t, dagpkg.NodeSystemError, info.state, "5xx should be dagpkg.NodeSystemError")
 		assert.Equal(t, "ServerError", info.reason)
 	})
 
-	t.Run("service unavailable is NodeSystemError", func(t *testing.T) {
+	t.Run("service unavailable is dagpkg.NodeSystemError", func(t *testing.T) {
 		err := apierrors.NewServiceUnavailable("maintenance")
 		info := classifyAPIError(err)
-		assert.Equal(t, NodeSystemError, info.state)
+		assert.Equal(t, dagpkg.NodeSystemError, info.state)
 	})
 
-	t.Run("too many requests is NodeSystemError", func(t *testing.T) {
+	t.Run("too many requests is dagpkg.NodeSystemError", func(t *testing.T) {
 		err := apierrors.NewTooManyRequests("rate limited", 5)
 		info := classifyAPIError(err)
-		assert.Equal(t, NodeSystemError, info.state)
+		assert.Equal(t, dagpkg.NodeSystemError, info.state)
 	})
 
 	t.Run("nil error returns zero value", func(t *testing.T) {
 		info := classifyAPIError(nil)
-		assert.Equal(t, NodeState(0), info.state)
+		assert.Equal(t, dagpkg.NodeState(0), info.state)
 	})
 }
 
@@ -383,7 +386,7 @@ func TestParseNodeListEnforcesValidNodeIDs(t *testing.T) {
 					"template": map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "cm"}},
 				},
 			}
-			_, err := parseNodeList(raw)
+			_, err := graphpkg.ParseNodeList(raw)
 			if tc.wantErr {
 				require.Error(t, err, "node ID %q must be rejected", tc.id)
 			} else {
@@ -391,22 +394,22 @@ func TestParseNodeListEnforcesValidNodeIDs(t *testing.T) {
 			}
 		})
 	}
-} // TestNodeStateString verifies that NodeState.String() returns the design's
+} // TestNodeStateString verifies that dagpkg.NodeState.String() returns the design's
 // canonical names. Each concept has exactly one name.
 func TestNodeStateString(t *testing.T) {
 	tests := []struct {
-		state NodeState
+		state dagpkg.NodeState
 		want  string
 	}{
-		{nodeUnvisited, "Unvisited"},
-		{NodePending, "Pending"},
-		{NodeReady, "Ready"},
-		{NodeNotReady, "NotReady"},
-		{NodeExcluded, "Excluded"},
-		{NodeBlocked, "Blocked"},
-		{NodeError, "Error"},
-		{NodeConflict, "Conflict"},
-		{NodeSystemError, "SystemError"},
+		{dagpkg.NodeUnvisited, "Unvisited"},
+		{dagpkg.NodePending, "Pending"},
+		{dagpkg.NodeReady, "Ready"},
+		{dagpkg.NodeNotReady, "NotReady"},
+		{dagpkg.NodeExcluded, "Excluded"},
+		{dagpkg.NodeBlocked, "Blocked"},
+		{dagpkg.NodeError, "Error"},
+		{dagpkg.NodeConflict, "Conflict"},
+		{dagpkg.NodeSystemError, "SystemError"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.want, func(t *testing.T) {
@@ -418,7 +421,7 @@ func TestNodeStateString(t *testing.T) {
 // TestForEachChildIdentityLabelKey verifies the DNS subdomain format for
 // forEach child identity labels per 005-reconciliation.md § Child Identity.
 func TestForEachChildIdentityLabelKey(t *testing.T) {
-	key := forEachChildIdentityLabelKey(
+	key := graphpkg.ForEachChildIdentityLabelKey(
 		"policies", "default-deny", "ns-a",
 		"NetworkPolicy", "networking.k8s.io",
 		"mygraph", "default",
@@ -432,7 +435,7 @@ func TestForEachChildIdentityLabelKey(t *testing.T) {
 // TestForEachChildIdentityLabelKeyNoGroup verifies core API group resources
 // (empty group) omit the group segment.
 func TestForEachChildIdentityLabelKeyNoGroup(t *testing.T) {
-	key := forEachChildIdentityLabelKey(
+	key := graphpkg.ForEachChildIdentityLabelKey(
 		"configs", "my-cm", "default",
 		"ConfigMap", "",
 		"mygraph", "default",
@@ -475,8 +478,8 @@ func TestGVRKindFromInformerFallback_RegressionIrregularPlurals(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.resource, func(t *testing.T) {
 			gvr := schema.GroupVersionResource{Resource: tc.resource}
-			got := gvrKindFromInformer(gvr, nil)
-			assert.Equal(t, tc.want, got, "gvrKindFromInformer(%q) should produce correct singular form", tc.resource)
+			got := watches.GVRKindFromInformer(gvr, nil)
+			assert.Equal(t, tc.want, got, "GVRKindFromInformer(%q) should produce correct singular form", tc.resource)
 		})
 	}
 }
@@ -488,13 +491,13 @@ func TestGVRKindFromInformerPrimaryPath(t *testing.T) {
 	accessor := &metav1.PartialObjectMetadata{}
 	accessor.Kind = "NetworkPolicy"
 	gvr := schema.GroupVersionResource{Resource: "networkpolicies"}
-	got := gvrKindFromInformer(gvr, accessor)
+	got := watches.GVRKindFromInformer(gvr, accessor)
 	assert.Equal(t, "NetworkPolicy", got, "primary path should return exact CamelCase Kind")
 }
 
 // TestClassifyAPIErrorNetworkErrors_RegressionRetry proves that raw network
-// errors (not wrapped as *StatusError) get classified as NodeSystemError for
-// the 5s retry instead of NodeError's 30-minute resync timer.
+// errors (not wrapped as *StatusError) get classified as dagpkg.NodeSystemError for
+// the 5s retry instead of dagpkg.NodeError's 30-minute resync timer.
 func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 	tests := []struct {
 		name string
@@ -508,8 +511,8 @@ func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			info := classifyAPIError(tc.err)
-			assert.Equal(t, NodeSystemError, info.state,
-				"network/transient error %q should be NodeSystemError for fast retry", tc.err)
+			assert.Equal(t, dagpkg.NodeSystemError, info.state,
+				"network/transient error %q should be dagpkg.NodeSystemError for fast retry", tc.err)
 		})
 	}
 }
@@ -522,20 +525,20 @@ func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 // and its data is in scope, regardless of readyWhen."
 //
 // A readyWhen expression that returns a non-bool type or hits a CEL error
-// is a permanent spec error — but it must NOT produce NodeError (which
-// blocks dependents). It must produce NodeNotReady.
+// is a permanent spec error — but it must NOT produce dagpkg.NodeError (which
+// blocks dependents). It must produce dagpkg.NodeNotReady.
 // ---------------------------------------------------------------------------
 
 // TestEvalReadiness_ExpressionErrorWrapsReadyWhenFailed proves that when
 // readyWhen evaluation fails with a permanent expression error (not data
-// pending), evalReadiness wraps it with ErrReadyWhenFailed so the
-// coordinator classifies it as NodeNotReady instead of NodeError.
+// pending), evalReadiness wraps it with compiler.ErrReadyWhenFailed so the
+// coordinator classifies it as dagpkg.NodeNotReady instead of dagpkg.NodeError.
 // // TestEvalReadiness_NormalNotReadyIsUnchanged proves that normal readyWhen
 // failures (condition evaluates to false, data pending) still produce
-// ErrWaitingForReadiness — the fix only affects expression errors.
+// compiler.ErrWaitingForReadiness — the fix only affects expression errors.
 func TestEvalReadiness_NormalNotReadyIsUnchanged(t *testing.T) {
-	spec := &GraphSpec{
-		Nodes: []Node{
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
 			{
 				ID:        "deploy",
 				Template:  map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "app"}},
@@ -543,7 +546,7 @@ func TestEvalReadiness_NormalNotReadyIsUnchanged(t *testing.T) {
 			},
 		},
 	}
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	eval := &evaluator{compiled: compiled, scope: map[string]any{
@@ -556,11 +559,11 @@ func TestEvalReadiness_NormalNotReadyIsUnchanged(t *testing.T) {
 	err = eval.evalReadiness("deploy", []string{"${deploy.status.availableReplicas > 0}"})
 	require.Error(t, err)
 
-	// Normal readyWhen failure (condition false) — should still be ErrWaitingForReadiness.
-	assert.True(t, errors.Is(err, ErrWaitingForReadiness),
-		"normal readyWhen=false should produce ErrWaitingForReadiness, got: %v", err)
-	assert.False(t, errors.Is(err, ErrReadyWhenFailed),
-		"normal readyWhen=false should NOT produce ErrReadyWhenFailed")
+	// Normal readyWhen failure (condition false) — should still be compiler.ErrWaitingForReadiness.
+	assert.True(t, errors.Is(err, compiler.ErrWaitingForReadiness),
+		"normal readyWhen=false should produce compiler.ErrWaitingForReadiness, got: %v", err)
+	assert.False(t, errors.Is(err, compiler.ErrReadyWhenFailed),
+		"normal readyWhen=false should NOT produce compiler.ErrReadyWhenFailed")
 }
 
 // ---------------------------------------------------------------------------
@@ -574,7 +577,7 @@ func TestEvalReadiness_NormalNotReadyIsUnchanged(t *testing.T) {
 // TestHighestPriorityChildError proves that when multiple forEach children
 // fail, the highest-priority error is returned — not the first one.
 func TestHighestPriorityChildError(t *testing.T) {
-	errConflict := fmt.Errorf("SSA conflict on apps/v1/Deployment my-app: %w: field taken", ErrFieldConflict)
+	errConflict := fmt.Errorf("SSA conflict on apps/v1/Deployment my-app: %w: field taken", compiler.ErrFieldConflict)
 	errForbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "deployments"}, "my-app", fmt.Errorf("RBAC"))
 	errNetwork := &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("connection refused")}
 	errCEL := fmt.Errorf("evaluating template: expression returned string, want int")
@@ -582,27 +585,27 @@ func TestHighestPriorityChildError(t *testing.T) {
 	tests := []struct {
 		name     string
 		errs     []error
-		wantType NodeState // the expected classification of the returned error
+		wantType dagpkg.NodeState // the expected classification of the returned error
 	}{
 		{
 			name:     "deterministic (Forbidden) over transient (network)",
 			errs:     []error{errNetwork, errForbidden},
-			wantType: NodeError,
+			wantType: dagpkg.NodeError,
 		},
 		{
 			name:     "deterministic (CEL) over conflict",
 			errs:     []error{errConflict, errCEL},
-			wantType: NodeError,
+			wantType: dagpkg.NodeError,
 		},
 		{
 			name:     "conflict over network (system error)",
 			errs:     []error{errNetwork, errConflict},
-			wantType: NodeConflict,
+			wantType: dagpkg.NodeConflict,
 		},
 		{
 			name:     "single error returns itself",
 			errs:     []error{errNetwork},
-			wantType: NodeSystemError,
+			wantType: dagpkg.NodeSystemError,
 		},
 	}
 
@@ -612,8 +615,8 @@ func TestHighestPriorityChildError(t *testing.T) {
 			require.NotNil(t, result)
 
 			// Classify the result to check priority.
-			if errors.Is(result, ErrFieldConflict) {
-				assert.Equal(t, NodeConflict, tc.wantType)
+			if errors.Is(result, compiler.ErrFieldConflict) {
+				assert.Equal(t, dagpkg.NodeConflict, tc.wantType)
 			} else {
 				info := classifyAPIError(result)
 				assert.Equal(t, tc.wantType, info.state,
@@ -820,13 +823,13 @@ func TestPatchStatusDetection(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestClassifyAPIError_EvalErrorWithNetworkPattern proves that non-API errors
-// (CEL evaluation, template rendering) are classified as NodeError even when
+// (CEL evaluation, template rendering) are classified as dagpkg.NodeError even when
 // their message contains network-like patterns. Before the fix, an error
 // message containing "unexpected EOF" from a JSON marshal failure would
-// false-positive as a network error → NodeSystemError → 5s retry loop.
+// false-positive as a network error → dagpkg.NodeSystemError → 5s retry loop.
 //
 // The fix: errors originating from non-API operations are wrapped with
-// ErrEvaluation at the source (toMap, evalString). classifyAPIError checks
+// compiler.ErrEvaluation at the source (toMap, evalString). classifyAPIError checks
 // for this sentinel before falling through to network pattern matching.
 //
 // This tests a classification boundary on a pure function — manufacturing
@@ -835,18 +838,18 @@ func TestPatchStatusDetection(t *testing.T) {
 // property directly.
 func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 	// An evaluation error whose message contains a network error pattern.
-	// Without the sentinel, this would be classified as NodeSystemError.
+	// Without the sentinel, this would be classified as dagpkg.NodeSystemError.
 	evalErr := fmt.Errorf("evaluating template: %w: unexpected EOF in field value",
-		ErrEvaluation)
+		compiler.ErrEvaluation)
 	info := classifyAPIError(evalErr)
-	assert.Equal(t, NodeError, info.state,
-		"evaluation errors must be NodeError even when message contains network patterns")
+	assert.Equal(t, dagpkg.NodeError, info.state,
+		"evaluation errors must be dagpkg.NodeError even when message contains network patterns")
 
-	// A real network error should still be NodeSystemError.
+	// A real network error should still be dagpkg.NodeSystemError.
 	netErr := fmt.Errorf("unexpected EOF during API call")
 	info = classifyAPIError(netErr)
-	assert.Equal(t, NodeSystemError, info.state,
-		"real network errors without ErrEvaluation sentinel should remain NodeSystemError")
+	assert.Equal(t, dagpkg.NodeSystemError, info.state,
+		"real network errors without compiler.ErrEvaluation sentinel should remain dagpkg.NodeSystemError")
 }
 
 // ---------------------------------------------------------------------------
@@ -866,7 +869,7 @@ func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
 	state := &reconcileState{
 		compiled: true,
-		PlanSummary: PlanSummary{
+		PlanSummary: dagpkg.PlanSummary{
 			HasPending: true,
 			HasBlocked: true,
 		},
@@ -883,7 +886,7 @@ func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
 func TestDeriveReadyCondition_PendingSurfacesReasons(t *testing.T) {
 	s := &reconcileState{
 		compiled:    true,
-		PlanSummary: PlanSummary{HasPending: true},
+		PlanSummary: dagpkg.PlanSummary{HasPending: true},
 		nodeErrors:  []string{"deploy: waiting for input from cfg"},
 	}
 	_, _, message := s.deriveReadyCondition()
@@ -891,71 +894,71 @@ func TestDeriveReadyCondition_PendingSurfacesReasons(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// finalizeSkippedStates — silent Ready fallthrough (#14) regression
+// dagpkg.FinalizeSkippedStates — silent Ready fallthrough (#14) regression
 // ---------------------------------------------------------------------------
 
 // TestFinalizeSkippedStates_RestoresPreviousState exercises the happy path —
 // a node in the outputsReady set with a previousPlanStates entry has its
-// state restored so PlanSummary counts it.
+// state restored so dagpkg.PlanSummary counts it.
 func TestFinalizeSkippedStates_RestoresPreviousState(t *testing.T) {
-	plan := &PlanState{
-		States: map[string]NodeState{
-			"n1": nodeUnvisited,
+	plan := &dagpkg.PlanState{
+		States: map[string]dagpkg.NodeState{
+			"n1": dagpkg.NodeUnvisited,
 		},
 	}
 	outputsReady := map[string]bool{"n1": true}
-	prev := map[string]NodeState{"n1": NodeReady}
+	prev := map[string]dagpkg.NodeState{"n1": dagpkg.NodeReady}
 
-	finalizeSkippedStates(plan, outputsReady, prev, nil)
+	dagpkg.FinalizeSkippedStates(plan, outputsReady, prev, nil)
 
-	assert.Equal(t, NodeReady, plan.States["n1"],
+	assert.Equal(t, dagpkg.NodeReady, plan.States["n1"],
 		"skipped node with prior state should restore to prior state")
 }
 
 // TestFinalizeSkippedStates_RegressionSilentReady guards against the
 // silent-Ready fallthrough documented in #14: a node in outputsReady with no
-// previousPlanStates entry previously stayed nodeUnvisited, which PlanSummary
+// previousPlanStates entry previously stayed dagpkg.NodeUnvisited, which dagpkg.PlanSummary
 // silently counts as zero — the graph appeared Ready with one fewer node
-// than it actually had. The fix explicitly marks such nodes NodePending.
+// than it actually had. The fix explicitly marks such nodes dagpkg.NodePending.
 func TestFinalizeSkippedStates_RegressionSilentReady(t *testing.T) {
-	plan := &PlanState{
-		States: map[string]NodeState{
-			"n1": nodeUnvisited,
+	plan := &dagpkg.PlanState{
+		States: map[string]dagpkg.NodeState{
+			"n1": dagpkg.NodeUnvisited,
 		},
 	}
 	outputsReady := map[string]bool{"n1": true}
 	// Empty previousPlanStates — the structurally-impossible case.
-	prev := map[string]NodeState{}
+	prev := map[string]dagpkg.NodeState{}
 
 	var diagnosedNode string
-	finalizeSkippedStates(plan, outputsReady, prev, func(id string) {
+	dagpkg.FinalizeSkippedStates(plan, outputsReady, prev, func(id string) {
 		diagnosedNode = id
 	})
 
-	assert.Equal(t, NodePending, plan.States["n1"],
+	assert.Equal(t, dagpkg.NodePending, plan.States["n1"],
 		"skipped node with no prior state must be marked Pending, not left Unvisited")
 	assert.Equal(t, "n1", diagnosedNode,
 		"the callback should surface the diagnostic so logs record the invariant break")
 }
 
 // TestFinalizeSkippedStates_IgnoresNonSkipped confirms the helper only
-// touches nodes in outputsReady AND in nodeUnvisited — nodes that were
+// touches nodes in outputsReady AND in dagpkg.NodeUnvisited — nodes that were
 // actually walked keep whatever the walker set.
 func TestFinalizeSkippedStates_IgnoresNonSkipped(t *testing.T) {
-	plan := &PlanState{
-		States: map[string]NodeState{
-			"walked": NodeError,
-			"skip":   nodeUnvisited,
+	plan := &dagpkg.PlanState{
+		States: map[string]dagpkg.NodeState{
+			"walked": dagpkg.NodeError,
+			"skip":   dagpkg.NodeUnvisited,
 		},
 	}
 	outputsReady := map[string]bool{"skip": true} // "walked" is NOT in outputsReady
-	prev := map[string]NodeState{"skip": NodeReady, "walked": NodeReady}
+	prev := map[string]dagpkg.NodeState{"skip": dagpkg.NodeReady, "walked": dagpkg.NodeReady}
 
-	finalizeSkippedStates(plan, outputsReady, prev, nil)
+	dagpkg.FinalizeSkippedStates(plan, outputsReady, prev, nil)
 
-	assert.Equal(t, NodeError, plan.States["walked"],
+	assert.Equal(t, dagpkg.NodeError, plan.States["walked"],
 		"node not in outputsReady must not be overwritten")
-	assert.Equal(t, NodeReady, plan.States["skip"],
+	assert.Equal(t, dagpkg.NodeReady, plan.States["skip"],
 		"node in outputsReady with prior state gets restored")
 }
 
@@ -969,7 +972,7 @@ func TestTryDispatch_RegressionExcludedPersistence(t *testing.T) {
 	// When tryDispatch evaluates child, it sees an excluded dependency
 	// and should mark child as Excluded in BOTH plan.States AND
 	// state.previousPlanStates.
-	nodes := []Node{
+	nodes := []graphpkg.Node{
 		{
 			ID: "root",
 			Template: map[string]any{
@@ -986,13 +989,13 @@ func TestTryDispatch_RegressionExcludedPersistence(t *testing.T) {
 			},
 		},
 	}
-	spec := &GraphSpec{Nodes: nodes}
-	compiled, err := compileGraphSpec(spec, nil)
+	spec := &graphpkg.GraphSpec{Nodes: nodes}
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
-	dag := assembleDAG(spec.Nodes, compiled.topology)
+	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
 
 	state := newInstanceState(compiled)
-	plan := NewPlanState(dag)
+	plan := dagpkg.NewPlanState(dag)
 	eval := newEvaluator(state)
 
 	walk := &walkState{
@@ -1010,15 +1013,15 @@ func TestTryDispatch_RegressionExcludedPersistence(t *testing.T) {
 	}
 
 	// Mark root as Excluded in the plan (simulates root's includeWhen=false).
-	plan.SetState(dag, "root", NodeExcluded)
-	state.previousPlanStates["root"] = NodeExcluded
+	plan.SetState(dag, "root", dagpkg.NodeExcluded)
+	state.previousPlanStates["root"] = dagpkg.NodeExcluded
 
 	// Dispatch child — it should see root is Excluded and contagiously exclude.
 	walk.tryDispatch(dag.Index["child"])
 
-	assert.Equal(t, NodeExcluded, plan.States["child"],
+	assert.Equal(t, dagpkg.NodeExcluded, plan.States["child"],
 		"child should be contagiously excluded in plan")
-	assert.Equal(t, NodeExcluded, state.previousPlanStates["child"],
+	assert.Equal(t, dagpkg.NodeExcluded, state.previousPlanStates["child"],
 		"child's excluded state must be persisted to previousPlanStates for next reconcile")
 }
 
@@ -1031,7 +1034,7 @@ func TestTryDispatch_RegressionExcludedPersistence(t *testing.T) {
 func revisionWithGeneration(gen int64) *unstructured.Unstructured {
 	r := &unstructured.Unstructured{}
 	r.SetLabels(map[string]string{
-		LabelGraphGeneration: fmt.Sprintf("%d", gen),
+		graphpkg.LabelGraphGeneration: fmt.Sprintf("%d", gen),
 	})
 	return r
 }
@@ -1138,8 +1141,8 @@ func TestForEach_SliceScopeReadyWhenWorks(t *testing.T) {
 // TestUpdatedFunction_ScalarNode proves that .updated() reads __updated from
 // a scalar scope object (map[string]any).
 func TestUpdatedFunction_ScalarNode(t *testing.T) {
-	spec := &GraphSpec{
-		Nodes: []Node{
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
 			{ID: "deploy", Template: map[string]any{
 				"apiVersion": "apps/v1", "kind": "Deployment",
 				"metadata": map[string]any{"name": "test"},
@@ -1149,7 +1152,7 @@ func TestUpdatedFunction_ScalarNode(t *testing.T) {
 			}},
 		},
 	}
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -1169,7 +1172,7 @@ func TestUpdatedFunction_ScalarNode(t *testing.T) {
 			if tt.updated != nil {
 				deploy["__updated"] = tt.updated
 			}
-			result, err := compiled.eval("deploy.updated()", map[string]any{
+			result, err := compiled.Eval("deploy.updated()", map[string]any{
 				"deploy": deploy,
 			})
 			require.NoError(t, err)
@@ -1182,18 +1185,18 @@ func TestUpdatedFunction_ScalarNode(t *testing.T) {
 // returns true only when ALL items have __updated == true (the aggregate
 // semantics matching .ready()). Empty collections are vacuously true.
 func TestUpdatedFunction_Collection(t *testing.T) {
-	spec := &GraphSpec{
-		Nodes: []Node{
-			{ID: "deploys", Watch: map[string]any{
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
+			node(graphpkg.Node{ID: "deploys", Watch: map[string]any{
 				"apiVersion": "apps/v1", "kind": "Deployment",
 				"selector": map[string]any{},
-			}, nodeType: NodeTypeWatch},
+			}}, graphpkg.NodeTypeWatch),
 			{ID: "check", Def: map[string]any{
 				"result": "${deploys.updated()}",
 			}},
 		},
 	}
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -1216,7 +1219,7 @@ func TestUpdatedFunction_Collection(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := compiled.eval("deploys.updated()", map[string]any{
+			result, err := compiled.Eval("deploys.updated()", map[string]any{
 				"deploys": tt.items,
 			})
 			require.NoError(t, err)
@@ -1229,18 +1232,18 @@ func TestUpdatedFunction_Collection(t *testing.T) {
 // collection filter expressions — the primary propagateWhen pattern from
 // 005-reconciliation.md § Propagation Control.
 func TestUpdatedFunction_Filter(t *testing.T) {
-	spec := &GraphSpec{
-		Nodes: []Node{
-			{ID: "deploys", Watch: map[string]any{
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
+			node(graphpkg.Node{ID: "deploys", Watch: map[string]any{
 				"apiVersion": "apps/v1", "kind": "Deployment",
 				"selector": map[string]any{},
-			}, nodeType: NodeTypeWatch},
+			}}, graphpkg.NodeTypeWatch),
 			{ID: "check", Def: map[string]any{
 				"count": "${deploys.filter(d, d.updated()).size()}",
 			}},
 		},
 	}
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	items := []any{
@@ -1248,7 +1251,7 @@ func TestUpdatedFunction_Filter(t *testing.T) {
 		map[string]any{"__updated": false, "metadata": map[string]any{"name": "b"}},
 		map[string]any{"__updated": true, "metadata": map[string]any{"name": "c"}},
 	}
-	result, err := compiled.eval("deploys.filter(d, d.updated()).size()", map[string]any{
+	result, err := compiled.Eval("deploys.filter(d, d.updated()).size()", map[string]any{
 		"deploys": items,
 	})
 	require.NoError(t, err)
@@ -1263,12 +1266,12 @@ func TestUpdatedFunction_Filter(t *testing.T) {
 //	!updated() && ready() → Pending
 //	!updated() && !ready()→ Stuck
 func TestUpdatedFunction_CombinedWithReady(t *testing.T) {
-	spec := &GraphSpec{
-		Nodes: []Node{
-			{ID: "items", Watch: map[string]any{
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
+			node(graphpkg.Node{ID: "items", Watch: map[string]any{
 				"apiVersion": "v1", "kind": "Pod",
 				"selector": map[string]any{},
-			}, nodeType: NodeTypeWatch},
+			}}, graphpkg.NodeTypeWatch),
 			{ID: "counts", Def: map[string]any{
 				"current":  "${items.filter(i, i.updated() && i.ready()).size()}",
 				"updating": "${items.filter(i, i.updated() && !i.ready()).size()}",
@@ -1277,7 +1280,7 @@ func TestUpdatedFunction_CombinedWithReady(t *testing.T) {
 			}},
 		},
 	}
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	items := []any{
@@ -1288,19 +1291,19 @@ func TestUpdatedFunction_CombinedWithReady(t *testing.T) {
 	}
 	scope := map[string]any{"items": items}
 
-	current, err := compiled.eval("items.filter(i, i.updated() && i.ready()).size()", scope)
+	current, err := compiled.Eval("items.filter(i, i.updated() && i.ready()).size()", scope)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), current)
 
-	updating, err := compiled.eval("items.filter(i, i.updated() && !i.ready()).size()", scope)
+	updating, err := compiled.Eval("items.filter(i, i.updated() && !i.ready()).size()", scope)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), updating)
 
-	pending, err := compiled.eval("items.filter(i, !i.updated() && i.ready()).size()", scope)
+	pending, err := compiled.Eval("items.filter(i, !i.updated() && i.ready()).size()", scope)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), pending)
 
-	stuck, err := compiled.eval("items.filter(i, !i.updated() && !i.ready()).size()", scope)
+	stuck, err := compiled.Eval("items.filter(i, !i.updated() && !i.ready()).size()", scope)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), stuck)
 }
@@ -1317,8 +1320,8 @@ func TestIsForEachItemUpdated(t *testing.T) {
 
 	// Build a resource with the forEach child generation label.
 	makeItem := func(name, ns, apiVersion, kind string, gen int64) map[string]any {
-		gvk := gvkFromMap(map[string]any{"apiVersion": apiVersion, "kind": kind})
-		genKey := forEachChildGenerationLabelKey(parentID, name, ns, kind, gvk.Group, graphName, graphNS)
+		gvk := graphpkg.GVKFromMap(map[string]any{"apiVersion": apiVersion, "kind": kind})
+		genKey := graphpkg.ForEachChildGenerationLabelKey(parentID, name, ns, kind, gvk.Group, graphName, graphNS)
 		return map[string]any{
 			"apiVersion": apiVersion,
 			"kind":       kind,
@@ -1415,8 +1418,8 @@ func TestMarkUpdated(t *testing.T) {
 // stamps __updated = true on the scope entry. Definition nodes are always
 // re-evaluated — vacuously updated.
 func TestReconcileDefinition_StampsUpdated(t *testing.T) {
-	spec := &GraphSpec{
-		Nodes: []Node{
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
 			{ID: "config", Def: map[string]any{
 				"name":  "my-app",
 				"port":  "8080",
@@ -1424,7 +1427,7 @@ func TestReconcileDefinition_StampsUpdated(t *testing.T) {
 			}},
 		},
 	}
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	eval := &evaluator{compiled: compiled, scope: map[string]any{}}
@@ -1445,15 +1448,15 @@ func TestReconcileDefinition_StampsUpdated(t *testing.T) {
 // updated() = false so propagateWhen can count them as "Pending" in the
 // four-state matrix (005-reconciliation.md § Propagation Control).
 func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
-	spec := &GraphSpec{
-		Nodes: []Node{
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
 			{ID: "source", Def: map[string]any{
 				"items": []any{
 					map[string]any{"metadata": map[string]any{"name": "alpha"}},
 					map[string]any{"metadata": map[string]any{"name": "beta"}},
 				},
 			}},
-			{ID: "workers", ForEach: &ForEachBinding{VarName: "item", Expr: "${source.items}"},
+			{ID: "workers", ForEach: &graphpkg.ForEachBinding{VarName: "item", Expr: "${source.items}"},
 				// propagateWhen that immediately halts — forces ALL items
 				// through the carry-forward path.
 				PropagateWhen: []string{"${false}"},
@@ -1461,7 +1464,7 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 			},
 		},
 	}
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	state := newInstanceState(compiled)
@@ -1479,8 +1482,8 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 	// Build previous scope data with generation labels.
 	// "alpha" has current generation (5) → __updated = true
 	// "beta" has old generation (4) → __updated = false
-	alphaGenKey := forEachChildGenerationLabelKey("workers", "alpha", "default", "Deployment", "apps", "test", "default")
-	betaGenKey := forEachChildGenerationLabelKey("workers", "beta", "default", "Deployment", "apps", "test", "default")
+	alphaGenKey := graphpkg.ForEachChildGenerationLabelKey("workers", "alpha", "default", "Deployment", "apps", "test", "default")
+	betaGenKey := graphpkg.ForEachChildGenerationLabelKey("workers", "beta", "default", "Deployment", "apps", "test", "default")
 
 	prevAlpha := map[string]any{
 		"apiVersion": "apps/v1", "kind": "Deployment",
@@ -1524,8 +1527,8 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 
 	r := &GraphReconciler{}
 	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false)
-	// ErrWaitingForReadiness expected — propagateWhen halted expansion.
-	require.ErrorIs(t, err, ErrWaitingForReadiness)
+	// compiler.ErrWaitingForReadiness expected — propagateWhen halted expansion.
+	require.ErrorIs(t, err, compiler.ErrWaitingForReadiness)
 
 	// Verify carried-forward items in scope have correct __updated stamps.
 	items, ok := eval.scope["workers"].([]any)
@@ -1549,19 +1552,19 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 // input hash matches but the generation label on the resource is the only
 // signal of which generation it was applied in.
 func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
-	spec := &GraphSpec{
-		Nodes: []Node{
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
 			{ID: "source", Def: map[string]any{
 				"items": []any{
 					map[string]any{"metadata": map[string]any{"name": "alpha"}},
 				},
 			}},
-			{ID: "results", ForEach: &ForEachBinding{VarName: "item", Expr: "${source.items}"},
+			{ID: "results", ForEach: &graphpkg.ForEachBinding{VarName: "item", Expr: "${source.items}"},
 				Def: map[string]any{"name": "${item.metadata.name}"},
 			},
 		},
 	}
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	state := newInstanceState(compiled)
@@ -1574,7 +1577,7 @@ func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
 	eval.scope["source"] = map[string]any{"items": sourceItems}
 
 	// Build previous scope with a generation label matching current gen.
-	genKey := forEachChildGenerationLabelKey("results", "alpha", "default", "Deployment", "apps", "test", "default")
+	genKey := graphpkg.ForEachChildGenerationLabelKey("results", "alpha", "default", "Deployment", "apps", "test", "default")
 	prevAlpha := map[string]any{
 		"apiVersion": "apps/v1", "kind": "Deployment",
 		"metadata": map[string]any{
@@ -1663,7 +1666,7 @@ func TestMergeCollectionChanges_InputNotMutated(t *testing.T) {
 	// items[:0] in-place filtering and would corrupt the input.
 	result, err := mergeCollectionChanges(
 		context.Background(), nil, cached,
-		[]CollectionChange{{Namespace: "ns", Name: "b", EventType: WatchEventDelete}},
+		[]watches.CollectionChange{{Namespace: "ns", Name: "b", EventType: watches.WatchEventDelete}},
 		schema.GroupVersionKind{}, nil,
 	)
 	require.NoError(t, err)
@@ -1692,11 +1695,11 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 			},
 		},
 	}
-	spec, err := extractGraphSpec(graphObj)
+	spec, err := graphpkg.ExtractGraphSpec(graphObj)
 	require.NoError(t, err)
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
-	dag := assembleDAG(spec.Nodes, compiled.topology)
+	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
 	resultsNode := dag.Nodes[dag.Index["results"]]
 
 	graph := &unstructured.Unstructured{Object: map[string]any{
@@ -1776,8 +1779,8 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 // blocking rgdStatus propagation and preventing RGDs from staying Active.
 func TestPath2_SelfRefresh_StampsReady(t *testing.T) {
 	// Build: crd (template, no readyWhen) → downstream (def, uses crd.ready())
-	spec := &GraphSpec{
-		Nodes: []Node{
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
 			{ID: "crd", Template: map[string]any{
 				"apiVersion": "apiextensions.k8s.io/v1",
 				"kind":       "CustomResourceDefinition",
@@ -1788,7 +1791,7 @@ func TestPath2_SelfRefresh_StampsReady(t *testing.T) {
 			}},
 		},
 	}
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
 	// Phase 1: Normal dispatch stamps __ready via evalReadiness.
@@ -1804,7 +1807,7 @@ func TestPath2_SelfRefresh_StampsReady(t *testing.T) {
 	}
 	// evalReadiness with no readyWhen stamps __ready = true
 	require.NoError(t, eval1.evalReadiness("crd", nil))
-	result1, err := compiled.eval("crd.ready()", eval1.scope)
+	result1, err := compiled.Eval("crd.ready()", eval1.scope)
 	require.NoError(t, err)
 	assert.True(t, result1.(bool), "after evalReadiness, crd.ready() should be true")
 
@@ -1820,16 +1823,16 @@ func TestPath2_SelfRefresh_StampsReady(t *testing.T) {
 
 	// BUG: without markReady, __ready is missing from the fresh scope.
 	// Verify .ready() returns false — this is the regression.
-	result2, err := compiled.eval("crd.ready()", eval1.scope)
+	result2, err := compiled.Eval("crd.ready()", eval1.scope)
 	require.NoError(t, err)
 	assert.False(t, result2.(bool),
 		"REGRESSION: after Path 2 scope replacement without markReady, "+
 			"crd.ready() should be false because __ready is missing")
 
 	// FIX: Path 2 must call markReady after readiness evaluation.
-	// For nodes with no readyWhen, nodeState is NodeReady, so markReady(true).
+	// For nodes with no readyWhen, nodeState is dagpkg.NodeReady, so markReady(true).
 	eval1.markReady("crd", true)
-	result3, err := compiled.eval("crd.ready()", eval1.scope)
+	result3, err := compiled.Eval("crd.ready()", eval1.scope)
 	require.NoError(t, err)
 	assert.True(t, result3.(bool),
 		"after markReady, crd.ready() should be true again")
@@ -1845,40 +1848,40 @@ func TestPath2_SelfRefresh_StampsReady(t *testing.T) {
 // access) produce no AST field paths, causing processExpr to bail via the
 // exprPaths[expr] miss path without registering the dependency.
 func TestBareIdentifierForEachDependency(t *testing.T) {
-	spec := &GraphSpec{
-		Nodes: []Node{
-			{ID: "source", nodeType: NodeTypeTemplate, Template: map[string]any{
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
+			node(graphpkg.Node{ID: "source", Template: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata":   map[string]any{"name": "src"},
-			}},
-			{ID: "items", nodeType: NodeTypeWatch, Watch: map[string]any{
+			}}, graphpkg.NodeTypeTemplate),
+			node(graphpkg.Node{ID: "items", Watch: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Pod",
 				"selector":   map[string]any{},
-			}},
-			{ID: "consumer", nodeType: NodeTypeTemplate,
-				ForEach: &ForEachBinding{VarName: "item", Expr: "${items}"},
+			}}, graphpkg.NodeTypeWatch),
+			node(graphpkg.Node{ID: "consumer",
+				ForEach: &graphpkg.ForEachBinding{VarName: "item", Expr: "${items}"},
 				Template: map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
 					"metadata":   map[string]any{"name": "${item.metadata.name}-copy"},
 					"data":       map[string]any{"ref": "${source.metadata.name}"},
 				},
-			},
+			}, graphpkg.NodeTypeTemplate),
 		},
 	}
 
-	compiled, err := compileGraphSpec(spec, nil)
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, compiled)
 
 	// Find the consumer node in the DAG.
-	dag := compiled.topology
+	dag := compiled.Topology
 	consumerIdx, ok := dag.Index["consumer"]
 	assert.True(t, ok, "consumer node must exist in DAG")
 
-	consumerNode := compiled.topology.nodeDeps[consumerIdx]
+	consumerNode := compiled.Topology.NodeDeps(consumerIdx)
 
 	// The consumer node must depend on both "items" (bare forEach reference)
 	// and "source" (field access in template body).

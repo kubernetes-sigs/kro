@@ -11,6 +11,10 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
 )
 
 // instanceState holds the mutable reconcile-time state for a single Graph
@@ -18,19 +22,19 @@ import (
 // compiledGraph with other instances. This is correct because the mutable
 // state tracks per-instance Kubernetes resources with different observed states.
 type instanceState struct {
-	compiled *compiledGraph
+	compiled *compiler.CompiledGraph
 
 	// Per-instance spec and DAG. The compiled graph is shared across instances
 	// with the same compilation key; the spec and DAG contain per-instance
 	// node bodies (template maps with concrete values).
 	// Per 004-compilation.md § Structural Compilation Caching.
-	spec *GraphSpec
-	dag  *DAG
+	spec *graph.GraphSpec
+	dag  *dagpkg.DAG
 
 	// State retained across reconciles for propagateWhen and forEach diffing.
 	previousScope      map[string]any       // node ID → last scope data
 	previousKeys       map[string][]string  // node ID → last applied keys
-	previousPlanStates map[string]NodeState // node ID → last plan state
+	previousPlanStates map[string]dagpkg.NodeState // node ID → last plan state
 	forEachItems       map[string][]any     // "nodeID/varName" → cached collection items
 
 	// Evaluation hashing state — retained across reconciles for change detection.
@@ -116,12 +120,12 @@ type instanceState struct {
 }
 
 // newInstanceState creates a fresh instanceState for a compiledGraph.
-func newInstanceState(compiled *compiledGraph) *instanceState {
+func newInstanceState(compiled *compiler.CompiledGraph) *instanceState {
 	return &instanceState{
 		compiled:           compiled,
 		previousScope:      map[string]any{},
 		previousKeys:       map[string][]string{},
-		previousPlanStates: map[string]NodeState{},
+		previousPlanStates: map[string]dagpkg.NodeState{},
 		previousEvalHashes: map[string]string{},
 		previousSelfHashes: map[string]string{},
 		forEachItems:       map[string][]any{},

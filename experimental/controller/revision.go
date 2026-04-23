@@ -30,6 +30,10 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
 )
 
 // GraphRevisionGVK is the GVK for the GraphRevision custom resource.
@@ -69,7 +73,7 @@ func revisionName(graphName string, generation int64) string {
 // The revision is a spec snapshot — CEL ${...} expressions are preserved
 // as-is. Ownership labels and template hashes are injected at apply time,
 // not at materialization time.
-func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructured.Unstructured {
+func materialize(graph *unstructured.Unstructured, spec *graphpkg.GraphSpec) *unstructured.Unstructured {
 	graphName := graph.GetName()
 	graphNamespace := graph.GetNamespace()
 	generation := graph.GetGeneration()
@@ -89,8 +93,8 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 				"name":      revisionName(graphName, generation),
 				"namespace": graphNamespace,
 				"labels": map[string]any{
-					LabelRevisionGraphName: labelSafeGraphName(graphName),
-					LabelGraphGeneration:   generationStr,
+					graphpkg.LabelRevisionGraphName: graphpkg.LabelSafeGraphName(graphName),
+					graphpkg.LabelGraphGeneration:   generationStr,
 				},
 				"ownerReferences": []any{
 					map[string]any{
@@ -116,7 +120,7 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 // def); the value may be a map (static body) or a string (CEL expression
 // for the body-producing classifications). Ref/Watch are always maps.
 // The revision re-parses with the same classification.
-func snapshotNode(node Node) map[string]any {
+func snapshotNode(node graphpkg.Node) map[string]any {
 	entry := map[string]any{
 		"id": node.ID,
 	}
@@ -125,11 +129,11 @@ func snapshotNode(node Node) map[string]any {
 		// CEL-as-whole-body: the value under the classification keyword
 		// is a string. ExprKeyword tells us which keyword to use.
 		switch node.ExprKeyword {
-		case NodeTypeTemplate:
+		case graphpkg.NodeTypeTemplate:
 			entry["template"] = node.TemplateExpr
-		case NodeTypePatch:
+		case graphpkg.NodeTypePatch:
 			entry["patch"] = node.TemplateExpr
-		case NodeTypeDef:
+		case graphpkg.NodeTypeDef:
 			entry["def"] = node.TemplateExpr
 		default:
 			// Parser constrains ExprKeyword to exactly {Template, Patch, Def}
@@ -138,23 +142,23 @@ func snapshotNode(node Node) map[string]any {
 		}
 	} else {
 		switch node.Type() {
-		case NodeTypeTemplate:
+		case graphpkg.NodeTypeTemplate:
 			if node.Template != nil {
 				entry["template"] = deepCopyMap(node.Template)
 			}
-		case NodeTypePatch:
+		case graphpkg.NodeTypePatch:
 			if node.Patch != nil {
 				entry["patch"] = deepCopyMap(node.Patch)
 			}
-		case NodeTypeRef:
+		case graphpkg.NodeTypeRef:
 			if node.Ref != nil {
 				entry["ref"] = deepCopyMap(node.Ref)
 			}
-		case NodeTypeWatch:
+		case graphpkg.NodeTypeWatch:
 			if node.Watch != nil {
 				entry["watch"] = deepCopyMap(node.Watch)
 			}
-		case NodeTypeDef:
+		case graphpkg.NodeTypeDef:
 			if node.Def != nil {
 				entry["def"] = deepCopyMap(node.Def)
 			}
@@ -167,13 +171,13 @@ func snapshotNode(node Node) map[string]any {
 		entry["finalizes"] = node.Finalizes
 	}
 	if len(node.IncludeWhen) > 0 {
-		entry["includeWhen"] = stringsToAny(node.IncludeWhen)
+		entry["includeWhen"] = graphpkg.StringsToAny(node.IncludeWhen)
 	}
 	if len(node.ReadyWhen) > 0 {
-		entry["readyWhen"] = stringsToAny(node.ReadyWhen)
+		entry["readyWhen"] = graphpkg.StringsToAny(node.ReadyWhen)
 	}
 	if len(node.PropagateWhen) > 0 {
-		entry["propagateWhen"] = stringsToAny(node.PropagateWhen)
+		entry["propagateWhen"] = graphpkg.StringsToAny(node.PropagateWhen)
 	}
 	if node.Lifecycle.Apply != "" {
 		entry["lifecycle"] = map[string]any{"apply": node.Lifecycle.Apply}
@@ -188,7 +192,7 @@ func snapshotNode(node Node) map[string]any {
 
 // extractRevisionSpec parses a GraphSpec from a GraphRevision object.
 // The revision's spec.nodes has the same structure as Graph spec.nodes.
-func extractRevisionSpec(revision *unstructured.Unstructured) (*GraphSpec, error) {
+func extractRevisionSpec(revision *unstructured.Unstructured) (*graphpkg.GraphSpec, error) {
 	spec, ok := revision.Object["spec"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("revision %s: missing spec", revision.GetName())
@@ -197,11 +201,11 @@ func extractRevisionSpec(revision *unstructured.Unstructured) (*GraphSpec, error
 	if !ok {
 		return nil, fmt.Errorf("revision %s: missing spec.nodes", revision.GetName())
 	}
-	nodes, err := parseNodeList(rawNodes)
+	nodes, err := graphpkg.ParseNodeList(rawNodes)
 	if err != nil {
 		return nil, fmt.Errorf("revision %s: %w", revision.GetName(), err)
 	}
-	return &GraphSpec{Nodes: nodes}, nil
+	return &graphpkg.GraphSpec{Nodes: nodes}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +248,7 @@ func getRevision(ctx context.Context, c client.Client, name, namespace string) (
 // listRevisions returns all GraphRevisions for a given Graph, ordered by
 // generation (ascending). Uses the graph-name label for selection.
 func listRevisions(ctx context.Context, c client.Client, graphName, namespace string) ([]*unstructured.Unstructured, error) {
-	req, err := labels.NewRequirement(LabelRevisionGraphName, selection.Equals, []string{labelSafeGraphName(graphName)})
+	req, err := labels.NewRequirement(graphpkg.LabelRevisionGraphName, selection.Equals, []string{graphpkg.LabelSafeGraphName(graphName)})
 	if err != nil {
 		return nil, fmt.Errorf("building label selector: %w", err)
 	}
@@ -348,7 +352,7 @@ func revisionGeneration(revision *unstructured.Unstructured) int64 {
 	if lbls == nil {
 		return 0
 	}
-	genStr, ok := lbls[LabelGraphGeneration]
+	genStr, ok := lbls[graphpkg.LabelGraphGeneration]
 	if !ok {
 		return 0
 	}
@@ -452,15 +456,15 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	// No revision for this generation. Parse, compile, and create one.
 	// If compilation fails, no revision is created — the failure is reported
 	// on the Graph. A revision can only exist if processing succeeded.
-	graphSpec, err := extractGraphSpec(graph.Object)
+	graphSpec, err := graphpkg.ExtractGraphSpec(graph.Object)
 	if err != nil {
 		return nil, nil, fmt.Errorf("extracting graph spec: %w", err)
 	}
 
 	// Compile to verify validity before creating the revision.
 	// Phase 1-2: resolve types (I/O) before pure compilation.
-	typeInfo := resolveNodeTypes(graphSpec.Nodes, r.SchemaResolver)
-	compiled, err := compileGraphSpec(graphSpec, typeInfo)
+	typeInfo := compiler.ResolveNodeTypes(graphSpec.Nodes, r.SchemaResolver)
+	compiled, err := compiler.CompileGraphSpec(graphSpec, typeInfo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -479,7 +483,7 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	// Validate that identity label keys won't exceed the DNS subdomain limit.
 	// This is a compile-time check — same inputs always produce the same length.
 	for _, node := range graphSpec.Nodes {
-		if err := validateIdentityLabelKey(node.ID, graphName, namespace); err != nil {
+		if err := graphpkg.ValidateIdentityLabelKey(node.ID, graphName, namespace); err != nil {
 			return nil, nil, fmt.Errorf("label key too long: %w", err)
 		}
 	}
@@ -525,7 +529,7 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 // after the parent has created its CRDs, the schema resolver can look up the
 // child's ref node types — enabling full type checking including forEach
 // list-type validation (Phase 4b).
-func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, namespace string, spec *GraphSpec, compiled *compiledGraph) error {
+func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, namespace string, spec *graphpkg.GraphSpec, compiled *compiler.CompiledGraph) error {
 	for _, node := range spec.Nodes {
 		if node.ForEach == nil {
 			continue
@@ -538,7 +542,7 @@ func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, n
 		// Check if the body is a Graph CR template.
 		apiVersion, _ := body["apiVersion"].(string)
 		kind, _ := body["kind"].(string)
-		if !isGraphCRLiteral(apiVersion, kind) {
+		if !compiler.IsGraphCRLiteral(apiVersion, kind) {
 			continue
 		}
 
@@ -557,14 +561,14 @@ func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, n
 		}
 
 		// Extract the inner CEL expression from the ${...} wrapper.
-		dollars, innerExpr, _, _ := findExpr(nodesExpr, 0)
+		dollars, innerExpr, _, _ := graphpkg.FindExpr(nodesExpr, 0)
 		if innerExpr == "" || len(dollars) != 1 {
 			continue // not a single-dollar expression, skip
 		}
 
 		// Build a scope with resolved ref nodes referenced by the expression.
 		scope := map[string]any{
-			reservedNodeReadyVar: map[string]bool{},
+			compiler.ReservedNodeReadyVar: map[string]bool{},
 		}
 		for _, n := range spec.Nodes {
 			if n.Ref == nil {
@@ -607,7 +611,7 @@ func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, n
 		}
 
 		// Evaluate the spec.nodes expression.
-		result, err := compiled.eval(innerExpr, scope)
+		result, err := compiled.Eval(innerExpr, scope)
 		if err != nil {
 			// Expression evaluation failed — can't pre-compile. Skip gracefully.
 			continue
@@ -618,15 +622,15 @@ func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, n
 		}
 
 		// Parse and compile the child graph spec.
-		childNodes, err := parseNodeList(nodeList)
+		childNodes, err := graphpkg.ParseNodeList(nodeList)
 		if err != nil {
 			// Parse errors (invalid IDs, duplicates, reserved keywords,
 			// forEach conflicts, invalid apiVersion) surface directly.
 			return fmt.Errorf("node %q: child graph: %w", node.ID, err)
 		}
-		childSpec := &GraphSpec{Nodes: childNodes}
-		childTypeInfo := resolveNodeTypes(childNodes, r.SchemaResolver)
-		if _, err := compileGraphSpec(childSpec, childTypeInfo); err != nil {
+		childSpec := &graphpkg.GraphSpec{Nodes: childNodes}
+		childTypeInfo := compiler.ResolveNodeTypes(childNodes, r.SchemaResolver)
+		if _, err := compiler.CompileGraphSpec(childSpec, childTypeInfo); err != nil {
 			// All compilation errors surface — cycles, expression
 			// validation, type errors, etc. The compiler is the single
 			// source of truth for structural correctness.
@@ -639,9 +643,9 @@ func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, n
 // resolveRefForPrecompilation fetches a ref node's target object for use in
 // pre-compilation scope. Similar to reconcileRef but without watcher setup
 // or scope mutation.
-func (r *GraphReconciler) resolveRefForPrecompilation(ctx context.Context, defaultNamespace string, node Node) (map[string]any, error) {
+func (r *GraphReconciler) resolveRefForPrecompilation(ctx context.Context, defaultNamespace string, node graphpkg.Node) (map[string]any, error) {
 	ref := node.Ref
-	gvk := gvkFromMap(ref)
+	gvk := graphpkg.GVKFromMap(ref)
 	md, _ := ref["metadata"].(map[string]any)
 	name, _ := md["name"].(string)
 	namespace, _ := md["namespace"].(string)
@@ -654,7 +658,7 @@ func (r *GraphReconciler) resolveRefForPrecompilation(ctx context.Context, defau
 	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, obj); err != nil {
 		return nil, err
 	}
-	normalized, _ := normalizeTypes(obj.Object).(map[string]any)
+	normalized, _ := graphpkg.NormalizeTypes(obj.Object).(map[string]any)
 	return normalized, nil
 }
 
@@ -686,7 +690,7 @@ func (r *GraphReconciler) findSupersededRevisions(ctx context.Context, graphName
 //
 // Returns nil if the old revision's spec cannot be parsed (fall back to
 // triggering all nodes).
-func diffRevisionNodes(active *GraphSpec, superseded []*unstructured.Unstructured) map[string]bool {
+func diffRevisionNodes(active *graphpkg.GraphSpec, superseded []*unstructured.Unstructured) map[string]bool {
 	if len(superseded) == 0 {
 		return nil
 	}
@@ -732,7 +736,7 @@ func diffRevisionNodes(active *GraphSpec, superseded []*unstructured.Unstructure
 //
 // For N identical child graphs (common in nested graph patterns with forEach),
 // this means 1 compilation + N-1 key lookups instead of N compilations.
-func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string, revision *unstructured.Unstructured) (*GraphSpec, *instanceState, error) {
+func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string, revision *unstructured.Unstructured) (*graphpkg.GraphSpec, *instanceState, error) {
 	instanceKey := revision.GetNamespace() + "/" + revision.GetName()
 
 	// Retrieve existing instance state (may have resolvedDynamicGVKs from
@@ -748,7 +752,7 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 	// (steady-state reconcile). Check generation-based staleness and
 	// whether dynamic GVK schemas can now be resolved.
 	if existing != nil && existing.compiled != nil {
-		genFresh := r.SchemaGen == nil || existing.compiled.typeCacheGen >= r.SchemaGen.Generation()
+		genFresh := r.SchemaGen == nil || existing.compiled.TypeCacheGen >= r.SchemaGen.Generation()
 		schemasFresh := !dynamicGVKSchemasStale(existing.compiled, dynamicGVKHints)
 		if genFresh && schemasFresh {
 			return existing.spec, existing, nil
@@ -767,10 +771,10 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 	// resolved dynamic GVK hints to produce the full cache key. Instances
 	// with the same structure AND same resolved GVKs share a compiled artifact.
 	// On first reconcile (no hints), all instances share the bootstrap artifact.
-	compilationKey := compilationKeyWithHints(spec.CompilationKey(), dynamicGVKHints)
+	compilationKey := graphpkg.CompilationKeyWithHints(spec.CompilationKey(), dynamicGVKHints)
 	compiled := r.Caches.getCompiled(compilationKey)
 	// Validate the cached artifact is not stale (generation check).
-	if compiled != nil && r.SchemaGen != nil && compiled.typeCacheGen < r.SchemaGen.Generation() {
+	if compiled != nil && r.SchemaGen != nil && compiled.TypeCacheGen < r.SchemaGen.Generation() {
 		compiled = nil // stale — recompile
 	}
 	if compiled == nil {
@@ -782,15 +786,15 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 		// Resolve types. Then pre-populate schemas for dynamic GVK nodes
 		// whose GVK was resolved on a previous reconcile. The compiler
 		// is unaware of dynamic GVKs — it just sees pre-populated types.
-		typeInfo := resolveNodeTypes(spec.Nodes, r.SchemaResolver)
+		typeInfo := compiler.ResolveNodeTypes(spec.Nodes, r.SchemaResolver)
 		if r.SchemaResolver != nil && len(dynamicGVKHints) > 0 {
-			for _, nodeID := range typeInfo.dynamicGVKNodes {
+			for _, nodeID := range typeInfo.DynamicGVKNodes {
 				if gvk, ok := dynamicGVKHints[nodeID]; ok {
-					typeInfo.prePopulateSchema(nodeID, gvk, r.SchemaResolver)
+					typeInfo.PrePopulateSchema(nodeID, gvk, r.SchemaResolver)
 				}
 			}
 		}
-		compiled, err = compileGraphSpec(spec, typeInfo)
+		compiled, err = compiler.CompileGraphSpec(spec, typeInfo)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -801,14 +805,14 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 		if err := r.precompileExpressionChildGraphs(ctx, namespace, spec, compiled); err != nil {
 			return nil, nil, err
 		}
-		compiled.typeCacheGen = cacheGen
+		compiled.TypeCacheGen = cacheGen
 	}
 
 	// Assemble a per-instance DAG from the shared topology and this
 	// instance's node specs. The topology (sort order, edges, levels)
 	// is a compilation artifact shared across instances; the nodes contain
 	// per-instance concrete values.
-	dag := assembleDAG(spec.Nodes, compiled.topology)
+	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
 
 	// Check if this is an evicted instance (compiled was nil'd by
 	// evictUnresolved). The per-node mutable state is valid across
@@ -911,15 +915,15 @@ func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active *unst
 // dynamicGVKSchemasStale reports whether the artifact has dynamic GVK nodes
 // whose schemas can now be resolved (the instance has resolved GVKs from a
 // previous reconcile, but the artifact was compiled without those schemas).
-func dynamicGVKSchemasStale(compiled *compiledGraph, resolvedGVKs map[string]schema.GroupVersionKind) bool {
-	if len(compiled.dynamicGVKNodes) == 0 || len(resolvedGVKs) == 0 {
+func dynamicGVKSchemasStale(compiled *compiler.CompiledGraph, resolvedGVKs map[string]schema.GroupVersionKind) bool {
+	if len(compiled.DynamicGVKNodes) == 0 || len(resolvedGVKs) == 0 {
 		return false
 	}
-	for _, nodeID := range compiled.dynamicGVKNodes {
+	for _, nodeID := range compiled.DynamicGVKNodes {
 		if _, resolved := resolvedGVKs[nodeID]; !resolved {
 			continue
 		}
-		if _, hasSchema := compiled.resourceSchemas[nodeID]; !hasSchema {
+		if _, hasSchema := compiled.ResourceSchemas[nodeID]; !hasSchema {
 			return true // resolved GVK available but artifact compiled without schema
 		}
 	}

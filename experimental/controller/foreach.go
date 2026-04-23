@@ -14,13 +14,18 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
 )
 
 // snapshotFor builds a worker evaluator for a specific node. The snapshot
 // contains the node's dependency data (read-only) and, for forEach nodes,
 // the previous forEach state from the instance. The worker writes to its own
 // maps — the coordinator merges them back after the worker returns.
-func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
+func (e *evaluator) snapshotFor(node *graphpkg.Node, state *instanceState) *evaluator {
 	snap := make(map[string]any, len(node.Dependencies)+1)
 	for depID := range node.Dependencies {
 		if v, ok := e.scope[depID]; ok {
@@ -34,7 +39,7 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 	// errors. Use previous scope (carries __ready stamps from last
 	// reconcile) with empty-map fallback for new nodes.
 	if len(node.Dependencies) == 0 && e.compiled != nil {
-		for nodeID := range e.compiled.topology.Index {
+		for nodeID := range e.compiled.Topology.Index {
 			if _, exists := snap[nodeID]; exists {
 				continue
 			}
@@ -61,7 +66,7 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 		for k, v := range e.nodeReady {
 			workerReady[k] = v
 		}
-		snap[reservedNodeReadyVar] = workerReady
+		snap[compiler.ReservedNodeReadyVar] = workerReady
 	}
 
 	// Propagate dynamic GVK tracking to the worker if the compiled graph has
@@ -130,7 +135,7 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 // forEach state is passed in via the evaluator's forEachPrev* fields and
 // returned via forEachNew* fields. The coordinator merges the output back
 // into the shared cache — workers never touch shared state directly.
-func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, resyncCorrection bool) ([]string, error) {
+func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool) ([]string, error) {
 	logger := log.FromContext(ctx)
 	var keys []string
 	// Per-item propagateWhen gate. Per 001-graph.md § propagateWhen:
@@ -150,8 +155,8 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 	collection, err := eval.evalString(collectionExpr)
 	if err != nil {
-		if isPending(err) {
-			return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, ErrPending)
+		if compiler.IsPending(err) {
+			return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, compiler.ErrPending)
 		}
 		return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, err)
 	}
@@ -353,13 +358,13 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		if !node.HasBody() {
 			continue
 		}
-		innerScope := copyScope(eval.scope)
+		innerScope := graphpkg.CopyScope(eval.scope)
 		innerScope[varName] = item
 		innerEval := eval.withScope(innerScope)
 
 		// Definition forEach: evaluate the template per item, collect
 		// values into []any. No resource is created or tracked.
-		if node.Type() == NodeTypeDef {
+		if node.Type() == graphpkg.NodeTypeDef {
 			evalMap, err := innerEval.toMapNode(node)
 			if err != nil {
 				childErrors = append(childErrors, fmt.Errorf("forEach defines %s item: %w", node.ID, err))
@@ -412,14 +417,14 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		// runtime resolution.
 		childNodeType := node.Type()
 
-		stampForEachChildLabels(childObj, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, childNodeType)
+		graphpkg.StampForEachChildLabels(childObj, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, childNodeType)
 		evalMap = childObj.Object
 
 		var applied *unstructured.Unstructured
-		if childNodeType == NodeTypePatch {
-			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypePatch, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
+		if childNodeType == graphpkg.NodeTypePatch {
+			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, graphpkg.NodeTypePatch, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
 		} else {
-			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeTemplate, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
+			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
 		}
 		if err != nil {
 			// Per 005-reconciliation.md § Parent State: track per-child errors
@@ -436,7 +441,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		// Just applied with effectiveGeneration — child is on the latest generation.
 		applied.Object["__updated"] = true
 		var itemKeys []string
-		if childNodeType == NodeTypePatch {
+		if childNodeType == graphpkg.NodeTypePatch {
 			hasStatus := evalMap["status"] != nil
 			itemKeys = []string{patchKey(applied, hasStatus)}
 		} else {
@@ -505,7 +510,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	// Per-item propagateWhen halted expansion — the collection is
 	// incomplete. Signal NotReady so the controller requeues.
 	if halted {
-		return keys, ErrWaitingForReadiness
+		return keys, compiler.ErrWaitingForReadiness
 	}
 
 	// Check readyWhen per-item and stamp __ready on each item.
@@ -525,7 +530,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 // forEachStampReadyWhen evaluates readyWhen per-item and stamps __ready on
 // each item in scope[nodeID]. When readyWhen is empty, all items are stamped
-// __ready=true (applied = ready). Returns ErrWaitingForReadiness if any item
+// __ready=true (applied = ready). Returns compiler.ErrWaitingForReadiness if any item
 // fails its readyWhen check.
 //
 // eval may be nil when readyWhen is empty (no expressions to evaluate).
@@ -561,7 +566,7 @@ func forEachStampReadyWhen(scope map[string]any, nodeID string, readyWhen []stri
 			}
 		}
 		if anyNotReady {
-			return ErrWaitingForReadiness
+			return compiler.ErrWaitingForReadiness
 		}
 	} else {
 		// No readyWhen — all items are ready on apply.
@@ -700,15 +705,15 @@ func highestPriorityChildError(errs []error) error {
 // childErrorPriority returns a numeric priority for a forEach child error.
 // Higher values mean higher priority (deterministic errors > transient).
 func childErrorPriority(err error) int {
-	if errors.Is(err, ErrPending) {
+	if errors.Is(err, compiler.ErrPending) {
 		return 0
 	}
-	if errors.Is(err, ErrFieldConflict) {
+	if errors.Is(err, compiler.ErrFieldConflict) {
 		return 2 // Conflict — transient, but a specific positive signal
 	}
 	info := classifyAPIError(err)
 	switch info.state {
-	case NodeSystemError:
+	case dagpkg.NodeSystemError:
 		return 1 // SystemError — transient
 	default:
 		return 3 // NodeError — deterministic

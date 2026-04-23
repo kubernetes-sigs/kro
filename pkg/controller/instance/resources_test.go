@@ -442,12 +442,12 @@ func TestProcessCollectionNodeMatchesChildrenWithRawNodeIDLabel(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	_ = unstructured.SetNestedSlice(instance.Object, []interface{}{"one"}, "spec", "items")
 
-	collectionNode := newCollectionNodeForResources(t, "items")
+	collectionNode := newCollectionNodeForResources(t)
 
 	preHashChild := newConfigMapObject("one", "default")
 	preHashChild.SetLabels(map[string]string{
 		metadata.InstanceIDLabel: string(instance.GetUID()),
-		metadata.NodeIDLabel:     "items",
+		metadata.NodeIDLabel:     "configs",
 	})
 
 	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(collectionNode), preHashChild)
@@ -455,7 +455,7 @@ func TestProcessCollectionNodeMatchesChildrenWithRawNodeIDLabel(t *testing.T) {
 	runtimeNode := rcx.Runtime.Nodes()[0]
 	desired, err := runtimeNode.GetDesired()
 	require.NoError(t, err)
-	resources, err := controller.processCollectionNode(rcx, runtimeNode, rcx.StateManager.NewNodeState("items"), desired)
+	resources, _, err := controller.processCollectionNode(rcx, runtimeNode, desired)
 	require.NoError(t, err)
 	require.Len(t, resources, 1)
 	assert.NotNil(t, resources[0].Current, "should match child with raw node-id label as current")

@@ -15,6 +15,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// gateResult represents the outcome of a propagateWhen evaluation.
+type gateResult int
+
+const (
+	gatePass  gateResult = iota // all conditions true — node proceeds
+	gateBlock                   // at least one condition false — node waits
+	gateError                   // at least one condition errored — gate cannot decide
+)
+
 // evaluator holds the pre-compiled expression cache and the current scope
 // for a single reconcile cycle. The scope is owned by the coordinator —
 // workers receive read-only snapshots and return results for the coordinator
@@ -70,7 +79,7 @@ type evaluator struct {
 	collectionCachedList   []any              // previous cached list (nil = no cache, full list needed)
 	collectionChanges      []CollectionChange // buffered changes since last reconcile
 	collectionUpdatedCache []any              // output: updated list for coordinator to store
-	collectionDriftOrFull  bool               // true = bypass cache, do full list (drift or first reconcile)
+	collectionResyncOrFull bool               // true = bypass cache, do full list (resync or first reconcile)
 	// collectionDidFullList is set true by reconcileWatch when the
 	// worker took the full-List path (as opposed to incremental merge).
 	// Used by the coordinator to tighten dirty-flag clearing: dirty is
@@ -288,18 +297,32 @@ func (e *evaluator) evalReadinessConditions(conditions []string, nodeID string) 
 // single-node scope) is required for cross-node references to resolve.
 // The DAG walk's topological order guarantees that all dependency nodes
 // are already in e.scope when this is called.
-func (e *evaluator) checkPropagateWhen(conditions []string, nodeID string) bool {
+//
+// Returns three possible outcomes:
+//   - gatePass: all conditions evaluate to true — node proceeds
+//   - gateBlock: at least one condition evaluates to false (no error) — node waits
+//   - gateError: at least one condition errors during evaluation — gate cannot decide
+//
+// The distinction between gateBlock and gateError matters for contagious
+// exclusion: when a dependency is Excluded, gateError means the gate
+// can't evaluate because its inputs are missing, which should allow
+// contagious exclusion to proceed. gateBlock means the gate actively
+// decided "no" with valid inputs.
+func (e *evaluator) checkPropagateWhen(conditions []string, nodeID string) gateResult {
 	if len(conditions) == 0 {
-		return true
+		return gatePass
 	}
 
 	for _, cond := range conditions {
 		ok, err := e.evalBoolCondition(cond)
-		if err != nil || !ok {
-			return false
+		if err != nil {
+			return gateError
+		}
+		if !ok {
+			return gateBlock
 		}
 	}
-	return true
+	return gatePass
 }
 
 // firstUnsatisfiedCondition returns the first condition expression that

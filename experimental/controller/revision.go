@@ -826,7 +826,7 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 		existing.spec = spec
 		existing.dag = dag
 		// Reset runtime caches that should not survive recompilation.
-		// Per-node state (hashes, scopes, references, drift timers,
+		// Per-node state (hashes, scopes, references, resync timers,
 		// applied keys) is preserved — node structure is unchanged.
 		existing.forEachItems = map[string][]any{}
 		existing.forEachItemScope = map[string]map[string]any{}

@@ -57,23 +57,23 @@ var GraphGVK = schema.GroupVersionKind{
 	Kind:    "Graph",
 }
 
-// DefaultDriftInterval is the per-node consistency floor interval.
+// DefaultResyncInterval is the per-node consistency floor interval.
 // Per 005-reconciliation.md § Reconcile: "Each node has an in-memory
-// drift timer with a jittered interval (default 30 minutes)."
+// resync timer with a jittered interval (default 30 minutes)."
 // On expiry, the node bypasses the apply-hash check and applies
 // unconditionally.
-var DefaultDriftInterval = 30 * time.Minute
+var DefaultResyncInterval = 30 * time.Minute
 
-// MaxDriftJitter is the maximum random jitter added to the drift interval.
+// MaxResyncJitter is the maximum random jitter added to the resync interval.
 // Decorrelates timers across nodes to avoid correlated bursts.
-var MaxDriftJitter = 5 * time.Minute
+var MaxResyncJitter = 5 * time.Minute
 
 const (
 	finalizer = "experimental.kro.run/graph-controller"
 
 	// systemErrorRequeueInterval is the retry interval for Graphs with
 	// nodes in SystemError state. Per design: "backoff retry with a low
-	// cap, then wait for drift timer."
+	// cap, then wait for resync timer."
 	systemErrorRequeueInterval = 5 * time.Second
 
 	// finalizationRequeueInterval is the consistency floor for finalization
@@ -113,8 +113,8 @@ type GraphReconciler struct {
 	Watcher        *WatchCoordinator       // nil = no dynamic watches (backward compat with existing tests)
 	Caches         *graphCaches            // per-revision compiled expression caches
 	Resources      *resourceCache          // per-resource full object cache
-	DriftInterval  time.Duration           // per-node drift timer interval; 0 = use DefaultDriftInterval
-	DriftJitter    time.Duration           // max drift jitter; 0 = use MaxDriftJitter
+	ResyncInterval  time.Duration           // per-node resync timer interval; 0 = use DefaultResyncInterval
+	ResyncJitter    time.Duration           // max resync jitter; 0 = use MaxResyncJitter
 	Scope          GVKScopeResolver        // nil = unknown scope; staticResourceKey falls back to namespace-substitution heuristic
 }
 
@@ -168,7 +168,7 @@ type walkState struct {
 
 	// Trigger maps
 	triggered            map[string]bool
-	driftTriggered       map[string]bool
+	resyncTriggered       map[string]bool
 	propagationTriggered map[string]bool
 
 	// Watch incremental cache — drained once at walk start.
@@ -216,14 +216,14 @@ func (w *walkState) carryForwardKeys(nodeID string) {
 //
 // Conditions for incremental diff:
 //  1. CollectionSource is set (compile-time: single scope var, not in template)
-//  2. Not drift-triggered or directly triggered (watch event on forEach itself)
+//  2. Not resync-triggered or directly triggered (watch event on forEach itself)
 //  3. CollectionSource has CollectionChanges (incremental Watch path)
 //  4. Every non-CollectionSource dependency was skipped (output unchanged)
 func (w *walkState) resolveForEachChangedItems(node *Node) map[string]bool {
 	src := node.ForEach.CollectionSource
 
-	// Direct trigger (watch event) or drift → full rehash.
-	if w.driftTriggered[node.ID] || w.triggered[node.ID] {
+	// Direct trigger (watch event) or resync → full rehash.
+	if w.resyncTriggered[node.ID] || w.triggered[node.ID] {
 		return nil
 	}
 
@@ -398,7 +398,19 @@ func (w *walkState) tryDispatch(idx int) {
 		// expressions resolve correctly.
 		w.populateDepsMap(node)
 
-		if !w.eval.checkPropagateWhen(node.PropagateWhen, node.ID) {
+		gate := w.eval.checkPropagateWhen(node.PropagateWhen, node.ID)
+		if gate != gatePass {
+			// When a dependency is Excluded and the gate ERRORS (not just
+			// blocks), the gate can't evaluate because its inputs are
+			// missing — the excluded dependency's data is absent from scope.
+			// Contagious exclusion should proceed: the gate didn't actively
+			// decide "no," it failed to decide at all.
+			if hasExcluded && gate == gateError {
+				w.plan.SetState(w.dag, node.ID, NodeExcluded)
+				w.notifyDependents(node.ID)
+				return
+			}
+
 			unsatisfied := w.eval.firstUnsatisfiedCondition(node.PropagateWhen)
 			logger.V(1).Info("propagateWhen input gate — retaining previous state",
 				"node", node.ID, "unsatisfied", unsatisfied)
@@ -420,7 +432,7 @@ func (w *walkState) tryDispatch(idx int) {
 
 	// Step 4: Evaluation check — section-scoped evaluation hashing.
 	declaredNodeType := node.Type()
-	canHashSkip := declaredNodeType != NodeTypeRef && declaredNodeType != NodeTypeWatch && !w.driftTriggered[node.ID]
+	canHashSkip := declaredNodeType != NodeTypeRef && declaredNodeType != NodeTypeWatch && !w.resyncTriggered[node.ID]
 	if canHashSkip {
 		if _, hasPrevHash := w.state.previousEvalHashes[node.ID]; hasPrevHash {
 			evalHash, hashErr := hashNodeInputs(node, w.eval.scope)
@@ -514,6 +526,18 @@ func (w *walkState) tryDispatch(idx int) {
 				}
 				w.plan.States[node.ID] = nodeState
 				w.state.previousPlanStates[node.ID] = nodeState
+				// Persist the refreshed scope so the next reconcile's
+				// skipNode restores the up-to-date object (e.g., CRD
+				// with Established status), not the stale version from
+				// the original apply.
+				w.state.previousScope[node.ID] = w.eval.scope[node.ID]
+				// Update the eval hash to reflect the unchanged inputs.
+				// Without this, the next triggered reconcile would
+				// recompute the hash, find the same value, and re-enter
+				// Path 2 unnecessarily.
+				if evalHash, err := hashNodeInputs(node, w.eval.scope); err == nil && evalHash != "" {
+					w.state.previousEvalHashes[node.ID] = evalHash
+				}
 				// Mark dependents as propagation-triggered so they
 				// re-evaluate instead of hash-skipping. The scope
 				// data changed (status updated by external controller),
@@ -573,16 +597,16 @@ func (w *walkState) tryDispatch(idx int) {
 		// re-List from the API server to recover authoritative state.
 		// Per 005-reconciliation.md § Propagation: incremental
 		// updates must not allow the cache to serve stale data beyond
-		// the drift interval when a recoverable error interrupted a
+		// the resync interval when a recoverable error interrupted a
 		// merge.
 		dirty := w.state.collectionDirty[node.ID]
-		if hasCached && !w.driftTriggered[node.ID] && !dirty {
+		if hasCached && !w.resyncTriggered[node.ID] && !dirty {
 			workerEval.collectionCachedList = cached
 			workerEval.collectionChanges = w.collectionChanges[node.ID]
 		} else {
-			// First reconcile, drift, or previous incremental error:
+			// First reconcile, resync, or previous incremental error:
 			// force full list.
-			workerEval.collectionDriftOrFull = true
+			workerEval.collectionResyncOrFull = true
 		}
 	}
 
@@ -603,10 +627,10 @@ func (w *walkState) tryDispatch(idx int) {
 
 	// Dispatch to worker goroutine.
 	w.dispatched[idx] = true
-	isDrift := w.driftTriggered[node.ID]
-	go func(n Node, we *evaluator, nodeType NodeType, driftCorrection bool) {
+	isResync := w.resyncTriggered[node.ID]
+	go func(n Node, we *evaluator, nodeType NodeType, resyncCorrection bool) {
 		evalStart := time.Now()
-		keys, err := w.r.reconcileNode(w.ctx, w.graph, n, nodeType, we, w.watcher, driftCorrection)
+		keys, err := w.r.reconcileNode(w.ctx, w.graph, n, nodeType, we, w.watcher, resyncCorrection)
 		evalDuration := time.Since(evalStart)
 		state := NodeReady
 		if err != nil {
@@ -662,31 +686,31 @@ func (w *walkState) tryDispatch(idx int) {
 			nodeReadyUpdate:       nodeReadyUpdate,
 			resolvedGVK:           resolvedGVK,
 		}
-	}(*node, workerEval, resolvedNodeType, isDrift)
+	}(*node, workerEval, resolvedNodeType, isResync)
 	w.inflight++
 }
 
-// driftInterval returns the effective drift interval for this reconciler.
-func (r *GraphReconciler) driftInterval() time.Duration {
-	if r.DriftInterval > 0 {
-		return r.DriftInterval
+// resyncInterval returns the effective resync interval for this reconciler.
+func (r *GraphReconciler) resyncInterval() time.Duration {
+	if r.ResyncInterval > 0 {
+		return r.ResyncInterval
 	}
-	return DefaultDriftInterval
+	return DefaultResyncInterval
 }
 
-// driftJitter returns the effective drift jitter for this reconciler.
-func (r *GraphReconciler) driftJitter() time.Duration {
-	if r.DriftInterval > 0 {
+// resyncJitter returns the effective resync jitter for this reconciler.
+func (r *GraphReconciler) resyncJitter() time.Duration {
+	if r.ResyncInterval > 0 {
 		// When interval is overridden, use overridden jitter (even if 0).
-		return r.DriftJitter
+		return r.ResyncJitter
 	}
-	return MaxDriftJitter
+	return MaxResyncJitter
 }
 
 func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, reconcileErr error) {
 	reconcileStart := time.Now()
 	logger := log.FromContext(ctx)
-	// requeueFloor is an explicit requeue interval independent of drift timers.
+	// requeueFloor is an explicit requeue interval independent of resync timers.
 	// Set when a transient condition needs re-checking beyond what watch events
 	// guarantee — e.g., finalization in progress. Zero means no explicit floor.
 	var requeueFloor time.Duration
@@ -842,13 +866,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Per 005-reconciliation.md § Reconcile: nodes evaluate on external
 	// triggers or propagation triggers. Otherwise O(1) skip.
 	triggered := make(map[string]bool, len(dag.Nodes))
-	// driftTriggered tracks nodes triggered specifically by the drift timer.
-	// Per 005-reconciliation.md § Reconcile: "The drift timer bypasses the
+	// resyncTriggered tracks nodes triggered specifically by the resync timer.
+	// Per 005-reconciliation.md § Reconcile: "The resync timer bypasses the
 	// template-hash check — apply unconditionally." Drift-triggered nodes
 	// skip the step 3 evaluation hash check AND force the SSA Patch in step 5,
 	// because the question is "does live state match desired state?" not
 	// "did inputs change?" — different questions with different cache semantics.
-	driftTriggered := make(map[string]bool, len(dag.Nodes))
+	resyncTriggered := make(map[string]bool, len(dag.Nodes))
 	var collectionChanges map[string][]CollectionChange // Watch incremental cache
 	isRevisionTransition := len(supersededRevisions) > 0
 	isFirstReconcile := len(state.previousPlanStates) == 0
@@ -946,15 +970,15 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		collectionChanges = watcher.drainCollectionChanges()
 		// Drift timer triggers: nodes whose consistency timer expired.
 		// Per 005-reconciliation.md § Reconcile: "Each node has an
-		// in-memory drift timer with a jittered interval (default 30
+		// in-memory resync timer with a jittered interval (default 30
 		// minutes). On expiry, the node runs the full pipeline (steps
-		// 1-7). The drift timer bypasses the template-hash check —
+		// 1-7). The resync timer bypasses the template-hash check —
 		// apply unconditionally."
 		for _, node := range dag.Nodes {
-			if state.isDriftExpired(node.ID) {
+			if state.isResyncExpired(node.ID) {
 				triggered[node.ID] = true
-				driftTriggered[node.ID] = true
-				DriftTimerFiresTotal.With(graphMetricLabels(
+				resyncTriggered[node.ID] = true
+				ResyncTimerFiresTotal.With(graphMetricLabels(
 					graph.GetName(), graph.GetNamespace(), node.ID,
 				)).Inc()
 			}
@@ -981,7 +1005,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Early exit: no nodes triggered → no walk needed. Preserves previous
 	// No triggered nodes → no walk needed. Preserve existing watch state
 	// (walkCompleted stays false → watcher.done(false)). Schedule next
-	// reconcile at the earliest drift timer expiry.
+	// reconcile at the earliest resync timer expiry.
 	//
 	// Exception: revision transitions where the superseded revision has
 	// nodes not in the active set MUST reach the prune phase even with
@@ -1008,7 +1032,16 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 	}
 	if len(triggered) == 0 && !needsPruneSweep {
-		if next := state.nextDriftExpiry(); !next.IsZero() {
+		if compilationErr != nil {
+			rstate := &reconcileState{
+				compiled:    false,
+				compiledErr: compilationErr,
+			}
+			if err := r.updateStatus(ctx, graph, rstate); err != nil {
+				logger.Error(err, "status update (compilation error, no triggers)")
+			}
+		}
+		if next := state.nextResyncExpiry(); !next.IsZero() {
 			if remaining := time.Until(next); remaining > 0 {
 				return ctrl.Result{RequeueAfter: remaining}, nil
 			}
@@ -1040,7 +1073,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		plan:                 plan,
 		watcher:              watcher,
 		triggered:            triggered,
-		driftTriggered:       driftTriggered,
+		resyncTriggered:       resyncTriggered,
 		propagationTriggered: propagationTriggered,
 		collectionChanges:    collectionChanges,
 		dispatched:           make(map[int]bool, len(dag.Nodes)),
@@ -1072,7 +1105,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// CollectionChanges are lost. Mark the node dirty so the next
 		// reconcile takes the full-list path to recover authoritative
 		// state from the API server. Without this, stale cache can
-		// persist for up to the drift interval (default 30m). Per
+		// persist for up to the resync interval (default 30m). Per
 		// 005-reconciliation.md § Propagation.
 		if res.err != nil && node.Type() == NodeTypeWatch &&
 			len(res.collectionCacheUpdate) == 0 {
@@ -1132,6 +1165,14 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// Merge worker output into shared scope.
 		if res.scopeValue != nil {
 			eval.scope[res.scopeKey] = res.scopeValue
+		}
+
+		if r.SchemaGen != nil && node.Type() == NodeTypeTemplate {
+			if scopeMap, ok := res.scopeValue.(map[string]any); ok {
+				if scopeMap["apiVersion"] == "apiextensions.k8s.io/v1" && scopeMap["kind"] == "CustomResourceDefinition" {
+					r.SchemaGen.AdvanceGeneration()
+				}
+			}
 		}
 
 		// Merge node-readiness verdict. Watch nodes carry an explicit
@@ -1451,7 +1492,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				// ensures the gate is re-checked even if the watch event is
 				// delayed. Same principle as the NodePending 1s timer,
 				// but graph-level (not per-node) so it doesn't touch the
-				// drift timer map.
+				// resync timer map.
 				requeueFloor = finalizationRequeueInterval
 			} else {
 				state.deferredPruneKeys = nil
@@ -1494,23 +1535,23 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		!rstate.HasBlocked && !rstate.HasConflict && !rstate.HasError && !rstate.HasSystemError
 	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK && !prunePending)
 
-	// Reset drift timers for nodes that were dispatched to workers.
+	// Reset resync timers for nodes that were dispatched to workers.
 	// Per 005-reconciliation.md § Reconcile: "An SSA apply resets the
-	// drift timer. A skipped write during normal evaluation (hash match
+	// resync timer. A skipped write during normal evaluation (hash match
 	// from a watch event or propagation trigger) does not — the timer
 	// still fires to catch divergence that the hash cannot detect."
 	//
 	// Only dispatched nodes (which evaluated and potentially applied via
-	// SSA) reset their drift timers. Nodes that were skipped — no
+	// SSA) reset their resync timers. Nodes that were skipped — no
 	// trigger, evaluation-hash match, propagateWhen gate, or
 	// coordinator-resolved states (Excluded, Blocked) — retain their
 	// existing timer so the consistency floor is preserved. Without
 	// this guard, frequent reconciles (driven by watch events on other
 	// nodes) perpetually reset timers for stable nodes, preventing the
-	// drift timer from ever firing.
+	// resync timer from ever firing.
 	//
 	// Drift-triggered dispatches always write (applySSA bypasses the
-	// apply-hash check when driftCorrection=true), so resetting after
+	// apply-hash check when resyncCorrection=true), so resetting after
 	// dispatch is correct. Non-drift dispatches may skip the write if
 	// the apply-hash matches — the timer reset is at most one-interval
 	// imprecise, bounded by the next drift expiry.
@@ -1524,7 +1565,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		switch nodeState {
 		case NodeReady, NodeNotReady:
 			if walk.dispatched[i] {
-				state.resetDriftTimer(node.ID, r.driftInterval(), r.driftJitter())
+				state.resetResyncTimer(node.ID, r.resyncInterval(), r.resyncJitter())
 			}
 			// Reset exponential backoff on any non-SystemError state.
 			// Per muse: "Reset on any non-SystemError evaluation, not just
@@ -1532,41 +1573,41 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			// the backoff should reset because the failure mode changed."
 			delete(state.systemErrorBackoff, node.ID)
 		case NodePending:
-			state.resetDriftTimer(node.ID, 1*time.Second, 0)
+			state.resetResyncTimer(node.ID, 1*time.Second, 0)
 			delete(state.systemErrorBackoff, node.ID)
 		case NodeSystemError:
 			// Per 005-reconciliation.md § Trigger: "Transient errors
 			// (5xx) retry with exponential backoff [1s, resyncInterval]."
 			// Double the backoff duration on each consecutive SystemError,
-			// capped at the drift interval. Initial backoff is 1s.
+			// capped at the resync interval. Initial backoff is 1s.
 			backoff := state.systemErrorBackoff[node.ID]
 			if backoff == 0 {
 				backoff = 1 * time.Second
 			} else {
 				backoff *= 2
 			}
-			cap := r.driftInterval()
+			cap := r.resyncInterval()
 			if backoff > cap {
 				backoff = cap
 			}
 			state.systemErrorBackoff[node.ID] = backoff
-			state.resetDriftTimer(node.ID, backoff, 0)
+			state.resetResyncTimer(node.ID, backoff, 0)
 		case NodeError:
 			// Per 005-reconciliation.md § Trigger: "Deterministic
 			// errors (4xx) are not retried — same inputs produce the same
-			// failure. They resolve via changes or resync." The drift timer
+			// failure. They resolve via changes or resync." The resync timer
 			// is the resync path — the designed recovery mechanism for
 			// deterministic errors when no external change arrives.
-			state.resetDriftTimer(node.ID, r.driftInterval(), r.driftJitter())
+			state.resetResyncTimer(node.ID, r.resyncInterval(), r.resyncJitter())
 			delete(state.systemErrorBackoff, node.ID)
 		}
 	}
 
 	// Schedule next reconcile. Watch events handle convergence — no
-	// periodic polling. The drift timer is the consistency floor.
+	// periodic polling. The resync timer is the consistency floor.
 	// Per 005-reconciliation.md § Why Not: "Periodic full-graph resync
 	// ... Informer resyncs trigger all nodes simultaneously — correlated,
-	// expensive. Per-node drift timers with jitter amortize resync."
+	// expensive. Per-node resync timers with jitter amortize resync."
 	//
 	// Non-converged nodes (Pending, SystemError) have short drift
 	// timers set above, so the earliest expiry reflects urgency.
@@ -1575,7 +1616,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// timers — used for graph-level transient conditions (e.g., finalization
 	// in progress) that are not associated with any single node.
 	requeue := requeueFloor
-	if next := state.nextDriftExpiry(); !next.IsZero() {
+	if next := state.nextResyncExpiry(); !next.IsZero() {
 		if remaining := time.Until(next); remaining > 0 {
 			if requeue == 0 || remaining < requeue {
 				requeue = remaining
@@ -1716,8 +1757,8 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *WatchMan
 // Returns a shutdown function that stops the watch manager. The caller
 // must invoke this on teardown.
 //
-// driftInterval overrides the per-node drift timer interval. 0 uses the default (30m).
-func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int, driftInterval time.Duration) (shutdown func(), caches *graphCaches, err error) {
+// resyncInterval overrides the per-node resync timer interval. 0 uses the default (30m).
+func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int, resyncInterval time.Duration) (shutdown func(), caches *graphCaches, err error) {
 	RegisterMetrics(crmetrics.Registry)
 
 	if maxWorkers <= 0 {
@@ -1731,7 +1772,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 
 	watchChan := make(chan event.GenericEvent, 256)
 
-	watchMgr := newWatchManager(metadataClient, 0, nil, log.Log)
+	watchMgr := newWatchManager(metadataClient, 12*time.Hour, nil, log.Log)
 	coordinator := newWatchCoordinator(watchMgr, func(graph graphKey) {
 		obj := &unstructured.Unstructured{}
 		obj.SetName(graph.Name)
@@ -1769,7 +1810,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 		Watcher:        coordinator,
 		Caches:         newGraphCaches(),
 		Resources:      newResourceCache(),
-		DriftInterval:  driftInterval,
+		ResyncInterval:  resyncInterval,
 		// Scope is used by staticResourceKey to avoid namespacing
 		// cluster-scoped resource keys. Without this, prune/teardown
 		// silently miss cluster-scoped resources because their keys

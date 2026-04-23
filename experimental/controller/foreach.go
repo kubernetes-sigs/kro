@@ -125,12 +125,12 @@ func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 // Implements forEach item diffing from design 004: the parent diffs the
 // current collection against cached state and only re-evaluates changed items.
 //
-// driftCorrection bypasses the apply-hash check in child applies.
+// resyncCorrection bypasses the apply-hash check in child applies.
 //
 // forEach state is passed in via the evaluator's forEachPrev* fields and
 // returned via forEachNew* fields. The coordinator merges the output back
 // into the shared cache — workers never touch shared state directly.
-func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, driftCorrection bool) ([]string, error) {
+func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher, resyncCorrection bool) ([]string, error) {
 	logger := log.FromContext(ctx)
 	var keys []string
 	// Per-item propagateWhen gate. Per 001-graph.md § propagateWhen:
@@ -232,7 +232,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			// Expose the partially-built collection so the gate
 			// expression can inspect already-processed items.
 			eval.scope[node.ID] = allApplied
-			if !eval.checkPropagateWhen(node.PropagateWhen, node.ID) {
+			if eval.checkPropagateWhen(node.PropagateWhen, node.ID) != gatePass {
 				halted = true
 				logger.V(1).Info("per-item propagateWhen halted forEach expansion",
 					"node", node.ID, "haltedAt", id, "processedCount", len(allApplied))
@@ -300,7 +300,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		// Cached hash includes context prefix — when shared deps change,
 		// no cached hash matches and all items re-evaluate.
 		itemUnchanged := false
-		if existed && !driftCorrection {
+		if existed && !resyncCorrection {
 			cachedHash := prevItemHashes[id]
 			if cachedHash != "" {
 				itemUnchanged = forEachItemUnchangedCached(cachedHash, item, contextHash)
@@ -417,9 +417,9 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 		var applied *unstructured.Unstructured
 		if childNodeType == NodeTypePatch {
-			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypePatch, eval.effectiveGeneration, driftCorrection, node.Lifecycle.ForceApply())
+			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypePatch, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
 		} else {
-			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeTemplate, eval.effectiveGeneration, driftCorrection, node.Lifecycle.ForceApply())
+			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, NodeTypeTemplate, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
 		}
 		if err != nil {
 			// Per 005-reconciliation.md § Parent State: track per-child errors

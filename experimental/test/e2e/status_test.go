@@ -289,7 +289,7 @@ func TestRevisionCondition_RegressionLastTransitionTime(t *testing.T) {
 		return
 	}
 
-	// Wait a moment for at least one reconcile to fire (drift timer or watch event).
+	// Wait a moment for at least one reconcile to fire (resync timer or watch event).
 	// Then re-fetch and verify lastTransitionTime is unchanged.
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		// Poll until revision resource version stabilizes (no further updates).

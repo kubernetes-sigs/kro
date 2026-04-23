@@ -60,7 +60,7 @@ const (
 	// NodeTypeDef — a computed value expressed as a map of key-value
 	// pairs (literals, CEL expressions, or both). The node produces no
 	// Kubernetes resource — it defines values and enters the result into
-	// scope as map[string]any. No drift timer, no applied-set entry,
+	// scope as map[string]any. No resync timer, no applied-set entry,
 	// nothing to clean up.
 	NodeTypeDef
 )

@@ -425,7 +425,7 @@ func TestConflictThenSpecChangeResolvesConflict(t *testing.T) {
 //     classification is parse-time and there is no resolution error path;
 //     the same storage bug is covered for the remaining error paths
 //     (includeWhen, readyWhen, per-node apply errors).
-//  2. NodeError had no drift timer case — the node was never re-evaluated
+//  2. NodeError had no resync timer case — the node was never re-evaluated
 //     when upstream data was stable.
 func TestErrorClassification_RegressionCELRuntime(t *testing.T) {
 	t.Parallel()

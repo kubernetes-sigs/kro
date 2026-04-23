@@ -16,15 +16,15 @@ import (
 // deleteGraphMetricsForGraph. On controller restart the registry is fresh.
 
 var (
-	// DriftTimerFiresTotal counts drift timer expirations that trigger an
+	// ResyncTimerFiresTotal counts resync timer expirations that trigger an
 	// unconditional apply. Incremented in the trigger determination block
-	// when a per-node drift timer expires and bypasses the apply-hash
-	// check. Per 005-reconciliation.md: "the drift timer bypasses the
+	// when a per-node resync timer expires and bypasses the apply-hash
+	// check. Per 005-reconciliation.md: "the resync timer bypasses the
 	// template-hash check — apply unconditionally."
-	DriftTimerFiresTotal = prometheus.NewCounterVec(
+	ResyncTimerFiresTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "graph_drift_timer_fires_total",
-			Help: "Total number of drift timer expirations that triggered unconditional apply",
+			Name: "graph_resync_timer_fires_total",
+			Help: "Total number of resync timer expirations that triggered unconditional apply",
 		},
 		[]string{"graph_name", "graph_namespace", "node_id"},
 	)
@@ -102,7 +102,7 @@ var (
 // (e.g., metric name collision with different configuration).
 func RegisterMetrics(registry prometheus.Registerer) {
 	for _, c := range []prometheus.Collector{
-		DriftTimerFiresTotal,
+		ResyncTimerFiresTotal,
 		SystemErrorRetriesTotal,
 		ReconcileDurationSeconds,
 		NodeEvalDurationSeconds,
@@ -135,7 +135,7 @@ func deleteGraphMetricsForGraph(graphName, graphNamespace string) {
 		"graph_name":      graphName,
 		"graph_namespace": graphNamespace,
 	}
-	DriftTimerFiresTotal.DeletePartialMatch(labels)
+	ResyncTimerFiresTotal.DeletePartialMatch(labels)
 	SystemErrorRetriesTotal.DeletePartialMatch(labels)
 	SelfRefreshTotal.DeletePartialMatch(labels)
 	ReconcileDurationSeconds.DeletePartialMatch(labels)
@@ -149,7 +149,7 @@ func deleteGraphMetricsForGraph(graphName, graphNamespace string) {
 func deleteNodeMetrics(graphName, graphNamespace string, nodeIDs map[string]bool) {
 	for nodeID := range nodeIDs {
 		labels := graphMetricLabels(graphName, graphNamespace, nodeID)
-		DriftTimerFiresTotal.Delete(labels)
+		ResyncTimerFiresTotal.Delete(labels)
 		SystemErrorRetriesTotal.Delete(labels)
 		SelfRefreshTotal.Delete(labels)
 		NodeEvalDurationSeconds.Delete(labels)

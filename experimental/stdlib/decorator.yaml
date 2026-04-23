@@ -70,7 +70,7 @@ spec:
               watch:
                 apiVersion: $${decorator.spec.watch.apiVersion}
                 kind: $${decorator.spec.watch.kind}
-                selector: {}
+                selector: $${decorator.spec.watch.selector}
 
             # For each item, create a sub-Graph with an auto-prepended
             # Watch node ("item") plus the user's nodes.

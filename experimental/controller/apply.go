@@ -317,18 +317,31 @@ func templateHasStatus(tmpl map[string]any) bool {
 // failed to compile). Explicit parameter rather than reading from graph so
 // the choice is visible at the call site.
 //
-// driftCorrection bypasses the content-addressed apply hash check.
-// Per 005-reconciliation.md § Reconcile: "The drift timer bypasses the
+// resyncCorrection bypasses the content-addressed apply hash check.
+// Per 005-reconciliation.md § Reconcile: "The resync timer bypasses the
 // template-hash check — apply unconditionally, because server-side
 // defaulters and mutating webhooks can change fields without changing
 // the desired state hash. SSA is idempotent; the apply corrects drift
 // as a side effect."
-func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, nodeType NodeType, generation int64, driftCorrection bool, forceApply bool) (*unstructured.Unstructured, error) {
+func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string, nodeType NodeType, generation int64, resyncCorrection bool, forceApply bool) (*unstructured.Unstructured, error) {
 	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
 	if obj.GetNamespace() == "" {
-		obj.SetNamespace(graph.GetNamespace())
+		// Only default namespace for namespace-scoped resources.
+		// Cluster-scoped resources (CRDs, ClusterRoles, etc.) must keep
+		// namespace empty — setting it breaks watch event routing because
+		// the metadata informer reports events with namespace="" while
+		// the scalar index would store namespace="<graph-ns>".
+		clusterScoped := false
+		if r.Scope != nil {
+			if isNS, known := r.Scope.IsNamespaced(obj.GroupVersionKind()); known && !isNS {
+				clusterScoped = true
+			}
+		}
+		if !clusterScoped {
+			obj.SetNamespace(graph.GetNamespace())
+		}
 	}
 
 	// Stamp identity labels per 005-reconciliation.md § API Server Interaction.
@@ -364,10 +377,10 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	}
 	cacheKey := resourceCacheKey(obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName())
 
-	// Drift correction bypasses the cache check entirely — the drift timer's
+	// Resync correction bypasses the cache check entirely — the resync timer's
 	// purpose is to re-apply unconditionally so SSA corrects any live-state
 	// divergence from the desired state.
-	if !driftCorrection {
+	if !resyncCorrection {
 		if cached, ok := r.Resources.get(cacheKey); ok && cached.applyHash == applyHash {
 			if watcher != nil {
 				liveRV := watcher.getResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
@@ -396,7 +409,7 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 				return readBack, nil
 			}
 		}
-	} // !driftCorrection
+	} // !resyncCorrection
 
 	// Template: set the apply hash annotation for future comparisons.
 	if nodeType == NodeTypeTemplate {

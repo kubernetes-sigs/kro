@@ -616,6 +616,8 @@ func (c *WatchCoordinator) doneGraph(graph graphKey, pending []watchRequest) {
 	// swaps current→previous and reallocates current. This is correct but
 	// means the entire pending array stays live, not individual elements.
 	newGVRs := make(map[schema.GroupVersionResource]string)
+	var newNodeIDs []string
+	hasNewIndexEntries := false
 	for i := range pending {
 		req := &pending[i]
 
@@ -637,6 +639,8 @@ func (c *WatchCoordinator) doneGraph(graph graphKey, pending []watchRequest) {
 			} else {
 				c.addScalarLocked(graph, *req)
 			}
+			newNodeIDs = append(newNodeIDs, req.nodeID)
+			hasNewIndexEntries = true
 		}
 		newGVRs[req.gvr] = req.kind
 	}
@@ -678,6 +682,18 @@ func (c *WatchCoordinator) doneGraph(graph graphKey, pending []watchRequest) {
 	}
 	for _, gvr := range toRelease {
 		c.watches.releaseWatch(gvr, ownerID)
+	}
+
+	if hasNewIndexEntries {
+		c.triggerMu.Lock()
+		if c.pendingTriggers[graph] == nil {
+			c.pendingTriggers[graph] = make(map[string]bool)
+		}
+		for _, nodeID := range newNodeIDs {
+			c.pendingTriggers[graph][nodeID] = true
+		}
+		c.triggerMu.Unlock()
+		c.enqueue(graph)
 	}
 }
 

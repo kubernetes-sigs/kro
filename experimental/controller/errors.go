@@ -84,7 +84,7 @@ func classifyAPIError(err error) apiErrorInfo {
 	// Default: non-API, non-network errors are deterministic failures
 	// (CEL evaluation, template rendering, marshaling, etc.). These cannot
 	// be resolved by retry — they resolve via propagation (upstream input
-	// changes), revision transition (user fixes the spec), or drift timer.
+	// changes), revision transition (user fixes the spec), or resync timer.
 	// Per 005-reconciliation.md § Node States: Definition nodes produce
 	// Error on CEL failure, not SystemError.
 	return apiErrorInfo{state: NodeError, reason: err.Error()}

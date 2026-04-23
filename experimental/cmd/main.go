@@ -48,7 +48,7 @@ func main() {
 		metricsBindAddress     string
 		pprofBindAddress       string
 		maxWorkers             int
-		driftInterval          time.Duration
+		nodeResyncInterval     time.Duration
 	)
 
 	flag.BoolVar(&bootstrapFlag, "bootstrap", false, "Install CRDs before starting the controller")
@@ -56,7 +56,7 @@ func main() {
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", "0", "The address the metrics endpoint binds to. Use 0 to disable.")
 	flag.StringVar(&pprofBindAddress, "pprof-bind-address", "", "The address the pprof endpoint binds to. Empty to disable.")
 	flag.IntVar(&maxWorkers, "max-workers", 0, "Maximum concurrent reconcile workers. 0 uses the default.")
-	flag.DurationVar(&driftInterval, "drift-interval", 0, "Per-node drift timer interval. 0 uses the default (30m).")
+	flag.DurationVar(&nodeResyncInterval, "node-resync-interval", 0, "Per-node resync timer interval. 0 uses the default (30m).")
 	flag.Parse()
 
 	if pprofBindAddress != "" {
@@ -98,7 +98,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	shutdown, caches, err := graphcontroller.SetupWithManager(mgr, cfg, maxWorkers, driftInterval)
+	shutdown, caches, err := graphcontroller.SetupWithManager(mgr, cfg, maxWorkers, nodeResyncInterval)
 	if err != nil {
 		log.Error(err, "setting up controller")
 		os.Exit(1)

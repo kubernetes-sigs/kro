@@ -868,7 +868,7 @@ func graphLabels(graphName, namespace string) map[string]string {
 	}
 }
 
-// nodeLabels returns the label set for querying per-node metrics (drift timer, system error retries).
+// nodeLabels returns the label set for querying per-node metrics (resync timer, system error retries).
 func nodeLabels(graphName, namespace, nodeID string) map[string]string {
 	return map[string]string{
 		"graph_name":      graphName,

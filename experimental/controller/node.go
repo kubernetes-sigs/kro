@@ -24,8 +24,8 @@ import (
 // reconcileNode dispatches to the appropriate handler based on node type.
 // NodeType is a parse-time property of the node; no runtime resolution.
 //
-// driftCorrection is true when the node was triggered by the drift timer.
-// Per 005-reconciliation.md § Reconcile: drift-triggered nodes bypass the
+// resyncCorrection is true when the node was triggered by the resync timer.
+// Per 005-reconciliation.md § Reconcile: resync-triggered nodes bypass the
 // apply-hash check and apply unconditionally via SSA.
 //
 // After dispatch, reconcileNode evaluates readyWhen as a post-dispatch step
@@ -37,9 +37,9 @@ import (
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, nodeType NodeType, eval *evaluator, watcher *graphWatcher, driftCorrection bool) ([]string, error) {
+func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, nodeType NodeType, eval *evaluator, watcher *graphWatcher, resyncCorrection bool) ([]string, error) {
 	if node.ForEach != nil {
-		return r.reconcileForEach(ctx, graph, node, eval, watcher, driftCorrection)
+		return r.reconcileForEach(ctx, graph, node, eval, watcher, resyncCorrection)
 	}
 
 	switch nodeType {
@@ -55,7 +55,7 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 			return nil, err
 		}
 	default: // NodeTypeTemplate, NodeTypePatch
-		key, err := r.reconcileApply(ctx, graph, node, nodeType, eval, watcher, driftCorrection)
+		key, err := r.reconcileApply(ctx, graph, node, nodeType, eval, watcher, resyncCorrection)
 		if err != nil {
 			if key != "" {
 				return []string{key}, err
@@ -132,7 +132,7 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 // update the cached list incrementally rather than re-listing — O(1) per
 // event, not O(matching)." The evaluator carries the cached list and buffered
 // collection changes from the coordinator. On incremental path, only changed
-// items are GET'd and merged. On drift or first reconcile, a full List is
+// items are GET'd and merged. On resync or first reconcile, a full List is
 // performed and the cache is replaced.
 func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
@@ -199,7 +199,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 
 	// Incremental path: cached list exists and collection changes are available.
 	// GET only the changed items and merge into the cached list.
-	if eval.collectionCachedList != nil && !eval.collectionDriftOrFull {
+	if eval.collectionCachedList != nil && !eval.collectionResyncOrFull {
 		var err error
 		items, err = mergeCollectionChanges(
 			ctx, r.Client, eval.collectionCachedList, eval.collectionChanges,
@@ -213,7 +213,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 			"cachedCount", len(eval.collectionCachedList), "changes", len(eval.collectionChanges),
 			"resultCount", len(items))
 	} else {
-		// Full list path: first reconcile, drift timer, or no cache.
+		// Full list path: first reconcile, resync timer, or no cache.
 		listGVK := gvk
 		listGVK.Kind = gvk.Kind + "List"
 
@@ -291,8 +291,8 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 // checks) and applied set key format: Template keys use resourceKey
 // (prune → delete), Patch keys use patchKey (prune → release apply to
 // release fields). See applySSA for the full type-dependent behavior.
-// driftCorrection bypasses the apply-hash check in applySSA.
-func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, nodeType NodeType, eval *evaluator, watcher *graphWatcher, driftCorrection bool) (string, error) {
+// resyncCorrection bypasses the apply-hash check in applySSA.
+func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node Node, nodeType NodeType, eval *evaluator, watcher *graphWatcher, resyncCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMapNode(node)
@@ -300,7 +300,7 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 		return "", fmt.Errorf("%s %s: %w", nodeType, node.ID, err)
 	}
 
-	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, nodeType, eval.effectiveGeneration, driftCorrection, node.Lifecycle.ForceApply())
+	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, nodeType, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
 	if err != nil {
 		return "", err
 	}

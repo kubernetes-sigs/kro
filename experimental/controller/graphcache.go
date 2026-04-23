@@ -28,7 +28,7 @@ import (
 // their compiled pointer set to nil rather than being moved to a separate map.
 // compileRevision detects this (compiled == nil) and recompiles in-place,
 // preserving the per-node mutable state that is valid across type-resolution
-// recompilation (hashes, scopes, references, drift timers, applied keys).
+// recompilation (hashes, scopes, references, resync timers, applied keys).
 type graphCaches struct {
 	// RWMutex: get and getCompiled are read-only and take RLock; set and remove
 	// mutate both maps and take Lock. The read path (one get per reconcile per
@@ -114,7 +114,7 @@ func (gc *graphCaches) CacheSizes() (compiledCount, instanceCount int) {
 //
 // The instanceState stays in the instances map with compiled == nil. On the
 // next reconcile, compileRevision detects this and recompiles in-place,
-// preserving per-node mutable state (hashes, scopes, drift timers, applied
+// preserving per-node mutable state (hashes, scopes, resync timers, applied
 // keys) that is valid across type-resolution recompilation.
 func (gc *graphCaches) evictUnresolved(gvr schema.GroupVersionResource) []graphKey {
 	gc.mu.Lock()

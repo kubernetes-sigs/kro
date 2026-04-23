@@ -66,11 +66,11 @@ type instanceState struct {
 	// subsequent prune cycles don't race with in-progress finalization.
 	activeFinalization map[string]*finalizationEntry
 
-	// Per-node drift timer expiry times. When expired, the node is triggered
+	// Per-node resync timer expiry times. When expired, the node is triggered
 	// unconditionally — the consistency floor. Reset on successful evaluation.
 	// On restart, all timers start fresh with random jitter.
 	// Per 005-reconciliation.md § Reconcile.
-	driftTimers map[string]time.Time
+	resyncTimers map[string]time.Time
 
 	// resolvedDynamicGVKs maps node ID → last-resolved GVK for dynamic GVK nodes.
 	// Per 004-compilation.md § Deferred Types: "When the reconciler evaluates
@@ -84,7 +84,7 @@ type instanceState struct {
 	// Per 005-reconciliation.md § Propagation: "When a single resource
 	// changes, update the cached list incrementally rather than re-listing
 	// — O(1) per event, not O(matching)." On watch events, only the changed
-	// items are GET'd and merged. On drift timer, the cache is replaced via
+	// items are GET'd and merged. On resync timer, the cache is replaced via
 	// full List.
 	collectionCache map[string][]any // node ID → cached collection items
 
@@ -128,7 +128,7 @@ func newInstanceState(compiled *compiledGraph) *instanceState {
 		forEachItemScope:   map[string]map[string]any{},
 		forEachItemKeys:    map[string]map[string][]string{},
 		forEachItemHashes:  map[string]map[string]string{},
-		driftTimers:        make(map[string]time.Time),
+		resyncTimers:       make(map[string]time.Time),
 		collectionCache:    make(map[string][]any),
 		collectionDirty:    make(map[string]bool),
 		nodeReady:          make(map[string]bool),
@@ -145,34 +145,34 @@ func (s *instanceState) updateAppliedKeys(keys []string) {
 	}
 }
 
-// resetDriftTimer sets the drift timer for a node to fire after the default
+// resetResyncTimer sets the resync timer for a node to fire after the default
 // interval plus jitter. Called after a node is successfully evaluated.
-// Per 005-reconciliation.md § Reconcile: "An SSA apply resets the drift timer."
-func (s *instanceState) resetDriftTimer(nodeID string, interval, maxJitter time.Duration) {
+// Per 005-reconciliation.md § Reconcile: "An SSA apply resets the resync timer."
+func (s *instanceState) resetResyncTimer(nodeID string, interval, maxJitter time.Duration) {
 	var jitter time.Duration
 	if maxJitter > 0 {
 		jitter = time.Duration(rand.Int63n(int64(maxJitter)))
 	}
-	s.driftTimers[nodeID] = time.Now().Add(interval + jitter)
+	s.resyncTimers[nodeID] = time.Now().Add(interval + jitter)
 }
 
-// isDriftExpired reports whether a node's drift timer has expired.
+// isResyncExpired reports whether a node's resync timer has expired.
 // Returns false if no timer is set (first reconcile handles this via
 // the "all nodes triggered" path).
-func (s *instanceState) isDriftExpired(nodeID string) bool {
-	expiry, ok := s.driftTimers[nodeID]
+func (s *instanceState) isResyncExpired(nodeID string) bool {
+	expiry, ok := s.resyncTimers[nodeID]
 	if !ok {
 		return false
 	}
 	return time.Now().After(expiry)
 }
 
-// nextDriftExpiry returns the earliest drift timer expiry across all nodes.
+// nextResyncExpiry returns the earliest resync timer expiry across all nodes.
 // Returns zero time if no timers are set. Used to schedule the next
 // reconcile via RequeueAfter — the consistency floor.
-func (s *instanceState) nextDriftExpiry() time.Time {
+func (s *instanceState) nextResyncExpiry() time.Time {
 	var earliest time.Time
-	for _, expiry := range s.driftTimers {
+	for _, expiry := range s.resyncTimers {
 		if earliest.IsZero() || expiry.Before(earliest) {
 			earliest = expiry
 		}

@@ -79,6 +79,9 @@ func TestCore(t *testing.T) {
 				filepath.Join(moduleRoot, "test", "integration", "crds", "ack-iam-controller"),
 				filepath.Join(moduleRoot, "test", "integration", "crds", "ack-eks-controller"),
 			},
+			// The compat suite depends on fast resync for convergence.
+			// TODO: fix propagation bugs and remove this override.
+			ResyncInterval: 5 * time.Second,
 		}
 		cfg, err := testEnvironment.Start()
 		Expect(err).NotTo(HaveOccurred())

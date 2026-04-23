@@ -274,7 +274,7 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 // TestClassifyAPIErrorDefault proves that unrecognized errors (raw Go errors
 // not wrapped as *StatusError) become NodeSystemError — the safe direction.
 // Misclassifying transient network failures as deterministic (NodeError) means
-// the system stops retrying when it should be retrying hardest (30-minute drift
+// the system stops retrying when it should be retrying hardest (30-minute resync
 // timer vs 5s SystemError retry). Misclassifying a deterministic error as
 // transient means wasted retries — annoying but not an outage.
 //
@@ -494,7 +494,7 @@ func TestGVRKindFromInformerPrimaryPath(t *testing.T) {
 
 // TestClassifyAPIErrorNetworkErrors_RegressionRetry proves that raw network
 // errors (not wrapped as *StatusError) get classified as NodeSystemError for
-// the 5s retry instead of NodeError's 30-minute drift timer.
+// the 5s retry instead of NodeError's 30-minute resync timer.
 func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 	tests := []struct {
 		name string

@@ -251,7 +251,7 @@ func TestMetricsCleanupOnGraphDelete(t *testing.T) {
 // encountered a transient server error (5xx). Uses the same webhook fault
 // injection mechanism as TestSystemError_WebhookFaultAndRecovery.
 //
-// Replaces: TestSystemErrorRetriesIncrement, TestDriftTimerFiresIncrement (unit)
+// Replaces: TestSystemErrorRetriesIncrement, TestResyncTimerFiresIncrement (unit)
 func TestMetricsSystemErrorRetries(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)

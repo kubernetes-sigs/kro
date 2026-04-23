@@ -118,6 +118,7 @@ spec:
                                 When set, all resources matching the selector are included.
                                 The selector may be a literal Kubernetes [metav1.LabelSelector] object or a full CEL
                                 expression that resolves to one at reconcile time.
+
                                 Mutually exclusive with Name.
                               x-kubernetes-preserve-unknown-fields: true
                           type: object

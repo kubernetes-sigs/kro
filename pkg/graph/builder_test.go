@@ -24,7 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	apiservercel "k8s.io/apiserver/pkg/cel"
@@ -3847,8 +3846,10 @@ spec:
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
-						MatchLabels: map[string]string{"app": "demo"},
+					Selector: toRawExtension(t, map[string]any{
+						"matchLabels": map[string]any{
+							"app": "demo",
+						},
 					}),
 				},
 			},
@@ -3865,7 +3866,7 @@ spec:
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: krov1alpha1.MustJSON("${schema.spec.selector}"),
+					Selector: toRawExtension(t, "${schema.spec.selector}"),
 				},
 			},
 		}, 0, true)

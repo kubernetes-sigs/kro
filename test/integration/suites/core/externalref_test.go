@@ -453,7 +453,7 @@ var _ = Describe("ExternalRef", func() {
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{}),
+					Selector: toRawExtension(metav1.LabelSelector{}),
 				},
 			}, nil, nil),
 		)
@@ -584,7 +584,7 @@ var _ = Describe("ExternalRef", func() {
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: krov1alpha1.MustJSON("${schema.spec.selector}"),
+					Selector: toRawExtension("${schema.spec.selector}"),
 				},
 			}, nil, nil),
 		)
@@ -684,7 +684,7 @@ var _ = Describe("ExternalRef", func() {
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
 					// No Namespace — should list across all namespaces.
-					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
+					Selector: toRawExtension(metav1.LabelSelector{
 						MatchLabels: map[string]string{"suite": uniqueLabel},
 					}),
 				},

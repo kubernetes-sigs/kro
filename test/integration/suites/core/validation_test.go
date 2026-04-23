@@ -350,7 +350,7 @@ var _ = Describe("Validation", func() {
 					APIVersion: "v1",
 					Kind:       "ConfigMap",
 					Metadata: krov1alpha1.ExternalRefMetadata{
-						Selector: krov1alpha1.MustJSON(map[string]interface{}{
+						Selector: toRawExtension(map[string]interface{}{
 							"matchExpressions": []map[string]interface{}{{
 								"key":      "team",
 								"operator": "NotARealOperator",

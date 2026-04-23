@@ -394,19 +394,32 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 				if !apierrors.IsNotFound(err) {
 					return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
 				}
-				if nodeType == NodeTypeTemplate {
-					// Template: externally deleted. Clear cache + ErrPending.
-					r.Resources.remove(cacheKey)
-					return nil, fmt.Errorf("resource %s externally deleted: %w", obj.GetName(), ErrPending)
-				}
+				// Resource externally deleted — clear cache and fall
+				// through to re-apply via SSA (creates if absent).
+				r.Resources.remove(cacheKey)
 				// Patch: object might not exist yet (race), fall through to apply
 			} else {
-				r.Resources.set(cacheKey, &cachedObject{
-					resourceVersion: readBack.GetResourceVersion(),
-					applyHash:       applyHash,
-					object:          readBack.Object,
-				})
-				return readBack, nil
+				// Verify the GET result isn't stale. The controller-runtime
+				// delegating client may read from an internal cache that
+				// lags behind the metadata informer. If the informer has
+				// a newer resourceVersion, the readback is stale — fall
+				// through to SSA apply whose Patch response is authoritative.
+				stale := false
+				if watcher != nil {
+					liveRV := watcher.getResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
+					if liveRV != "" && liveRV != readBack.GetResourceVersion() {
+						stale = true
+					}
+				}
+				if !stale {
+					r.Resources.set(cacheKey, &cachedObject{
+						resourceVersion: readBack.GetResourceVersion(),
+						applyHash:       applyHash,
+						object:          readBack.Object,
+					})
+					return readBack, nil
+				}
+				// Stale readback — fall through to SSA apply.
 			}
 		}
 	} // !resyncCorrection
@@ -484,6 +497,11 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	}
 
 	// Status subresource patch if .status is present.
+	// The response from whichever patch runs last is the most current
+	// server-side state — use it as the scope value instead of doing
+	// a separate readback GET (which goes through the controller-runtime
+	// cache and can serve stale data).
+	readBack := applied
 	if hasStatus && statusData != nil {
 		statusPayload := map[string]any{
 			"apiVersion": obj.GetAPIVersion(),
@@ -498,29 +516,25 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		if err != nil {
 			return nil, fmt.Errorf("marshaling status: %w", err)
 		}
-		statusTarget := &unstructured.Unstructured{}
-		statusTarget.SetGroupVersionKind(obj.GroupVersionKind())
-		statusTarget.SetName(obj.GetName())
-		statusTarget.SetNamespace(obj.GetNamespace())
+		statusApplied := &unstructured.Unstructured{}
+		statusApplied.SetGroupVersionKind(obj.GroupVersionKind())
+		statusApplied.SetName(obj.GetName())
+		statusApplied.SetNamespace(obj.GetNamespace())
 		var statusOpts []client.SubResourcePatchOption
 		statusOpts = append(statusOpts, fieldOwner)
 		if forceApply {
 			statusOpts = append(statusOpts, client.ForceOwnership)
 		}
-		if err := r.Client.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, sData), statusOpts...); err != nil {
+		if err := r.Client.Status().Patch(ctx, statusApplied, client.RawPatch(types.ApplyPatchType, sData), statusOpts...); err != nil {
 			r.Resources.remove(cacheKey)
 			if apierrors.IsConflict(err) {
 				return nil, fmt.Errorf("SSA status conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
 			}
 			return nil, fmt.Errorf("applying status %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
 		}
-	}
-
-	// Read back the full object to populate scope.
-	readBack := &unstructured.Unstructured{}
-	readBack.SetGroupVersionKind(obj.GroupVersionKind())
-	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(applied), readBack); err != nil {
-		return nil, fmt.Errorf("reading back %s: %w", obj.GetName(), err)
+		// Status Patch response is strictly newer — includes the status
+		// we just wrote plus the current main-resource state.
+		readBack = statusApplied
 	}
 
 	// Eviction release: after a force-apply on a template, evict all third-party

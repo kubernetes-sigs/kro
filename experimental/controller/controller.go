@@ -183,6 +183,7 @@ type walkState struct {
 	results           chan nodeResult
 	inflight          int
 	dynamicGVKChanged bool // set when a dynamic GVK resolves for the first time or changes
+	staleReads        bool // set when a Client.Get/Patch returned data older than the informer knows
 }
 
 // notifyDependents dispatches all dependents of a node after its state is
@@ -439,7 +440,19 @@ func (w *walkState) tryDispatch(idx int) {
 			if hashErr == nil && evalHash != "" && evalHash == w.state.previousEvalHashes[node.ID] {
 				prevScope := w.state.previousScope[node.ID]
 				selfChanged := false
-				if len(node.SelfPaths) > 0 && w.watcher != nil && prevScope != nil {
+				// Check whether the node's own resource changed since
+				// the last reconcile by comparing informer-cache RV
+				// against the RV in previousScope. This detects status
+				// updates by external controllers, drift corrections,
+				// and any mutation not reflected in eval-hash inputs.
+				//
+				// The check is unconditional — it runs for ALL nodes
+				// with a Kubernetes resource in scope, not just those
+				// with non-empty SelfPaths. SelfPaths tracks which
+				// fields *downstream* nodes reference; readyWhen and
+				// propagation hash use the full resource and must
+				// re-evaluate on any RV change.
+				if w.watcher != nil && prevScope != nil {
 					if prevMap, ok := prevScope.(map[string]any); ok {
 						prevMD, _ := prevMap["metadata"].(map[string]any)
 						prevRV, _ := prevMD["resourceVersion"].(string)
@@ -468,32 +481,31 @@ func (w *walkState) tryDispatch(idx int) {
 					}
 				}
 
-				if !selfChanged && !readinessDepChanged {
-					// Path 1: skip everything.
-					logger.V(1).Info("evaluation hash match — skipping evaluation",
-						"node", node.ID)
-					if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
-						w.plan.States[node.ID] = prevState
-					}
-					w.skipNode(node)
-					return
+			if !selfChanged && !readinessDepChanged {
+				// Path 1: skip everything — inputs unchanged, live state
+				// unchanged (informer RV matches), no readiness dep change.
+				logger.V(1).Info("evaluation hash match — skipping evaluation",
+					"node", node.ID)
+				if prevState, ok := w.state.previousPlanStates[node.ID]; ok {
+					w.plan.States[node.ID] = prevState
 				}
+				w.skipNode(node)
+				return
+			}
 
-				// Path 2: self-state changed — refresh scope.
+				// Path 2: watch-triggered or self-state changed — refresh scope.
+				//
+				// This is the primary fast path for watch-driven state changes.
+				// A watch event signals a resource change (e.g., external
+				// controller updated status) but the node's template inputs
+				// haven't changed (eval hash match). Re-read live state,
+				// re-evaluate readyWhen, propagate only if output changed.
 				//
 				// Known liveness bound: the Client.Get below runs in the
-				// single-threaded coordinator. All other dispatch and result
-				// processing is blocked until the GET returns. Under mass
-				// external update (GitOps sync, operator batch), many nodes
-				// may hit Path 2 in the same reconcile, serializing API
-				// server round trips. At 100ms/GET × N nodes, the stall
-				// is O(N × RTT). This is acceptable because Path 2 is
-				// uncommon (requires eval-hash match + resourceVersion diff)
-				// and the alternative — dispatching a worker just to GET
-				// and return — adds concurrency complexity for a rare path.
-				// If profiling shows this is a bottleneck, move the GET to
-				// a lightweight worker goroutine.
-				logger.V(1).Info("self-state changed — refreshing scope",
+				// single-threaded coordinator, serializing API server round
+				// trips at O(N × RTT). If profiling shows this is a
+				// bottleneck, move the GET to a lightweight worker goroutine.
+				logger.V(1).Info("watch refresh — re-reading live state",
 					"node", node.ID)
 				SelfRefreshTotal.With(graphMetricLabels(
 					w.graph.GetName(), w.graph.GetNamespace(), node.ID,
@@ -506,10 +518,31 @@ func (w *walkState) tryDispatch(idx int) {
 					prevName, _ := prevMD["name"].(string)
 					gv, _ := schema.ParseGroupVersion(prevAPIVersion)
 					gvk := gv.WithKind(prevKind)
+					gvr := gvkToGVR(gvk)
 					readBack := &unstructured.Unstructured{}
 					readBack.SetGroupVersionKind(gvk)
 					if err := w.r.Client.Get(w.ctx, types.NamespacedName{Namespace: prevNS, Name: prevName}, readBack); err == nil {
-						w.eval.scope[node.ID] = readBack.Object
+						// Verify the GET result isn't stale. If the
+						// metadata informer has a newer RV than what
+						// Client.Get returned, the cache served stale
+						// data. Keep prevScope — the node's state
+						// won't change this cycle, but the informer
+						// RV mismatch means selfChanged will fire
+						// again on the next triggered reconcile.
+						readBackRV := readBack.GetResourceVersion()
+						stale := false
+						if w.watcher != nil {
+							liveRV := w.watcher.getResourceVersion(gvr, prevNS, prevName)
+							if liveRV != "" && liveRV != readBackRV {
+								stale = true
+							}
+						}
+						if !stale {
+							w.eval.scope[node.ID] = readBack.Object
+						} else {
+							w.eval.scope[node.ID] = prevScope
+							w.staleReads = true
+						}
 					} else {
 						w.eval.scope[node.ID] = prevScope
 					}
@@ -526,25 +559,51 @@ func (w *walkState) tryDispatch(idx int) {
 				}
 				w.plan.States[node.ID] = nodeState
 				w.state.previousPlanStates[node.ID] = nodeState
-				// Persist the refreshed scope so the next reconcile's
-				// skipNode restores the up-to-date object (e.g., CRD
-				// with Established status), not the stale version from
-				// the original apply.
 				w.state.previousScope[node.ID] = w.eval.scope[node.ID]
-				// Update the eval hash to reflect the unchanged inputs.
-				// Without this, the next triggered reconcile would
-				// recompute the hash, find the same value, and re-enter
-				// Path 2 unnecessarily.
 				if evalHash, err := hashNodeInputs(node, w.eval.scope); err == nil && evalHash != "" {
 					w.state.previousEvalHashes[node.ID] = evalHash
 				}
-				// Mark dependents as propagation-triggered so they
-				// re-evaluate instead of hash-skipping. The scope
-				// data changed (status updated by external controller),
-				// so downstream nodes referencing this output need
-				// to see the new values.
+				// Propagation check: hash the output fields dependents
+				// reference and compare with the previous reconcile. Only
+				// mark dependents as propagation-triggered if the hash
+				// actually changed. This mirrors Step 8 in the coordinator
+				// loop — without it, every watch event cascades through
+				// the entire downstream subgraph.
+				if observed := w.eval.scope[node.ID]; observed != nil {
+					propagateHash, hashErr := hashSelfPaths(node, observed)
+					if hashErr == nil && propagateHash == "" {
+						if m, ok := observed.(map[string]any); ok {
+							propagateHash, hashErr = hashDesiredState(m)
+						} else {
+							data, jsonErr := json.Marshal(observed)
+							if jsonErr == nil {
+								h := fnv.New64a()
+								h.Write(data)
+								propagateHash = fmt.Sprintf("%016x", h.Sum64())
+							}
+						}
+					}
+					if hashErr == nil && propagateHash != "" {
+						if nodeState == NodeReady {
+							propagateHash += ":ready=true"
+						} else {
+							propagateHash += ":ready=false"
+						}
+						prevHash := w.state.previousSelfHashes[node.ID]
+						if prevHash == "" || propagateHash != prevHash {
+							for _, depIdx := range w.dag.Dependents[node.ID] {
+								w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
+							}
+						}
+						w.state.previousSelfHashes[node.ID] = propagateHash
+					} else {
+						// Hash failed — unconditional propagation for safety.
+						for _, depIdx := range w.dag.Dependents[node.ID] {
+							w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
+						}
+					}
+				}
 				for _, depIdx := range w.dag.Dependents[node.ID] {
-					w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
 					w.tryDispatch(depIdx)
 				}
 				return
@@ -771,7 +830,15 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	if r.Watcher != nil {
 		watcher = r.Watcher.forGraph(req.NamespacedName)
 		defer func() {
-			watcher.done(walkAttempted && reconcileErr == nil)
+			// Commit watches whenever the walk ran, regardless of
+			// reconcileErr. A post-walk error (e.g., optimistic lock
+			// conflict on status update) should not discard valid watch
+			// registrations from the walk. Without this, all events
+			// between the failed commit and the next successful commit
+			// are silently dropped — the root cause of timer-dependent
+			// convergence for CRD Establishment and other status
+			// propagation patterns.
+			watcher.done(walkAttempted)
 		}()
 	}
 
@@ -1344,6 +1411,23 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 	}
 
+	// Retain watches for all DAG nodes not already retained via skipNode
+	// or worker dispatch. Without this, the double-buffer swap in doneGraph
+	// removes watch index entries for nodes that weren't visited this cycle
+	// (e.g., healthy nodes not triggered). Once removed, watch events for
+	// those resources are silently dropped until the resync timer fires.
+	// This was the structural cause of timer-dependent convergence: partial
+	// reconciles (only some nodes triggered) would strip watches from
+	// untriggered-but-healthy nodes, making their convergence entirely
+	// timer-driven rather than watch-driven.
+	if watcher != nil {
+		for i, node := range dag.Nodes {
+			if !walk.dispatched[i] && !walk.outputsReady[node.ID] {
+				watcher.retainWatches(node.ID)
+			}
+		}
+	}
+
 	appliedKeys := walk.appliedKeys
 	nodeErrors := walk.nodeErrors
 	var nodeNotes []string // informational messages (e.g., FinalizerSkipped) routed to status without gating Ready
@@ -1558,8 +1642,10 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	//
 	// Pending and SystemError get short timers regardless of dispatch
 	// status — these are retry mechanisms, not drift detection.
-	// Pending: fallback for edge cases where no watch event arrives.
 	// SystemError: transient server failure needs backoff retry.
+	// Pending: resolves via watch-driven propagation (upstream status
+	// change → watch event → Path 2 refresh → propagation trigger).
+	// The standard resync timer is the safety net for edge cases.
 	for i, node := range dag.Nodes {
 		nodeState := plan.States[node.ID]
 		switch nodeState {
@@ -1573,7 +1659,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			// the backoff should reset because the failure mode changed."
 			delete(state.systemErrorBackoff, node.ID)
 		case NodePending:
-			state.resetResyncTimer(node.ID, 1*time.Second, 0)
+			state.resetResyncTimer(node.ID, r.resyncInterval(), r.resyncJitter())
 			delete(state.systemErrorBackoff, node.ID)
 		case NodeSystemError:
 			// Per 005-reconciliation.md § Trigger: "Transient errors
@@ -1609,8 +1695,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// ... Informer resyncs trigger all nodes simultaneously — correlated,
 	// expensive. Per-node resync timers with jitter amortize resync."
 	//
-	// Non-converged nodes (Pending, SystemError) have short drift
-	// timers set above, so the earliest expiry reflects urgency.
+	// SystemError nodes have short backoff timers; all other nodes
+	// (including Pending) use the standard resync interval.
 	//
 	// requeueFloor provides an explicit lower bound independent of drift
 	// timers — used for graph-level transient conditions (e.g., finalization
@@ -1632,6 +1718,16 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// typed artifact on the next pass.
 	if walk.dynamicGVKChanged {
 		return ctrl.Result{Requeue: true}, nil
+	}
+	// A stale read means a Client.Get returned data older than what the
+	// metadata informer knows. This happens when the controller-runtime
+	// cache lags the informer — typically right after a resource is
+	// mutated by an external controller (e.g., CRD Established). The
+	// informer saw the event but the cache hasn't caught up. One
+	// immediate requeue lets the cache settle; selfChanged will detect
+	// the RV mismatch again and re-read.
+	if walk.staleReads {
+		return ctrl.Result{RequeueAfter: 200 * time.Millisecond}, nil
 	}
 	return ctrl.Result{}, nil
 }

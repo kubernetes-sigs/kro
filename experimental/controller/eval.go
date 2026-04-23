@@ -346,7 +346,7 @@ func (e *evaluator) toMap(tmpl map[string]any) (map[string]any, error) {
 	evaluated, err := e.template(tmpl)
 	if err != nil {
 		if isPending(err) {
-			return nil, ErrPending
+			return nil, fmt.Errorf("%w: %v", ErrPending, err)
 		}
 		return nil, fmt.Errorf("%w: %w", ErrEvaluation, err)
 	}

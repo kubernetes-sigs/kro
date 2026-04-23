@@ -410,7 +410,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 		// Extract field paths from the AST before creating the program.
 		// Per 004-compilation.md § Algorithm, Phase 4 step 5: field path
 		// extraction walks the AST at compile time. One walk per expression.
-		exprPaths[expr] = graph.ExtractFieldPathsFromAST(ast.NativeRep().Expr(), scopeVars, nil)
+		exprPaths[expr] = ExtractFieldPathsFromAST(ast.NativeRep().Expr(), scopeVars, nil)
 		prg, err := env.Program(ast)
 		if err != nil {
 			return nil, fmt.Errorf("programming expression %q: %w: %w", expr, ErrInvalidExpression, err)

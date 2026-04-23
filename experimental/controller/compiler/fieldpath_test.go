@@ -1,4 +1,4 @@
-package graph
+package compiler
 
 import (
 	"testing"
@@ -6,12 +6,14 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
 )
 
-// testEnv creates a CEL environment with the given scope variable names
+// testFieldPathEnv creates a CEL environment with the given scope variable names
 // declared as dyn types, plus the custom ready() member function, suitable
 // for testing field path extraction.
-func testEnv(t *testing.T, vars ...string) *cel.Env {
+func testFieldPathEnv(t *testing.T, vars ...string) *cel.Env {
 	t.Helper()
 	opts := []cel.EnvOption{
 		cel.HomogeneousAggregateLiterals(),
@@ -38,14 +40,14 @@ func TestExtractFieldPaths(t *testing.T) {
 		expr      string
 		vars      []string
 		scopeVars map[string]bool
-		want      map[string][]FieldPath
+		want      map[string][]graph.FieldPath
 	}{
 		{
 			name:      "simple scalar path",
 			expr:      "deploy.status.availableReplicas",
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {{"status", "availableReplicas"}},
 			},
 		},
@@ -54,7 +56,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      "deploy.spec",
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {{"spec"}},
 			},
 		},
@@ -63,7 +65,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      "deploy.spec.replicas + svc.spec.ports",
 			vars:      []string{"deploy", "svc"},
 			scopeVars: map[string]bool{"deploy": true, "svc": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {{"spec", "replicas"}},
 				"svc":    {{"spec", "ports"}},
 			},
@@ -73,7 +75,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      "deploy.spec.replicas > 0 ? deploy.spec.replicas : 1",
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {{"spec", "replicas"}},
 			},
 		},
@@ -82,7 +84,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      "deploy.status.ready ? deploy.spec.replicas : deploy.spec.minReplicas",
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {
 					{"status", "ready"},
 					{"spec", "replicas"},
@@ -95,7 +97,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      `deploy.metadata.labels["app"]`,
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {{"metadata", "labels"}},
 			},
 		},
@@ -104,7 +106,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      "has(deploy.status.conditions)",
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {{"status", "conditions"}},
 			},
 		},
@@ -113,7 +115,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      `deploy.status.conditions.filter(c, c.type == "Available")`,
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				// The path terminates at conditions because filter is a
 				// comprehension. The iteration variable 'c' is not a scope var.
 				"deploy": {{"status", "conditions"}},
@@ -124,7 +126,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      `deploy.status.conditions.exists(c, c.type == "Available" && c.status == "True")`,
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {{"status", "conditions"}},
 			},
 		},
@@ -133,7 +135,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      "deploy",
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {nil},
 			},
 		},
@@ -142,21 +144,21 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      "someLocal.field",
 			vars:      []string{"someLocal"},
 			scopeVars: map[string]bool{"deploy": true}, // someLocal is not a scope var
-			want:      map[string][]FieldPath{},
+			want:      map[string][]graph.FieldPath{},
 		},
 		{
 			name:      "literal only — no paths",
 			expr:      `"hello"`,
 			vars:      []string{},
 			scopeVars: map[string]bool{},
-			want:      map[string][]FieldPath{},
+			want:      map[string][]graph.FieldPath{},
 		},
 		{
 			name:      "size function on field",
 			expr:      "size(deploy.spec.containers)",
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {{"spec", "containers"}},
 			},
 		},
@@ -165,7 +167,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      `deploy.metadata.name + "-svc"`,
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {{"metadata", "name"}},
 			},
 		},
@@ -174,7 +176,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			expr:      "deploy.spec.replicas == config.data.replicas",
 			vars:      []string{"deploy", "config"},
 			scopeVars: map[string]bool{"deploy": true, "config": true},
-			want: map[string][]FieldPath{
+			want: map[string][]graph.FieldPath{
 				"deploy": {{"spec", "replicas"}},
 				"config": {{"data", "replicas"}},
 			},
@@ -188,23 +190,23 @@ func TestExtractFieldPaths(t *testing.T) {
 			// chain is Ident → Call, not Ident → Select, so no path
 			// is extracted. This is correct — readiness is a runtime
 			// property, not a field path.
-			want: map[string][]FieldPath{},
+			want: map[string][]graph.FieldPath{},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env := testEnv(t, tt.vars...)
+			env := testFieldPathEnv(t, tt.vars...)
 			ast, issues := env.Compile(tt.expr)
 			require.NoError(t, issues.Err())
 			got := ExtractFieldPathsFromAST(ast.NativeRep().Expr(), tt.scopeVars, nil)
 
 			// Normalize empty maps for comparison.
 			if len(got) == 0 {
-				got = map[string][]FieldPath{}
+				got = map[string][]graph.FieldPath{}
 			}
 			if len(tt.want) == 0 {
-				tt.want = map[string][]FieldPath{}
+				tt.want = map[string][]graph.FieldPath{}
 			}
 
 			assert.Equal(t, tt.want, got, "ExtractFieldPathsFromAST(%q)", tt.expr)

@@ -73,7 +73,7 @@ func (e *evaluator) snapshotFor(node *graphpkg.Node, state *instanceState) *eval
 	// dynamic nodes. Each worker gets its own map (no sharing) — the resolved
 	// GVK is returned via nodeResult.resolvedGVK.
 	var workerDynamicGVK map[string]schema.GroupVersionKind
-	if e.dynamicGVKResolved != nil {
+	if e.dispatch.dynamicGVKResolved != nil {
 		workerDynamicGVK = make(map[string]schema.GroupVersionKind, 1)
 	}
 
@@ -82,22 +82,24 @@ func (e *evaluator) snapshotFor(node *graphpkg.Node, state *instanceState) *eval
 		scope:               snap,
 		effectiveGeneration: e.effectiveGeneration,
 		nodeReady:           workerReady,
-		dynamicGVKResolved:  workerDynamicGVK,
-		forEachNewScope:     map[string]map[string]any{},
-		forEachNewKeys:      map[string]map[string][]string{},
-		forEachNewHashes:    map[string]map[string]string{},
-		forEachNewItems:     map[string][]any{},
-		forEachPrevItems:    map[string][]any{},
-		forEachPrevScope:    map[string]map[string]any{},
-		forEachPrevKeys:     map[string]map[string][]string{},
-		forEachPrevHashes:   map[string]map[string]string{},
+		dispatch: workerState{
+			dynamicGVKResolved:  workerDynamicGVK,
+			forEachNewScope:     map[string]map[string]any{},
+			forEachNewKeys:      map[string]map[string][]string{},
+			forEachNewHashes:    map[string]map[string]string{},
+			forEachNewItems:     map[string][]any{},
+			forEachPrevItems:    map[string][]any{},
+			forEachPrevScope:    map[string]map[string]any{},
+			forEachPrevKeys:     map[string]map[string][]string{},
+			forEachPrevHashes:   map[string]map[string]string{},
+		},
 	}
 
 	// Copy forEach previous state from the shared instance for this node.
 	if node.ForEach != nil && state != nil {
 		cacheKey := node.ID + "/" + node.ForEach.VarName
 		if items, ok := state.forEachItems[cacheKey]; ok {
-			worker.forEachPrevItems[cacheKey] = items
+			worker.dispatch.forEachPrevItems[cacheKey] = items
 		}
 		// Copy per-item state — keyed by node ID in outer map.
 		if itemScope, ok := state.forEachItemScope[node.ID]; ok {
@@ -105,21 +107,21 @@ func (e *evaluator) snapshotFor(node *graphpkg.Node, state *instanceState) *eval
 			for k, v := range itemScope {
 				copied[k] = v
 			}
-			worker.forEachPrevScope[node.ID] = copied
+			worker.dispatch.forEachPrevScope[node.ID] = copied
 		}
 		if itemKeys, ok := state.forEachItemKeys[node.ID]; ok {
 			copied := make(map[string][]string, len(itemKeys))
 			for k, v := range itemKeys {
 				copied[k] = v
 			}
-			worker.forEachPrevKeys[node.ID] = copied
+			worker.dispatch.forEachPrevKeys[node.ID] = copied
 		}
 		if itemHashes, ok := state.forEachItemHashes[node.ID]; ok {
 			copied := make(map[string]string, len(itemHashes))
 			for k, v := range itemHashes {
 				copied[k] = v
 			}
-			worker.forEachPrevHashes[node.ID] = copied
+			worker.dispatch.forEachPrevHashes[node.ID] = copied
 		}
 	}
 
@@ -195,7 +197,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	// still needs the identity set.
 	cacheKey := node.ID + "/" + varName
 	prevItems := make(map[string]any)
-	if prev, ok := eval.forEachPrevItems[cacheKey]; ok {
+	if prev, ok := eval.dispatch.forEachPrevItems[cacheKey]; ok {
 		for _, item := range prev {
 			id := forEachItemIdentity(item)
 			prevItems[id] = item
@@ -203,15 +205,15 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	}
 
 	// Load per-item previous state from nested maps (keyed by node ID, then item ID).
-	prevItemScope := eval.forEachPrevScope[node.ID]
+	prevItemScope := eval.dispatch.forEachPrevScope[node.ID]
 	if prevItemScope == nil {
 		prevItemScope = map[string]any{}
 	}
-	prevItemKeys := eval.forEachPrevKeys[node.ID]
+	prevItemKeys := eval.dispatch.forEachPrevKeys[node.ID]
 	if prevItemKeys == nil {
 		prevItemKeys = map[string][]string{}
 	}
-	prevItemHashes := eval.forEachPrevHashes[node.ID]
+	prevItemHashes := eval.dispatch.forEachPrevHashes[node.ID]
 	if prevItemHashes == nil {
 		prevItemHashes = map[string]string{}
 	}
@@ -280,7 +282,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		// and this item is NOT in the changed set, carry forward without
 		// any hash computation. The coordinator proved that only specific
 		// collection items changed and this isn't one of them.
-		if eval.forEachChangedItems != nil && !eval.forEachChangedItems[id] && existed {
+		if eval.dispatch.forEachChangedItems != nil && !eval.dispatch.forEachChangedItems[id] && existed {
 			if prevScope, ok := prevItemScope[id]; ok {
 				if prevKeys, ok := prevItemKeys[id]; ok {
 					keys = append(keys, prevKeys...)
@@ -472,24 +474,24 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	}
 
 	// Record updated state for coordinator to merge back.
-	if eval.forEachNewScope == nil {
-		eval.forEachNewScope = map[string]map[string]any{}
+	if eval.dispatch.forEachNewScope == nil {
+		eval.dispatch.forEachNewScope = map[string]map[string]any{}
 	}
-	eval.forEachNewScope[node.ID] = newItemScope
-	if eval.forEachNewKeys == nil {
-		eval.forEachNewKeys = map[string]map[string][]string{}
+	eval.dispatch.forEachNewScope[node.ID] = newItemScope
+	if eval.dispatch.forEachNewKeys == nil {
+		eval.dispatch.forEachNewKeys = map[string]map[string][]string{}
 	}
-	eval.forEachNewKeys[node.ID] = newItemKeys
-	if eval.forEachNewHashes == nil {
-		eval.forEachNewHashes = map[string]map[string]string{}
+	eval.dispatch.forEachNewKeys[node.ID] = newItemKeys
+	if eval.dispatch.forEachNewHashes == nil {
+		eval.dispatch.forEachNewHashes = map[string]map[string]string{}
 	}
-	eval.forEachNewHashes[node.ID] = newItemHashes
+	eval.dispatch.forEachNewHashes[node.ID] = newItemHashes
 
 	// Record updated collection for next reconcile's diff.
-	if eval.forEachNewItems == nil {
-		eval.forEachNewItems = map[string][]any{}
+	if eval.dispatch.forEachNewItems == nil {
+		eval.dispatch.forEachNewItems = map[string][]any{}
 	}
-	eval.forEachNewItems[cacheKey] = items
+	eval.dispatch.forEachNewItems[cacheKey] = items
 
 	// Per 005-reconciliation.md § Parent State: derive parent state from children.
 	// Error states take precedence over Pending; deterministic errors (Error)

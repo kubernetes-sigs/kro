@@ -1503,21 +1503,21 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 	}
 
 	// Pre-populate forEach state so items are "known" and can be carried forward.
-	eval.forEachPrevItems = map[string][]any{
+	eval.dispatch.forEachPrevItems = map[string][]any{
 		"workers/item": {
 			map[string]any{"metadata": map[string]any{"name": "alpha"}},
 			map[string]any{"metadata": map[string]any{"name": "beta"}},
 		},
 	}
-	eval.forEachPrevScope = map[string]map[string]any{
+	eval.dispatch.forEachPrevScope = map[string]map[string]any{
 		"workers": {"alpha": prevAlpha, "beta": prevBeta},
 	}
-	eval.forEachPrevKeys = map[string]map[string][]string{
+	eval.dispatch.forEachPrevKeys = map[string]map[string][]string{
 		"workers": {"alpha": {"key-alpha"}, "beta": {"key-beta"}},
 	}
-	eval.forEachNewScope = map[string]map[string]any{}
-	eval.forEachNewKeys = map[string]map[string][]string{}
-	eval.forEachNewItems = map[string][]any{}
+	eval.dispatch.forEachNewScope = map[string]map[string]any{}
+	eval.dispatch.forEachNewKeys = map[string]map[string][]string{}
+	eval.dispatch.forEachNewItems = map[string][]any{}
 
 	graph := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "experimental.kro.run/v1alpha1",
@@ -1588,18 +1588,18 @@ func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
 	}
 
 	// Pre-populate forEach state: same items as current → skip path fires.
-	eval.forEachPrevItems = map[string][]any{
+	eval.dispatch.forEachPrevItems = map[string][]any{
 		"results/item": sourceItems,
 	}
-	eval.forEachPrevScope = map[string]map[string]any{
+	eval.dispatch.forEachPrevScope = map[string]map[string]any{
 		"results": {"alpha": prevAlpha},
 	}
-	eval.forEachPrevKeys = map[string]map[string][]string{
+	eval.dispatch.forEachPrevKeys = map[string]map[string][]string{
 		"results": {"alpha": {}},
 	}
-	eval.forEachNewScope = map[string]map[string]any{}
-	eval.forEachNewKeys = map[string]map[string][]string{}
-	eval.forEachNewItems = map[string][]any{}
+	eval.dispatch.forEachNewScope = map[string]map[string]any{}
+	eval.dispatch.forEachNewKeys = map[string]map[string][]string{}
+	eval.dispatch.forEachNewItems = map[string][]any{}
 
 	graph := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "experimental.kro.run/v1alpha1",
@@ -1626,14 +1626,14 @@ func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
 	eval2.scope["source"] = map[string]any{"items": sourceItems}
 
 	// prevAlpha still has generation "7" but effectiveGeneration is now 8.
-	eval2.forEachPrevItems = map[string][]any{"results/item": sourceItems}
-	eval2.forEachPrevScope = map[string]map[string]any{
+	eval2.dispatch.forEachPrevItems = map[string][]any{"results/item": sourceItems}
+	eval2.dispatch.forEachPrevScope = map[string]map[string]any{
 		"results": {"alpha": prevAlpha},
 	}
-	eval2.forEachPrevKeys = map[string]map[string][]string{"results": {"alpha": {}}}
-	eval2.forEachNewScope = map[string]map[string]any{}
-	eval2.forEachNewKeys = map[string]map[string][]string{}
-	eval2.forEachNewItems = map[string][]any{}
+	eval2.dispatch.forEachPrevKeys = map[string]map[string][]string{"results": {"alpha": {}}}
+	eval2.dispatch.forEachNewScope = map[string]map[string]any{}
+	eval2.dispatch.forEachNewKeys = map[string]map[string][]string{}
+	eval2.dispatch.forEachNewItems = map[string][]any{}
 
 	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval2, nil, false)
 	require.NoError(t, err)
@@ -1715,10 +1715,10 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval.effectiveGeneration = 1
 	eval.scope["config"] = map[string]any{"version": "v1"}
 	eval.scope["source"] = map[string]any{"names": names}
-	eval.forEachNewScope = map[string]map[string]any{}
-	eval.forEachNewKeys = map[string]map[string][]string{}
-	eval.forEachNewItems = map[string][]any{}
-	eval.forEachNewHashes = map[string]map[string]string{}
+	eval.dispatch.forEachNewScope = map[string]map[string]any{}
+	eval.dispatch.forEachNewKeys = map[string]map[string][]string{}
+	eval.dispatch.forEachNewItems = map[string][]any{}
+	eval.dispatch.forEachNewHashes = map[string]map[string]string{}
 
 	_, err = r.reconcileForEach(context.Background(), graph, resultsNode, eval, nil, false)
 	require.NoError(t, err)
@@ -1729,16 +1729,16 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 		assert.Contains(t, item.(map[string]any)["combined"].(string), "-v1")
 	}
 
-	for k, v := range eval.forEachNewScope {
+	for k, v := range eval.dispatch.forEachNewScope {
 		state.forEachItemScope[k] = v
 	}
-	for k, v := range eval.forEachNewKeys {
+	for k, v := range eval.dispatch.forEachNewKeys {
 		state.forEachItemKeys[k] = v
 	}
-	for k, v := range eval.forEachNewHashes {
+	for k, v := range eval.dispatch.forEachNewHashes {
 		state.forEachItemHashes[k] = v
 	}
-	for k, v := range eval.forEachNewItems {
+	for k, v := range eval.dispatch.forEachNewItems {
 		state.forEachItems[k] = v
 	}
 
@@ -1747,10 +1747,10 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval2.effectiveGeneration = 1
 	eval2.scope["config"] = map[string]any{"version": "v2"}
 	eval2.scope["source"] = map[string]any{"names": names}
-	eval2.forEachNewScope = map[string]map[string]any{}
-	eval2.forEachNewKeys = map[string]map[string][]string{}
-	eval2.forEachNewItems = map[string][]any{}
-	eval2.forEachNewHashes = map[string]map[string]string{}
+	eval2.dispatch.forEachNewScope = map[string]map[string]any{}
+	eval2.dispatch.forEachNewKeys = map[string]map[string][]string{}
+	eval2.dispatch.forEachNewItems = map[string][]any{}
+	eval2.dispatch.forEachNewHashes = map[string]map[string]string{}
 
 	_, err = r.reconcileForEach(context.Background(), graph, resultsNode, eval2, nil, false)
 	require.NoError(t, err)

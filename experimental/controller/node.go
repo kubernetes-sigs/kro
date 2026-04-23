@@ -203,10 +203,10 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 
 	// Incremental path: cached list exists and collection changes are available.
 	// GET only the changed items and merge into the cached list.
-	if eval.collectionCachedList != nil && !eval.collectionResyncOrFull {
+	if eval.dispatch.collectionCachedList != nil && !eval.dispatch.collectionResyncOrFull {
 		var err error
 		items, err = mergeCollectionChanges(
-			ctx, r.apiReader(), eval.collectionCachedList, eval.collectionChanges,
+			ctx, r.apiReader(), eval.dispatch.collectionCachedList, eval.dispatch.collectionChanges,
 			gvk, labelSelector,
 		)
 		if err != nil {
@@ -214,7 +214,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 		}
 
 		logger.V(1).Info("resolved watch (incremental)", "node", node.ID, "gvk", gvk,
-			"cachedCount", len(eval.collectionCachedList), "changes", len(eval.collectionChanges),
+			"cachedCount", len(eval.dispatch.collectionCachedList), "changes", len(eval.dispatch.collectionChanges),
 			"resultCount", len(items))
 	} else {
 		// Full list path: first reconcile, resync timer, or no cache.
@@ -237,12 +237,12 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 		// Mark that this worker took the full-List path. The coordinator
 		// uses this to clear the collectionDirty flag — only a successful
 		// full re-List recovers from a lost incremental merge.
-		eval.collectionDidFullList = true
+		eval.dispatch.collectionDidFullList = true
 		logger.V(1).Info("resolved watch (full list)", "node", node.ID, "gvk", gvk, "count", len(items))
 	}
 
 	// Store the updated cache for the coordinator to persist.
-	eval.collectionUpdatedCache = items
+	eval.dispatch.collectionUpdatedCache = items
 
 	eval.scope[node.ID] = items
 
@@ -312,8 +312,8 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 	// Per 004-compilation.md § Deferred Types: record the resolved GVK for
 	// dynamic GVK nodes. The staleness check compares this against what was
 	// compiled — if different, recompilation is needed on the next reconcile.
-	if eval.dynamicGVKResolved != nil && node.HasDynamicGVR() {
-		eval.dynamicGVKResolved[node.ID] = applied.GroupVersionKind()
+	if eval.dispatch.dynamicGVKResolved != nil && node.HasDynamicGVR() {
+		eval.dispatch.dynamicGVKResolved[node.ID] = applied.GroupVersionKind()
 	}
 
 	eval.scope[node.ID] = graphpkg.NormalizeTypes(applied.Object)

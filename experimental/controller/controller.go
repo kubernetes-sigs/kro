@@ -652,7 +652,7 @@ func (w *walkState) tryDispatch(idx int) {
 	// Watch incremental cache: pass cached list and collection changes
 	// to the worker so reconcileWatch can GET only changed items.
 	if node.Type() == graphpkg.NodeTypeWatch {
-		workerEval.collectionNodeID = node.ID
+		workerEval.dispatch.collectionNodeID = node.ID
 		cached, hasCached := w.state.collectionCache[node.ID]
 		// dirty: a previous incremental reconcile errored mid-merge,
 		// so the drained CollectionChanges were lost. Force a full
@@ -663,12 +663,12 @@ func (w *walkState) tryDispatch(idx int) {
 		// merge.
 		dirty := w.state.collectionDirty[node.ID]
 		if hasCached && !w.resyncTriggered[node.ID] && !dirty {
-			workerEval.collectionCachedList = cached
-			workerEval.collectionChanges = w.collectionChanges[node.ID]
+			workerEval.dispatch.collectionCachedList = cached
+			workerEval.dispatch.collectionChanges = w.collectionChanges[node.ID]
 		} else {
 			// First reconcile, resync, or previous incremental error:
 			// force full list.
-			workerEval.collectionResyncOrFull = true
+			workerEval.dispatch.collectionResyncOrFull = true
 		}
 	}
 
@@ -684,7 +684,7 @@ func (w *walkState) tryDispatch(idx int) {
 	// O(N). Falls back to full rehash (nil annotation) when any other
 	// dependency changed or conditions aren't met.
 	if node.ForEach != nil && node.ForEach.CollectionSource != "" {
-		workerEval.forEachChangedItems = w.resolveForEachChangedItems(node)
+		workerEval.dispatch.forEachChangedItems = w.resolveForEachChangedItems(node)
 	}
 
 	// Dispatch to worker goroutine.
@@ -726,8 +726,8 @@ func (w *walkState) tryDispatch(idx int) {
 		}
 		// Extract dynamic GVK resolution from worker.
 		var resolvedGVK *schema.GroupVersionKind
-		if we.dynamicGVKResolved != nil {
-			if gvk, ok := we.dynamicGVKResolved[n.ID]; ok {
+		if we.dispatch.dynamicGVKResolved != nil {
+			if gvk, ok := we.dispatch.dynamicGVKResolved[n.ID]; ok {
 				resolvedGVK = &gvk
 			}
 		}
@@ -739,12 +739,12 @@ func (w *walkState) tryDispatch(idx int) {
 			scopeKey:              n.ID,
 			scopeValue:            we.scope[n.ID],
 			evalDuration:          evalDuration,
-			forEachUpdates:        we.forEachNewKeys,
-			forEachScopes:         we.forEachNewScope,
-			forEachHashes:         we.forEachNewHashes,
-			forEachItems:          we.forEachNewItems,
+			forEachUpdates:        we.dispatch.forEachNewKeys,
+			forEachScopes:         we.dispatch.forEachNewScope,
+			forEachHashes:         we.dispatch.forEachNewHashes,
+			forEachItems:          we.dispatch.forEachNewItems,
 			collectionCacheUpdate: we.collectionCacheUpdate(),
-			collectionDidFullList: we.collectionDidFullList,
+			collectionDidFullList: we.dispatch.collectionDidFullList,
 			nodeReadyUpdate:       nodeReadyUpdate,
 			resolvedGVK:           resolvedGVK,
 		}

@@ -32,6 +32,12 @@ const (
 // for a single reconcile cycle. The scope is owned by the coordinator —
 // workers receive read-only snapshots and return results for the coordinator
 // to merge. No locking needed.
+//
+// Coordinator fields (compiled, scope, effectiveGeneration, nodeReady) persist
+// for the reconcile cycle. Worker fields live in the dispatch sub-struct —
+// populated by snapshotFor before each worker dispatch, consumed by the
+// node-type handler, and read by the goroutine closure to build nodeResult.
+// The coordinator's evaluator always has dispatch at zero value.
 type evaluator struct {
 	compiled *compiler.CompiledGraph
 	scope    map[string]any
@@ -52,18 +58,27 @@ type evaluator struct {
 	// by this sidecar. Per 001-graph.md § readyWhen.
 	nodeReady map[string]bool
 
-	// forEach state — populated by the coordinator before dispatching a
-	// forEach worker, and read by reconcileForEach. Workers write to these
-	// maps (they're private to the worker's evaluator copy), and the results
-	// are returned to the coordinator for merging into the shared cache.
+	// dispatch holds per-worker state populated by snapshotFor before each
+	// worker dispatch. Zero value for the coordinator's evaluator.
+	dispatch workerState
+}
+
+// workerState holds per-node-dispatch state for worker goroutines. Populated
+// by snapshotFor before dispatch, consumed by reconcileForEach and
+// reconcileWatch during evaluation, and read by the worker goroutine closure
+// to build nodeResult. Always zero for the coordinator's evaluator.
+type workerState struct {
+	// forEach input state — copied from instanceState by snapshotFor.
 	forEachPrevItems  map[string][]any               // cache key → previous collection items
 	forEachPrevScope  map[string]map[string]any      // nodeID → itemID → previous scope data
 	forEachPrevKeys   map[string]map[string][]string // nodeID → itemID → previous applied keys
 	forEachPrevHashes map[string]map[string]string   // nodeID → itemID → previous content hash
-	forEachNewItems   map[string][]any               // cache key → updated collection items (output)
-	forEachNewScope   map[string]map[string]any      // nodeID → itemID → updated scope data (output)
-	forEachNewKeys    map[string]map[string][]string // nodeID → itemID → updated keys (output)
-	forEachNewHashes  map[string]map[string]string   // nodeID → itemID → updated content hash (output)
+
+	// forEach output state — written by reconcileForEach, read by goroutine closure.
+	forEachNewItems  map[string][]any               // cache key → updated collection items
+	forEachNewScope  map[string]map[string]any      // nodeID → itemID → updated scope data
+	forEachNewKeys   map[string]map[string][]string // nodeID → itemID → updated keys
+	forEachNewHashes map[string]map[string]string   // nodeID → itemID → updated content hash
 
 	// forEachChangedItems is set by the coordinator when a forEach dispatch
 	// is triggered exclusively by collection-item changes with stable
@@ -72,32 +87,22 @@ type evaluator struct {
 	// never hedges.
 	forEachChangedItems map[string]bool
 
-	// Watch incremental cache state — populated by the coordinator
-	// before dispatching a Watch worker (cached list + collection
-	// changes). The worker merges changes into the cached list and returns
-	// the updated list via collectionUpdatedCache.
-	// Per 005-reconciliation.md § Propagation: "When a single resource
-	// changes, update the cached list incrementally rather than re-listing
-	// — O(1) per event, not O(matching)."
-	collectionNodeID       string             // node ID for cache key (set by coordinator)
-	collectionCachedList   []any              // previous cached list (nil = no cache, full list needed)
-	collectionChanges      []watches.CollectionChange // buffered changes since last reconcile
-	collectionUpdatedCache []any              // output: updated list for coordinator to store
-	collectionResyncOrFull bool               // true = bypass cache, do full list (resync or first reconcile)
+	// Watch incremental cache input — populated by the coordinator.
+	// Per 005-reconciliation.md § Propagation.
+	collectionNodeID       string                       // node ID for cache key
+	collectionCachedList   []any                        // previous cached list (nil = full list needed)
+	collectionChanges      []watches.CollectionChange   // buffered changes since last reconcile
+	collectionResyncOrFull bool                         // true = bypass cache, do full list
+
+	// Watch incremental cache output — written by reconcileWatch.
+	collectionUpdatedCache []any // updated list for coordinator to store
 	// collectionDidFullList is set true by reconcileWatch when the
 	// worker took the full-List path (as opposed to incremental merge).
-	// Used by the coordinator to tighten dirty-flag clearing: dirty is
-	// cleared only when a full re-List has successfully completed,
-	// because dirty means "drained incremental changes were lost, cache
-	// is suspect." An incremental-merge success with an already-stale
-	// cache does not address the staleness. Per 005-reconciliation.md
-	// § Propagation.
+	// Per 005-reconciliation.md § Propagation.
 	collectionDidFullList bool
 
 	// dynamicGVKResolved maps node ID → resolved GVK for dynamic GVK nodes.
-	// Per 004-compilation.md § Deferred Types: recorded after template evaluation
-	// so the coordinator can compare against the previous reconcile. When a
-	// dynamic GVK changes, the artifact is stale.
+	// Per 004-compilation.md § Deferred Types.
 	dynamicGVKResolved map[string]schema.GroupVersionKind
 }
 
@@ -122,10 +127,10 @@ func newEvaluator(state *instanceState) *evaluator {
 		dynamicGVKResolved = make(map[string]schema.GroupVersionKind, len(state.compiled.DynamicGVKNodes))
 	}
 	return &evaluator{
-		compiled:           state.compiled,
-		scope:              scope,
-		nodeReady:          state.nodeReady,
-		dynamicGVKResolved: dynamicGVKResolved,
+		compiled:  state.compiled,
+		scope:     scope,
+		nodeReady: state.nodeReady,
+		dispatch:  workerState{dynamicGVKResolved: dynamicGVKResolved},
 	}
 }
 
@@ -147,10 +152,10 @@ func (e *evaluator) withScope(scope map[string]any) *evaluator {
 // update was produced (the worker was not a Watch node, or the
 // reconcileWatch call failed before producing a cache update).
 func (e *evaluator) collectionCacheUpdate() map[string][]any {
-	if e.collectionUpdatedCache == nil || e.collectionNodeID == "" {
+	if e.dispatch.collectionUpdatedCache == nil || e.dispatch.collectionNodeID == "" {
 		return nil
 	}
-	return map[string][]any{e.collectionNodeID: e.collectionUpdatedCache}
+	return map[string][]any{e.dispatch.collectionNodeID: e.dispatch.collectionUpdatedCache}
 }
 
 // evalBoolCondition evaluates a CEL expression and coerces the result to bool.

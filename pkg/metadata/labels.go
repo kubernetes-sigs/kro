@@ -32,11 +32,14 @@ import (
 const (
 	// LabelKROPrefix is the label key prefix used to identify KRO owned resources.
 	LabelKROPrefix = v1alpha1.KRODomainName + "/"
+	// InternalLabelKROPrefix is the prefix for internal-only metadata that
+	// should not be treated as part of kro's public API surface.
+	InternalLabelKROPrefix = "internal.kro.run/"
 )
 
 const (
 	NodeIDLabel    = LabelKROPrefix + "node-id"
-	NodeAnnotation = LabelKROPrefix + "node"
+	NodeAnnotation = InternalLabelKROPrefix + "node"
 
 	// Collection labels for tracking collection membership and position.
 	// These enable querying collection resources and understanding their position.

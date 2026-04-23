@@ -805,11 +805,11 @@ used for querying or debugging:
 
 | Annotation | Description | Example |
 |------------|-------------|---------|
-| `kro.run/node` | A human-readable node identifier from the RGD | `workerPods` |
+| `internal.kro.run/node` | A human-readable node identifier from the RGD | `workerPods` |
 
 The `kro.run/node-id` label stores a deterministic hash rather than the raw
 resource ID because Kubernetes limits label values to 63 characters. The
-original ID is preserved in the `kro.run/node` annotation for
+original ID is preserved in the `internal.kro.run/node` annotation for
 traceability and debugging.
 
 :::note

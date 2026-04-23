@@ -128,6 +128,25 @@ func TestPlanNodesForDeletionSkipsIgnoredExternalAndMissingNodes(t *testing.T) {
 	assert.Equal(t, v1alpha1.NodeStateDeleted, rcx.StateManager.NodeStates["missing"].State)
 }
 
+func TestPlanNodesForDeletionFindsCollectionChildrenWithRawNodeIDLabel(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	_ = unstructured.SetNestedSlice(instance.Object, []interface{}{"one"}, "spec", "items")
+
+	collectionNode := newDeletionCollectionNode(t, "configs")
+
+	preHashChild := newConfigMapObject("one", "default")
+	preHashChild.SetLabels(map[string]string{
+		metadata.InstanceIDLabel: string(instance.GetUID()),
+		metadata.NodeIDLabel:     "configs",
+	})
+
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(collectionNode), preHashChild)
+	node, err := controller.planNodesForDeletion(rcx)
+	require.NoError(t, err)
+	require.NotNil(t, node, "should find collection child with raw node-id label, not treat it as already deleted")
+	assert.Equal(t, "configs", node.Spec.Meta.ID)
+}
+
 func TestPlanNodesForDeletionErrors(t *testing.T) {
 	tests := []struct {
 		name      string

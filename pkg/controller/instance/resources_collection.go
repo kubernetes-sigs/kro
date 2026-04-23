@@ -121,21 +121,45 @@ func (c *Controller) listCollectionItems(
 	gvr schema.GroupVersionResource,
 	nodeID string,
 ) ([]*unstructured.Unstructured, error) {
-	// Filter by both instance UID and node ID for precise matching
 	instanceUID := string(rcx.Instance.GetUID())
+
+	items, err := c.listByNodeIDLabel(rcx, gvr, instanceUID, metadata.SafeNodeID(nodeID))
+	if err != nil {
+		return nil, err
+	}
+	if len(items) > 0 {
+		return items, nil
+	}
+
+	// Fallback: children created before the node-id hashing change still carry
+	// the raw node ID as their label value. Without this second lookup the
+	// deletion path would miss them and leave orphans behind.
+	items, err = c.listByNodeIDLabel(rcx, gvr, instanceUID, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) > 0 {
+		rcx.Log.V(1).Info("found collection items with raw node-id label from pre-hashing controller version",
+			"nodeID", nodeID, "count", len(items))
+	}
+	return items, nil
+}
+
+func (c *Controller) listByNodeIDLabel(
+	rcx *ReconcileContext,
+	gvr schema.GroupVersionResource,
+	instanceUID, nodeIDValue string,
+) ([]*unstructured.Unstructured, error) {
 	selector := fmt.Sprintf("%s=%s,%s=%s",
 		metadata.InstanceIDLabel, instanceUID,
-		metadata.NodeIDLabel, metadata.SafeNodeID(nodeID),
+		metadata.NodeIDLabel, nodeIDValue,
 	)
-
-	// List across all namespaces - collection items may span namespaces
 	list, err := rcx.Client.Resource(gvr).List(rcx.Ctx, metav1.ListOptions{
 		LabelSelector: selector,
 	})
 	if err != nil {
 		return nil, err
 	}
-
 	items := make([]*unstructured.Unstructured, len(list.Items))
 	for i := range list.Items {
 		items[i] = &list.Items[i]

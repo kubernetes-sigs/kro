@@ -372,7 +372,6 @@ func (c *Controller) processRegularNode(
 	}
 
 	return []applyset.Resource{resource}, inProgressState(), nil
-}
 
 // applyDecoratorLabels merges tool labels and adds node/collection identifiers.
 func (c *Controller) applyDecoratorLabels(

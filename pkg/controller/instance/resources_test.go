@@ -438,6 +438,30 @@ func TestCollectionAndExternalCollectionProcessing(t *testing.T) {
 	assert.Equal(t, v1alpha1.NodeStateSynced, extState.State)
 }
 
+func TestProcessCollectionNodeMatchesChildrenWithRawNodeIDLabel(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	_ = unstructured.SetNestedSlice(instance.Object, []interface{}{"one"}, "spec", "items")
+
+	collectionNode := newCollectionNodeForResources(t, "items")
+
+	preHashChild := newConfigMapObject("one", "default")
+	preHashChild.SetLabels(map[string]string{
+		metadata.InstanceIDLabel: string(instance.GetUID()),
+		metadata.NodeIDLabel:     "items",
+	})
+
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(collectionNode), preHashChild)
+
+	runtimeNode := rcx.Runtime.Nodes()[0]
+	desired, err := runtimeNode.GetDesired()
+	require.NoError(t, err)
+	resources, err := controller.processCollectionNode(rcx, runtimeNode, rcx.StateManager.NewNodeState("items"), desired)
+	require.NoError(t, err)
+	require.Len(t, resources, 1)
+	assert.NotNil(t, resources[0].Current, "should match child with raw node-id label as current")
+	assert.Equal(t, "one", resources[0].Object.GetName())
+}
+
 func TestProcessExternalRefNodePaths(t *testing.T) {
 	tests := []struct {
 		name        string

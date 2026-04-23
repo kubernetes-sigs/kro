@@ -116,7 +116,7 @@ var _ = Describe("ClusterScopedInstance", func() {
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
 					Namespace: "${schema.spec.targetNamespace}",
-					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
+					Selector: toRawExtension(metav1.LabelSelector{
 						MatchLabels: map[string]string{"role": "team-config"},
 					}),
 				},

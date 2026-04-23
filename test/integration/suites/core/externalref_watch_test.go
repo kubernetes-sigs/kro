@@ -170,7 +170,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
+					Selector: toRawExtension(metav1.LabelSelector{
 						MatchExpressions: []metav1.LabelSelectorRequirement{
 							{
 								Key:      "team",
@@ -275,7 +275,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
+					Selector: toRawExtension(metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"team": "${schema.spec.teamName}",
 						},
@@ -377,7 +377,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
+					Selector: toRawExtension(metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"team": "${schema.spec.teamName}",
 						},
@@ -496,7 +496,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
+					Selector: toRawExtension(metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"watch-test": "reactive",
 						},
@@ -606,7 +606,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
+					Selector: toRawExtension(metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"app": "sorttest",
 						},

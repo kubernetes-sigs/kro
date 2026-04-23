@@ -15,6 +15,7 @@
 package graph
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -798,21 +799,21 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 		{
 			name: "selector object is valid",
 			metadata: v1alpha1.ExternalRefMetadata{
-				Selector: v1alpha1.MustJSON(metav1.LabelSelector{
-					MatchLabels: map[string]string{"app": "demo"},
+				Selector: toRawExtension(t, map[string]interface{}{
+					"matchLabels": map[string]string{"app": "demo"},
 				}),
 			},
 		},
 		{
 			name: "selector CEL string is valid",
 			metadata: v1alpha1.ExternalRefMetadata{
-				Selector: v1alpha1.MustJSON("${schema.spec.selector}"),
+				Selector: rawExt("${schema.spec.selector}"),
 			},
 		},
 		{
 			name: "matchLabels CEL object is valid",
 			metadata: v1alpha1.ExternalRefMetadata{
-				Selector: v1alpha1.MustJSON(map[string]any{
+				Selector: toRawExtension(t, map[string]any{
 					"matchLabels": "${schema.spec.matchLabels}",
 				}),
 			},
@@ -820,7 +821,7 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 		{
 			name: "matchExpressions CEL object is valid",
 			metadata: v1alpha1.ExternalRefMetadata{
-				Selector: v1alpha1.MustJSON(map[string]any{
+				Selector: toRawExtension(t, map[string]any{
 					"matchExpressions": "${schema.spec.matchExpressions}",
 				}),
 			},
@@ -828,7 +829,7 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 		{
 			name: "matchLabels CEL value is valid",
 			metadata: v1alpha1.ExternalRefMetadata{
-				Selector: v1alpha1.MustJSON(map[string]any{
+				Selector: toRawExtension(t, map[string]any{
 					"matchLabels": map[string]any{
 						"team": "${schema.spec.teamName}",
 					},
@@ -838,7 +839,7 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 		{
 			name: "matchExpressions CEL value is valid",
 			metadata: v1alpha1.ExternalRefMetadata{
-				Selector: v1alpha1.MustJSON(map[string]any{
+				Selector: toRawExtension(t, map[string]any{
 					"matchExpressions": []map[string]any{{
 						"key":      "team",
 						"operator": "In",
@@ -855,7 +856,7 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 		{
 			name: "null selector and no name is invalid",
 			metadata: v1alpha1.ExternalRefMetadata{
-				Selector: v1alpha1.MustJSON(nil),
+				Selector: toRawExtension(t, nil),
 			},
 			wantErr: "exactly one of name or selector must be provided",
 		},
@@ -863,28 +864,28 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 			name: "both name and selector are invalid",
 			metadata: v1alpha1.ExternalRefMetadata{
 				Name:     "cm",
-				Selector: v1alpha1.MustJSON(metav1.LabelSelector{}),
+				Selector: toRawExtension(t, metav1.LabelSelector{}),
 			},
 			wantErr: "exactly one of name or selector must be provided",
 		},
 		{
 			name: "scalar selector string is invalid",
 			metadata: v1alpha1.ExternalRefMetadata{
-				Selector: v1alpha1.MustJSON("app=demo"),
+				Selector: rawExt("app=demo"),
 			},
-			wantErr: "selector must be a Kubernetes LabelSelector object or a CEL expression that resolves to one",
+			wantErr: "selector must resolve to a Kubernetes LabelSelector object",
 		},
 		{
 			name: "non object non string selector is invalid",
 			metadata: v1alpha1.ExternalRefMetadata{
-				Selector: v1alpha1.MustJSON(42),
+				Selector: toRawExtension(t, 42),
 			},
 			wantErr: "selector must resolve to a Kubernetes LabelSelector object",
 		},
 		{
 			name: "invalid selector object is invalid",
 			metadata: v1alpha1.ExternalRefMetadata{
-				Selector: v1alpha1.MustJSON(map[string]any{
+				Selector: toRawExtension(t, map[string]any{
 					"matchExpressions": []map[string]any{{
 						"key":      "app",
 						"operator": "InvalidOperator",
@@ -1123,4 +1124,11 @@ func TestValidateIdentityFields(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
+}
+
+// Helper function to convert map to runtime.RawExtension
+func toRawExtension(t *testing.T, v interface{}) runtime.RawExtension {
+	rawJSON, err := json.Marshal(v)
+	require.NoError(t, err)
+	return runtime.RawExtension{Raw: rawJSON}
 }

@@ -284,13 +284,9 @@ func (n *Node) resolve(mode resolveMode) (result []*unstructured.Unstructured, e
 func (n *Node) DeleteTargets() ([]*unstructured.Unstructured, error) {
 	switch n.Spec.Meta.Type {
 	case graph.NodeTypeCollection, graph.NodeTypeResource:
-		desired, err := n.GetDesiredIdentity()
-		if err != nil {
-			return nil, err
-		}
-		if n.Spec.Meta.Type == graph.NodeTypeCollection {
-			return orderedIntersection(n.observed, desired), nil
-		}
+		// Instance deletion: return all observed items without filtering.
+		// Collections list by labels, single resources GET by identity.
+		// Both paths happen in planNodesForDeletion before DeleteTargets is called.
 		return n.observed, nil
 	case graph.NodeTypeInstance, graph.NodeTypeExternal, graph.NodeTypeExternalCollection:
 		panic(fmt.Sprintf("DeleteTargets called for node type %v", n.Spec.Meta.Type))

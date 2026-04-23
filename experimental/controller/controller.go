@@ -370,6 +370,7 @@ func (w *walkState) tryDispatch(idx int) {
 		// this check, Excluded propagates unconditionally and the
 		// status patch never happens.
 		if len(node.PropagateWhen) == 0 || node.ForEach != nil {
+			logger.V(1).Info("node excluded — dependency excluded", "node", node.ID)
 			w.plan.SetState(w.dag, node.ID, dagpkg.NodeExcluded)
 			w.state.previousPlanStates[node.ID] = dagpkg.NodeExcluded
 			delete(w.state.previousEvalHashes, node.ID)
@@ -379,6 +380,7 @@ func (w *walkState) tryDispatch(idx int) {
 		// Fall through to propagateWhen evaluation.
 	}
 	if hasBlocked {
+		logger.V(1).Info("node blocked — dependency in error state", "node", node.ID)
 		w.plan.SetState(w.dag, node.ID, dagpkg.NodeBlocked)
 		w.state.previousPlanStates[node.ID] = dagpkg.NodeBlocked
 		delete(w.state.previousEvalHashes, node.ID)
@@ -386,6 +388,7 @@ func (w *walkState) tryDispatch(idx int) {
 		return
 	}
 	if hasPending {
+		logger.V(1).Info("node pending — dependency pending", "node", node.ID)
 		w.plan.SetState(w.dag, node.ID, dagpkg.NodePending)
 		w.state.previousPlanStates[node.ID] = dagpkg.NodePending
 		delete(w.state.previousEvalHashes, node.ID)
@@ -638,6 +641,7 @@ func (w *walkState) tryDispatch(idx int) {
 			return
 		}
 		if !included {
+			logger.V(1).Info("node excluded by includeWhen", "node", node.ID)
 			w.plan.SetState(w.dag, node.ID, dagpkg.NodeExcluded)
 			w.state.previousPlanStates[node.ID] = dagpkg.NodeExcluded
 			delete(w.state.previousEvalHashes, node.ID)
@@ -690,6 +694,7 @@ func (w *walkState) tryDispatch(idx int) {
 	// Dispatch to worker goroutine.
 	w.dispatched[idx] = true
 	isResync := w.resyncTriggered[node.ID]
+	logger.V(1).Info("dispatching node", "node", node.ID, "nodeType", resolvedNodeType, "resyncCorrection", isResync)
 	go func(n graphpkg.Node, we *evaluator, nodeType graphpkg.NodeType, resyncCorrection bool) {
 		evalStart := time.Now()
 		keys, err := w.r.reconcileNode(w.ctx, w.graph, n, nodeType, we, w.watcher, resyncCorrection)
@@ -772,6 +777,14 @@ func (r *GraphReconciler) resyncJitter() time.Duration {
 func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, reconcileErr error) {
 	reconcileStart := time.Now()
 	logger := log.FromContext(ctx)
+	logger.V(1).Info("reconcile started")
+	defer func() {
+		if reconcileErr != nil {
+			logger.Error(reconcileErr, "reconcile failed", "duration", time.Since(reconcileStart))
+		} else {
+			logger.V(1).Info("reconcile complete", "duration", time.Since(reconcileStart))
+		}
+	}()
 	// requeueFloor is an explicit requeue interval independent of resync timers.
 	// Set when a transient condition needs re-checking beyond what watch events
 	// guarantee — e.g., finalization in progress. Zero means no explicit floor.
@@ -817,6 +830,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		if err := r.Client.Delete(ctx, graph); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, fmt.Errorf("self-deleting graph for owner teardown: %w", err)
 		}
+		logger.Info("self-deleted graph — owner is terminating")
 		return ctrl.Result{}, nil
 	}
 
@@ -1102,6 +1116,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 	}
 	if len(triggered) == 0 && !needsPruneSweep {
+		logger.V(1).Info("no nodes triggered — skipping walk")
 		if compilationErr != nil {
 			rstate := &reconcileState{
 				compiled:    false,
@@ -1189,11 +1204,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// flows into the status condition for operator triage.
 		if res.state == dagpkg.NodeError {
 			info := classifyAPIError(res.err)
+			prevState := state.previousPlanStates[node.ID]
 			plan.SetState(dag, node.ID, info.state)
 			state.previousPlanStates[node.ID] = info.state
 			walk.nodeErrors = append(walk.nodeErrors, fmt.Sprintf("%s: %s", node.ID, info.reason))
 			logger.V(0).Info("error on node", "node", node.ID,
-				"state", info.state, "reason", info.reason, "error", res.err)
+				"previousState", prevState, "state", info.state, "reason", info.reason, "error", res.err)
 			// Retain previous keys — the resource may still exist in the cluster.
 			walk.carryForwardKeys(node.ID)
 			// Dispatch dependents — tryDispatch will see the error state
@@ -1204,12 +1220,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			continue
 		}
 		if res.state == dagpkg.NodeConflict {
+			prevState := state.previousPlanStates[node.ID]
 			plan.SetState(dag, node.ID, dagpkg.NodeConflict)
 			state.previousPlanStates[node.ID] = dagpkg.NodeConflict
 			state.previousScope[node.ID] = res.scopeValue
 			state.previousKeys[node.ID] = res.keys
 			walk.nodeErrors = append(walk.nodeErrors, fmt.Sprintf("%s: field conflict", node.ID))
-			logger.V(0).Info("conflict on node", "node", node.ID, "error", res.err)
+			logger.V(0).Info("conflict on node", "node", node.ID, "previousState", prevState, "error", res.err)
 			walk.carryForwardKeys(node.ID)
 			for _, depIdx := range dag.Dependents[node.ID] {
 				walk.tryDispatch(depIdx)
@@ -1217,6 +1234,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			continue
 		}
 		if res.state == dagpkg.NodePending {
+			prevState := state.previousPlanStates[node.ID]
 			plan.SetState(dag, node.ID, dagpkg.NodePending)
 			// Under declared-keyword classification, patch→template is an
 			// authoring event (patch: → template: spec edit) handled by
@@ -1224,7 +1242,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			state.previousPlanStates[node.ID] = dagpkg.NodePending
 			state.previousScope[node.ID] = res.scopeValue
 			state.previousKeys[node.ID] = res.keys
-			logger.V(1).Info("data pending for node", "node", node.ID, "error", res.err)
+			logger.V(1).Info("data pending for node", "node", node.ID, "previousState", prevState, "error", res.err)
 			walk.carryForwardKeys(node.ID)
 			for _, depIdx := range dag.Dependents[node.ID] {
 				walk.tryDispatch(depIdx)
@@ -1284,7 +1302,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 
 		// Update plan state.
+		prevState := state.previousPlanStates[node.ID]
 		plan.SetState(dag, node.ID, res.state)
+		if prevState != res.state {
+			logger.V(1).Info("node state transition", "node", node.ID,
+				"previousState", prevState, "newState", res.state, "duration", res.evalDuration)
+		}
 
 		// Surface readyWhen expression errors. Per 001-graph.md: readyWhen
 		// errors produce NodeNotReady (not NodeError), so they don't gate

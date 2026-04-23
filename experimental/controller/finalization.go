@@ -177,8 +177,14 @@ func (r *GraphReconciler) advanceFinalization(
 			result.ProtectedKeys[ck] = true
 		}
 
+		prevPhase := FinalizationPhase("")
+		if entry, ok := state.activeFinalization[key]; ok {
+			prevPhase = entry.Phase
+		}
+
 		if finErr != nil {
-			logger.Error(finErr, "finalization failed", "key", key)
+			logger.Error(finErr, "finalization failed",
+				"key", key, "previousPhase", prevPhase, "newPhase", FinalizationCreating)
 			result.BlockedReasons = append(result.BlockedReasons, fmt.Sprintf(
 				"TeardownBlocked: %s (finalizer creation failed: %s)", key, finErr))
 			result.DeferredTargets = append(result.DeferredTargets, key)
@@ -191,7 +197,8 @@ func (r *GraphReconciler) advanceFinalization(
 
 		if !ready {
 			logger.Info("finalization in progress — deletion deferred",
-				"key", key, "finalizers", finalizerNodeIDs)
+				"key", key, "finalizers", finalizerNodeIDs,
+				"previousPhase", prevPhase, "newPhase", FinalizationWaitingReady)
 			result.BlockedReasons = append(result.BlockedReasons, fmt.Sprintf(
 				"TeardownBlocked: %s (finalizer not ready: %s)",
 				key, strings.Join(finalizerNodeIDs, ", ")))
@@ -204,7 +211,8 @@ func (r *GraphReconciler) advanceFinalization(
 		}
 
 		// Finalization complete — target can be deleted.
-		logger.Info("finalization complete", "key", key)
+		logger.Info("finalization complete", "key", key,
+			"previousPhase", prevPhase)
 		result.CompletedTargets[key] = true
 		result.ChildKeysToCleanup[key] = childKeys
 		delete(state.activeFinalization, key)

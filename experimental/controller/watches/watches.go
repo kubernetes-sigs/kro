@@ -127,7 +127,10 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource, kind string,
 	}
 
 	if _, ok := m.watches[gvr]; ok {
+		ownerCount := len(m.owners[gvr])
 		m.mu.Unlock()
+		m.log.V(2).Info("watch already active — reusing informer",
+			"gvr", gvr, "owner", ownerID, "ownerCount", ownerCount)
 		return nil
 	}
 
@@ -146,7 +149,7 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource, kind string,
 	m.watches[gvr] = w
 
 	go inf.RunWithContext(ctx)
-	m.log.V(1).Info("informer started", "gvr", gvr)
+	m.log.V(1).Info("informer started", "gvr", gvr, "owner", ownerID)
 	m.mu.Unlock()
 
 	// Wait for sync outside the lock. Firing onNewType BEFORE the cache is
@@ -155,12 +158,16 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource, kind string,
 	// populated the discovery cache, and compile silently falls back to dyn
 	// again. Sync first, notify second — the informer is authoritative by
 	// the time the callback runs.
+	syncStart := time.Now()
+	m.log.V(1).Info("waiting for cache sync", "gvr", gvr)
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer syncCancel()
 	if !cache.WaitForCacheSync(syncCtx.Done(), inf.HasSynced) {
+		m.log.Error(nil, "cache sync timeout", "gvr", gvr, "duration", time.Since(syncStart))
 		m.forceStop(gvr)
 		return fmt.Errorf("cache sync timeout for %s", gvr)
 	}
+	m.log.V(1).Info("cache synced", "gvr", gvr, "duration", time.Since(syncStart))
 
 	// Notify that a new type is being watched. This triggers recompilation
 	// for Graphs that had this type unresolved — the schema may now be available.
@@ -196,6 +203,8 @@ func (m *WatchManager) stopLocked(gvr schema.GroupVersionResource, force bool) {
 		return
 	}
 	if !force && len(m.owners[gvr]) > 0 {
+		m.log.V(2).Info("informer retained — other owners remain",
+			"gvr", gvr, "ownerCount", len(m.owners[gvr]))
 		return
 	}
 	_ = w.informer.RemoveEventHandler(w.handlerReg) // best-effort; informer is being cancelled anyway
@@ -205,12 +214,14 @@ func (m *WatchManager) stopLocked(gvr schema.GroupVersionResource, force bool) {
 }
 
 func (m *WatchManager) Shutdown() {
+	m.log.V(1).Info("shutting down watch manager")
 	m.parentCancel() // stop all informers via parent context
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for gvr := range m.watches {
 		m.stopLocked(gvr, true)
 	}
+	m.log.V(1).Info("watch manager shutdown complete")
 }
 
 // KindFor returns the canonical CamelCase Kind for a GVR, or "" if unknown.
@@ -707,6 +718,10 @@ func (c *WatchCoordinator) doneGraph(graph GraphKey, pending []watchRequest) {
 	toRelease := c.gvrsToReleaseLocked(state.previous, affectedGVRs)
 	c.mu.Unlock()
 
+	c.log.V(1).Info("watch cycle flushed", "graph", graph,
+		"newWatches", len(newNodeIDs), "staleWatches", len(affectedGVRs),
+		"toRelease", len(toRelease))
+
 	// Ensure informers running for watched GVRs (outside lock).
 	// ensureWatch is idempotent and ref-counted — calling it for
 	// GVRs already running just bumps the owner set.
@@ -742,6 +757,7 @@ func (c *WatchCoordinator) doneGraph(graph GraphKey, pending []watchRequest) {
 
 // RemoveGraph removes all watch state for a deleted Graph.
 func (c *WatchCoordinator) RemoveGraph(graph GraphKey) {
+	c.log.V(1).Info("removing graph watch state", "graph", graph)
 	c.mu.Lock()
 
 	state, ok := c.graphs[graph]
@@ -857,7 +873,9 @@ func (c *WatchCoordinator) RouteEvent(event watchEvent) {
 			c.enqueue(graph)
 		}
 
-		c.log.V(2).Info("routed event", "gvr", event.gvr, "name", event.name, "namespace", event.namespace, "type", event.eventType, "matchCount", len(matched))
+		c.log.V(2).Info("routed event", "gvr", event.gvr, "name", event.name,
+			"namespace", event.namespace, "type", event.eventType,
+			"matchCount", len(matched))
 	}
 }
 

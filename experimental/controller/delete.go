@@ -25,6 +25,8 @@ import (
 
 func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructured.Unstructured) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	teardownStart := time.Now()
+	logger.V(1).Info("teardown started")
 
 	// List revisions early — needed for key extraction and finalization.
 	// Cache eviction is deferred to after finalization (which calls
@@ -443,6 +445,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	if err := r.Client.Update(ctx, graph); err != nil {
 		return ctrl.Result{}, err
 	}
+	logger.V(1).Info("teardown complete", "duration", time.Since(teardownStart))
 	return ctrl.Result{}, nil
 }
 

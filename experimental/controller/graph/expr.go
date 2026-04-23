@@ -1,6 +1,9 @@
 package graph
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // FindExpr finds the next $+{...} expression in input starting at pos,
 // handling balanced braces for nested CEL map/object literals.
@@ -117,6 +120,7 @@ func ExtractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 	depPaths map[string][]FieldPath,
 	selfPaths []FieldPath,
 	readinessDeps map[string]bool,
+	err error,
 ) {
 	dependencies = map[string]bool{}
 	depPaths = map[string][]FieldPath{}
@@ -156,18 +160,67 @@ func ExtractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 		}
 	}
 
-	// Helper: check if an expression contains a .ready() call on a non-self node.
-	// The field path walker skips ready() targets (no paths extracted), so we
-	// need a separate string-based check for ReadinessDeps. These are also
-	// dependencies — the node needs the upstream in scope to check readiness.
+	// Helper: find all .ready() targets in an expression and register them
+	// as readiness deps. The field path walker skips .ready() targets (no
+	// paths extracted), so we need string-based extraction. Scans for every
+	// occurrence of ".ready()" and extracts the identifier immediately
+	// before it.
 	checkReadyRef := func(expr string) {
-		if !strings.Contains(expr, ".ready()") {
-			return
+		remaining := expr
+		for {
+			idx := strings.Index(remaining, ".ready()")
+			if idx < 0 {
+				return
+			}
+			// Walk backwards from the dot to find the identifier.
+			end := idx
+			start := end
+			for start > 0 && isIdentContinue(remaining[start-1]) {
+				start--
+			}
+			if start < end && isIdentStart(remaining[start]) {
+				id := remaining[start:end]
+				// Filter CEL keywords/builtins
+				switch id {
+				case "true", "false", "null", "size", "has", "exists", "all",
+					"filter", "map", "int", "uint", "double", "string", "bool",
+					"bytes", "list", "type", "duration", "timestamp":
+				default:
+					if id != node.ID {
+						readinessDeps[id] = true
+						dependencies[id] = true
+					}
+				}
+			}
+			remaining = remaining[idx+len(".ready()"):]
 		}
-		id := ExtractFirstIdentifier(expr)
-		if id != "" && id != node.ID {
-			readinessDeps[id] = true
-			dependencies[id] = true // ready() targets are dependencies too
+	}
+
+	// Validate .dependencies() references are self-referential only.
+	// Per 001-graph.md § CEL Functions: .dependencies() returns the scope
+	// values of a node's own dependencies. Cross-node .dependencies()
+	// (e.g., ${otherNode.dependencies()...}) would access scope data
+	// without DAG edges — reject it.
+	checkDepsRef := func(expr string) {
+		remaining := expr
+		for {
+			idx := strings.Index(remaining, ".dependencies()")
+			if idx < 0 {
+				return
+			}
+			end := idx
+			start := end
+			for start > 0 && isIdentContinue(remaining[start-1]) {
+				start--
+			}
+			if start < end && isIdentStart(remaining[start]) {
+				id := remaining[start:end]
+				if id != node.ID {
+					err = fmt.Errorf("node %q: .dependencies() can only be called on self (%q), not %q", node.ID, node.ID, id)
+					return
+				}
+			}
+			remaining = remaining[idx+len(".dependencies()"):]
 		}
 	}
 
@@ -202,6 +255,11 @@ func ExtractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 				continue
 			}
 			processExpr(expr, false)
+			checkReadyRef(expr)
+			checkDepsRef(expr)
+			if err != nil {
+				return
+			}
 		}
 	}
 
@@ -227,10 +285,14 @@ func ExtractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 			}
 			processExpr(expr, true)
 			checkReadyRef(expr)
+			checkDepsRef(expr)
+			if err != nil {
+				return
+			}
 		}
 	}
 
-	return dependencies, depPaths, selfPaths, readinessDeps
+	return dependencies, depPaths, selfPaths, readinessDeps, nil
 }
 
 // CollectStrings recursively collects all string values from a value tree.

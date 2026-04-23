@@ -68,6 +68,12 @@ type Topology struct {
 	// Reverse adjacency list for eager scheduling — when a node completes,
 	// check its dependents to see if they can be dispatched.
 	Dependents map[string][]int
+	// ReadinessDependents maps a node ID to the indices of nodes that
+	// reference it via .ready() (ReadinessDeps) but are NOT in the
+	// normal Dependents index. When a node's readiness state changes,
+	// the propagation hash (which includes :ready=true/false) triggers
+	// these consumers for re-evaluation via the standard hash mechanism.
+	ReadinessDependents map[string][]int
 	// Finalizers maps a target node ID to the IDs of nodes that declare
 	// `finalizes` pointing at it. These nodes are created only when the
 	// target becomes a prune candidate. The DAG records the relationship
@@ -117,7 +123,11 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 	}
 
 	for i, node := range nodes {
-		node.Dependencies, node.DepPaths, node.SelfPaths, node.ReadinessDeps = graph.ExtractReferencedPathsFromNode(node, exprPaths)
+		var err error
+		node.Dependencies, node.DepPaths, node.SelfPaths, node.ReadinessDeps, err = graph.ExtractReferencedPathsFromNode(node, exprPaths)
+		if err != nil {
+			return nil, err
+		}
 		if node.ForEach != nil && exprPaths != nil {
 			node.ForEach.CollectionSource = resolveCollectionSource(node, exprPaths)
 		}
@@ -181,6 +191,21 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 			if _, exists := dag.Index[depID]; exists {
 				dag.Dependents[depID] = append(dag.Dependents[depID], i)
 			}
+		}
+	}
+
+	// Build readiness-dependents reverse index. For each node, record which
+	// nodes reference it via .ready() but are NOT already data-dependents.
+	// Data-dependents already receive propagation via the Dependents index;
+	// ReadinessDependents covers the gap for nodes that only consume
+	// readiness state (e.g., rgdInstanceStatus checking deployment.ready()).
+	dag.ReadinessDependents = make(map[string][]int)
+	for i, node := range dag.Nodes {
+		for depID := range node.ReadinessDeps {
+			if node.Dependencies[depID] {
+				continue // already a data-dependent
+			}
+			dag.ReadinessDependents[depID] = append(dag.ReadinessDependents[depID], i)
 		}
 	}
 

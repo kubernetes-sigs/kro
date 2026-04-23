@@ -585,11 +585,17 @@ func (w *walkState) tryDispatch(idx int) {
 							for _, depIdx := range w.dag.Dependents[node.ID] {
 								w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
 							}
+							for _, depIdx := range w.dag.ReadinessDependents[node.ID] {
+								w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
+							}
 						}
 						w.state.previousSelfHashes[node.ID] = propagateHash
 					} else {
 						// Hash failed — unconditional propagation for safety.
 						for _, depIdx := range w.dag.Dependents[node.ID] {
+							w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
+						}
+						for _, depIdx := range w.dag.ReadinessDependents[node.ID] {
 							w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
 						}
 					}
@@ -1352,6 +1358,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 						for _, depIdx := range dag.Dependents[node.ID] {
 							walk.propagationTriggered[dag.Nodes[depIdx].ID] = true
 						}
+						for _, depIdx := range dag.ReadinessDependents[node.ID] {
+							walk.propagationTriggered[dag.Nodes[depIdx].ID] = true
+						}
 					}
 					state.previousSelfHashes[node.ID] = propagateHash
 				}
@@ -1382,6 +1391,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 		// Check dependents: dispatch any whose dependencies are now satisfied.
 		for _, depIdx := range dag.Dependents[node.ID] {
+			walk.tryDispatch(depIdx)
+		}
+		for _, depIdx := range dag.ReadinessDependents[node.ID] {
 			walk.tryDispatch(depIdx)
 		}
 	}

@@ -308,7 +308,7 @@ func BenchmarkExtractReferencedPaths(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _, _, _ = graph.ExtractReferencedPathsFromNode(node, exprPaths)
+		_, _, _, _, _ = graph.ExtractReferencedPathsFromNode(node, exprPaths)
 	}
 }
 

@@ -152,7 +152,7 @@ func (r *GraphReconciler) advanceFinalization(
 		if !ok {
 			continue
 		}
-		if getErr := r.Client.Get(ctx, nn, obj); getErr != nil {
+		if getErr := r.apiReader().Get(ctx, nn, obj); getErr != nil {
 			if apierrors.IsNotFound(getErr) {
 				// Target already gone — skip finalization.
 				logger.Info("finalization skipped: target resource does not exist",
@@ -271,7 +271,7 @@ func (r *GraphReconciler) runFinalization(
 		}
 		existing := &unstructured.Unstructured{}
 		existing.SetGroupVersionKind(finObj.GroupVersionKind())
-		err = r.Client.Get(ctx, client.ObjectKey{
+		err = r.apiReader().Get(ctx, client.ObjectKey{
 			Namespace: finObj.GetNamespace(),
 			Name:      finObj.GetName(),
 		}, existing)
@@ -355,7 +355,7 @@ func (r *GraphReconciler) runForEachFinalization(
 
 		existing := &unstructured.Unstructured{}
 		existing.SetGroupVersionKind(childObj.GroupVersionKind())
-		getErr := r.Client.Get(ctx, client.ObjectKey{
+		getErr := r.apiReader().Get(ctx, client.ObjectKey{
 			Namespace: childObj.GetNamespace(),
 			Name:      childObj.GetName(),
 		}, existing)

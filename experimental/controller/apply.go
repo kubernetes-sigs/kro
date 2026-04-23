@@ -388,39 +388,12 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 					return &unstructured.Unstructured{Object: cached.object}, nil
 				}
 			}
-			readBack := &unstructured.Unstructured{}
-			readBack.SetGroupVersionKind(obj.GroupVersionKind())
-			if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, readBack); err != nil {
-				if !apierrors.IsNotFound(err) {
-					return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
-				}
-				// Resource externally deleted — clear cache and fall
-				// through to re-apply via SSA (creates if absent).
-				r.Resources.remove(cacheKey)
-				// Patch: object might not exist yet (race), fall through to apply
-			} else {
-				// Verify the GET result isn't stale. The controller-runtime
-				// delegating client may read from an internal cache that
-				// lags behind the metadata informer. If the informer has
-				// a newer resourceVersion, the readback is stale — fall
-				// through to SSA apply whose Patch response is authoritative.
-				stale := false
-				if watcher != nil {
-					liveRV := watcher.getResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
-					if liveRV != "" && liveRV != readBack.GetResourceVersion() {
-						stale = true
-					}
-				}
-				if !stale {
-					r.Resources.set(cacheKey, &cachedObject{
-						resourceVersion: readBack.GetResourceVersion(),
-						applyHash:       applyHash,
-						object:          readBack.Object,
-					})
-					return readBack, nil
-				}
-				// Stale readback — fall through to SSA apply.
-			}
+			// Watcher RV differs from cached or watcher unavailable —
+			// resource changed externally or freshness unknown. Fall
+			// through to SSA apply whose Patch response is authoritative.
+			// No intermediate GET: the controller-runtime cache can lag
+			// the metadata informer, and the SSA Patch response is
+			// strictly newer than any cached read.
 		}
 	} // !resyncCorrection
 
@@ -438,11 +411,23 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 	if nodeType == NodeTypeTemplate {
 		// kro label check: if the existing resource has a different Graph's identity
 		// label, require Force to proceed. Prevents accidental cross-Graph ownership.
-		existing := &unstructured.Unstructured{}
-		existing.SetGroupVersionKind(obj.GroupVersionKind())
-		if getErr := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing); getErr == nil {
-			existingLabels := existing.GetLabels()
-			if otherGraph, found := hasOtherGraphIdentityLabel(existingLabels, graph.GetName(), graph.GetNamespace()); found {
+		// Read labels from the metadata informer first (fast path, no API call).
+		// Fall back to direct API read when the informer hasn't observed the
+		// resource yet — preserves the cross-Graph safety guarantee during
+		// informer startup or watch reconnect.
+		var existingLabels map[string]string
+		if watcher != nil {
+			existingLabels, _ = watcher.getLabels(gvr, obj.GetNamespace(), obj.GetName())
+		}
+		if existingLabels == nil {
+			existing := &unstructured.Unstructured{}
+			existing.SetGroupVersionKind(obj.GroupVersionKind())
+			if getErr := r.apiReader().Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing); getErr == nil {
+				existingLabels = existing.GetLabels()
+			}
+		}
+		if existingLabels != nil {
+			if otherGraph, conflict := hasOtherGraphIdentityLabel(existingLabels, graph.GetName(), graph.GetNamespace()); conflict {
 				if !forceApply {
 					return nil, fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use lifecycle.apply: Force to take ownership): %w",
 						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, graph.GetName(), ErrFieldConflict)
@@ -451,9 +436,10 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		}
 	} else {
 		// Patch: target must exist — patches apply to existing resources.
+		// Direct API server read to avoid stale cache giving false negatives.
 		targetCheck := &unstructured.Unstructured{}
 		targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
-		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
+		if err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
 			if apierrors.IsNotFound(err) {
 				return nil, fmt.Errorf("patch target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), ErrPending)
 			}
@@ -547,14 +533,16 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		if managers := thirdPartyFieldManagers(readBack, ownManager); len(managers) > 0 {
 			hasStatus := templateHasStatus(evalMap)
 			for _, mgr := range managers {
-				if err := releaseApply(ctx, r.Client, obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName(), client.FieldOwner(mgr), hasStatus); err != nil {
+				evicted, err := releaseApply(ctx, r.Client, obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName(), client.FieldOwner(mgr), hasStatus)
+				if err != nil {
 					return nil, fmt.Errorf("eviction release for manager %q on %s: %w", mgr, obj.GetName(), err)
 				}
+				// Use the last release's Patch response — it reflects
+				// the cumulative effect of all evictions.
+				if evicted != nil {
+					readBack = evicted
+				}
 				log.FromContext(ctx).Info("evicted field manager", "node", nodeID, "manager", mgr, "name", obj.GetName())
-			}
-			// Re-read after eviction to reflect the cleaned-up state.
-			if err := r.Client.Get(ctx, client.ObjectKeyFromObject(applied), readBack); err != nil {
-				return nil, fmt.Errorf("reading back %s after eviction: %w", obj.GetName(), err)
 			}
 		}
 	}
@@ -667,7 +655,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			if gvk.Kind == "" {
 				continue
 			}
-			if err := releaseApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
+			if _, err := releaseApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
 				logger.Error(err, "releasing contribution fields", "key", resKey)
 			} else {
 				logger.Info("released contribution fields", "key", resKey)
@@ -683,7 +671,8 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		}
 
 		// Check if it exists and is ours before deleting.
-		if err := r.Client.Get(ctx, nn, obj); err != nil {
+		// Direct API server read for authoritative ownership data.
+		if err := r.apiReader().Get(ctx, nn, obj); err != nil {
 			// Target already gone — nothing to delete.
 			r.Resources.remove(key)
 			continue // already gone
@@ -804,7 +793,7 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 
 		// Cannot use label selector with DNS subdomain keys — list all and
 		// filter client-side. This only runs during teardown (not hot path).
-		if err := r.Client.List(ctx, list, &client.ListOptions{
+		if err := r.apiReader().List(ctx, list, &client.ListOptions{
 			Namespace: graph.GetNamespace(),
 		}); err != nil {
 			continue // skip GVKs we can't list (e.g., CRD deleted)
@@ -925,7 +914,7 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 // Release apply — release field ownership without deleting the object
 // ---------------------------------------------------------------------------
 
-func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, namespace, name string, fieldOwner client.FieldOwner, hasStatus bool) error {
+func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, namespace, name string, fieldOwner client.FieldOwner, hasStatus bool) (*unstructured.Unstructured, error) {
 	apiVersion := gvk.Group + "/" + gvk.Version
 	if gvk.Group == "" {
 		apiVersion = gvk.Version
@@ -941,7 +930,7 @@ func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionK
 
 	data, err := json.Marshal(release)
 	if err != nil {
-		return fmt.Errorf("marshaling release: %w", err)
+		return nil, fmt.Errorf("marshaling release: %w", err)
 	}
 
 	target := &unstructured.Unstructured{}
@@ -950,10 +939,16 @@ func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionK
 	target.SetNamespace(namespace)
 	if err := c.Patch(ctx, target, client.RawPatch(types.ApplyPatchType, data), fieldOwner, client.ForceOwnership); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil
+			// Resource already deleted — nothing to release.
+			// Callers must check the returned object for nil before use.
+			return nil, nil
 		}
-		return fmt.Errorf("release apply for %s/%s: %w", namespace, name, err)
+		return nil, fmt.Errorf("release apply for %s/%s: %w", namespace, name, err)
 	}
+
+	// result holds the most recent Patch response — the authoritative
+	// server-side state after this release.
+	result := target
 
 	if hasStatus {
 		// The status subresource endpoint only processes fields under .status.
@@ -963,7 +958,7 @@ func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionK
 		release["status"] = map[string]any{}
 		statusData, err := json.Marshal(release)
 		if err != nil {
-			return fmt.Errorf("marshaling status release: %w", err)
+			return nil, fmt.Errorf("marshaling status release: %w", err)
 		}
 		statusTarget := &unstructured.Unstructured{}
 		statusTarget.SetGroupVersionKind(gvk)
@@ -971,10 +966,13 @@ func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionK
 		statusTarget.SetNamespace(namespace)
 		if err := c.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, statusData), fieldOwner, client.ForceOwnership); err != nil {
 			if !apierrors.IsNotFound(err) {
-				return fmt.Errorf("status release apply for %s/%s: %w", namespace, name, err)
+				return nil, fmt.Errorf("status release apply for %s/%s: %w", namespace, name, err)
 			}
+		} else {
+			// Status Patch response is strictly newer.
+			result = statusTarget
 		}
 	}
 
-	return nil
+	return result, nil
 }

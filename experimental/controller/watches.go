@@ -334,6 +334,33 @@ func (m *WatchManager) getResourceVersion(gvr schema.GroupVersionResource, names
 	return accessor.GetResourceVersion()
 }
 
+// getLabels returns the labels of an object from the metadata informer cache.
+// Returns nil, false if the object is not found or no watch exists for the GVR.
+func (m *WatchManager) getLabels(gvr schema.GroupVersionResource, namespace, name string) (map[string]string, bool) {
+	m.mu.RLock()
+	w, ok := m.watches[gvr]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+
+	key := name
+	if namespace != "" {
+		key = namespace + "/" + name
+	}
+
+	item, exists, err := w.informer.GetStore().GetByKey(key)
+	if err != nil || !exists {
+		return nil, false
+	}
+
+	accessor, err := meta.Accessor(item)
+	if err != nil {
+		return nil, false
+	}
+	return maps.Clone(accessor.GetLabels()), true
+}
+
 func (m *WatchManager) defaultCreateInformer(gvr schema.GroupVersionResource) cache.SharedIndexInformer {
 	return metadatainformer.NewFilteredMetadataInformer(
 		m.client, gvr, metav1.NamespaceAll, m.resync,
@@ -544,6 +571,12 @@ func (gw *graphWatcher) retainWatches(nodeID string) {
 // cache for a specific object. Returns "" if not found or no watch exists.
 func (gw *graphWatcher) getResourceVersion(gvr schema.GroupVersionResource, namespace, name string) string {
 	return gw.coord.watches.getResourceVersion(gvr, namespace, name)
+}
+
+// getLabels returns the labels from the metadata informer cache for a specific
+// object. Returns nil, false if not found or no watch exists.
+func (gw *graphWatcher) getLabels(gvr schema.GroupVersionResource, namespace, name string) (map[string]string, bool) {
+	return gw.coord.watches.getLabels(gvr, namespace, name)
 }
 
 // drainTriggers atomically drains and returns the set of node IDs that

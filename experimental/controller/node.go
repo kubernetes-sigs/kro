@@ -110,7 +110,7 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
+	if err := r.apiReader().Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("ref %s: resource %s %s/%s not found: %w", node.ID, gvk, namespace, name, ErrPending)
 		}
@@ -202,7 +202,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 	if eval.collectionCachedList != nil && !eval.collectionResyncOrFull {
 		var err error
 		items, err = mergeCollectionChanges(
-			ctx, r.Client, eval.collectionCachedList, eval.collectionChanges,
+			ctx, r.apiReader(), eval.collectionCachedList, eval.collectionChanges,
 			gvk, labelSelector,
 		)
 		if err != nil {
@@ -219,7 +219,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 
 		list := &unstructured.UnstructuredList{}
 		list.SetGroupVersionKind(listGVK)
-		if err := r.Client.List(ctx, list, &client.ListOptions{
+		if err := r.apiReader().List(ctx, list, &client.ListOptions{
 			LabelSelector: labelSelector,
 			Namespace:     watchNamespace,
 		}); err != nil {
@@ -344,7 +344,7 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 // O(1) per event, not O(matching)."
 func mergeCollectionChanges(
 	ctx context.Context,
-	k8s client.Client,
+	k8s client.Reader,
 	cached []any,
 	changes []CollectionChange,
 	gvk schema.GroupVersionKind,

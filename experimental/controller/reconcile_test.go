@@ -959,6 +959,69 @@ func TestFinalizeSkippedStates_IgnoresNonSkipped(t *testing.T) {
 		"node in outputsReady with prior state gets restored")
 }
 
+// TestTryDispatch_RegressionExcludedPersistence guards against the bug where
+// tryDispatch set plan state for Excluded/Blocked/Pending nodes but never
+// persisted to previousPlanStates. On the next reconcile, finalizeSkippedStates
+// couldn't restore the state and fell back to Pending — breaking contagious
+// exclusion across reconcile cycles.
+func TestTryDispatch_RegressionExcludedPersistence(t *testing.T) {
+	// Build a DAG: root → child. Root will be Excluded in the plan.
+	// When tryDispatch evaluates child, it sees an excluded dependency
+	// and should mark child as Excluded in BOTH plan.States AND
+	// state.previousPlanStates.
+	nodes := []Node{
+		{
+			ID: "root",
+			Template: map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "root"},
+			},
+		},
+		{
+			ID: "child",
+			Template: map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "child"},
+				"data":     map[string]any{"ref": "${root.data.key}"},
+			},
+		},
+	}
+	spec := &GraphSpec{Nodes: nodes}
+	compiled, err := compileGraphSpec(spec, nil)
+	require.NoError(t, err)
+	dag := assembleDAG(spec.Nodes, compiled.topology)
+
+	state := newInstanceState(compiled)
+	plan := NewPlanState(dag)
+	eval := newEvaluator(state)
+
+	walk := &walkState{
+		ctx:                  t.Context(),
+		dag:                  dag,
+		eval:                 eval,
+		state:                state,
+		plan:                 plan,
+		triggered:            map[string]bool{"root": true, "child": true},
+		resyncTriggered:      map[string]bool{},
+		propagationTriggered: map[string]bool{},
+		dispatched:           map[int]bool{},
+		outputsReady:         map[string]bool{},
+		results:              make(chan nodeResult, 10),
+	}
+
+	// Mark root as Excluded in the plan (simulates root's includeWhen=false).
+	plan.SetState(dag, "root", NodeExcluded)
+	state.previousPlanStates["root"] = NodeExcluded
+
+	// Dispatch child — it should see root is Excluded and contagiously exclude.
+	walk.tryDispatch(dag.Index["child"])
+
+	assert.Equal(t, NodeExcluded, plan.States["child"],
+		"child should be contagiously excluded in plan")
+	assert.Equal(t, NodeExcluded, state.previousPlanStates["child"],
+		"child's excluded state must be persisted to previousPlanStates for next reconcile")
+}
+
 // ---------------------------------------------------------------------------
 // pickEffectiveGeneration — compile-failure fallback generation (#19)
 // ---------------------------------------------------------------------------

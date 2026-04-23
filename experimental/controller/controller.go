@@ -108,6 +108,7 @@ func gvkToGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
 // GraphReconciler reconciles Graph objects.
 type GraphReconciler struct {
 	Client         client.Client
+	APIReader      client.Reader           // direct API server reader — bypasses cache for managed resources
 	SchemaResolver resolver.SchemaResolver // nil = all resource nodes fall back to dyn
 	SchemaGen      *SchemaGeneration       // nil = no generation tracking; never triggers recompilation
 	Watcher        *WatchCoordinator       // nil = no dynamic watches (backward compat with existing tests)
@@ -116,6 +117,16 @@ type GraphReconciler struct {
 	ResyncInterval  time.Duration           // per-node resync timer interval; 0 = use DefaultResyncInterval
 	ResyncJitter    time.Duration           // max resync jitter; 0 = use MaxResyncJitter
 	Scope          GVKScopeResolver        // nil = unknown scope; staticResourceKey falls back to namespace-substitution heuristic
+}
+
+// apiReader returns the direct API server reader for managed resource reads.
+// Falls back to Client when APIReader is nil (unit tests that don't set up
+// a full manager).
+func (r *GraphReconciler) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 // nodeResult carries a worker's output back to the coordinator.
@@ -183,7 +194,6 @@ type walkState struct {
 	results           chan nodeResult
 	inflight          int
 	dynamicGVKChanged bool // set when a dynamic GVK resolves for the first time or changes
-	staleReads        bool // set when a Client.Get/Patch returned data older than the informer knows
 }
 
 // notifyDependents dispatches all dependents of a node after its state is
@@ -370,6 +380,8 @@ func (w *walkState) tryDispatch(idx int) {
 		// status patch never happens.
 		if len(node.PropagateWhen) == 0 || node.ForEach != nil {
 			w.plan.SetState(w.dag, node.ID, NodeExcluded)
+			w.state.previousPlanStates[node.ID] = NodeExcluded
+			delete(w.state.previousEvalHashes, node.ID)
 			w.notifyDependents(node.ID)
 			return
 		}
@@ -377,11 +389,15 @@ func (w *walkState) tryDispatch(idx int) {
 	}
 	if hasBlocked {
 		w.plan.SetState(w.dag, node.ID, NodeBlocked)
+		w.state.previousPlanStates[node.ID] = NodeBlocked
+		delete(w.state.previousEvalHashes, node.ID)
 		w.notifyDependents(node.ID)
 		return
 	}
 	if hasPending {
 		w.plan.SetState(w.dag, node.ID, NodePending)
+		w.state.previousPlanStates[node.ID] = NodePending
+		delete(w.state.previousEvalHashes, node.ID)
 		w.notifyDependents(node.ID)
 		return
 	}
@@ -408,6 +424,8 @@ func (w *walkState) tryDispatch(idx int) {
 			// decide "no," it failed to decide at all.
 			if hasExcluded && gate == gateError {
 				w.plan.SetState(w.dag, node.ID, NodeExcluded)
+				w.state.previousPlanStates[node.ID] = NodeExcluded
+				delete(w.state.previousEvalHashes, node.ID)
 				w.notifyDependents(node.ID)
 				return
 			}
@@ -501,7 +519,7 @@ func (w *walkState) tryDispatch(idx int) {
 				// haven't changed (eval hash match). Re-read live state,
 				// re-evaluate readyWhen, propagate only if output changed.
 				//
-				// Known liveness bound: the Client.Get below runs in the
+				// Known liveness bound: the APIReader.Get below runs in the
 				// single-threaded coordinator, serializing API server round
 				// trips at O(N × RTT). If profiling shows this is a
 				// bottleneck, move the GET to a lightweight worker goroutine.
@@ -518,31 +536,13 @@ func (w *walkState) tryDispatch(idx int) {
 					prevName, _ := prevMD["name"].(string)
 					gv, _ := schema.ParseGroupVersion(prevAPIVersion)
 					gvk := gv.WithKind(prevKind)
-					gvr := gvkToGVR(gvk)
 					readBack := &unstructured.Unstructured{}
 					readBack.SetGroupVersionKind(gvk)
-					if err := w.r.Client.Get(w.ctx, types.NamespacedName{Namespace: prevNS, Name: prevName}, readBack); err == nil {
-						// Verify the GET result isn't stale. If the
-						// metadata informer has a newer RV than what
-						// Client.Get returned, the cache served stale
-						// data. Keep prevScope — the node's state
-						// won't change this cycle, but the informer
-						// RV mismatch means selfChanged will fire
-						// again on the next triggered reconcile.
-						readBackRV := readBack.GetResourceVersion()
-						stale := false
-						if w.watcher != nil {
-							liveRV := w.watcher.getResourceVersion(gvr, prevNS, prevName)
-							if liveRV != "" && liveRV != readBackRV {
-								stale = true
-							}
-						}
-						if !stale {
-							w.eval.scope[node.ID] = readBack.Object
-						} else {
-							w.eval.scope[node.ID] = prevScope
-							w.staleReads = true
-						}
+					// Direct API server read — bypasses the controller-runtime
+					// cache, which can lag behind the metadata informer and
+					// serve stale data.
+					if err := w.r.apiReader().Get(w.ctx, types.NamespacedName{Namespace: prevNS, Name: prevName}, readBack); err == nil {
+						w.eval.scope[node.ID] = readBack.Object
 					} else {
 						w.eval.scope[node.ID] = prevScope
 					}
@@ -626,9 +626,17 @@ func (w *walkState) tryDispatch(idx int) {
 			w.carryForwardKeys(node.ID)
 			if errors.Is(err, ErrPending) {
 				w.plan.SetState(w.dag, node.ID, NodePending)
+				w.state.previousPlanStates[node.ID] = NodePending
 			} else {
 				w.plan.SetState(w.dag, node.ID, NodeError)
+				w.state.previousPlanStates[node.ID] = NodeError
 			}
+			// Clear stale eval hash — the node was not evaluated this cycle,
+			// so the hash from a prior successful evaluation is invalid. Without
+			// this, a future reconcile where inputs cycle back to their original
+			// values would match the stale hash and skip re-evaluation, leaving
+			// the node permanently stuck in Pending/Error.
+			delete(w.state.previousEvalHashes, node.ID)
 			w.notifyDependents(node.ID)
 			return
 		}
@@ -638,6 +646,8 @@ func (w *walkState) tryDispatch(idx int) {
 			// forward. Per 005-reconciliation.md § Prune: "Excluded
 			// propagates as Excluded (definitive absence — safe to prune)."
 			w.plan.SetState(w.dag, node.ID, NodeExcluded)
+			w.state.previousPlanStates[node.ID] = NodeExcluded
+			delete(w.state.previousEvalHashes, node.ID)
 			w.notifyDependents(node.ID)
 			return
 		}
@@ -1719,16 +1729,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	if walk.dynamicGVKChanged {
 		return ctrl.Result{Requeue: true}, nil
 	}
-	// A stale read means a Client.Get returned data older than what the
-	// metadata informer knows. This happens when the controller-runtime
-	// cache lags the informer — typically right after a resource is
-	// mutated by an external controller (e.g., CRD Established). The
-	// informer saw the event but the cache hasn't caught up. One
-	// immediate requeue lets the cache settle; selfChanged will detect
-	// the RV mismatch again and re-read.
-	if walk.staleReads {
-		return ctrl.Result{RequeueAfter: 200 * time.Millisecond}, nil
-	}
 	return ctrl.Result{}, nil
 }
 
@@ -1901,6 +1901,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 
 	reconciler := &GraphReconciler{
 		Client:         mgr.GetClient(),
+		APIReader:      mgr.GetAPIReader(),
 		SchemaResolver: schemaResolver,
 		SchemaGen:      NewSchemaGeneration(),
 		Watcher:        coordinator,

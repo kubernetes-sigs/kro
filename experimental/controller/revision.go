@@ -651,7 +651,7 @@ func (r *GraphReconciler) resolveRefForPrecompilation(ctx context.Context, defau
 
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
-	if err := r.Client.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, obj); err != nil {
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, obj); err != nil {
 		return nil, err
 	}
 	normalized, _ := normalizeTypes(obj.Object).(map[string]any)

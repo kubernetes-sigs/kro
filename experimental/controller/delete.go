@@ -252,7 +252,8 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		// FinalizerSkipped when a finalizer was declared, or a silent no-op
 		// otherwise. Emit the note so operators can tell finalization was
 		// bypassed vs never needed.
-		if err := r.Client.Get(ctx, nn, obj); err != nil {
+		// Direct API server read for authoritative existence/ownership data.
+		if err := r.apiReader().Get(ctx, nn, obj); err != nil {
 			if teardownDAG != nil {
 				if nodeID := keyToNodeID[key]; nodeID != "" {
 					if finalizerNodeIDs, ok := teardownDAG.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
@@ -350,7 +351,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if !ok {
 			continue
 		}
-		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(check), check); err == nil {
+		if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(check), check); err == nil {
 			logger.V(1).Info("waiting for managed resource to be deleted", "key", key)
 			return ctrl.Result{RequeueAfter: 500 * time.Millisecond}, nil
 		}
@@ -409,7 +410,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if gvk.Kind == "" {
 			continue
 		}
-		if err := releaseApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
+		if _, err := releaseApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
 			logger.Error(err, "releasing patch fields during teardown", "key", resKey)
 		} else {
 			logger.Info("released patch fields during teardown", "key", resKey)
@@ -468,7 +469,7 @@ func (r *GraphReconciler) ownerDeleting(ctx context.Context, graph *unstructured
 			Version: gv.Version,
 			Kind:    ref.Kind,
 		})
-		if err := r.Client.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: graph.GetNamespace()}, owner); err != nil {
+		if err := r.apiReader().Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: graph.GetNamespace()}, owner); err != nil {
 			continue // Owner gone or unreachable — not our trigger
 		}
 		if !owner.GetDeletionTimestamp().IsZero() {

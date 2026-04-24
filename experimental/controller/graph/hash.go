@@ -165,29 +165,49 @@ func (s *GraphSpec) CompilationKey() string {
 }
 
 // CompilationKeyWithHints produces the full cache key by combining the
-// structural compilation key with resolved dynamic GVK hints. Instances
-// with the same structure AND same resolved GVKs share a compiled artifact.
-// When hints is nil or empty, returns the structural key unchanged (bootstrap).
-func CompilationKeyWithHints(structuralKey string, hints map[string]schema.GroupVersionKind) string {
-	if len(hints) == 0 {
+// structural compilation key with resolved dynamic GVK hints and child ref
+// content hashes. Instances with the same structure, same resolved GVKs, and
+// same ref targets share a compiled artifact. When all hint maps are nil or
+// empty, returns the structural key unchanged (bootstrap).
+func CompilationKeyWithHints(structuralKey string, gvkHints map[string]schema.GroupVersionKind, childRefHashes map[string]string) string {
+	if len(gvkHints) == 0 && len(childRefHashes) == 0 {
 		return structuralKey
 	}
-	// Sort node IDs for deterministic hashing.
-	nodeIDs := make([]string, 0, len(hints))
-	for id := range hints {
-		nodeIDs = append(nodeIDs, id)
-	}
-	sort.Strings(nodeIDs)
 
 	h := fnv.New64a()
 	h.Write([]byte(structuralKey))
-	for _, id := range nodeIDs {
-		gvk := hints[id]
-		h.Write([]byte(id))
-		h.Write([]byte(gvk.Group))
-		h.Write([]byte(gvk.Version))
-		h.Write([]byte(gvk.Kind))
+
+	// Dynamic GVK hints.
+	if len(gvkHints) > 0 {
+		nodeIDs := make([]string, 0, len(gvkHints))
+		for id := range gvkHints {
+			nodeIDs = append(nodeIDs, id)
+		}
+		sort.Strings(nodeIDs)
+		for _, id := range nodeIDs {
+			gvk := gvkHints[id]
+			h.Write([]byte(id))
+			h.Write([]byte(gvk.Group))
+			h.Write([]byte(gvk.Version))
+			h.Write([]byte(gvk.Kind))
+		}
 	}
+
+	// Child ref content hashes — instances referencing different ref
+	// targets (e.g., different RGDs) get separate compiled artifacts.
+	if len(childRefHashes) > 0 {
+		refIDs := make([]string, 0, len(childRefHashes))
+		for id := range childRefHashes {
+			refIDs = append(refIDs, id)
+		}
+		sort.Strings(refIDs)
+		for _, id := range refIDs {
+			h.Write([]byte("ref:"))
+			h.Write([]byte(id))
+			h.Write([]byte(childRefHashes[id]))
+		}
+	}
+
 	return fmt.Sprintf("%s+%016x", structuralKey, h.Sum64())
 }
 

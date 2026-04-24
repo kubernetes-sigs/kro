@@ -70,21 +70,21 @@ func TestCompilationKeyWithHints(t *testing.T) {
 	structKey := "abc123"
 
 	// No hints → same key.
-	assert.Equal(t, structKey, graph.CompilationKeyWithHints(structKey, nil))
-	assert.Equal(t, structKey, graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{}))
+	assert.Equal(t, structKey, graph.CompilationKeyWithHints(structKey, nil, nil))
+	assert.Equal(t, structKey, graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{}, nil))
 
 	// With hints → different key.
 	widgetGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Widget"}
 	gadgetGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Gadget"}
 
-	key1 := graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": widgetGVK})
-	key2 := graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": gadgetGVK})
+	key1 := graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": widgetGVK}, nil)
+	key2 := graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": gadgetGVK}, nil)
 
 	assert.NotEqual(t, structKey, key1, "hints should change the key")
 	assert.NotEqual(t, key1, key2, "different GVKs should produce different keys")
 
 	// Same hints → same key (deterministic).
-	key1b := graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": widgetGVK})
+	key1b := graph.CompilationKeyWithHints(structKey, map[string]schema.GroupVersionKind{"node": widgetGVK}, nil)
 	assert.Equal(t, key1, key1b, "same hints should produce same key")
 }
 

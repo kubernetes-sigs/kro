@@ -476,7 +476,7 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	// resolve referenced ref nodes from the API and evaluate the expression to
 	// get the child node list, then compile it. This catches cycles and other
 	// structural errors at the parent's compile time.
-	if err := r.precompileExpressionChildGraphs(ctx, graph.GetNamespace(), graphSpec, compiled); err != nil {
+	if err := r.precompileExpressionChildGraphs(ctx, graph.GetNamespace(), graphSpec, compiled, nil); err != nil {
 		return nil, nil, err
 	}
 
@@ -516,6 +516,87 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	return active, superseded, nil
 }
 
+// childRefResolution holds the output of resolveChildRefHints — both the
+// content hashes (for the compilation key) and the resolved objects (to
+// pass to precompileExpressionChildGraphs, avoiding redundant API reads).
+type childRefResolution struct {
+	hashes  map[string]string         // nodeID → content hash
+	objects map[string]map[string]any // nodeID → resolved object
+}
+
+// resolveChildRefHints resolves ref targets referenced by expression-valued
+// child spec.nodes and returns content hashes and resolved objects. The hashes
+// feed into the compilation key so that instances referencing different ref
+// targets (e.g., different RGDs) get separate compiled artifacts. The objects
+// are passed to precompileExpressionChildGraphs to avoid redundant API reads.
+//
+// Returns nil when no expression-valued child specs exist or when ref
+// targets cannot be resolved (best effort — first compile with dyn types,
+// narrowed when refs become resolvable).
+func (r *GraphReconciler) resolveChildRefHints(ctx context.Context, namespace string, spec *graphpkg.GraphSpec) *childRefResolution {
+	var res *childRefResolution
+	for _, node := range spec.Nodes {
+		if node.ForEach == nil {
+			continue
+		}
+		body := node.Payload()
+		if body == nil {
+			continue
+		}
+		apiVersion, _ := body["apiVersion"].(string)
+		kind, _ := body["kind"].(string)
+		if !compiler.IsGraphCRLiteral(apiVersion, kind) {
+			continue
+		}
+		specMap, ok := body["spec"].(map[string]any)
+		if !ok {
+			continue
+		}
+		nodesRaw, ok := specMap["nodes"]
+		if !ok {
+			continue
+		}
+		nodesExpr, ok := nodesRaw.(string)
+		if !ok {
+			continue
+		}
+		dollars, innerExpr, _, _ := graphpkg.FindExpr(nodesExpr, 0)
+		if innerExpr == "" || len(dollars) != 1 {
+			continue
+		}
+		for _, n := range spec.Nodes {
+			if n.Ref == nil {
+				continue
+			}
+			if !strings.Contains(innerExpr, n.ID+".") && !strings.Contains(innerExpr, n.ID+"[") {
+				continue
+			}
+			obj, err := r.resolveRefForPrecompilation(ctx, namespace, n)
+			if err != nil {
+				// Can't resolve — omit from hints. Compilation proceeds
+				// with the structural key only (permissive).
+				continue
+			}
+			if res == nil {
+				res = &childRefResolution{
+					hashes:  make(map[string]string),
+					objects: make(map[string]map[string]any),
+				}
+			}
+			res.objects[n.ID] = obj
+			// Use the ref target's UID + generation as the content
+			// hash. Generation only increments on spec changes, which
+			// is what determines the child graph structure. UID
+			// distinguishes different objects with the same name.
+			md, _ := obj["metadata"].(map[string]any)
+			uid, _ := md["uid"].(string)
+			gen, _ := md["generation"].(int64)
+			res.hashes[n.ID] = fmt.Sprintf("%s@%d", uid, gen)
+		}
+	}
+	return res
+}
+
 // precompileExpressionChildGraphs resolves expression-valued spec.nodes in
 // forEach Graph templates by fetching referenced ref node targets from the API
 // and evaluating the expression. The resulting child node list is compiled with
@@ -529,7 +610,11 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 // after the parent has created its CRDs, the schema resolver can look up the
 // child's ref node types — enabling full type checking including forEach
 // list-type validation (Phase 4b).
-func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, namespace string, spec *graphpkg.GraphSpec, compiled *compiler.CompiledGraph) error {
+//
+// resolvedRefs provides pre-resolved ref targets from resolveChildRefHints,
+// avoiding redundant API reads. Refs not present in the map are fetched
+// directly.
+func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, namespace string, spec *graphpkg.GraphSpec, compiled *compiler.CompiledGraph, resolvedRefs map[string]map[string]any) error {
 	for _, node := range spec.Nodes {
 		if node.ForEach == nil {
 			continue
@@ -577,13 +662,17 @@ func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, n
 			if !strings.Contains(innerExpr, n.ID+".") && !strings.Contains(innerExpr, n.ID+"[") {
 				continue
 			}
-			// Resolve this ref's target from the API.
-			obj, err := r.resolveRefForPrecompilation(ctx, namespace, n)
-			if err != nil {
-				// Best effort — if we can't resolve, skip pre-compilation.
-				return nil
+			// Use pre-resolved ref if available, otherwise fetch.
+			if obj, ok := resolvedRefs[n.ID]; ok {
+				scope[n.ID] = obj
+			} else {
+				obj, err := r.resolveRefForPrecompilation(ctx, namespace, n)
+				if err != nil {
+					// Best effort — if we can't resolve, skip pre-compilation.
+					return nil
+				}
+				scope[n.ID] = obj
 			}
-			scope[n.ID] = obj
 		}
 		if len(scope) == 1 {
 			// No refs resolved (only __kroNodeReady in scope) — can't evaluate.
@@ -767,11 +856,24 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 		return nil, nil, err
 	}
 
+	// Resolve ref targets referenced by expression-valued child specs.
+	// These hashes feed into the compilation key so that instances
+	// referencing different ref targets (e.g., different RGDs) produce
+	// different keys and compile separately. This follows the same
+	// pattern as dynamic GVK hints: runtime state that affects
+	// compilation output feeds into the key.
+	childRefs := r.resolveChildRefHints(ctx, namespace, spec)
+	var childRefHashes map[string]string
+	if childRefs != nil {
+		childRefHashes = childRefs.hashes
+	}
+
 	// Compute the compilation key. The structural key is combined with
-	// resolved dynamic GVK hints to produce the full cache key. Instances
-	// with the same structure AND same resolved GVKs share a compiled artifact.
+	// resolved dynamic GVK hints and child ref content hashes to produce
+	// the full cache key. Instances with the same structure, same resolved
+	// GVKs, and same ref targets share a compiled artifact.
 	// On first reconcile (no hints), all instances share the bootstrap artifact.
-	compilationKey := graphpkg.CompilationKeyWithHints(spec.CompilationKey(), dynamicGVKHints)
+	compilationKey := graphpkg.CompilationKeyWithHints(spec.CompilationKey(), dynamicGVKHints, childRefHashes)
 	compiled := r.Caches.getCompiled(compilationKey)
 	// Validate the cached artifact is not stale (generation check).
 	if compiled != nil && r.SchemaGen != nil && compiled.TypeCacheGen < r.SchemaGen.Generation() {
@@ -798,11 +900,20 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 		if err != nil {
 			return nil, nil, err
 		}
+		// Override the artifact's key to include hints so it's stored
+		// under the hinted key by set(). CompileGraphSpec sets the
+		// structural key; we extend it with the same hints used for
+		// the cache lookup above.
+		compiled.CompilationKey = compilationKey
 		// Pre-compile child graphs with expression-valued spec.nodes.
 		// On staleness recompilation (CRD installed since last compile),
 		// the schema resolver can now resolve child ref node types,
 		// enabling forEach list-type validation in the child.
-		if err := r.precompileExpressionChildGraphs(ctx, namespace, spec, compiled); err != nil {
+		var resolvedRefs map[string]map[string]any
+		if childRefs != nil {
+			resolvedRefs = childRefs.objects
+		}
+		if err := r.precompileExpressionChildGraphs(ctx, namespace, spec, compiled, resolvedRefs); err != nil {
 			return nil, nil, err
 		}
 		compiled.TypeCacheGen = cacheGen

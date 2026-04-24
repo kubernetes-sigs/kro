@@ -232,7 +232,7 @@ func applyMarker(schema *extv1.JSONSchemaProps, marker *Marker, key string, pare
 	case MarkerTypeRequired:
 		return applyRequiredMarker(marker, key, parentSchema)
 	case MarkerTypeDefault:
-		applyDefaultMarker(schema, marker)
+		return applyDefaultMarker(schema, marker)
 	case MarkerTypeDescription:
 		schema.Description = marker.Value
 	case MarkerTypeMinimum:
@@ -274,17 +274,31 @@ func applyRequiredMarker(marker *Marker, key string, parentSchema *extv1.JSONSch
 	return nil
 }
 
-func applyDefaultMarker(schema *extv1.JSONSchemaProps, marker *Marker) {
+func applyDefaultMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
 	var defaultValue []byte
 	switch schema.Type {
 	case schemaTypeString:
 		defaultValue = []byte(fmt.Sprintf("\"%s\"", marker.Value))
-	case schemaTypeInteger, schemaTypeNumber, schemaTypeBoolean:
+	case schemaTypeInteger:
+		if _, err := strconv.ParseInt(marker.Value, 10, 64); err != nil {
+			return fmt.Errorf("default value must be a valid integer, got: %s", marker.Value)
+		}
+		defaultValue = []byte(marker.Value)
+	case schemaTypeNumber:
+		if _, err := strconv.ParseFloat(marker.Value, 64); err != nil {
+			return fmt.Errorf("default value must be a valid number, got: %s", marker.Value)
+		}
+		defaultValue = []byte(marker.Value)
+	case schemaTypeBoolean:
+		if _, err := strconv.ParseBool(marker.Value); err != nil {
+			return fmt.Errorf("default value must be a valid boolean, got: %s", marker.Value)
+		}
 		defaultValue = []byte(marker.Value)
 	default:
 		defaultValue = []byte(marker.Value)
 	}
 	schema.Default = &extv1.JSON{Raw: defaultValue}
+	return nil
 }
 
 func applyMinimumMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {

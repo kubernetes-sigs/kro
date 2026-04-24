@@ -71,6 +71,37 @@ func TestApplyMarkers(t *testing.T) {
 			markers:    "default=true",
 			want:       &extv1.JSONSchemaProps{Type: "boolean", Default: &extv1.JSON{Raw: []byte("true")}},
 		},
+		// Invalid default values should error
+		{
+			name:       "integer with string default",
+			schemaType: "integer",
+			markers:    `default="hello"`,
+			wantErr:    true,
+		},
+		{
+			name:       "integer with invalid number",
+			schemaType: "integer",
+			markers:    "default=3.14",
+			wantErr:    true,
+		},
+		{
+			name:       "number with string default",
+			schemaType: "number",
+			markers:    `default="notanumber"`,
+			wantErr:    true,
+		},
+		{
+			name:       "boolean with string default",
+			schemaType: "boolean",
+			markers:    `default="maybe"`,
+			wantErr:    true,
+		},
+		{
+			name:       "boolean with invalid default",
+			schemaType: "boolean",
+			markers:    "default=yes",
+			wantErr:    true,
+		},
 		// Description marker
 		{
 			name:       "description",

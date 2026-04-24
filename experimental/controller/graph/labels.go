@@ -70,11 +70,11 @@ func nodeLabelPrefix(nodeID, graphName, namespace string) string {
 	return strings.ToLower(nodeID) + "." + strings.ToLower(graphName) + "." + strings.ToLower(namespace)
 }
 
-// IdentityLabelKey returns the identity label key for a node in a graph.
+// identityLabelKey returns the identity label key for a node in a graph.
 // Format: <nodeID>.<graphName>.<namespace>.internal.kro.run/type
 // All segments are lowercased to satisfy the RFC 1123 subdomain requirement
 // for Kubernetes label key prefixes.
-func IdentityLabelKey(nodeID, graphName, namespace string) string {
+func identityLabelKey(nodeID, graphName, namespace string) string {
 	return nodeLabelPrefix(nodeID, graphName, namespace) + identityLabelSuffix
 }
 
@@ -96,9 +96,9 @@ func ValidateIdentityLabelKey(nodeID, graphName, namespace string) error {
 	return nil
 }
 
-// GenerationLabelKey returns the generation label key for a node in a graph.
+// generationLabelKey returns the generation label key for a node in a graph.
 // Format: <nodeID>.<graphName>.<namespace>.internal.kro.run/generation
-func GenerationLabelKey(nodeID, graphName, namespace string) string {
+func generationLabelKey(nodeID, graphName, namespace string) string {
 	return nodeLabelPrefix(nodeID, graphName, namespace) + generationLabelSuffix
 }
 
@@ -131,11 +131,11 @@ func ParseNodeIDFromLabel(key string) (nodeID string, ok bool) {
 	return prefix[:dot], true
 }
 
-// GraphNameFromLabel extracts the graph name from an identity label key
+// graphNameFromLabel extracts the graph name from an identity label key
 // by parsing from the right side of the prefix (the graph identity suffix).
 // The suffix structure is always .<graphName>.<namespace>.internal.kro.run/*,
 // regardless of whether the label is for a regular node or a forEach child.
-func GraphNameFromLabel(key string) string {
+func graphNameFromLabel(key string) string {
 	if !strings.HasSuffix(key, identityLabelSuffix) {
 		return ""
 	}
@@ -189,7 +189,7 @@ func HasOtherGraphIdentityLabel(labels map[string]string, myGraphName, myNamespa
 		if !strings.HasSuffix(lowerKey, mySuffix) {
 			// Different graph. Extract graph name for the error message.
 			if val == NodeTypeTemplate.String() || val == NodeTypePatch.String() {
-				return GraphNameFromLabel(lowerKey), true
+				return graphNameFromLabel(lowerKey), true
 			}
 		}
 	}
@@ -209,8 +209,8 @@ func SetIdentityLabels(labels map[string]string, nodeID, graphName, namespace, g
 	if labels == nil {
 		labels = make(map[string]string)
 	}
-	labels[IdentityLabelKey(nodeID, graphName, namespace)] = lv
-	labels[GenerationLabelKey(nodeID, graphName, namespace)] = generation
+	labels[identityLabelKey(nodeID, graphName, namespace)] = lv
+	labels[generationLabelKey(nodeID, graphName, namespace)] = generation
 	return labels
 }
 
@@ -247,14 +247,14 @@ func ForEachChildGenerationLabelKey(parentID, resName, resNamespace, kind, group
 	return forEachChildLabelPrefix(parentID, resName, resNamespace, kind, group, graphName, graphNamespace) + generationLabelSuffix
 }
 
-// SetForEachChildIdentityLabels stamps forEach child identity and generation labels.
+// setForEachChildIdentityLabels stamps forEach child identity and generation labels.
 // Panics if nodeType does not have a label value — this is an invariant
 // violation, as all call sites pass NodeTypeTemplate or NodeTypePatch
 // directly.
-func SetForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation string, nodeType NodeType) map[string]string {
+func setForEachChildIdentityLabels(labels map[string]string, parentID, resName, resNamespace, kind, group, graphName, graphNamespace, generation string, nodeType NodeType) map[string]string {
 	lv, ok := nodeType.LabelValue()
 	if !ok {
-		panic(fmt.Sprintf("SetForEachChildIdentityLabels called with non-writable node type %s", nodeType))
+		panic(fmt.Sprintf("setForEachChildIdentityLabels called with non-writable node type %s", nodeType))
 	}
 	if labels == nil {
 		labels = make(map[string]string)
@@ -281,7 +281,7 @@ func StampForEachChildLabels(childObj *unstructured.Unstructured, parentID, grap
 	if lbls == nil {
 		lbls = map[string]string{}
 	}
-	lbls = SetForEachChildIdentityLabels(
+	lbls = setForEachChildIdentityLabels(
 		lbls, parentID,
 		childObj.GetName(), childObj.GetNamespace(),
 		gvk.Kind, gv.Group,

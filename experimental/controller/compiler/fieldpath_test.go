@@ -199,7 +199,7 @@ func TestExtractFieldPaths(t *testing.T) {
 			env := testFieldPathEnv(t, tt.vars...)
 			ast, issues := env.Compile(tt.expr)
 			require.NoError(t, issues.Err())
-			got := ExtractFieldPathsFromAST(ast.NativeRep().Expr(), tt.scopeVars, nil)
+			got := extractFieldPathsFromAST(ast.NativeRep().Expr(), tt.scopeVars, nil)
 
 			// Normalize empty maps for comparison.
 			if len(got) == 0 {
@@ -209,7 +209,7 @@ func TestExtractFieldPaths(t *testing.T) {
 				tt.want = map[string][]graph.FieldPath{}
 			}
 
-			assert.Equal(t, tt.want, got, "ExtractFieldPathsFromAST(%q)", tt.expr)
+			assert.Equal(t, tt.want, got, "extractFieldPathsFromAST(%q)", tt.expr)
 		})
 	}
 }

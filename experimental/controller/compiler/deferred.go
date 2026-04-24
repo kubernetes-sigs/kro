@@ -31,7 +31,7 @@ type deferredExpr struct {
 	source string // the original string containing the expression (for error messages)
 }
 
-// CompileDeferredExpressions validates $${...} expressions at each deferral
+// compileDeferredExpressions validates $${...} expressions at each deferral
 // depth by building best-effort child type environments. Called during
 // CompileGraphSpec after ${...} expression compilation.
 //
@@ -39,7 +39,7 @@ type deferredExpr struct {
 // node list, the function also pre-compiles the child spec. Parse errors,
 // type errors, and DAG cycle errors in the child are reported as parent
 // compilation errors.
-func CompileDeferredExpressions(spec *graph.GraphSpec) error {
+func compileDeferredExpressions(spec *graph.GraphSpec) error {
 	for _, node := range spec.Nodes {
 		// Walk the node's body for $${...} expressions.
 		body := node.Body()
@@ -89,7 +89,7 @@ func CompileDeferredExpressions(spec *graph.GraphSpec) error {
 		// template produces a child Graph CR..." — only forEach nodes trigger
 		// pre-compilation (they stamp N identical children from one template).
 		if body != nil && len(scope.NodeIDs) > 0 && node.ForEach != nil {
-			if err := PrecompileChildGraph(node.ID, body); err != nil {
+			if err := precompileChildGraph(node.ID, body); err != nil {
 				return err
 			}
 		}
@@ -227,7 +227,7 @@ func validateDeferredExprs(parentNodeID string, scope ChildScope, exprs []deferr
 // Pre-compilation of child Graph specs
 // ---------------------------------------------------------------------------
 
-// PrecompileChildGraph extracts a child GraphSpec from a parent template body
+// precompileChildGraph extracts a child GraphSpec from a parent template body
 // that produces a Graph CR, strips one deferral level ($${...} → ${...}),
 // parses the child's node list, and runs CompileGraphSpec on the child spec.
 // Compilation errors in the child are reported as parent compilation errors.
@@ -235,7 +235,7 @@ func validateDeferredExprs(parentNodeID string, scope ChildScope, exprs []deferr
 // Per 004-compilation.md § Pre-compilation: "The parent extracts the child spec
 // (with $${...} → ${...} stripping), runs CompileGraphSpec on it, and caches
 // the result."
-func PrecompileChildGraph(parentNodeID string, body map[string]any) error {
+func precompileChildGraph(parentNodeID string, body map[string]any) error {
 	specMap, ok := body["spec"].(map[string]any)
 	if !ok {
 		return nil

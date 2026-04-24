@@ -17,8 +17,8 @@ package graph
 // For example, ["status", "availableReplicas"] represents .status.availableReplicas.
 type FieldPath []string
 
-// Equal returns true if two FieldPaths have the same segments.
-func (fp FieldPath) Equal(other FieldPath) bool {
+// equal returns true if two FieldPaths have the same segments.
+func (fp FieldPath) equal(other FieldPath) bool {
 	if len(fp) != len(other) {
 		return false
 	}
@@ -33,7 +33,7 @@ func (fp FieldPath) Equal(other FieldPath) bool {
 // AddFieldPath appends a FieldPath to a slice, deduplicating exact matches.
 func AddFieldPath(paths *[]FieldPath, path FieldPath) {
 	for _, existing := range *paths {
-		if existing.Equal(path) {
+		if existing.equal(path) {
 			return
 		}
 	}
@@ -43,7 +43,7 @@ func AddFieldPath(paths *[]FieldPath, path FieldPath) {
 // AddPath adds a FieldPath to the result map, deduplicating exact matches.
 func AddPath(result map[string][]FieldPath, root string, path FieldPath) {
 	for _, existing := range result[root] {
-		if existing.Equal(path) {
+		if existing.equal(path) {
 			return
 		}
 	}

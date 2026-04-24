@@ -8,12 +8,12 @@ import (
 )
 
 func TestIdentityLabelKey(t *testing.T) {
-	key := IdentityLabelKey("deploy", "my-app", "default")
+	key := identityLabelKey("deploy", "my-app", "default")
 	assert.Equal(t, "deploy.my-app.default.internal.kro.run/type", key)
 }
 
 func TestGenerationLabelKey(t *testing.T) {
-	key := GenerationLabelKey("deploy", "my-app", "default")
+	key := generationLabelKey("deploy", "my-app", "default")
 	assert.Equal(t, "deploy.my-app.default.internal.kro.run/generation", key)
 }
 
@@ -94,7 +94,7 @@ func TestGraphNameFromLabel(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := GraphNameFromLabel(tc.key)
+			got := graphNameFromLabel(tc.key)
 			assert.Equal(t, tc.wantGraph, got)
 		})
 	}

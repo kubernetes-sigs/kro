@@ -16,10 +16,10 @@ import (
 	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
 )
 
-// ExtractFieldPathsFromAST walks a CEL AST and collects all (scopeVariable, FieldPath)
+// extractFieldPathsFromAST walks a CEL AST and collects all (scopeVariable, FieldPath)
 // pairs. comprehensionVars tracks iteration variables introduced by comprehension
 // expressions — these are not scope variables and should not produce paths.
-func ExtractFieldPathsFromAST(expr celast.Expr, scopeVars map[string]bool, comprehensionVars map[string]bool) map[string][]graph.FieldPath {
+func extractFieldPathsFromAST(expr celast.Expr, scopeVars map[string]bool, comprehensionVars map[string]bool) map[string][]graph.FieldPath {
 	result := map[string][]graph.FieldPath{}
 
 	var walk func(e celast.Expr)
@@ -66,13 +66,13 @@ func ExtractFieldPathsFromAST(expr celast.Expr, scopeVars map[string]bool, compr
 				innerVars[comp.IterVar2()] = true
 			}
 			innerVars[comp.AccuVar()] = true
-			innerResult := ExtractFieldPathsFromAST(comp.LoopCondition(), scopeVars, innerVars)
+			innerResult := extractFieldPathsFromAST(comp.LoopCondition(), scopeVars, innerVars)
 			mergeResults(result, innerResult)
-			innerResult = ExtractFieldPathsFromAST(comp.LoopStep(), scopeVars, innerVars)
+			innerResult = extractFieldPathsFromAST(comp.LoopStep(), scopeVars, innerVars)
 			mergeResults(result, innerResult)
-			innerResult = ExtractFieldPathsFromAST(comp.AccuInit(), scopeVars, innerVars)
+			innerResult = extractFieldPathsFromAST(comp.AccuInit(), scopeVars, innerVars)
 			mergeResults(result, innerResult)
-			innerResult = ExtractFieldPathsFromAST(comp.Result(), scopeVars, innerVars)
+			innerResult = extractFieldPathsFromAST(comp.Result(), scopeVars, innerVars)
 			mergeResults(result, innerResult)
 
 		case celast.ListKind:

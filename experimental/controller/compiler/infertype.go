@@ -192,10 +192,10 @@ func ResolveNodeTypes(nodes []graph.Node, schemaResolver resolver.SchemaResolver
 	return ts
 }
 
-// BuildTypedEnvOptions constructs CEL environment options from resolved type sources.
+// buildTypedEnvOptions constructs CEL environment options from resolved type sources.
 // Builds a single DeclTypeProvider for both resource schemas and definition types,
 // avoiding the double-provider problem where a second CustomTypeProvider replaces the first.
-func BuildTypedEnvOptions(ts *TypeSource) []cel.EnvOption {
+func buildTypedEnvOptions(ts *TypeSource) []cel.EnvOption {
 	var declarations []cel.EnvOption
 	var allDeclTypes []*apiservercel.DeclType
 
@@ -483,12 +483,12 @@ func InferStringType(s string) *apiservercel.DeclType {
 // Type refinement (second pass)
 // ---------------------------------------------------------------------------
 
-// RefineDefTypes narrows definition types using expression return types from
+// refineDefTypes narrows definition types using expression return types from
 // the first compilation pass. For each def node, standalone expression fields
 // that were initially typed as dyn are narrowed to their compiled return type.
 //
 // Returns a new TypeSource with narrowed definitions, or nil if nothing changed.
-func RefineDefTypes(nodes []graph.Node, ts *TypeSource, exprTypes map[string]*cel.Type) *TypeSource {
+func refineDefTypes(nodes []graph.Node, ts *TypeSource, exprTypes map[string]*cel.Type) *TypeSource {
 	narrowed := false
 	newDefTypes := make(map[string]*apiservercel.DeclType, len(ts.DefinitionTypes))
 
@@ -703,11 +703,11 @@ func ExtractLiteralGVK(tmpl map[string]any) *runtimeschema.GroupVersionKind {
 // Expression-to-field compatibility
 // ---------------------------------------------------------------------------
 
-// ValidateExprFieldCompat checks that standalone expressions in node bodies
+// validateExprFieldCompat checks that standalone expressions in node bodies
 // produce types compatible with the destination field's schema. For example,
 // spec.replicas: ${someString} is rejected if the schema says replicas is
 // integer. Only checked for nodes with resolved schemas (template, patch, ref).
-func ValidateExprFieldCompat(nodes []graph.Node, ts *TypeSource, exprTypes map[string]*cel.Type) error {
+func validateExprFieldCompat(nodes []graph.Node, ts *TypeSource, exprTypes map[string]*cel.Type) error {
 	for _, node := range nodes {
 		nodeType := node.Type()
 		if nodeType == graph.NodeTypeDef {

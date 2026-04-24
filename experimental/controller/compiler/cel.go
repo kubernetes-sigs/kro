@@ -224,13 +224,13 @@ func (c *CompiledGraph) Eval(expr string, scope map[string]any) (any, error) {
 				return id
 			}
 			factory := celast.NewExprFactory()
-			RewriteCollectionReady(nativeAst.Expr(), c.CollectionIDs, factory, nextID)
+			rewriteCollectionReady(nativeAst.Expr(), c.CollectionIDs, factory, nextID)
 			// Build scope vars for .dependencies() rewrite in dynamic path.
 			dynScopeVars := make(map[string]bool, len(c.declaredVars))
 			for k := range c.declaredVars {
 				dynScopeVars[k] = true
 			}
-			RewriteDependencies(nativeAst.Expr(), dynScopeVars, factory, nextID)
+			rewriteDependencies(nativeAst.Expr(), dynScopeVars, factory, nextID)
 		}
 		ast, issues := compileEnv.Check(parsed)
 		if issues != nil && issues.Err() != nil {
@@ -325,7 +325,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 	// Phase 3: build the typed CEL environment.
 	// All typed declarations (resource schemas + definition types) go through
 	// a single DeclTypeProvider to avoid the double-provider problem.
-	typedDecls := BuildTypedEnvOptions(typeInfo)
+	typedDecls := buildTypedEnvOptions(typeInfo)
 
 	env, err := krocel.DefaultEnvironment(
 		krocel.WithResourceIDs(typeInfo.UntypedIDs),
@@ -400,8 +400,8 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 			nextIDVal++
 			return id
 		}
-		RewriteCollectionReady(nativeAst.Expr(), collectionIDs, rewriteFactory, nextID)
-		RewriteDependencies(nativeAst.Expr(), scopeVars, rewriteFactory, nextID)
+		rewriteCollectionReady(nativeAst.Expr(), collectionIDs, rewriteFactory, nextID)
+		rewriteDependencies(nativeAst.Expr(), scopeVars, rewriteFactory, nextID)
 		ast, issues := env.Check(parsed)
 		if issues != nil && issues.Err() != nil {
 			return nil, fmt.Errorf("checking expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
@@ -410,7 +410,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 		// Extract field paths from the AST before creating the program.
 		// Per 004-compilation.md § Algorithm, Phase 4 step 5: field path
 		// extraction walks the AST at compile time. One walk per expression.
-		exprPaths[expr] = ExtractFieldPathsFromAST(ast.NativeRep().Expr(), scopeVars, nil)
+		exprPaths[expr] = extractFieldPathsFromAST(ast.NativeRep().Expr(), scopeVars, nil)
 		prg, err := env.Program(ast)
 		if err != nil {
 			return nil, fmt.Errorf("programming expression %q: %w: %w", expr, ErrInvalidExpression, err)
@@ -422,10 +422,10 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 	// Narrow def expression fields from dyn to their compiled return types.
 	// Narrow forEach iterators from the collection expression's element type.
 	// Re-check expressions that reference narrowed types against a new environment.
-	refinedTypeInfo := RefineDefTypes(spec.Nodes, typeInfo, exprTypes)
+	refinedTypeInfo := refineDefTypes(spec.Nodes, typeInfo, exprTypes)
 	if refinedTypeInfo != nil {
 		// Types narrowed — rebuild the environment and re-check affected expressions.
-		refinedDecls := BuildTypedEnvOptions(refinedTypeInfo)
+		refinedDecls := buildTypedEnvOptions(refinedTypeInfo)
 		refinedEnv, err := krocel.DefaultEnvironment(
 			krocel.WithResourceIDs(refinedTypeInfo.UntypedIDs),
 			krocel.WithListVariables(refinedTypeInfo.listIDs),
@@ -458,8 +458,8 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 				nextIDVal++
 				return id
 			}
-			RewriteCollectionReady(nativeAst.Expr(), collectionIDs, rewriteFactory, nextID)
-			RewriteDependencies(nativeAst.Expr(), scopeVars, rewriteFactory, nextID)
+			rewriteCollectionReady(nativeAst.Expr(), collectionIDs, rewriteFactory, nextID)
+			rewriteDependencies(nativeAst.Expr(), scopeVars, rewriteFactory, nextID)
 			_, issues = refinedEnv.Check(parsed)
 			if issues != nil && issues.Err() != nil {
 				return nil, fmt.Errorf("checking expression %q (type refinement): %w: %w", expr, ErrInvalidExpression, issues.Err())
@@ -472,7 +472,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 	// Phase 4a-2: validate expression-to-field compatibility.
 	// Check that standalone expression return types match the destination
 	// field's schema type. Only for nodes with resolved schemas.
-	if err := ValidateExprFieldCompat(spec.Nodes, typeInfo, exprTypes); err != nil {
+	if err := validateExprFieldCompat(spec.Nodes, typeInfo, exprTypes); err != nil {
 		return nil, err
 	}
 
@@ -553,8 +553,8 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 				nextIDVal++
 				return id
 			}
-			RewriteCollectionReady(nativeAst.Expr(), collectionIDs, rewriteFactory, nextID)
-			RewriteDependencies(nativeAst.Expr(), scopeVars, rewriteFactory, nextID)
+			rewriteCollectionReady(nativeAst.Expr(), collectionIDs, rewriteFactory, nextID)
+			rewriteDependencies(nativeAst.Expr(), scopeVars, rewriteFactory, nextID)
 			_, issues = innerEnv.Check(parsed)
 			if issues != nil && issues.Err() != nil {
 				return nil, fmt.Errorf("node %q: readyWhen expression %q (forEach inner scope): %w: %w",
@@ -607,7 +607,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 
 	// Phase 4c: validate deferred ($${...}) expressions at each deferral depth.
 	// Per 004-compilation.md § Deferred Expression Analysis.
-	if err := CompileDeferredExpressions(spec); err != nil {
+	if err := compileDeferredExpressions(spec); err != nil {
 		return nil, err
 	}
 

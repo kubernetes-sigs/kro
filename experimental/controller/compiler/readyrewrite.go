@@ -33,19 +33,19 @@ const ReservedNodeReadyVar = "__kroNodeReady"
 // propagateWhen evaluation. Per 001-graph.md § propagateWhen.
 const ReservedDepsMapVar = "__kroDeps"
 
-// RewriteCollectionReady rewrites `<wk_id>.ready()` → `__kroNodeReady["<wk_id>"]`
+// rewriteCollectionReady rewrites `<wk_id>.ready()` → `__kroNodeReady["<wk_id>"]`
 // for each Watch node ID in collectionIDs.
 //
 // Scalar and forEach nodes are NOT rewritten. Their `.ready()` continues
 // to work via per-item `__ready` stamping, which is correct for those
 // topologies.
-func RewriteCollectionReady(expr celast.Expr, collectionIDs map[string]bool, factory celast.ExprFactory, nextID func() int64) bool {
+func rewriteCollectionReady(expr celast.Expr, collectionIDs map[string]bool, factory celast.ExprFactory, nextID func() int64) bool {
 	return rewriteMemberCallToMapLookup(expr, "ready", collectionIDs, ReservedNodeReadyVar, factory, nextID)
 }
 
-// RewriteDependencies rewrites `<ident>.dependencies()` → `__kroDeps["<ident>"]`
+// rewriteDependencies rewrites `<ident>.dependencies()` → `__kroDeps["<ident>"]`
 // for each node ID in scopeVars.
-func RewriteDependencies(expr celast.Expr, scopeVars map[string]bool, factory celast.ExprFactory, nextID func() int64) bool {
+func rewriteDependencies(expr celast.Expr, scopeVars map[string]bool, factory celast.ExprFactory, nextID func() int64) bool {
 	return rewriteMemberCallToMapLookup(expr, "dependencies", scopeVars, ReservedDepsMapVar, factory, nextID)
 }
 

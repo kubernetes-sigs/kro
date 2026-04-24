@@ -323,9 +323,10 @@ func applyValidationMarker(schema *extv1.JSONSchemaProps, marker *Marker) error 
 	if strings.TrimSpace(marker.Value) == "" {
 		return fmt.Errorf("validation failed")
 	}
-	schema.XValidations = []extv1.ValidationRule{
-		{Rule: marker.Value, Message: "validation failed"},
-	}
+	schema.XValidations = append(schema.XValidations, extv1.ValidationRule{
+		Rule:    marker.Value,
+		Message: "validation failed",
+	})
 	return nil
 }
 

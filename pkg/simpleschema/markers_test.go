@@ -351,6 +351,30 @@ func TestApplyMarkers(t *testing.T) {
 			},
 			wantParent: &extv1.JSONSchemaProps{Required: []string{"field"}},
 		},
+		{
+			name:       "immutable and validation markers together",
+			schemaType: "string",
+			markers:    `immutable=true validation="self.matches('^(pending|active|done)$')"`,
+			want: &extv1.JSONSchemaProps{
+				Type: "string",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self == oldSelf", Message: "field is immutable"},
+					{Rule: "self.matches('^(pending|active|done)$')", Message: "validation failed"},
+				},
+			},
+		},
+		{
+			name:       "validation and immutable markers together (reversed order)",
+			schemaType: "string",
+			markers:    `validation="self.size() > 0" immutable=true`,
+			want: &extv1.JSONSchemaProps{
+				Type: "string",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self.size() > 0", Message: "validation failed"},
+					{Rule: "self == oldSelf", Message: "field is immutable"},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

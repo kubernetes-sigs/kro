@@ -165,7 +165,19 @@ func ExtractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 	// paths extracted), so we need string-based extraction. Scans for every
 	// occurrence of ".ready()" and extracts the identifier immediately
 	// before it.
-	checkReadyRef := func(expr string) {
+	//
+	// addDataDep controls whether the target is also added to dependencies
+	// (creating a hard DAG edge). Gate expressions (readyWhen/propagateWhen)
+	// need hard deps because the gate evaluator runs in the coordinator
+	// and requires the upstream in scope. Body expressions (template/patch)
+	// must NOT create hard deps — the status reporter node
+	// (rgdInstanceStatus) uses .ready() in its body to compute
+	// IN_PROGRESS/ACTIVE, and hard deps on blocked upstream nodes would
+	// prevent the status patch from running. Body .ready() targets use
+	// readinessDeps only; the snapshotFor zero-deps fallback populates
+	// scope, and ReadinessDependents propagation triggers re-evaluation
+	// when readiness changes.
+	checkReadyRef := func(expr string, addDataDep bool) {
 		remaining := expr
 		for {
 			idx := strings.Index(remaining, ".ready()")
@@ -188,7 +200,9 @@ func ExtractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 				default:
 					if id != node.ID {
 						readinessDeps[id] = true
-						dependencies[id] = true
+						if addDataDep {
+							dependencies[id] = true
+						}
 					}
 				}
 			}
@@ -255,7 +269,7 @@ func ExtractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 				continue
 			}
 			processExpr(expr, false)
-			checkReadyRef(expr)
+			checkReadyRef(expr, false) // body: readinessDeps only, no hard DAG edge
 			checkDepsRef(expr)
 			if err != nil {
 				return
@@ -284,7 +298,7 @@ func ExtractReferencedPathsFromNode(node Node, exprPaths map[string]map[string][
 				continue
 			}
 			processExpr(expr, true)
-			checkReadyRef(expr)
+			checkReadyRef(expr, true) // gate: hard DAG edge needed for scope access
 			checkDepsRef(expr)
 			if err != nil {
 				return

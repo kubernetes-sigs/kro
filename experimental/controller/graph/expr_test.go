@@ -5,10 +5,11 @@ import (
 )
 
 // TestExtractReferencedPaths_ReadyInBody_RegressionMultiTarget verifies that
-// .ready() calls in body expressions create both DAG dependency edges and
-// readinessDeps entries for ALL targets. Previously, checkReadyRef only ran
-// on gate expressions (readyWhen/propagateWhen) and only extracted the first
-// identifier — body .ready() calls created no edges at all.
+// .ready() calls in body expressions create readinessDeps entries for ALL
+// targets. With exprPaths == nil (string fallback), processExpr also adds
+// identifiers to dependencies (conservative). With exprPaths != nil (AST
+// path in production), the AST walker skips .ready() targets, so only
+// readinessDeps are populated — no hard DAG edges.
 func TestExtractReferencedPaths_ReadyInBody_RegressionMultiTarget(t *testing.T) {
 	// Simulates rgdInstanceStatus's body expression:
 	//   ${deployment1.ready() && deployment2.ready() ? 'ACTIVE' : 'IN_PROGRESS'}
@@ -26,12 +27,16 @@ func TestExtractReferencedPaths_ReadyInBody_RegressionMultiTarget(t *testing.T) 
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Both targets must appear in dependencies (DAG edge for scope access).
+	// String fallback: processExpr extracts FIRST identifier only
+	// (deployment1 from ExtractFirstIdentifier). checkReadyRef does NOT
+	// add to deps for body. deployment2 is NOT in deps because
+	// ExtractFirstIdentifier only finds the first.
 	if !deps["deployment1"] {
-		t.Error("deployment1 missing from dependencies")
+		t.Error("deployment1 missing from dependencies (string fallback extracts first identifier)")
 	}
-	if !deps["deployment2"] {
-		t.Error("deployment2 missing from dependencies")
+	// deployment2 is NOT extracted by ExtractFirstIdentifier
+	if deps["deployment2"] {
+		t.Error("deployment2 should not be in dependencies (ExtractFirstIdentifier only finds first)")
 	}
 
 	// Both targets must appear in readinessDeps (propagation on readiness change).
@@ -44,7 +49,8 @@ func TestExtractReferencedPaths_ReadyInBody_RegressionMultiTarget(t *testing.T) 
 }
 
 // TestExtractReferencedPaths_ReadyInBody_RegressionSingle verifies the simple
-// case: a single .ready() call in a body expression.
+// case: a single .ready() call in a body expression creates readinessDeps.
+// With string fallback (exprPaths == nil), processExpr also adds deps.
 func TestExtractReferencedPaths_ReadyInBody_RegressionSingle(t *testing.T) {
 	node := Node{
 		ID: "status",
@@ -60,8 +66,9 @@ func TestExtractReferencedPaths_ReadyInBody_RegressionSingle(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	// String fallback adds all identifiers to deps (conservative).
 	if !deps["job"] {
-		t.Error("job missing from dependencies")
+		t.Error("job missing from dependencies (string fallback)")
 	}
 	if !readinessDeps["job"] {
 		t.Error("job missing from readinessDeps")
@@ -173,11 +180,12 @@ func TestExtractReferencedPaths_ReadyCELBuiltinFiltered(t *testing.T) {
 		t.Error("CEL builtin 'list' should be filtered by ExtractFirstIdentifier")
 	}
 	// "d" is a loop variable — the string scanner can't distinguish it
-	// from a node ID. This is expected behavior with exprPaths == nil.
-	// When exprPaths is available (normal compilation), the AST walker
-	// handles this correctly.
-	if !deps["d"] {
-		t.Error("expected 'd' as dependency (string scanner can't resolve comprehension variables)")
+	// from a node ID. With exprPaths == nil, ExtractFirstIdentifier finds
+	// "list" which is a CEL builtin (filtered), so deps is empty.
+	// checkReadyRef walks ALL .ready() occurrences and finds "d" in
+	// readinessDeps only (body = soft dep).
+	if deps["d"] {
+		t.Error("'d' should not be in deps (ExtractFirstIdentifier finds 'list', which is filtered)")
 	}
 	if !readinessDeps["d"] {
 		t.Error("expected 'd' in readinessDeps (string scanner can't resolve comprehension variables)")

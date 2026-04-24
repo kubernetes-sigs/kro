@@ -26,10 +26,27 @@ import (
 // the previous forEach state from the instance. The worker writes to its own
 // maps — the coordinator merges them back after the worker returns.
 func (e *evaluator) snapshotFor(node *graphpkg.Node, state *instanceState) *evaluator {
-	snap := make(map[string]any, len(node.Dependencies)+1)
+	snap := make(map[string]any, len(node.Dependencies)+len(node.ReadinessDeps)+1)
 	for depID := range node.Dependencies {
 		if v, ok := e.scope[depID]; ok {
 			snap[depID] = v
+		}
+	}
+	// Include readiness-only deps (in ReadinessDeps but not Dependencies)
+	// with fallback scope. Body .ready() calls create readinessDeps without
+	// hard dependencies — the node needs these in scope for CEL evaluation.
+	// Use current scope if available, fall back to previous scope (carries
+	// __ready stamps from last reconcile), then empty-map (ready() = false).
+	for depID := range node.ReadinessDeps {
+		if _, exists := snap[depID]; exists {
+			continue // already included via Dependencies
+		}
+		if v, ok := e.scope[depID]; ok {
+			snap[depID] = v
+		} else if prev, ok := state.previousScope[depID]; ok {
+			snap[depID] = prev
+		} else {
+			snap[depID] = map[string]any{}
 		}
 	}
 	// For nodes with zero declared dependencies (e.g., status reporter
@@ -38,7 +55,7 @@ func (e *evaluator) snapshotFor(node *graphpkg.Node, state *instanceState) *eval
 	// so the worker can evaluate .ready() without "no such attribute"
 	// errors. Use previous scope (carries __ready stamps from last
 	// reconcile) with empty-map fallback for new nodes.
-	if len(node.Dependencies) == 0 && e.compiled != nil {
+	if len(node.Dependencies) == 0 && len(node.ReadinessDeps) == 0 && e.compiled != nil {
 		for nodeID := range e.compiled.Topology.Index {
 			if _, exists := snap[nodeID]; exists {
 				continue

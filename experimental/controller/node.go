@@ -105,7 +105,20 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 	name, _ := md["name"].(string)
 	namespace, _ := md["namespace"].(string)
 	if namespace == "" {
-		namespace = graph.GetNamespace()
+		// Only default namespace for namespace-scoped resources.
+		// Cluster-scoped resources (CRDs, ClusterRoles, etc.) must keep
+		// namespace empty — setting it breaks watch event routing because
+		// the metadata informer reports events with namespace="" while
+		// the scalar index would store namespace="<graph-ns>".
+		clusterScoped := false
+		if r.Scope != nil {
+			if isNS, known := r.Scope.IsNamespaced(gvk); known && !isNS {
+				clusterScoped = true
+			}
+		}
+		if !clusterScoped {
+			namespace = graph.GetNamespace()
+		}
 	}
 
 	if watcher != nil {

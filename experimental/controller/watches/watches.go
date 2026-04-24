@@ -613,6 +613,18 @@ func (gw *GraphWatcher) DrainTriggers() map[string]bool {
 	return triggers
 }
 
+// DepositTrigger adds a node ID to the pending triggers for the next
+// reconcile. Used by the walk to schedule re-evaluation of nodes that
+// were dispatched with stale readiness data (concurrent workers raced).
+func (gw *GraphWatcher) DepositTrigger(nodeID string) {
+	gw.coord.triggerMu.Lock()
+	defer gw.coord.triggerMu.Unlock()
+	if gw.coord.pendingTriggers[gw.graph] == nil {
+		gw.coord.pendingTriggers[gw.graph] = make(map[string]bool)
+	}
+	gw.coord.pendingTriggers[gw.graph][nodeID] = true
+}
+
 // DrainCollectionChanges atomically drains and returns the buffered
 // collection changes for this Graph's Watch nodes. Returns nil if
 // no collection changes were buffered. Used by reconcileWatch to

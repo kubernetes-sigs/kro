@@ -185,6 +185,13 @@ type walkState struct {
 	results           chan nodeResult
 	inflight          int
 	dynamicGVKChanged bool // set when a dynamic GVK resolves for the first time or changes
+
+	// staleReadinessDeps tracks nodes dispatched to workers while some
+	// of their ReadinessDeps were still inflight. The worker snapshot
+	// captured stale .ready() values. After the walk, explicit triggers
+	// are deposited for these nodes so the next reconcile re-evaluates
+	// them with fresh scope from completed readiness deps.
+	staleReadinessDeps map[string]bool
 }
 
 // notifyDependents dispatches all dependents of a node after its state is
@@ -615,26 +622,36 @@ func (w *walkState) tryDispatch(idx int) {
 							propagateHash += ":ready=false"
 						}
 						prevHash := w.state.previousSelfHashes[node.ID]
-						if prevHash == "" || propagateHash != prevHash {
-							for _, depIdx := range w.dag.Dependents[node.ID] {
-								w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
-							}
-						}
-						w.state.previousSelfHashes[node.ID] = propagateHash
-					} else {
-						// Hash failed — unconditional propagation for safety.
+					if prevHash == "" || propagateHash != prevHash {
 						for _, depIdx := range w.dag.Dependents[node.ID] {
 							w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
 						}
+						// ReadinessDependents consume .ready() state without
+						// a hard DAG edge. They need the same propagation
+						// trigger so tryDispatch bypasses the skip check and
+						// re-evaluates them with the updated readiness.
+						for _, depIdx := range w.dag.ReadinessDependents[node.ID] {
+							w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
+						}
+					}
+					w.state.previousSelfHashes[node.ID] = propagateHash
+				} else {
+					// Hash failed — unconditional propagation for safety.
+					for _, depIdx := range w.dag.Dependents[node.ID] {
+						w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
+					}
+					for _, depIdx := range w.dag.ReadinessDependents[node.ID] {
+						w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
 					}
 				}
-				for _, depIdx := range w.dag.Dependents[node.ID] {
-					w.tryDispatch(depIdx)
-				}
-				for _, depIdx := range w.dag.ReadinessDependents[node.ID] {
-					w.tryDispatch(depIdx)
-				}
-				return
+			}
+			for _, depIdx := range w.dag.Dependents[node.ID] {
+				w.tryDispatch(depIdx)
+			}
+			for _, depIdx := range w.dag.ReadinessDependents[node.ID] {
+				w.tryDispatch(depIdx)
+			}
+			return
 			}
 		fullEval:
 			// Path 3: hash mismatch → full evaluation.
@@ -722,6 +739,24 @@ func (w *walkState) tryDispatch(idx int) {
 
 	// Dispatch to worker goroutine.
 	w.dispatched[idx] = true
+
+	// Track stale readiness dispatch: if any ReadinessDep (not a hard dep)
+	// is still inflight, the worker snapshot has stale .ready() values.
+	// After the walk, explicit triggers are deposited so the next
+	// reconcile re-evaluates this node with fresh scope.
+	for depID := range node.ReadinessDeps {
+		if node.Dependencies[depID] {
+			continue
+		}
+		if w.plan.States[depID] == dagpkg.NodeUnvisited && !w.outputsReady[depID] {
+			if w.staleReadinessDeps == nil {
+				w.staleReadinessDeps = map[string]bool{}
+			}
+			w.staleReadinessDeps[node.ID] = true
+			break
+		}
+	}
+
 	isResync := w.resyncTriggered[node.ID]
 	logger.V(1).Info("dispatching node", "node", node.ID, "nodeType", resolvedNodeType, "resyncCorrection", isResync)
 	go func(n graphpkg.Node, we *evaluator, nodeType graphpkg.NodeType, resyncCorrection bool) {
@@ -1405,13 +1440,21 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					} else {
 						propagateHash += ":ready=false"
 					}
-					prevHash := state.previousSelfHashes[node.ID]
-					if prevHash == "" || propagateHash != prevHash {
-						for _, depIdx := range dag.Dependents[node.ID] {
-							walk.propagationTriggered[dag.Nodes[depIdx].ID] = true
-						}
+				prevHash := state.previousSelfHashes[node.ID]
+				if prevHash == "" || propagateHash != prevHash {
+					for _, depIdx := range dag.Dependents[node.ID] {
+						walk.propagationTriggered[dag.Nodes[depIdx].ID] = true
 					}
-					state.previousSelfHashes[node.ID] = propagateHash
+					// ReadinessDependents consume .ready() state without
+					// a hard DAG edge (e.g., rgdInstanceStatus checking
+					// ${job.ready()}). They need propagationTriggered so
+					// tryDispatch bypasses the skip check and re-evaluates
+					// them with the updated readiness verdict.
+					for _, depIdx := range dag.ReadinessDependents[node.ID] {
+						walk.propagationTriggered[dag.Nodes[depIdx].ID] = true
+					}
+				}
+				state.previousSelfHashes[node.ID] = propagateHash
 				}
 			}
 		}
@@ -1442,12 +1485,34 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		for _, depIdx := range dag.Dependents[node.ID] {
 			walk.tryDispatch(depIdx)
 		}
+		// ReadinessDependents: nodes that consume .ready() without a hard
+		// DAG edge (e.g., rgdInstanceStatus). When this node's readiness
+		// changes, these consumers must re-evaluate. propagationTriggered
+		// was set above (Step 8) so tryDispatch bypasses the skip check.
+		for _, depIdx := range dag.ReadinessDependents[node.ID] {
+			walk.tryDispatch(depIdx)
+		}
 	}
 
 	// Finalize skipped nodes: nodes that were skipped (outputsReady) and never
 	// re-dispatched via propagation trigger still have plan.States = Pending.
 	// Restore their previous state for the plan summary (status reporting).
 	walkAttempted = true
+
+	// Stale readiness dispatch: nodes dispatched while readiness deps were
+	// inflight evaluated with stale .ready() values. Deposit explicit
+	// triggers for these nodes so the next reconcile re-evaluates them
+	// with fresh scope. The requeueFloor ensures a follow-up reconcile
+	// fires promptly even if no watch events arrive.
+	if len(walk.staleReadinessDeps) > 0 && watcher != nil {
+		for nodeID := range walk.staleReadinessDeps {
+			watcher.DepositTrigger(nodeID)
+		}
+		if requeueFloor == 0 || requeueFloor > time.Second {
+			requeueFloor = time.Second
+		}
+	}
+
 	dagpkg.FinalizeSkippedStates(plan, walk.outputsReady, state.previousPlanStates, func(nodeID string) {
 		logger.V(1).Info("skipped node with no prior state — marking Pending", "node", nodeID)
 	})

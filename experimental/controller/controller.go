@@ -17,7 +17,6 @@ package graphcontroller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -31,7 +30,6 @@ import (
 
 	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
 	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
-	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
 	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -525,299 +523,21 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		outputsReady:         make(map[string]bool, len(dag.Nodes)),
 		nodeKeys:             make(map[string][]string, len(dag.Nodes)),
 		results:              make(chan nodeResult, len(dag.Nodes)),
+		preWalkSchemaGen:     preWalkGen,
+		compilationErr:       compilationErr,
+		activeRevision:       activeRevision,
 	}
 
-	// Seed: dispatch all nodes with no in-graph dependencies.
-	for _, idx := range dag.Levels[0] {
-		walk.tryDispatch(idx)
-	}
+	walk.run()
+	walkAttempted = walk.walkAttempted
+	compilationErr = walk.compilationErr // post-walk recompile may have updated this
+	requeueFloor = walk.requeueFloor     // stale readiness deps may have set a floor
 
-	// Coordinator loop: receive completions, merge into scope, dispatch dependents.
-	for walk.inflight > 0 {
-		res := <-walk.results
-		walk.inflight--
-
-		node := &dag.Nodes[res.idx]
-
-		// Observe per-node evaluation duration (measured inside the worker).
-		if res.evalDuration > 0 {
-			NodeEvalDurationSeconds.With(graphMetricLabels(
-				graph.GetName(), graph.GetNamespace(), node.ID,
-			)).Observe(res.evalDuration.Seconds())
-		}
-
-		// Watch incremental-cache integrity: if the worker errored
-		// AND did not persist a cache update, the drained
-		// CollectionChanges are lost. Mark the node dirty so the next
-		// reconcile takes the full-list path to recover authoritative
-		// state from the API server. Without this, stale cache can
-		// persist for up to the resync interval (default 30m). Per
-		// 005-reconciliation.md § Propagation.
-		if res.err != nil && node.Type() == graphpkg.NodeTypeWatch &&
-			len(res.collectionCacheUpdate) == 0 {
-			state.collectionDirty[node.ID] = true
-		}
-
-		// Error handling: block dependents, continue independent branches.
-		// Classify the API error to determine the plan state — NodeError
-		// for client errors (4xx), NodeSystemError for server/infra
-		// failures (5xx/timeout/network). Both retry; the distinction
-		// flows into the status condition for operator triage.
-		if res.state == dagpkg.NodeError {
-			info := classifyAPIError(res.err)
-			prevState := state.previousPlanStates[node.ID]
-			plan.SetState(dag, node.ID, info.state)
-			state.previousPlanStates[node.ID] = info.state
-			walk.nodeErrors = append(walk.nodeErrors, fmt.Sprintf("%s: %s", node.ID, info.reason))
-			logger.V(0).Info("error on node", "node", node.ID,
-				"previousState", prevState, "state", info.state, "reason", info.reason, "error", res.err)
-			// Retain previous keys — the resource may still exist in the cluster.
-			walk.carryForwardKeys(node.ID)
-			// Dispatch dependents — tryDispatch will see the error state
-			// and mark them as Blocked via the dependency check.
-			for _, depIdx := range dag.Dependents[node.ID] {
-				walk.tryDispatch(depIdx)
-			}
-			continue
-		}
-		if res.state == dagpkg.NodeConflict {
-			prevState := state.previousPlanStates[node.ID]
-			plan.SetState(dag, node.ID, dagpkg.NodeConflict)
-			state.previousPlanStates[node.ID] = dagpkg.NodeConflict
-			state.previousScope[node.ID] = res.scopeValue
-			state.previousKeys[node.ID] = res.keys
-			walk.nodeErrors = append(walk.nodeErrors, fmt.Sprintf("%s: field conflict", node.ID))
-			logger.V(0).Info("conflict on node", "node", node.ID, "previousState", prevState, "error", res.err)
-			walk.carryForwardKeys(node.ID)
-			for _, depIdx := range dag.Dependents[node.ID] {
-				walk.tryDispatch(depIdx)
-			}
-			continue
-		}
-		if res.state == dagpkg.NodePending {
-			prevState := state.previousPlanStates[node.ID]
-			plan.SetState(dag, node.ID, dagpkg.NodePending)
-			// Under declared-keyword classification, patch→template is an
-			// authoring event (patch: → template: spec edit) handled by
-			// revision supersession. No runtime reclassification reset.
-			state.previousPlanStates[node.ID] = dagpkg.NodePending
-			state.previousScope[node.ID] = res.scopeValue
-			state.previousKeys[node.ID] = res.keys
-			logger.V(1).Info("data pending for node", "node", node.ID, "previousState", prevState, "error", res.err)
-			walk.carryForwardKeys(node.ID)
-			for _, depIdx := range dag.Dependents[node.ID] {
-				walk.tryDispatch(depIdx)
-			}
-			continue
-		}
-
-		// Merge worker output into shared scope.
-		if res.scopeValue != nil {
-			eval.scope[res.scopeKey] = res.scopeValue
-		}
-
-		if r.SchemaGen != nil && node.Type() == graphpkg.NodeTypeTemplate {
-			if scopeMap, ok := res.scopeValue.(map[string]any); ok {
-				if scopeMap["apiVersion"] == "apiextensions.k8s.io/v1" && scopeMap["kind"] == "CustomResourceDefinition" {
-					r.SchemaGen.AdvanceGeneration()
-				}
-			}
-		}
-
-		// Merge node-readiness verdict. Watch nodes carry an explicit
-		// update from the worker; all other nodes derive readiness from
-		// the result state.
-		if eval.nodeReady != nil {
-			if res.nodeReadyUpdate != nil {
-				eval.nodeReady[res.scopeKey] = *res.nodeReadyUpdate
-			} else {
-				eval.nodeReady[res.scopeKey] = (res.state == dagpkg.NodeReady)
-			}
-		}
-
-		// Merge forEach state updates into the shared instance state.
-		for k, v := range res.forEachItems {
-			state.forEachItems[k] = v
-		}
-		for nodeID, itemScopes := range res.forEachScopes {
-			state.forEachItemScope[nodeID] = itemScopes
-		}
-		for nodeID, itemKeys := range res.forEachUpdates {
-			state.forEachItemKeys[nodeID] = itemKeys
-		}
-		for nodeID, itemHashes := range res.forEachHashes {
-			state.forEachItemHashes[nodeID] = itemHashes
-		}
-
-		// Merge Watch cache updates into the shared instance state.
-		// Dirty is cleared only when the worker took the full-List path
-		// — that's the only thing that recovers from a lost incremental
-		// merge. An incremental success against an already-stale cache
-		// does not address the staleness. Per 005-reconciliation.md
-		// § Propagation.
-		for nodeID, cached := range res.collectionCacheUpdate {
-			state.collectionCache[nodeID] = cached
-			if res.collectionDidFullList {
-				delete(state.collectionDirty, nodeID)
-			}
-		}
-
-		// Update plan state.
-		prevState := state.previousPlanStates[node.ID]
-		plan.SetState(dag, node.ID, res.state)
-		if prevState != res.state {
-			logger.V(1).Info("node state transition", "node", node.ID,
-				"previousState", prevState, "newState", res.state, "duration", res.evalDuration)
-		}
-
-		// Surface readyWhen expression errors. Per 001-graph.md: readyWhen
-		// errors produce NodeNotReady (not NodeError), so they don't gate
-		// dependents. But the user needs to know their expression is broken
-		// and won't self-heal — log it and include in nodeErrors for status.
-		if res.state == dagpkg.NodeNotReady && res.err != nil && errors.Is(res.err, compiler.ErrReadyWhenFailed) {
-			walk.nodeErrors = append(walk.nodeErrors, fmt.Sprintf("%s: %s", node.ID, res.err.Error()))
-			logger.V(0).Info("readyWhen expression error (not gating dependents)",
-				"node", node.ID, "error", res.err)
-		}
-
-		if res.state == dagpkg.NodeReady || res.state == dagpkg.NodeNotReady {
-			walk.nodeKeys[node.ID] = res.keys
-		} else {
-			// Non-success states that reach here (e.g., dagpkg.NodeNotReady with keys) —
-			// retain previous keys since the resource may still exist.
-			walk.carryForwardKeys(node.ID)
-		}
-
-		// Step 8: Propagation check — hash the specific field paths
-		// dependents reference from this node's output, plus propagateWhen
-		// state. If the hash differs from the previous reconcile, mark
-		// dependents as having a propagation trigger.
-		// Per 005-reconciliation.md § Propagation.
-		if res.state == dagpkg.NodeReady || res.state == dagpkg.NodeNotReady {
-			if observed := eval.scope[node.ID]; observed != nil {
-				walk.propagateIfChanged(node, observed, res.state)
-			}
-		}
-
-		// Save per-node state for next reconcile.
-		state.previousScope[node.ID] = eval.scope[node.ID]
-		state.previousKeys[node.ID] = res.keys
-		state.previousPlanStates[node.ID] = res.state
-
-		// Store evaluation hash for next reconcile's change check (step 3).
-		if evalHash, err := hashNodeInputs(node, eval.scope); err == nil && evalHash != "" {
-			state.previousEvalHashes[node.ID] = evalHash
-		}
-
-		// Record dynamic GVK resolutions. When a dynamic GVK node resolves
-		// for the first time or changes, the compilation key will differ on
-		// the next reconcile (includes resolved GVKs as hints). Mark for
-		// requeue so the next reconcile compiles with the schema available.
-		if res.resolvedGVK != nil {
-			if state.mergeDynamicGVK(node.ID, *res.resolvedGVK) {
-				walk.dynamicGVKChanged = true
-				logger.Info("dynamic GVK resolved; will recompile with schema on next reconcile",
-					"node", node.ID, "gvk", *res.resolvedGVK)
-			}
-		}
-
-		// Check dependents: dispatch any whose dependencies are now satisfied.
-		for _, depIdx := range dag.Dependents[node.ID] {
-			walk.tryDispatch(depIdx)
-		}
-		// ReadinessDependents: nodes that consume .ready() without a hard
-		// DAG edge (e.g., rgdInstanceStatus). When this node's readiness
-		// changes, these consumers must re-evaluate. propagationTriggered
-		// was set above (Step 8) so tryDispatch bypasses the skip check.
-		for _, depIdx := range dag.ReadinessDependents[node.ID] {
-			walk.tryDispatch(depIdx)
-		}
-	}
-
-	// Finalize skipped nodes: nodes that were skipped (outputsReady) and never
-	// re-dispatched via propagation trigger still have plan.States = Pending.
-	// Restore their previous state for the plan summary (status reporting).
-	walkAttempted = true
-
-	// Stale readiness dispatch: nodes dispatched while readiness deps were
-	// inflight evaluated with stale .ready() values. Deposit explicit
-	// triggers for these nodes so the next reconcile re-evaluates them
-	// with fresh scope. The requeueFloor ensures a follow-up reconcile
-	// fires promptly even if no watch events arrive.
-	if len(walk.staleReadinessDeps) > 0 && watcher != nil {
-		for nodeID := range walk.staleReadinessDeps {
-			watcher.DepositTrigger(nodeID)
-		}
-		if requeueFloor == 0 || requeueFloor > time.Second {
-			requeueFloor = time.Second
-		}
-	}
-
-	dagpkg.FinalizeSkippedStates(plan, walk.outputsReady, state.previousPlanStates, func(nodeID string) {
-		logger.V(1).Info("skipped node with no prior state — marking Pending", "node", nodeID)
-	})
-
-	// Retain previous keys for uncertain-absence nodes. These nodes were never
-	// dispatched to workers, so their keys aren't in appliedKeys yet.
-	// Without this, their managed resources would appear as prune candidates.
-	// Per 005-reconciliation.md § Prune: "Pending and Blocked both represent
-	// uncertain absence — previous applied keys are retained, not safe to prune."
-	//
-	// Belt-and-suspenders: the prune gate also blocks on these states, but key
-	// retention is the surgical fallback if the gate logic ever changes.
-	for _, node := range dag.Nodes {
-		if plan.States[node.ID] == dagpkg.NodeBlocked || plan.States[node.ID] == dagpkg.NodePending {
-			walk.carryForwardKeys(node.ID)
-		}
-	}
-
-	// Retain watches for all DAG nodes not already retained via skipNode
-	// or worker dispatch. Without this, the double-buffer swap in doneGraph
-	// removes watch index entries for nodes that weren't visited this cycle
-	// (e.g., healthy nodes not triggered). Once removed, watch events for
-	// those resources are silently dropped until the resync timer fires.
-	// This was the structural cause of timer-dependent convergence: partial
-	// reconciles (only some nodes triggered) would strip watches from
-	// untriggered-but-healthy nodes, making their convergence entirely
-	// timer-driven rather than watch-driven.
-	if watcher != nil {
-		for i, node := range dag.Nodes {
-			if !walk.dispatched[i] && !walk.outputsReady[node.ID] {
-				watcher.RetainWatches(node.ID)
-			}
-		}
-	}
-
-	// Flatten per-node keys into the applied key set for the prune phase.
-	// Last-writer-wins: if a node was carried forward (skip) and then
-	// dispatched (propagation trigger) in the same walk, only the dispatch
-	// result survives. This prevents stale keys from blocking prune
-	// candidates when forEach scales to zero children.
-	var appliedKeys []string
-	for _, keys := range walk.nodeKeys {
-		appliedKeys = append(appliedKeys, keys...)
-	}
+	appliedKeys := walk.appliedKeys
 	nodeErrors := walk.nodeErrors
 	var nodeNotes []string // informational messages (e.g., FinalizerSkipped) routed to status without gating Ready
 
-	// If the schema generation advanced during the walk (a CRD was created
-	// by a template node), re-validate compilation immediately. The schema
-	// resolver can now resolve types that were dyn at the start of this
-	// reconcile. This catches child graph type errors (e.g., forEach over a
-	// non-list field) within the same cycle that creates the CRD, rather
-	// than waiting for the next reconcile to detect staleness.
-	if r.SchemaGen != nil && r.SchemaGen.Generation() > preWalkGen && compilationErr == nil {
-		if _, _, err := r.compileRevision(ctx, graph.GetNamespace(), activeRevision); err != nil {
-			compilationErr = err
-			logger.Error(err, "post-walk recompilation detected error")
-		}
-	}
-
-	// Derive aggregate state from the DAG plan
-	summary := plan.Summary()
-
-	// Update node state gauge metrics for operator visibility.
-	updateNodeStateMetrics(graph.GetName(), graph.GetNamespace(), plan, dag)
+	summary := walk.summary
 
 	// -----------------------------------------------------------------------
 	// Prune resources no longer in the applied set

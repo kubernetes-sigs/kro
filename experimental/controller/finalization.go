@@ -408,27 +408,6 @@ func (r *GraphReconciler) runForEachFinalization(
 // Helpers
 // ---------------------------------------------------------------------------
 
-// cleanupFinalizationChildren deletes finalizer resources after their target
-// has been successfully deleted. Failures are non-fatal — children become
-// normal prune candidates on the next cycle.
-func (r *GraphReconciler) cleanupFinalizationChildren(ctx context.Context, keys []string) {
-	logger := log.FromContext(ctx)
-	for _, fk := range keys {
-		finDel, _, ok := unstructuredFromKey(fk)
-		if !ok {
-			continue
-		}
-		if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
-			if client.IgnoreNotFound(delErr) != nil {
-				logger.V(1).Info("finalizer resource cleanup failed (will retry as prune candidate)", "key", fk, "error", delErr)
-			}
-		} else {
-			logger.V(1).Info("cleaned up finalizer resource", "key", fk)
-			r.Resources.remove(fk)
-		}
-	}
-}
-
 // sortFinalizerNodes returns finalizer node IDs sorted by topological position.
 func sortFinalizerNodes(finalizerNodeIDs []string, dag *dagpkg.DAG) []string {
 	ordered := make([]string, len(finalizerNodeIDs))

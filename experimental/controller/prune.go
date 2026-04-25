@@ -248,7 +248,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 	// Clean up finalization children whose targets were successfully deleted.
 	// Failures are non-fatal — children become normal prune candidates next cycle.
-	r.cleanupFinalizationChildren(ctx, deferredDeletes)
+	r.deleteByKeys(ctx, deferredDeletes)
 
 	return deferredKeys, blockedReasons, notes, nil
 }

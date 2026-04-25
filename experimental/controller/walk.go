@@ -124,6 +124,9 @@ func (w *walkState) notifyDependents(nodeID string) {
 // applied set to prevent spurious pruning.
 func (w *walkState) carryForwardKeys(nodeID string) {
 	if prevKeys, ok := w.state.previousKeys[nodeID]; ok {
+		if len(prevKeys) > 0 {
+			log.FromContext(w.ctx).V(1).Info("carryForwardKeys", "node", nodeID, "keys", prevKeys)
+		}
 		w.appliedKeys = append(w.appliedKeys, prevKeys...)
 	}
 }
@@ -248,7 +251,8 @@ func (w *walkState) propagateIfChanged(node *graphpkg.Node, observed any, nodeSt
 		propagateHash += ":ready=false"
 	}
 	prevHash := w.state.previousSelfHashes[node.ID]
-	if prevHash == "" || propagateHash != prevHash {
+	propagated := prevHash == "" || propagateHash != prevHash
+	if propagated {
 		for _, depIdx := range w.dag.Dependents[node.ID] {
 			w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
 		}
@@ -260,6 +264,9 @@ func (w *walkState) propagateIfChanged(node *graphpkg.Node, observed any, nodeSt
 			w.propagationTriggered[w.dag.Nodes[depIdx].ID] = true
 		}
 	}
+	log.FromContext(w.ctx).V(1).Info("propagation hash check",
+		"node", node.ID, "propagated", propagated,
+		"prevHash", prevHash, "currHash", propagateHash)
 	w.state.previousSelfHashes[node.ID] = propagateHash
 	return true
 }
@@ -300,6 +307,12 @@ func (w *walkState) tryDispatch(idx int) {
 
 	// Step 1: Skip check — no external trigger and no propagation trigger.
 	if !w.triggered[node.ID] && !w.propagationTriggered[node.ID] {
+		if prevKeys, ok := w.state.previousKeys[node.ID]; ok && len(prevKeys) > 0 {
+			logger.V(1).Info("skip check — skipping node with non-empty previousKeys",
+				"node", node.ID, "triggered", w.triggered[node.ID],
+				"propagationTriggered", w.propagationTriggered[node.ID],
+				"previousKeys", prevKeys)
+		}
 		w.skipNode(node)
 		return
 	}

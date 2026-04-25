@@ -1,6 +1,9 @@
-// cel.go contains CEL runtime integration: expression compilation/evaluation,
-// custom CEL functions (plural, simpleSchema.toOpenAPI), and error classification
-// for distinguishing retryable "data pending" errors from expression bugs.
+// cel.go contains CEL runtime integration: expression compilation/evaluation
+// and error classification for distinguishing retryable "data pending" errors
+// from expression bugs.
+//
+// Custom CEL extension functions (plural, .ready(), simpleSchema.toOpenAPI(),
+// .updated(), .dependencies()) are defined in celfuncs.go.
 //
 // Performance model: CEL environments and programs are compiled eagerly when a
 // Graph spec is first seen (or when it changes). The reconcile loop only evaluates
@@ -14,7 +17,6 @@
 package compiler
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -22,16 +24,12 @@ import (
 	"github.com/google/cel-go/cel"
 	celast "github.com/google/cel-go/common/ast"
 	"github.com/google/cel-go/common/types"
-	"github.com/google/cel-go/common/types/ref"
-
-	"github.com/gobuffalo/flect"
 
 	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
 	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/conversion"
 	celunstructured "github.com/kubernetes-sigs/kro/pkg/cel/unstructured"
-	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	celopenapi "k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -649,306 +647,4 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 		CollectionIDs:   collectionIDs,
 		ResourceSchemas: typeInfo.ResourceSchemas,
 	}, nil
-}
-
-// ---------------------------------------------------------------------------
-// CEL extension functions
-// ---------------------------------------------------------------------------
-
-// celPluralFunction returns CEL env options for the plural() function.
-func celPluralFunction() []cel.EnvOption {
-	return []cel.EnvOption{
-		cel.Function("plural",
-			cel.Overload("plural_string",
-				[]*cel.Type{cel.StringType},
-				cel.StringType,
-				cel.UnaryBinding(func(val ref.Val) ref.Val {
-					s := val.Value().(string)
-					return types.String(flect.Pluralize(s))
-				}),
-			),
-		),
-	}
-}
-
-// celReadyFunction returns CEL env options for the .ready() member function.
-//
-// .ready() returns whether the graph controller considers a node ready.
-// The readiness state is injected into the scope data as "__ready" after
-// each node is processed during the DAG walk:
-//   - No readyWhen: __ready = true (applied = ready)
-//   - With readyWhen: __ready = (all conditions passed)
-//
-// For scalar nodes (Template, Patch), .ready() reads __ready from
-// the object map. For forEach parents, .ready() returns true when ALL items
-// have __ready == true — the collection's readiness is a function of its
-// children's readiness.
-//
-// For Watch nodes, `.ready()` is rewritten at compile time to a
-// scope-variable lookup (see readyrewrite.go). That redirection surfaces
-// the node's readyWhen verdict directly — independent of the collection
-// being non-empty — so `pods.ready()` returns the correct value even when
-// the collection has zero items. This function's list branch is kept for
-// forEach parents whose readiness is aggregated from children's per-item
-// __ready stamping. Per 001-graph.md § readyWhen.
-func celReadyFunction() []cel.EnvOption {
-	impl := func(val ref.Val) ref.Val {
-		native, err := conversion.GoNativeType(val)
-		if err != nil {
-			return types.Bool(false)
-		}
-		switch obj := native.(type) {
-		case map[string]any:
-			// Scalar node — read __ready directly
-			ready, _ := obj["__ready"].(bool)
-			return types.Bool(ready)
-		case []any:
-			// Collection node — all items must be ready
-			if len(obj) == 0 {
-				return types.Bool(true) // empty collection is vacuously ready
-			}
-			for _, item := range obj {
-				m, ok := item.(map[string]any)
-				if !ok {
-					return types.Bool(false)
-				}
-				ready, _ := m["__ready"].(bool)
-				if !ready {
-					return types.Bool(false)
-				}
-			}
-			return types.Bool(true)
-		default:
-			return types.Bool(false)
-		}
-	}
-	return []cel.EnvOption{
-		cel.Function("ready",
-			cel.MemberOverload("dyn_ready",
-				[]*cel.Type{cel.DynType},
-				cel.BoolType,
-				cel.UnaryBinding(impl),
-			),
-		),
-	}
-}
-
-// celSimpleSchemaFunction returns CEL env options for simpleSchema.toOpenAPI().
-// Converts a SimpleSchema definition to an OpenAPI v3 schema for use in CRD specs.
-// The first argument is a schema map with spec/status/types fields.
-// The second argument is a resources list (used for context, currently unused).
-func celSimpleSchemaFunction() []cel.EnvOption {
-	impl := func(schemaVal, resourcesVal ref.Val) ref.Val {
-		reg := types.NewEmptyRegistry()
-
-		schemaNative, err := conversion.GoNativeType(schemaVal)
-		if err != nil {
-			return types.NewErr("simpleSchema.toOpenAPI: converting schema: %v", err)
-		}
-
-		schemaMap, ok := schemaNative.(map[string]any)
-		if !ok {
-			return types.NewErr("simpleSchema.toOpenAPI: schema must be a map, got %T", schemaNative)
-		}
-
-		specMap, _ := schemaMap["spec"].(map[string]any)
-		if specMap == nil {
-			specMap = schemaMap
-		}
-		customTypes, _ := schemaMap["types"].(map[string]any)
-
-		openAPISchema, err := simpleschema.ToOpenAPISpec(specMap, customTypes)
-		if err != nil {
-			return types.NewErr("simpleSchema.toOpenAPI: %v", err)
-		}
-
-		// JSON round-trip: JSONSchemaProps → map[string]any
-		jsonBytes, err := json.Marshal(openAPISchema)
-		if err != nil {
-			return types.NewErr("simpleSchema.toOpenAPI: marshaling: %v", err)
-		}
-		var result map[string]any
-		if err := json.Unmarshal(jsonBytes, &result); err != nil {
-			return types.NewErr("simpleSchema.toOpenAPI: unmarshaling: %v", err)
-		}
-
-		// Wrap with standard Kubernetes object structure
-		fullSchema := map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"apiVersion": map[string]any{"type": "string"},
-				"kind":       map[string]any{"type": "string"},
-				"metadata":   map[string]any{"type": "object"},
-				"spec":       result,
-				"status": map[string]any{
-					"type":                                 "object",
-					"x-kubernetes-preserve-unknown-fields": true,
-					"properties":                           conditionsSchemaProperties(),
-				},
-			},
-		}
-
-		// Convert status types if present (skip runtime ${} expressions)
-		if statusMap, ok := schemaMap["status"].(map[string]any); ok && len(statusMap) > 0 {
-			hasExpressions := false
-			for _, v := range statusMap {
-				if s, ok := v.(string); ok && strings.Contains(s, "${") {
-					hasExpressions = true
-					break
-				}
-			}
-			if !hasExpressions {
-				statusSchema, err := simpleschema.ToOpenAPISpec(statusMap, customTypes)
-				if err != nil {
-					return types.NewErr("simpleSchema.toOpenAPI: status: %v", err)
-				}
-				statusJSON, err := json.Marshal(statusSchema)
-				if err != nil {
-					return types.NewErr("simpleSchema.toOpenAPI: marshaling status: %v", err)
-				}
-				var statusResult map[string]any
-				if err := json.Unmarshal(statusJSON, &statusResult); err != nil {
-					return types.NewErr("simpleSchema.toOpenAPI: unmarshaling status: %v", err)
-				}
-				// Inject conditions schema into user-declared status for
-				// proper SSA list-type semantics.
-				injectConditionsSchema(statusResult)
-				fullSchema["properties"].(map[string]any)["status"] = statusResult
-			}
-		}
-
-		return reg.NativeToValue(fullSchema)
-	}
-	return []cel.EnvOption{
-		cel.Function("simpleSchema.toOpenAPI",
-			cel.Overload("simpleSchema_toOpenAPI",
-				[]*cel.Type{cel.DynType, cel.DynType},
-				cel.DynType,
-				cel.BinaryBinding(impl),
-			),
-		),
-	}
-}
-
-// conditionsSchemaProperties returns a properties map containing a typed
-// conditions array with x-kubernetes-list-type: map keyed by "type". This
-// enables SSA to handle individual conditions independently rather than
-// treating the entire array as atomic — allowing separate field owners to
-// manage different condition types (e.g., Compiled vs Ready) without conflict.
-func conditionsSchemaProperties() map[string]any {
-	return map[string]any{
-		"conditions": map[string]any{
-			"type":                        "array",
-			"x-kubernetes-list-type":      "map",
-			"x-kubernetes-list-map-keys":  []any{"type"},
-			"x-kubernetes-preserve-unknown-fields": true,
-			"items": map[string]any{
-				"type":                                 "object",
-				"x-kubernetes-preserve-unknown-fields": true,
-				"properties": map[string]any{
-					"type":   map[string]any{"type": "string"},
-					"status": map[string]any{"type": "string"},
-				},
-				"required": []any{"type"},
-			},
-		},
-	}
-}
-
-// injectConditionsSchema adds the conditions array schema with proper list-type
-// annotations into an existing status schema. If conditions is already declared,
-// it merges the list annotations without overwriting item definitions.
-func injectConditionsSchema(statusSchema map[string]any) {
-	props, ok := statusSchema["properties"].(map[string]any)
-	if !ok {
-		props = map[string]any{}
-		statusSchema["properties"] = props
-	}
-	if _, exists := props["conditions"]; !exists {
-		props["conditions"] = conditionsSchemaProperties()["conditions"]
-	} else {
-		// Conditions already declared — inject list annotations.
-		cond, ok := props["conditions"].(map[string]any)
-		if ok {
-			cond["x-kubernetes-list-type"] = "map"
-			cond["x-kubernetes-list-map-keys"] = []any{"type"}
-		}
-	}
-}
-
-// celUpdatedFunction returns CEL env options for the .updated() member function.
-//
-// .updated() returns whether a node's resource is on the latest graph
-// generation. Per 001-graph.md § CEL Functions: ".updated() — true when the
-// node is on the latest graph generation." Per 005-reconciliation.md
-// § Propagation Control: used in propagateWhen for forEach rollout gating.
-//
-// Three paths determine __updated:
-//  1. Managed resources just applied → true (stamped by control flow).
-//  2. Non-managed nodes (Watch, Ref, Def) → true (vacuously — external
-//     observations have no graph generation to update).
-//  3. ForEach items not applied this pass → determined by comparing the
-//     resource's generation label against effectiveGeneration.
-//
-// For collections (forEach parents), .updated() returns true when ALL items
-// have __updated == true — the collection's updated state is a function of
-// its children.
-func celUpdatedFunction() []cel.EnvOption {
-	impl := func(val ref.Val) ref.Val {
-		native, err := conversion.GoNativeType(val)
-		if err != nil {
-			return types.Bool(false)
-		}
-		switch obj := native.(type) {
-		case map[string]any:
-			// Scalar node — read __updated directly.
-			updated, _ := obj["__updated"].(bool)
-			return types.Bool(updated)
-		case []any:
-			// Collection node — all items must be updated.
-			if len(obj) == 0 {
-				return types.Bool(true) // empty collection is vacuously updated
-			}
-			for _, item := range obj {
-				m, ok := item.(map[string]any)
-				if !ok {
-					return types.Bool(false)
-				}
-				updated, _ := m["__updated"].(bool)
-				if !updated {
-					return types.Bool(false)
-				}
-			}
-			return types.Bool(true)
-		default:
-			return types.Bool(false)
-		}
-	}
-	return []cel.EnvOption{
-		cel.Function("updated",
-			cel.MemberOverload("dyn_updated",
-				[]*cel.Type{cel.DynType},
-				cel.BoolType,
-				cel.UnaryBinding(impl),
-			),
-		),
-	}
-}
-
-// celDependenciesFunction returns CEL env options for the .dependencies()
-// member function. The actual call never runs at runtime because the AST
-// rewrite replaces it with a __kroDeps map lookup — this stub only exists
-// to make CEL type-check pass.
-func celDependenciesFunction() []cel.EnvOption {
-	return []cel.EnvOption{
-		cel.Function("dependencies",
-			cel.MemberOverload("dyn_dependencies",
-				[]*cel.Type{cel.DynType},
-				cel.ListType(cel.DynType),
-				cel.UnaryBinding(func(val ref.Val) ref.Val {
-					return types.NewDynamicList(types.DefaultTypeAdapter, []ref.Val{})
-				}),
-			),
-		),
-	}
 }

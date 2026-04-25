@@ -914,7 +914,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				var pruneDeferred []string
 				var pruneBR []string
 				var pruneN []string
-				pruneDeferred, pruneBR, pruneN, err = r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher, finResult)
+				pruneDeferred, pruneBR, pruneN, err = r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, finResult)
 				deferred = append(deferred, pruneDeferred...)
 				pruneBlockedReasons = append(pruneBlockedReasons, pruneBR...)
 				pruneNotes = append(pruneNotes, pruneN...)

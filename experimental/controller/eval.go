@@ -482,3 +482,127 @@ func (e *evaluator) includeWhen(conditions []string) (bool, error) {
 	}
 	return true, nil
 }
+
+// snapshotFor builds a worker evaluator for a specific node. The snapshot
+// contains the node's dependency data (read-only) and, for forEach nodes,
+// the previous forEach state from the instance. The worker writes to its own
+// maps — the coordinator merges them back after the worker returns.
+func (e *evaluator) snapshotFor(node *graph.Node, state *instanceState) *evaluator {
+	snap := make(map[string]any, len(node.Dependencies)+len(node.ReadinessDeps)+1)
+	for depID := range node.Dependencies {
+		if v, ok := e.scope[depID]; ok {
+			snap[depID] = v
+		}
+	}
+	// Include readiness-only deps (in ReadinessDeps but not Dependencies)
+	// with fallback scope. Body .ready() calls create readinessDeps without
+	// hard dependencies — the node needs these in scope for CEL evaluation.
+	// Use current scope if available, fall back to previous scope (carries
+	// __ready stamps from last reconcile), then empty-map (ready() = false).
+	for depID := range node.ReadinessDeps {
+		if _, exists := snap[depID]; exists {
+			continue // already included via Dependencies
+		}
+		if v, ok := e.scope[depID]; ok {
+			snap[depID] = v
+		} else if prev, ok := state.previousScope[depID]; ok {
+			snap[depID] = prev
+		} else {
+			snap[depID] = map[string]any{}
+		}
+	}
+	// For nodes with zero declared dependencies (e.g., status reporter
+	// nodes whose template only uses .ready() calls — which the field
+	// path extractor skips), include scope entries for ALL graph nodes
+	// so the worker can evaluate .ready() without "no such attribute"
+	// errors. Use previous scope (carries __ready stamps from last
+	// reconcile) with empty-map fallback for new nodes.
+	if len(node.Dependencies) == 0 && len(node.ReadinessDeps) == 0 && e.compiled != nil {
+		for nodeID := range e.compiled.Topology.Index {
+			if _, exists := snap[nodeID]; exists {
+				continue
+			}
+			if v, ok := e.scope[nodeID]; ok {
+				snap[nodeID] = v
+			} else if prev, ok := state.previousScope[nodeID]; ok {
+				snap[nodeID] = prev
+			} else {
+				snap[nodeID] = map[string]any{}
+			}
+		}
+	}
+	// The node-readiness sidecar must be visible to rewritten
+	// `<wk_id>.ready()` lookups, including those nested inside CEL
+	// comprehensions evaluated by the worker. The worker receives a
+	// COPY so its writes don't race with the coordinator or other
+	// workers; the coordinator merges the worker's verdict back via
+	// nodeResult.nodeReadyUpdate. Readiness is monotonic within a
+	// reconcile (a node's verdict is set once), so the copy sees a
+	// consistent snapshot.
+	var workerReady map[string]bool
+	if e.nodeReady != nil {
+		workerReady = make(map[string]bool, len(e.nodeReady))
+		for k, v := range e.nodeReady {
+			workerReady[k] = v
+		}
+		snap[compiler.ReservedNodeReadyVar] = workerReady
+	}
+
+	// Propagate dynamic GVK tracking to the worker if the compiled graph has
+	// dynamic nodes. Each worker gets its own map (no sharing) — the resolved
+	// GVK is returned via nodeResult.resolvedGVK.
+	var workerDynamicGVK map[string]schema.GroupVersionKind
+	if e.dispatch.dynamicGVKResolved != nil {
+		workerDynamicGVK = make(map[string]schema.GroupVersionKind, 1)
+	}
+
+	worker := &evaluator{
+		compiled:            e.compiled,
+		scope:               snap,
+		effectiveGeneration: e.effectiveGeneration,
+		nodeReady:           workerReady,
+		dispatch: workerState{
+			dynamicGVKResolved:  workerDynamicGVK,
+			forEachNewScope:     map[string]map[string]any{},
+			forEachNewKeys:      map[string]map[string][]string{},
+			forEachNewHashes:    map[string]map[string]string{},
+			forEachNewItems:     map[string][]any{},
+			forEachPrevItems:    map[string][]any{},
+			forEachPrevScope:    map[string]map[string]any{},
+			forEachPrevKeys:     map[string]map[string][]string{},
+			forEachPrevHashes:   map[string]map[string]string{},
+		},
+	}
+
+	// Copy forEach previous state from the shared instance for this node.
+	if node.ForEach != nil && state != nil {
+		cacheKey := node.ID + "/" + node.ForEach.VarName
+		if items, ok := state.forEachItems[cacheKey]; ok {
+			worker.dispatch.forEachPrevItems[cacheKey] = items
+		}
+		// Copy per-item state — keyed by node ID in outer map.
+		if itemScope, ok := state.forEachItemScope[node.ID]; ok {
+			copied := make(map[string]any, len(itemScope))
+			for k, v := range itemScope {
+				copied[k] = v
+			}
+			worker.dispatch.forEachPrevScope[node.ID] = copied
+		}
+		if itemKeys, ok := state.forEachItemKeys[node.ID]; ok {
+			copied := make(map[string][]string, len(itemKeys))
+			for k, v := range itemKeys {
+				copied[k] = v
+			}
+			worker.dispatch.forEachPrevKeys[node.ID] = copied
+		}
+		if itemHashes, ok := state.forEachItemHashes[node.ID]; ok {
+			copied := make(map[string]string, len(itemHashes))
+			for k, v := range itemHashes {
+				copied[k] = v
+			}
+			worker.dispatch.forEachPrevHashes[node.ID] = copied
+		}
+	}
+
+	return worker
+}

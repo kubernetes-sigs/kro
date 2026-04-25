@@ -523,6 +523,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		collectionChanges:    collectionChanges,
 		dispatched:           make(map[int]bool, len(dag.Nodes)),
 		outputsReady:         make(map[string]bool, len(dag.Nodes)),
+		nodeKeys:             make(map[string][]string, len(dag.Nodes)),
 		results:              make(chan nodeResult, len(dag.Nodes)),
 	}
 
@@ -680,7 +681,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 
 		if res.state == dagpkg.NodeReady || res.state == dagpkg.NodeNotReady {
-			walk.appliedKeys = append(walk.appliedKeys, res.keys...)
+			walk.nodeKeys[node.ID] = res.keys
 		} else {
 			// Non-success states that reach here (e.g., dagpkg.NodeNotReady with keys) —
 			// retain previous keys since the resource may still exist.
@@ -787,7 +788,15 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 	}
 
-	appliedKeys := walk.appliedKeys
+	// Flatten per-node keys into the applied key set for the prune phase.
+	// Last-writer-wins: if a node was carried forward (skip) and then
+	// dispatched (propagation trigger) in the same walk, only the dispatch
+	// result survives. This prevents stale keys from blocking prune
+	// candidates when forEach scales to zero children.
+	var appliedKeys []string
+	for _, keys := range walk.nodeKeys {
+		appliedKeys = append(appliedKeys, keys...)
+	}
 	nodeErrors := walk.nodeErrors
 	var nodeNotes []string // informational messages (e.g., FinalizerSkipped) routed to status without gating Ready
 

@@ -89,8 +89,8 @@ type walkState struct {
 	// Walk-local tracking
 	dispatched        map[int]bool
 	outputsReady      map[string]bool
-	appliedKeys       []string
-	nodeErrors        []string // "nodeID: reason" for status reporting
+	nodeKeys          map[string][]string // per-node applied keys; last writer wins
+	nodeErrors        []string            // "nodeID: reason" for status reporting
 	results           chan nodeResult
 	inflight          int
 	dynamicGVKChanged bool // set when a dynamic GVK resolves for the first time or changes
@@ -118,16 +118,17 @@ func (w *walkState) notifyDependents(nodeID string) {
 	}
 }
 
-// carryForwardKeys appends a node's previous applied keys to the walk's
-// applied key set. Used when a node is skipped, blocked, or in error — the
+// carryForwardKeys retains a node's previous applied keys in the walk's
+// per-node key map. Used when a node is skipped, blocked, or in error — the
 // resource may still exist in the cluster, so its keys must remain in the
-// applied set to prevent spurious pruning.
+// applied set to prevent spurious pruning. Last-writer-wins: a subsequent
+// dispatch for the same node overwrites these keys.
 func (w *walkState) carryForwardKeys(nodeID string) {
 	if prevKeys, ok := w.state.previousKeys[nodeID]; ok {
 		if len(prevKeys) > 0 {
 			log.FromContext(w.ctx).V(1).Info("carryForwardKeys", "node", nodeID, "keys", prevKeys)
 		}
-		w.appliedKeys = append(w.appliedKeys, prevKeys...)
+		w.nodeKeys[nodeID] = prevKeys
 	}
 }
 

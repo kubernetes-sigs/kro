@@ -643,15 +643,17 @@ func TestAssembleDAG_IsolationBetweenInstances(t *testing.T) {
 		dag2.Nodes[0].Template["data"].(map[string]any)["name"])
 
 	// Mutate instance 1's per-node data — must not affect instance 2.
-	dag1.Nodes[0].Dependencies["injected"] = true
+	dag1.Nodes[0].Dependencies["injected"] = graph.DepHard
 	dag1.Nodes[1].SelfPaths = append(dag1.Nodes[1].SelfPaths, graph.FieldPath{"injected"})
 
-	assert.False(t, dag2.Nodes[0].Dependencies["injected"],
+	_, injectedExists := dag2.Nodes[0].Dependencies["injected"]
+	assert.False(t, injectedExists,
 		"mutation of dag1 Dependencies must not leak to dag2")
 	assert.NotContains(t, dag2.Nodes[1].SelfPaths, graph.FieldPath{"injected"},
 		"mutation of dag1 SelfPaths must not leak to dag2")
 
 	// Verify the shared topology is also unaffected.
-	assert.False(t, compiled.Topology.NodeDeps(0)["injected"],
+	_, topoInjected := compiled.Topology.NodeDeps(0)["injected"]
+	assert.False(t, topoInjected,
 		"mutation of dag1 must not corrupt shared topology nodeDeps")
 }

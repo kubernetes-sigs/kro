@@ -409,7 +409,7 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 	if err != nil {
 		return nil, fmt.Errorf("extracting graph spec for deletion order: %w", err)
 	}
-	dag, err := dagpkg.BuildDAG(graphSpec.Nodes, nil)
+	dag, err := dagpkg.BuildDAG(graphSpec.Nodes, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building DAG for deletion order: %w", err)
 	}

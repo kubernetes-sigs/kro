@@ -68,12 +68,6 @@ type Topology struct {
 	// Reverse adjacency list for eager scheduling — when a node completes,
 	// check its dependents to see if they can be dispatched.
 	Dependents map[string][]int
-	// ReadinessDependents maps a node ID to the indices of nodes that
-	// reference it via .ready() (ReadinessDeps) but are NOT in the
-	// normal Dependents index. When a node's readiness state changes,
-	// the propagation hash (which includes :ready=true/false) triggers
-	// these consumers for re-evaluation via the standard hash mechanism.
-	ReadinessDependents map[string][]int
 	// Finalizers maps a target node ID to the IDs of nodes that declare
 	// `finalizes` pointing at it. These nodes are created only when the
 	// target becomes a prune candidate. The DAG records the relationship
@@ -83,15 +77,14 @@ type Topology struct {
 	// Per-node dependency metadata. Indexed by declaration order (same as
 	// Nodes). These are derived from expression paths during compilation
 	// and are the same across all instances with the same compilation key.
-	nodeDeps          []map[string]bool              // node index → dependency IDs
-	nodeDepPaths      []map[string][]graph.FieldPath // node index → dep ID → field paths
-	nodeSelfPaths     [][]graph.FieldPath            // node index → self field paths
-	nodeReadinessDeps []map[string]bool        // node index → readiness dep IDs
+	nodeDeps          []map[string]graph.DepKind      // node index → dependency IDs + kind
+	nodeDepPaths      []map[string][]graph.FieldPath  // node index → dep ID → field paths
+	nodeSelfPaths     [][]graph.FieldPath             // node index → self field paths
 }
 
 // NodeDeps returns the dependency set for a node at the given index.
 // Used by tests to verify topology isolation across shared instances.
-func (t *Topology) NodeDeps(idx int) map[string]bool {
+func (t *Topology) NodeDeps(idx int) map[string]graph.DepKind {
 	if idx < 0 || idx >= len(t.nodeDeps) {
 		return nil
 	}
@@ -102,19 +95,21 @@ func (t *Topology) NodeDeps(idx int) map[string]bool {
 // exprPaths contains pre-extracted field paths from CEL ASTs (computed during
 // compilation in compileGraphSpec). These replace string-scanning with AST-walked
 // field paths per 005-reconciliation.md § Hash Mechanics.
+// exprAccessModes contains per-expression, per-scope-variable access mode
+// classification from pre-rewrite CEL ASTs. Drives DepKind: optional-only
+// access → DepLazy, any direct access → DepHard. Nil means all deps are hard.
 // Returns an error if the dependency graph contains a cycle (ErrCircularDependency).
 // Topological order is computed via Kahn's algorithm with a min-heap keyed by
 // declaration index, so independent nodes preserve their spec.nodes ordering.
-func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldPath) (*DAG, error) {
+func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldPath, exprAccessModes map[string]map[string]bool) (*DAG, error) {
 	topo := &Topology{
 		Index:             make(map[string]int, len(nodes)),
 		NodeTypes:         make(map[string]graph.NodeType),
 		Dependents:        make(map[string][]int),
 		Finalizers:        make(map[string][]string),
-		nodeDeps:          make([]map[string]bool, len(nodes)),
+		nodeDeps:          make([]map[string]graph.DepKind, len(nodes)),
 		nodeDepPaths:      make([]map[string][]graph.FieldPath, len(nodes)),
 		nodeSelfPaths:     make([][]graph.FieldPath, len(nodes)),
-		nodeReadinessDeps: make([]map[string]bool, len(nodes)),
 	}
 
 	dag := &DAG{
@@ -124,7 +119,7 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 
 	for i, node := range nodes {
 		var err error
-		node.Dependencies, node.DepPaths, node.SelfPaths, node.ReadinessDeps, err = graph.ExtractReferencedPathsFromNode(node, exprPaths)
+		node.Dependencies, node.DepPaths, node.SelfPaths, err = graph.ExtractReferencedPathsFromNode(node, exprPaths, exprAccessModes)
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +133,6 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 		topo.nodeDeps[i] = node.Dependencies
 		topo.nodeDepPaths[i] = node.DepPaths
 		topo.nodeSelfPaths[i] = node.SelfPaths
-		topo.nodeReadinessDeps[i] = node.ReadinessDeps
 	}
 
 	// Build finalizer map: target node ID → list of finalizer node IDs.
@@ -186,26 +180,13 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 	}
 
 	// Build reverse adjacency list: for each node, record which nodes depend on it.
+	// Both hard and lazy dependencies create Dependents entries — propagation
+	// triggering uses the unified Dependents index.
 	for i, node := range dag.Nodes {
 		for depID := range node.Dependencies {
 			if _, exists := dag.Index[depID]; exists {
 				dag.Dependents[depID] = append(dag.Dependents[depID], i)
 			}
-		}
-	}
-
-	// Build readiness-dependents reverse index. For each node, record which
-	// nodes reference it via .ready() but are NOT already data-dependents.
-	// Data-dependents already receive propagation via the Dependents index;
-	// ReadinessDependents covers the gap for nodes that only consume
-	// readiness state (e.g., rgdInstanceStatus checking deployment.ready()).
-	dag.ReadinessDependents = make(map[string][]int)
-	for i, node := range dag.Nodes {
-		for depID := range node.ReadinessDeps {
-			if node.Dependencies[depID] {
-				continue // already a data-dependent
-			}
-			dag.ReadinessDependents[depID] = append(dag.ReadinessDependents[depID], i)
 		}
 	}
 
@@ -264,12 +245,16 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 	// is emitted first. This makes TopologicalOrder stable with respect to
 	// input ordering — independent nodes appear in declaration order.
 	// inDegree counts how many in-graph dependencies each node has.
+	// inDegree counts how many hard in-graph dependencies each node has.
+	// Lazy deps do not contribute to topological ordering.
 	n := len(nodes)
 	inDegree := make([]int, n)
 	for i, node := range dag.Nodes {
-		for depID := range node.Dependencies {
-			if _, exists := dag.Index[depID]; exists {
-				inDegree[i]++
+		for depID, kind := range node.Dependencies {
+			if kind == graph.DepHard {
+				if _, exists := dag.Index[depID]; exists {
+					inDegree[i]++
+				}
 			}
 		}
 	}
@@ -289,13 +274,15 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 		order = append(order, curr)
 
 		currID := dag.Nodes[curr].ID
-		// Decrement in-degree for every node that depends on curr.
-		// Uses the Dependents reverse adjacency list for O(V+E) traversal
-		// instead of scanning all nodes — same optimization as propagateState.
+		// Decrement in-degree for every node that has a hard dep on curr.
+		// Dependents includes both hard and lazy deps; only hard deps
+		// contribute to topological ordering (in-degree).
 		for _, depIdx := range dag.Dependents[currID] {
-			inDegree[depIdx]--
-			if inDegree[depIdx] == 0 {
-				heap.Push(&ready, depIdx)
+			if dag.Nodes[depIdx].Dependencies[currID] == graph.DepHard {
+				inDegree[depIdx]--
+				if inDegree[depIdx] == 0 {
+					heap.Push(&ready, depIdx)
+				}
 			}
 		}
 	}
@@ -313,16 +300,19 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 
 	dag.TopologicalOrder = order
 
-	// Compute topological levels. Level[i] = max(Level[dep] for dep in dependencies) + 1.
-	// Nodes with no dependencies are level 0.
+	// Compute topological levels. Level[i] = max(Level[hard dep] + 1).
+	// Nodes with no hard dependencies are level 0. Lazy deps don't
+	// affect level computation (they don't gate dispatch).
 	nodeLevel := make([]int, n)
 	maxLevel := 0
 	for _, idx := range order {
 		level := 0
-		for depID := range dag.Nodes[idx].Dependencies {
-			if depIdx, ok := dag.Index[depID]; ok {
-				if nodeLevel[depIdx]+1 > level {
-					level = nodeLevel[depIdx] + 1
+		for depID, kind := range dag.Nodes[idx].Dependencies {
+			if kind == graph.DepHard {
+				if depIdx, ok := dag.Index[depID]; ok {
+					if nodeLevel[depIdx]+1 > level {
+						level = nodeLevel[depIdx] + 1
+					}
 				}
 			}
 		}
@@ -423,8 +413,8 @@ func extractScopeVars(s string, nodeID string, exprPaths map[string]map[string][
 // infallible by construction — all validation (cycles, self-references,
 // finalizer targets) was performed during BuildDAG.
 //
-// Per-node dependency metadata (Dependencies, DepPaths, SelfPaths,
-// ReadinessDeps) is deep-copied from the topology to prevent mutation of
+// Per-node dependency metadata (Dependencies, DepPaths, SelfPaths)
+// is deep-copied from the topology to prevent mutation of
 // one instance's DAG from corrupting the shared topology. The topology
 // itself (Index, TopologicalOrder, Levels, Dependents, Finalizers,
 // NodeTypes) is shared by pointer — it is immutable after BuildDAG.
@@ -441,20 +431,19 @@ func AssembleDAG(nodes []graph.Node, topo *Topology) *DAG {
 		// Deep-copy per-node dependency metadata from the shared topology.
 		// The topology slices must not be mutated through the per-instance
 		// DAG — concurrent instances sharing the same topology would corrupt.
-		node.Dependencies = copyMapBool(topo.nodeDeps[i])
+		node.Dependencies = copyDepKindMap(topo.nodeDeps[i])
 		node.DepPaths = copyDepPaths(topo.nodeDepPaths[i])
 		node.SelfPaths = copySelfPaths(topo.nodeSelfPaths[i])
-		node.ReadinessDeps = copyMapBool(topo.nodeReadinessDeps[i])
 		dag.Nodes[i] = node
 	}
 	return dag
 }
 
-func copyMapBool(m map[string]bool) map[string]bool {
+func copyDepKindMap(m map[string]graph.DepKind) map[string]graph.DepKind {
 	if m == nil {
 		return nil
 	}
-	c := make(map[string]bool, len(m))
+	c := make(map[string]graph.DepKind, len(m))
 	for k, v := range m {
 		c[k] = v
 	}

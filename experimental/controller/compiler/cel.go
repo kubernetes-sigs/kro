@@ -139,6 +139,7 @@ type CompiledGraph struct {
 	env            *cel.Env                          // CEL environment (immutable after Extend)
 	Programs       map[string]cel.Program            // expression string → compiled program
 	ExprPaths      map[string]map[string][]graph.FieldPath // expression string → (scope var → field paths)
+	ExprAccessModes map[string]map[string]bool       // expression string → (scope var → optional-only access)
 	declaredVars   map[string]bool                   // variable names declared in the CEL env
 	Topology       *dagpkg.Topology                      // shared DAG structure (immutable after BuildDAG)
 	UnresolvedGVKs []schema.GroupVersionKind         // GVKs that fell back to dyn (triggers recompilation on CRD install)
@@ -278,6 +279,13 @@ func (c *CompiledGraph) WrapScope(scope map[string]any) map[string]any {
 	}
 	wrapped := make(map[string]any, len(scope))
 	for k, v := range scope {
+		// Optional values (lazy deps) are already CEL-ready — pass through
+		// without schema wrapping. The inner value was wrapped (if applicable)
+		// when the dependency's scope entry was first published.
+		if _, isOpt := v.(*types.Optional); isOpt {
+			wrapped[k] = v
+			continue
+		}
 		s, ok := c.ResourceSchemas[k]
 		if !ok || s == nil {
 			wrapped[k] = v
@@ -376,6 +384,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 
 	programs := make(map[string]cel.Program, len(expressions))
 	exprPaths := make(map[string]map[string][]graph.FieldPath, len(expressions))
+	exprAccessModes := make(map[string]map[string]bool, len(expressions))
 	exprTypes := make(map[string]*cel.Type, len(expressions))
 
 	for _, expr := range expressions {
@@ -387,6 +396,13 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 		if issues != nil && issues.Err() != nil {
 			return nil, fmt.Errorf("parsing expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
 		}
+
+		// Classify access modes on the pre-rewrite AST. The rewrite
+		// replaces Watch .ready() with map lookups, losing the scope var
+		// reference. Pre-rewrite classification captures the original
+		// .ready()/.updated() patterns that signal optional access.
+		exprAccessModes[expr] = classifyAccessModes(parsed.NativeRep().Expr(), scopeVars, nil)
+
 		// Fresh IDs for any rewritten sub-expressions. CEL IDs are
 		// per-AST, monotonic. Seeding at MaxID avoids collisions with
 		// existing IDs; collisions produce "incompatible type already
@@ -612,7 +628,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 	// Build the dependency graph using pre-extracted field paths.
 	// Cycle detection happens here — a cycle in the dependency graph
 	// sets Compiled=False with DependencyError reason.
-	dag, err := dagpkg.BuildDAG(spec.Nodes, exprPaths)
+	dag, err := dagpkg.BuildDAG(spec.Nodes, exprPaths, exprAccessModes)
 	if err != nil {
 		return nil, err
 	}
@@ -640,6 +656,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 		env:             env,
 		Programs:        programs,
 		ExprPaths:       exprPaths,
+		ExprAccessModes: exprAccessModes,
 		declaredVars:    declared,
 		Topology:        dag.Topology,
 		UnresolvedGVKs:  typeInfo.UnresolvedGVKs,

@@ -796,8 +796,22 @@ func TestRGDForEachNonListFieldCompilationError(t *testing.T) {
 
 	// The L1 sub-Graph compiles initially (types are dyn), creates the CRD,
 	// then recompiles with real types. Phase 4b catches the non-list forEach
-	// and sets Compiled=False on the L1 Graph.
-	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient, l1Key, "False"))
+	// and sets Compiled=False on the L1 Graph. This requires two full
+	// compilation cycles plus CRD establishment — use a longer timeout than
+	// the default waitForGraphCompiledStatus (30s) to accommodate slow CI.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 60*time.Second, true, func(ctx context.Context) (bool, error) {
+		if err := k8sClient.Get(ctx, l1Key, l1Graph); err != nil {
+			return false, nil
+		}
+		status, _ := l1Graph.Object["status"].(map[string]any)
+		conditions, _ := status["conditions"].([]any)
+		cond, ok := findCondition(conditions, "Compiled")
+		if !ok {
+			return false, nil
+		}
+		s, _ := cond["status"].(string)
+		return s == "False", nil
+	}))
 
 	// Verify the error message contains the Phase 4b error.
 	require.NoError(t, k8sClient.Get(ctx, l1Key, l1Graph))

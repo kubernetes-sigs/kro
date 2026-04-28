@@ -90,6 +90,14 @@ access in systems languages, the compiler cannot help -- the type information do
 dependency to dependent, both forward and reverse adjacency. Topological order is stable with
 respect to `spec.nodes` ordering. Cycles rejected.
 
+Each edge is classified as hard or lazy based on the expression syntax. A dependency accessed only
+through optional patterns (`?.`, `[?]`, `.ready().orValue()`, `.updated().orValue()`) is lazy — the
+expression handles the absent case. A dependency accessed directly in any expression (including bare
+`.ready()` without `.orValue()`) is hard. The classification is per-consumer: the same node can be a
+hard dependency of one consumer and a lazy dependency of another. The DAG records both edge types.
+Reconciliation uses the classification to determine scope construction (plain value vs optional) and
+frontier entry (hard deps only).
+
 **Compile in topological order.** For each node: resolve its type from the API server, compile its
 expressions against all upstream types (already resolved), then record the narrowed type in the
 artifact so the next node sees it.
@@ -105,6 +113,11 @@ assignment compatibility. Two node types require special handling:
   resolve when the reconciler evaluates the expression (see [Deferred Types](#deferred-types)).
   Nodes referencing CRDs not yet created resolve when the CRD appears
   (see [Compilation Cache](#compilation-cache)).
+- **Lazy dependencies** are optional in the evaluation context. `.ready()` and `.updated()` on a
+  concrete receiver return `bool`. On an optional receiver (lazy dep) they return `optional(bool)` —
+  the author chains `.orValue(false)` to unwrap. Bare `.ready()` without `.orValue()` makes the dep
+  hard — the user is not handling absence. Field access uses CEL's native optional types:
+  `deployment.?status.?replicas.orValue(0)` for lazy deps.
 
 Field paths are (node, field chain) pairs: `${deploy.status.replicas}` yields
 `(deploy, status.replicas)`. When a chain contains a dynamic operation, the path terminates at the

@@ -17,12 +17,42 @@ func testFieldPathEnv(t *testing.T, vars ...string) *cel.Env {
 	t.Helper()
 	opts := []cel.EnvOption{
 		cel.HomogeneousAggregateLiterals(),
+		cel.OptionalTypes(),
 		// Register the custom ready() member function so expressions like
 		// deploy.ready() compile without errors.
 		cel.Function("ready",
 			cel.MemberOverload("dyn_ready",
 				[]*cel.Type{cel.DynType},
 				cel.BoolType,
+			),
+		),
+	}
+	for _, v := range vars {
+		opts = append(opts, cel.Variable(v, cel.DynType))
+	}
+	env, err := cel.NewEnv(opts...)
+	require.NoError(t, err)
+	return env
+}
+
+// testAccessModeEnv creates a CEL environment for testing classifyAccessModes.
+// It includes optional types support (for ?. syntax), plus ready() and updated()
+// member functions declared on dyn types.
+func testAccessModeEnv(t *testing.T, vars ...string) *cel.Env {
+	t.Helper()
+	opts := []cel.EnvOption{
+		cel.HomogeneousAggregateLiterals(),
+		cel.OptionalTypes(),
+		cel.Function("ready",
+			cel.MemberOverload("dyn_ready",
+				[]*cel.Type{cel.DynType},
+				cel.DynType,
+			),
+		),
+		cel.Function("updated",
+			cel.MemberOverload("dyn_updated",
+				[]*cel.Type{cel.DynType},
+				cel.DynType,
 			),
 		),
 	}
@@ -182,15 +212,34 @@ func TestExtractFieldPaths(t *testing.T) {
 			},
 		},
 		{
-			name:      "ready function call — not a select chain",
+			name:      "ready function call — extracts __ready field path",
 			expr:      "deploy.ready()",
 			vars:      []string{"deploy"},
 			scopeVars: map[string]bool{"deploy": true},
-			// ready() is a CallExpr with target=Ident("deploy"). The
-			// chain is Ident → Call, not Ident → Select, so no path
-			// is extracted. This is correct — readiness is a runtime
-			// property, not a field path.
-			want: map[string][]graph.FieldPath{},
+			// .ready() is a property of a node like any other — it
+			// produces ["__ready"] as a field path through the same
+			// mechanism as status.replicas or metadata.name.
+			want: map[string][]graph.FieldPath{
+				"deploy": {{"__ready"}},
+			},
+		},
+		{
+			name:      "optional select — extracts field path through ?.",
+			expr:      "deploy.?status.?replicas.orValue(0)",
+			vars:      []string{"deploy"},
+			scopeVars: map[string]bool{"deploy": true},
+			want: map[string][]graph.FieldPath{
+				"deploy": {{"status", "replicas"}},
+			},
+		},
+		{
+			name:      "single optional select",
+			expr:      "deploy.?status.orValue({})",
+			vars:      []string{"deploy"},
+			scopeVars: map[string]bool{"deploy": true},
+			want: map[string][]graph.FieldPath{
+				"deploy": {{"status"}},
+			},
 		},
 	}
 
@@ -210,6 +259,141 @@ func TestExtractFieldPaths(t *testing.T) {
 			}
 
 			assert.Equal(t, tt.want, got, "extractFieldPathsFromAST(%q)", tt.expr)
+		})
+	}
+}
+
+func TestClassifyAccessModes(t *testing.T) {
+	tests := []struct {
+		name      string
+		expr      string
+		vars      []string
+		scopeVars map[string]bool
+		want      map[string]bool
+	}{
+		{
+			name:      "direct field select — hard",
+			expr:      "deploy.status.replicas",
+			vars:      []string{"deploy"},
+			scopeVars: map[string]bool{"deploy": true},
+			want:      map[string]bool{"deploy": false}, // false = direct (hard)
+		},
+		{
+			name:      "optional field select — lazy",
+			expr:      "deploy.?status.?replicas.orValue(0)",
+			vars:      []string{"deploy"},
+			scopeVars: map[string]bool{"deploy": true},
+			want:      map[string]bool{"deploy": true}, // true = optional (lazy)
+		},
+		{
+			name:      ".ready() — hard (no .orValue())",
+			expr:      "deploy.ready()",
+			vars:      []string{"deploy"},
+			scopeVars: map[string]bool{"deploy": true},
+			want:      map[string]bool{"deploy": false},
+		},
+		{
+			name:      ".updated() — hard (no .orValue())",
+			expr:      "deploy.updated()",
+			vars:      []string{"deploy"},
+			scopeVars: map[string]bool{"deploy": true},
+			want:      map[string]bool{"deploy": false},
+		},
+		{
+			name:      "direct + .ready() on same var — both hard",
+			expr:      "deploy.ready() ? deploy.status.replicas : 0",
+			vars:      []string{"deploy"},
+			scopeVars: map[string]bool{"deploy": true},
+			want:      map[string]bool{"deploy": false}, // both are direct access
+		},
+		{
+			name:      "two vars — both direct",
+			expr:      "deploy.ready() && svc.status.ready",
+			vars:      []string{"deploy", "svc"},
+			scopeVars: map[string]bool{"deploy": true, "svc": true},
+			want:      map[string]bool{"deploy": false, "svc": false},
+		},
+		{
+			name:      "bare identifier — direct",
+			expr:      "deploy",
+			vars:      []string{"deploy"},
+			scopeVars: map[string]bool{"deploy": true},
+			want:      map[string]bool{"deploy": false},
+		},
+		{
+			name:      "chained optional select — lazy",
+			expr:      "deploy.?metadata.?name.orValue('')",
+			vars:      []string{"deploy"},
+			scopeVars: map[string]bool{"deploy": true},
+			want:      map[string]bool{"deploy": true},
+		},
+		{
+			name:      "comprehension iter var not classified",
+			expr:      "items.filter(i, i.ready())",
+			vars:      []string{"items"},
+			scopeVars: map[string]bool{"items": true},
+			want:      map[string]bool{"items": false}, // items is accessed via .filter() which is direct (comprehension iter range)
+		},
+		{
+			name:      "non-scope var ignored",
+			expr:      "local.status.ready",
+			vars:      []string{"local"},
+			scopeVars: map[string]bool{"deploy": true}, // local is NOT a scope var
+			want:      map[string]bool{},
+		},
+		{
+			name:      "literal only — empty",
+			expr:      `"hello"`,
+			vars:      []string{},
+			scopeVars: map[string]bool{},
+			want:      map[string]bool{},
+		},
+		{
+			name:      ".ready() in && chain — both hard (no .orValue())",
+			expr:      "a.ready() && b.ready()",
+			vars:      []string{"a", "b"},
+			scopeVars: map[string]bool{"a": true, "b": true},
+			want:      map[string]bool{"a": false, "b": false},
+		},
+		{
+			name:      ".ready().orValue() — lazy",
+			expr:      "deploy.ready().orValue(false)",
+			vars:      []string{"deploy"},
+			scopeVars: map[string]bool{"deploy": true},
+			want:      map[string]bool{"deploy": true},
+		},
+		{
+			name:      ".updated().orValue() — lazy",
+			expr:      "deploy.updated().orValue(false)",
+			vars:      []string{"deploy"},
+			scopeVars: map[string]bool{"deploy": true},
+			want:      map[string]bool{"deploy": true},
+		},
+		{
+			name:      ".ready().orValue() and .ready() on different vars",
+			expr:      "a.ready().orValue(false) && b.ready()",
+			vars:      []string{"a", "b"},
+			scopeVars: map[string]bool{"a": true, "b": true},
+			want:      map[string]bool{"a": true, "b": false},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testAccessModeEnv(t, tt.vars...)
+			parsed, issues := env.Parse(tt.expr)
+			require.NoError(t, issues.Err())
+			got := classifyAccessModes(parsed.NativeRep().Expr(), tt.scopeVars, nil)
+
+			// Normalize empty maps for comparison.
+			if len(got) == 0 {
+				got = map[string]bool{}
+			}
+			if len(tt.want) == 0 {
+				tt.want = map[string]bool{}
+			}
+
+			assert.Equal(t, tt.want, got, "classifyAccessModes(%q)", tt.expr)
 		})
 	}
 }

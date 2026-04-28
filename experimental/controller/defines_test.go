@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+
 	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
 	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
 	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
@@ -38,7 +40,7 @@ func TestDefinesCycleDetection(t *testing.T) {
 			},
 		}, graphpkg.NodeTypeTemplate),
 	}
-	_, err := dagpkg.BuildDAG(nodes, nil)
+	_, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, compiler.ErrDependencyError)
 }
@@ -62,15 +64,15 @@ func TestDefinesChain(t *testing.T) {
 			},
 		}, graphpkg.NodeTypeTemplate),
 	}
-	dag, err := dagpkg.BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, len(dag.Levels))
 	assert.Contains(t, dag.Levels[0], dag.Index["a"])
 	assert.Contains(t, dag.Levels[1], dag.Index["b"])
 	assert.Contains(t, dag.Levels[2], dag.Index["c"])
-	assert.True(t, dag.Nodes[dag.Index["b"]].Dependencies["a"])
-	assert.True(t, dag.Nodes[dag.Index["c"]].Dependencies["b"])
+	assert.Equal(t, graph.DepHard, dag.Nodes[dag.Index["b"]].Dependencies["a"])
+	assert.Equal(t, graph.DepHard, dag.Nodes[dag.Index["c"]].Dependencies["b"])
 }
 
 // ---------------------------------------------------------------------------

@@ -151,8 +151,7 @@ node is a logical parent that aggregates child outputs. Each child is a real nod
 resource. Child identity is derived from the parent's ID combined with the rendered resource key
 (GVK + namespace + name).
 
-`.ready()` and `.updated()` on the parent aggregate with `.all()` — true when every child satisfies
-the condition.
+The parent is ready when all children are ready, and updated when all children are updated.
 
 For `def:` nodes, forEach produces an array of values instead of managed resources — no children
 are created.
@@ -320,12 +319,6 @@ includeWhen toggle, or forEach scale-down.
     - ${snapshot.status.readyToUse == true}
 ```
 
-## Dependencies
-
-Dependencies are inferred from CEL expression references. If node B's template contains
-`${A.metadata.name}`, B depends on A. The dependency graph must be acyclic — cycles are rejected at
-compile time. Nodes with no dependency relationship are independent and are processed in parallel.
-
 ## CEL Functions
 
 Any object in scope exposes functions maintained by the graph controller.
@@ -335,6 +328,56 @@ Any object in scope exposes functions maintained by the graph controller.
 - **`.dependencies()`** — returns the scope values of all dependency nodes as a list.
   Enables `${node.dependencies().all(d, d.ready())}` — gate until every dependency is ready without
   naming them.
+
+## Dependencies
+
+Dependencies are inferred from CEL expression references. If node B's template contains
+`${A.metadata.name}`, B depends on A. A consumer re-evaluates when the specific fields it depends on
+change — not on every change to the dependency.
+
+The dependency graph must be acyclic — cycles are rejected at compile time. Nodes with no dependency
+relationship are independent and processed in parallel. All dependencies are hard by default — the
+consumer waits for each dependency to be in scope before evaluating.
+
+## Lazy Evaluation
+
+A node that depends on another waits for it before evaluating. Some expressions have a meaningful
+value even when a dependency is absent — a status condition can report `Unknown` while the nodes it
+depends on are still being resolved.
+
+Lazy dependencies are optional values in the evaluation context. CEL's optional types handle absent
+data natively — `?` for field access, `.orValue()` for defaults:
+
+```yaml
+- id: deployment
+  template: ...
+
+- id: appStatus
+  patch:
+    status:
+      conditions:
+        - type: DeploymentReady
+          status: ${deployment.ready().orValue(false) ? 'True' : 'Unknown'}
+          message: ${deployment.ready().orValue(false)
+            ? 'Deployment available'
+            : 'Waiting for deployment'}
+      replicas: ${deployment.?status.?availableReplicas.orValue(0)}
+```
+
+`appStatus` evaluates immediately. While `deployment` is absent, `.ready().orValue(false)` returns
+`false` — the condition reports `Unknown`, and `.?replicas.orValue(0)` returns `0`. When `deployment`
+completes and becomes ready, the consumer re-evaluates and the condition flips to `True`.
+
+A lazy dependency does not make the consumer wait — it evaluates when its hard dependencies are
+satisfied, regardless of whether lazy dependencies are present. `.ready()` on a hard dep returns
+concrete `bool`. `.ready()` on a lazy dep (optional receiver) returns `optional(bool)` — the user
+chains `.orValue(false)` to unwrap. Field access uses CEL optional types:
+`.?field.orValue(default)` returns the default when the dependency is absent. When a lazy dependency
+later completes, the consumer re-evaluates.
+
+The compiler infers which dependencies are lazy from the expression syntax — a dependency accessed
+only through `?.`, `[?]`, or `.ready().orValue()` / `.updated().orValue()` is lazy; a dependency
+accessed directly (including bare `.ready()` without `.orValue()`) is hard.
 
 ## Nested Graphs
 

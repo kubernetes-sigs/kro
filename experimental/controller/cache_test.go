@@ -304,7 +304,7 @@ func TestResourceCache(t *testing.T) {
 // TestSpecHashCoversCompilationInputs proves that graph.GraphSpec.Hash() is
 // sensitive to every field that feeds into compileGraphSpec. Mutating any
 // single compilation input must produce a different hash. Fields populated
-// by BuildDAG (Dependencies, DepPaths, SelfPaths, ReadinessDeps) are
+// by BuildDAG (Dependencies, DepPaths, SelfPaths) are
 // derived outputs and intentionally excluded from the hash.
 func TestSpecHashCoversCompilationInputs(t *testing.T) {
 	// Baseline spec: one node with every compilation-relevant field populated.
@@ -405,7 +405,7 @@ func TestSpecHashCoversCompilationInputs(t *testing.T) {
 	// compilation, this count must be updated. The 7 compilation inputs
 	// are: ID, Template, ForEach, Finalizes, IncludeWhen, ReadyWhen,
 	// PropagateWhen. The 4 derived fields (Dependencies, DepPaths,
-	// SelfPaths, ReadinessDeps) are populated by BuildDAG and excluded.
+	// SelfPaths) are populated by BuildDAG and excluded.
 	const compilationInputCount = 7
 	const derivedFieldCount = 4
 	const totalNodeFields = compilationInputCount + derivedFieldCount

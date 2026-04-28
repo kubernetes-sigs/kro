@@ -49,7 +49,7 @@ func TestSetStateDoesNotPropagate(t *testing.T) {
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"ref": "${b.metadata.name}"}}},
 	}
-	dag, err := dagpkg.BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
 	states := []dagpkg.NodeState{dagpkg.NodeExcluded, dagpkg.NodeError, dagpkg.NodePending, dagpkg.NodeConflict, dagpkg.NodeSystemError, dagpkg.NodeReady, dagpkg.NodeNotReady}
@@ -74,7 +74,7 @@ func TestSummaryCountsBlockedState(t *testing.T) {
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 	}
-	dag, err := dagpkg.BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
 	plan := dagpkg.NewPlanState(dag)
@@ -143,7 +143,7 @@ func TestTryDispatchPrecedence_ExcludedOverBlockedOverPending(t *testing.T) {
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}}},
 		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"a": "${a.metadata.name}", "b": "${b.metadata.name}"}}},
 	}
-	dag, err := dagpkg.BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -212,7 +212,7 @@ func TestPruneOrderReverseDependency(t *testing.T) {
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 		{ID: "c", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "c"}, "data": map[string]any{"ref": "${b.metadata.name}"}}},
 	}
-	dag, err := dagpkg.BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
 	keys := []string{
@@ -237,7 +237,7 @@ func TestPruneOrderUnmatchedKeysFirst(t *testing.T) {
 	nodes := []graphpkg.Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 	}
-	dag, err := dagpkg.BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
 	keys := []string{
@@ -259,7 +259,7 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
 		{ID: "b", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "b"}, "data": map[string]any{"ref": "${a.metadata.name}"}}},
 	}
-	dag, err := dagpkg.BuildDAG(nodes, nil)
+	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
 	keys := []string{
@@ -1885,9 +1885,11 @@ func TestBareIdentifierForEachDependency(t *testing.T) {
 
 	// The consumer node must depend on both "items" (bare forEach reference)
 	// and "source" (field access in template body).
-	assert.True(t, consumerNode["items"],
+	_, hasItems := consumerNode["items"]
+	assert.True(t, hasItems,
 		"consumer must depend on 'items' (bare identifier in forEach expression)")
-	assert.True(t, consumerNode["source"],
+	_, hasSource := consumerNode["source"]
+	assert.True(t, hasSource,
 		"consumer must depend on 'source' (field access in template body)")
 
 	// Verify the reverse: items.Dependents must include consumer.
@@ -1900,4 +1902,212 @@ func TestBareIdentifierForEachDependency(t *testing.T) {
 	}
 	assert.True(t, found,
 		"dag.Dependents['items'] must include 'consumer' for propagation triggers to work")
+}
+
+// ---------------------------------------------------------------------------
+// Lazy dependency evaluation tests
+//
+// These tests verify the lazy dependency (DepLazy) behavior defined in
+// 005-reconciliation.md § Dependencies: "Lazy dependencies are always in
+// scope as optional values." and 004-compilation.md: "classification is
+// per-consumer."
+// ---------------------------------------------------------------------------
+
+// TestLazyDepDoesNotGateDispatch proves that a lazy dependency (DepLazy)
+// does not prevent a consumer from dispatching. Only hard dependencies
+// gate dispatch. Per 005-reconciliation.md § Dependencies: "Lazy
+// dependencies are always in scope as optional values."
+func TestLazyDepDoesNotGateDispatch(t *testing.T) {
+	// Node C depends on A (hard, direct field access) and B (lazy, .ready() only)
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
+			{ID: "a", Template: map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "a"},
+			}},
+			{ID: "b", Template: map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "b"},
+			}},
+			{ID: "c", Template: map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "c"},
+				"data": map[string]any{
+					"a_ref":   "${a.metadata.name}",                         // hard dep on A (direct field access)
+					"b_ready": "${b.ready().orValue(false) ? 'yes' : 'no'}", // lazy dep on B (.ready().orValue() only)
+				},
+			}},
+		},
+	}
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
+	require.NoError(t, err)
+	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
+
+	// Verify classification
+	cIdx := dag.Index["c"]
+	assert.Equal(t, graphpkg.DepHard, dag.Nodes[cIdx].Dependencies["a"], "a should be hard dep")
+	assert.Equal(t, graphpkg.DepLazy, dag.Nodes[cIdx].Dependencies["b"], "b should be lazy dep")
+
+	// A is ready, B is pending — C should still dispatch because B is lazy.
+	state := newInstanceState(compiled)
+	plan := dagpkg.NewPlanState(dag)
+	eval := newEvaluator(state)
+
+	triggered := make(map[string]bool, len(dag.Nodes))
+	for i := range dag.Nodes {
+		triggered[dag.Nodes[i].ID] = true
+	}
+
+	w := &walkState{
+		ctx:                      t.Context(),
+		dag:                      dag,
+		plan:                     plan,
+		state:                    state,
+		eval:                     eval,
+		triggered:                triggered,
+		resyncTriggered:          map[string]bool{},
+		propagationTriggered:     map[string]bool{},
+		lazyPropagationTriggered: map[string]bool{},
+		dispatched:               map[int]bool{},
+		outputsReady:             map[string]bool{},
+		results:                  make(chan nodeResult, 16),
+	}
+
+	plan.SetState(dag, "a", dagpkg.NodeReady)
+	plan.SetState(dag, "b", dagpkg.NodePending) // B is pending — lazy dep
+
+	w.tryDispatch(cIdx)
+	// C should NOT be NodePending — it dispatches because B is lazy (doesn't gate).
+	// tryDispatch only checks hard deps; lazy dep B=Pending is invisible to gating.
+	assert.NotEqual(t, dagpkg.NodePending, plan.States["c"],
+		"lazy dep B=Pending should not block C from dispatching")
+}
+
+// TestLazyDepClassification_MixedAccess proves that the same dependency
+// gets different DepKind classifications from different consumers based
+// on expression syntax. Per 004-compilation.md: classification is
+// per-consumer.
+func TestLazyDepClassification_MixedAccess(t *testing.T) {
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
+			{ID: "deploy", Template: map[string]any{
+				"apiVersion": "apps/v1", "kind": "Deployment",
+				"metadata": map[string]any{"name": "deploy"},
+			}},
+			// Consumer A: accesses deploy only via .ready().orValue() → DepLazy
+			{ID: "status", Def: map[string]any{
+				"state": "${deploy.ready().orValue(false) ? 'ACTIVE' : 'PENDING'}",
+			}},
+			// Consumer B: accesses deploy directly → DepHard
+			{ID: "service", Template: map[string]any{
+				"apiVersion": "v1", "kind": "Service",
+				"metadata": map[string]any{"name": "${deploy.metadata.name}"},
+			}},
+		},
+	}
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
+	require.NoError(t, err)
+	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
+
+	statusIdx := dag.Index["status"]
+	serviceIdx := dag.Index["service"]
+
+	assert.Equal(t, graphpkg.DepLazy, dag.Nodes[statusIdx].Dependencies["deploy"],
+		"status accesses deploy only via .ready().orValue() → DepLazy")
+	assert.Equal(t, graphpkg.DepHard, dag.Nodes[serviceIdx].Dependencies["deploy"],
+		"service accesses deploy directly → DepHard")
+}
+
+// TestLazyDepOptionalScope_AbsentReturnsDefault proves that when a lazy
+// dependency is absent (optional.none in scope), field access through ?.
+// and .orValue() returns the default value, and .ready() returns false.
+// Per 005-reconciliation.md: "Lazy dependencies are always in scope as
+// optional values."
+func TestLazyDepOptionalScope_AbsentReturnsDefault(t *testing.T) {
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
+			{ID: "deploy", Template: map[string]any{
+				"apiVersion": "apps/v1", "kind": "Deployment",
+				"metadata": map[string]any{"name": "deploy"},
+			}},
+			{ID: "status", Def: map[string]any{
+				"replicas": "${deploy.?status.?availableReplicas.orValue(0)}",
+				"ready":    "${deploy.ready().orValue(false) ? 'yes' : 'no'}",
+			}},
+		},
+	}
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
+	require.NoError(t, err)
+	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
+
+	// Verify deploy is lazy for status
+	statusIdx := dag.Index["status"]
+	statusNode := &dag.Nodes[statusIdx]
+	require.Equal(t, graphpkg.DepLazy, statusNode.Dependencies["deploy"])
+
+	// Create evaluator with deploy ABSENT from scope (lazy dep not yet available).
+	// snapshotFor will wrap the absent lazy dep as optional.none().
+	state := newInstanceState(compiled)
+	eval := newEvaluator(state)
+	// Don't put "deploy" in scope — it's absent.
+
+	worker := eval.snapshotFor(statusNode, state)
+
+	// .ready().orValue(false) on absent lazy dep → false
+	readyVal, err := compiled.Eval("deploy.ready().orValue(false) ? 'yes' : 'no'", worker.scope)
+	require.NoError(t, err)
+	assert.Equal(t, "no", readyVal, ".ready().orValue(false) on absent lazy dep should return false")
+
+	// ?.field.orValue() on absent lazy dep → default value
+	replicasVal, err := compiled.Eval("deploy.?status.?availableReplicas.orValue(0)", worker.scope)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), replicasVal, "?.orValue(0) on absent lazy dep should return 0")
+}
+
+// TestLazyDepOptionalScope_PresentReturnsRealData proves that when a lazy
+// dependency becomes available, expression evaluation sees the real data
+// through the optional wrapper. This tests the absent→present transition.
+func TestLazyDepOptionalScope_PresentReturnsRealData(t *testing.T) {
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{
+			{ID: "deploy", Template: map[string]any{
+				"apiVersion": "apps/v1", "kind": "Deployment",
+				"metadata": map[string]any{"name": "deploy"},
+			}},
+			{ID: "status", Def: map[string]any{
+				"replicas": "${deploy.?status.?availableReplicas.orValue(0)}",
+				"ready":    "${deploy.ready().orValue(false) ? 'yes' : 'no'}",
+			}},
+		},
+	}
+	compiled, err := compiler.CompileGraphSpec(spec, nil)
+	require.NoError(t, err)
+	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
+
+	statusIdx := dag.Index["status"]
+	statusNode := &dag.Nodes[statusIdx]
+	require.Equal(t, graphpkg.DepLazy, statusNode.Dependencies["deploy"])
+
+	// Create evaluator with deploy PRESENT in scope with real data.
+	// snapshotFor will wrap the present lazy dep as optional.of(value).
+	state := newInstanceState(compiled)
+	eval := newEvaluator(state)
+	eval.scope["deploy"] = map[string]any{
+		"status": map[string]any{
+			"availableReplicas": int64(3),
+		},
+		"__ready": true,
+	}
+
+	worker := eval.snapshotFor(statusNode, state)
+
+	// .ready().orValue(false) on present lazy dep → true (deploy has __ready: true)
+	readyVal, err := compiled.Eval("deploy.ready().orValue(false) ? 'yes' : 'no'", worker.scope)
+	require.NoError(t, err)
+	assert.Equal(t, "yes", readyVal, ".ready().orValue(false) on present lazy dep should return true")
+
+	// ?.field.orValue() on present lazy dep → real value
+	replicasVal, err := compiled.Eval("deploy.?status.?availableReplicas.orValue(0)", worker.scope)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), replicasVal, "?.orValue(0) on present lazy dep should return 3")
 }

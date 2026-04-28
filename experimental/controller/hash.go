@@ -174,8 +174,19 @@ func hashNodeInputs(node *graph.Node, scope map[string]any) (string, error) {
 	hs.buf = hs.buf[:0]
 
 	// Process dependencies in sorted order for deterministic hashing.
+	// Lazy dep paths are excluded — their availability in the coordinator's
+	// scope is timing-dependent (they may or may not have been processed
+	// in this walk). Changes to lazy deps propagate through the output-hash
+	// chain: the dep's self-paths include the referenced fields, so when
+	// the dep's data changes, its output-hash changes, triggering the
+	// consumer via propagation.
+	hasHardDeps := false
 	depIDs := sortedMapKeys(node.DepPaths)
 	for _, depID := range depIDs {
+		if node.Dependencies[depID] == graph.DepLazy {
+			continue
+		}
+		hasHardDeps = true
 		paths := node.DepPaths[depID]
 		depData, ok := scope[depID]
 		if !ok {
@@ -193,6 +204,14 @@ func hashNodeInputs(node *graph.Node, scope map[string]any) (string, error) {
 		for _, fp := range paths {
 			hashFieldPath(hs, depID, fp, depMap)
 		}
+	}
+
+	// If all dep paths were lazy (skipped), there's nothing to hash.
+	// Return "" to disable the eval-hash skip check — lazy dep changes
+	// propagate through the output-hash chain, not the input-hash.
+	if !hasHardDeps {
+		hashStatePool.Put(hs)
+		return "", nil
 	}
 
 	h := fnv.New64a()
@@ -311,7 +330,7 @@ func hashMetadataFiltered(hs *hashState, md map[string]any) {
 // in each per-item cached hash as a prefix. When context changes but
 // collection items are stable, the prefix differs and all cached hashes
 // become stale — forcing re-evaluation.
-func hashForEachContext(scope map[string]any, deps map[string]bool) string {
+func hashForEachContext(scope map[string]any, deps map[string]graph.DepKind) string {
 	h := fnv.New64a()
 	depIDs := make([]string, 0, len(deps))
 	for id := range deps {

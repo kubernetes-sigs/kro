@@ -270,9 +270,18 @@ func TestCollectionMemberRelabeledOutOfSelector(t *testing.T) {
 	}
 	t.Log("Both copies created")
 
+	// Wait for the graph's watch informer to fully sync. The informer
+	// starts at the end of the first reconcile; its initial list+watch
+	// must complete before external mutations will be observed. Poll
+	// until the copies have settled (stable resourceVersion) rather
+	// than guessing a sleep duration.
+	cmGVK := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+	for _, name := range []string{"item-a-copy", "item-b-copy"} {
+		require.NoError(t, waitForSettle(ctx, k8sClient, cmGVK, types.NamespacedName{Name: name, Namespace: ns}))
+	}
+
 	// Relabel item-b so it no longer matches the selector.
 	// The Watch coordinator should route this via oldLabels matching.
-	cmGVK := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
 	require.NoError(t, updateWithRetry(ctx, k8sClient, cmGVK, types.NamespacedName{Name: "item-b", Namespace: ns}, func(obj *unstructured.Unstructured) {
 		obj.SetLabels(map[string]string{"tier": "backend"})
 	}))

@@ -31,7 +31,9 @@ PASSING_COMPAT_FILES := \
   externalref_test.go \
   externalref_watch_test.go \
   externalref_deletion_test.go \
-  unknown_fields_test.go
+  unknown_fields_test.go \
+  instance_conditions_test.go \
+  include_when_test.go
 
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec

@@ -161,6 +161,12 @@ type CompiledGraph struct {
 	// reverts to vacuously-true on that path.
 	CollectionIDs map[string]bool
 
+	// ChildTopologies maps forEach node ID → pre-compiled child topological
+	// order, populated by precompileExpressionChildGraphs. Available before
+	// any child Graph CR exists. Nil when no expression-valued child Graphs
+	// exist.
+	ChildTopologies map[string][]string
+
 	// resourceSchemas maps node ID → resolved OpenAPI schema. Used at Eval
 	// time to wrap scope entries via UnstructuredToVal so schema-typed
 	// fields (e.g. Secret data values declared format:"byte") arrive in

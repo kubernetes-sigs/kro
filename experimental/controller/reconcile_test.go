@@ -117,7 +117,7 @@ func newTestWalkState(t *testing.T, dag *dagpkg.DAG) *walkState {
 		dag:                  dag,
 		plan:                 plan,
 		state:                newInstanceState(compiled),
-		eval:                 &evaluator{compiled: compiled, scope: map[string]any{}},
+		eval:                 &evaluator{compiled: compiled, scope: map[string]any{}, nodeReady: map[string]bool{}},
 		triggered:            triggered,
 		propagationTriggered: map[string]bool{},
 		dispatched:           map[int]bool{},
@@ -352,26 +352,27 @@ func TestClassifyAPIErrorDefault(t *testing.T) {
 }
 
 // TestParseNodeListEnforcesValidNodeIDs verifies that parseNodeList rejects
-// node IDs that are not valid lower camelCase identifiers. Node IDs must
-// start with a lowercase letter and contain only alphanumeric characters.
+// node IDs that are not valid CEL identifiers. Stricter naming conventions
+// (e.g., lower camelCase for RGD resources) are enforced by the consumer.
 func TestParseNodeListEnforcesValidNodeIDs(t *testing.T) {
 	tests := []struct {
 		name    string
 		id      string
 		wantErr bool
 	}{
-		// Valid cases — must not be rejected
+		// Valid cases — accepted by the parser (valid CEL identifiers)
 		{name: "simple alphanumeric", id: "deploy", wantErr: false},
 		{name: "single character", id: "a", wantErr: false},
 		{name: "camelCase", id: "myApp2v3", wantErr: false},
 		{name: "long but valid", id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", wantErr: false},
+		{name: "starts with uppercase", id: "MyResource", wantErr: false},
+		{name: "underscore", id: "foo_bar", wantErr: false},
+		{name: "multiple underscores", id: "prstatus_test_app_uat", wantErr: false},
+		{name: "leading underscore", id: "_foo", wantErr: false},
 
-		// Invalid cases — must be rejected
+		// Invalid cases — not valid CEL identifiers
 		{name: "empty string", id: "", wantErr: true},
-		{name: "starts with uppercase", id: "MyResource", wantErr: true},
 		{name: "starts with digit", id: "123resource", wantErr: true},
-		{name: "underscore", id: "foo_bar", wantErr: true},
-		{name: "multiple underscores", id: "prstatus_test_app_uat", wantErr: true},
 		{name: "dot", id: "foo.bar", wantErr: true},
 		{name: "space", id: "foo bar", wantErr: true},
 		{name: "hyphen", id: "my-app", wantErr: true},

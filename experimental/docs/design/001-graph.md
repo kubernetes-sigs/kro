@@ -510,9 +510,25 @@ status:
       reason: Ready
       message: "All 3 resources reconciled"
       lastTransitionTime: "2025-01-15T10:30:00Z"
+  topologicalOrder:
+    nodes: ["schema", "deployment", "service", "statusPatch"]
 ```
 
-The Graph's status contains only controller-managed conditions. There are no user-defined status
+### Topological Order
+
+`status.topologicalOrder` is a map with the key `nodes` holding the Graph's own DAG in topological
+order. When the Graph pre-compiles a forEach child Graph, the child's topology is stored as a
+sibling key named after the forEach node:
+
+```yaml
+topologicalOrder:
+  nodes: ["a", "b", "c"]
+  b: ["x", "y", "z"]
+```
+
+The child's topology is available before any child Graph CR exists.
+
+The Graph's status contains only controller-managed fields. There are no user-defined status
 fields on the Graph itself. User-defined status (e.g., `deploymentReady`, `address`) lives on custom
 resource types and is written via `patch:` nodes targeting the custom resource's status subresource.
 

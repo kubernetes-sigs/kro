@@ -53,6 +53,13 @@ type reconcileState struct {
 	// Finalization: "FinalizerSkipped is not an error — finalization was
 	// bypassed because there was nothing to finalize."
 	nodeNotes []string
+
+	// topologicalOrder is written to Graph CR status. It has the structure:
+	//   {"nodes": ["a", "b", ...], "forEachNodeID": ["child1", "child2", ...]}
+	// "nodes" is the parent DAG's own topological order. Each forEach node
+	// that has a pre-compiled child Graph gets a sibling key mapping to
+	// the child's topology.
+	topologicalOrder map[string]any
 }
 
 // deriveCompiledCondition computes the Compiled condition.
@@ -187,6 +194,9 @@ func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.
 			compiledCondition,
 			readyCondition,
 		},
+	}
+	if state.topologicalOrder != nil {
+		status["topologicalOrder"] = state.topologicalOrder
 	}
 
 	// Skip the status write if nothing changed. Compare via JSON to avoid

@@ -229,11 +229,29 @@ func (r *GraphReconciler) precompileExpressionChildGraphs(ctx context.Context, n
 		}
 		childSpec := &graphpkg.GraphSpec{Nodes: childNodes}
 		childTypeInfo := compiler.ResolveNodeTypes(childNodes, r.SchemaResolver)
-		if _, err := compiler.CompileGraphSpec(childSpec, childTypeInfo); err != nil {
+		childCompiled, err := compiler.CompileGraphSpec(childSpec, childTypeInfo)
+		if err != nil {
 			// All compilation errors surface — cycles, expression
 			// validation, type errors, etc. The compiler is the single
 			// source of truth for structural correctness.
 			return fmt.Errorf("node %q: child graph: %w", node.ID, err)
+		}
+
+		// Store the child topology keyed by the forEach node ID so the
+		// parent can expose it in status. The topology is identical for
+		// all instances of this forEach (it depends on the RGD spec, not
+		// the instance identity). Includes all child nodes — the consumer
+		// (e.g., rgd.yaml) filters out internal nodes it injected.
+		childTopo := childCompiled.Topology
+		if childTopo != nil {
+			childOrder := make([]string, len(childTopo.TopologicalOrder))
+			for i, idx := range childTopo.TopologicalOrder {
+				childOrder[i] = childSpec.Nodes[idx].ID
+			}
+			if compiled.ChildTopologies == nil {
+				compiled.ChildTopologies = make(map[string][]string)
+			}
+			compiled.ChildTopologies[node.ID] = childOrder
 		}
 	}
 	return nil

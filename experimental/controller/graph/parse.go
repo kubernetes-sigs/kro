@@ -10,12 +10,17 @@ import (
 )
 
 // nodeIDRe matches valid node IDs: lower camelCase identifiers.
-// Must start with a lowercase letter, followed by alphanumeric characters.
-var nodeIDRe = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*$`)
+// nodeIDRe matches valid Graph node identifiers: any valid CEL identifier.
+// Must start with a letter or underscore, followed by alphanumeric or underscore.
+// Stricter naming conventions (e.g., lower camelCase for RGD resources) are
+// enforced at the consumer level — see rgd.yaml's validation node.
+var nodeIDRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // apiVersionRe matches valid Kubernetes apiVersion strings: either a bare
 // version (v1, v1alpha1) or group/version (apps/v1, kro.run/v1alpha1).
-var apiVersionRe = regexp.MustCompile(`^([a-zA-Z0-9][a-zA-Z0-9.-]*/)?v[0-9]+([a-z]+[0-9]+)?$`)
+// The version qualifier is restricted to "alpha" or "beta" followed by
+// digits, matching upstream Kubernetes conventions.
+var apiVersionRe = regexp.MustCompile(`^([a-zA-Z0-9][a-zA-Z0-9.-]*/)?v[0-9]+(?:(?:alpha|beta)[0-9]+)?$`)
 
 // ExtractGraphSpec parses the spec from a Graph object.
 func ExtractGraphSpec(graphObj map[string]any) (*GraphSpec, error) {
@@ -365,8 +370,8 @@ func validateTemplate(tmpl map[string]any) error {
 	}
 	// Validate apiVersion format when it's a literal string (not a CEL
 	// expression). Must be either "version" (e.g., "v1") or "group/version"
-	// (e.g., "apps/v1"). The version must match v\d+(\w+\d+)? (e.g., v1,
-	// v1alpha1, v1beta2).
+	// (e.g., "apps/v1"). The version qualifier is restricted to "alpha" or
+	// "beta" followed by digits (e.g., v1, v1alpha1, v1beta2).
 	if av, ok := tmpl["apiVersion"].(string); ok && !strings.Contains(av, "${") {
 		if !apiVersionRe.MatchString(av) {
 			return fmt.Errorf("template: invalid apiVersion %q: must be \"version\" or \"group/version\" (e.g., v1, apps/v1)", av)

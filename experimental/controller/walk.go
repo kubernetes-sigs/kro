@@ -674,6 +674,16 @@ func (w *walkState) tryDispatch(idx int) {
 		w.plan.SetState(w.dag, node.ID, dagpkg.NodeExcluded)
 		w.state.previousPlanStates[node.ID] = dagpkg.NodeExcluded
 		delete(w.state.previousEvalHashes, node.ID)
+		// Excluded nodes advertise ready=true so that non-excluded status
+		// rollup expressions (e.g., ACTIVE/IN_PROGRESS) don't block on
+		// absent nodes. Both scope and nodeReady are set: scope covers
+		// the .ready() CEL function path (reads __ready from map),
+		// nodeReady covers the AST-rewritten __kroNodeReady lookup path.
+		// Persist to previousScope so the value survives across reconciles
+		// (skipNode restores from previousScope on subsequent cycles).
+		w.eval.scope[node.ID] = map[string]any{"__ready": true}
+		w.eval.nodeReady[node.ID] = true
+		w.state.previousScope[node.ID] = w.eval.scope[node.ID]
 		w.notifyDependents(node.ID)
 		return
 	}
@@ -836,6 +846,11 @@ func (w *walkState) tryDispatch(idx int) {
 			w.plan.SetState(w.dag, node.ID, dagpkg.NodeExcluded)
 			w.state.previousPlanStates[node.ID] = dagpkg.NodeExcluded
 			delete(w.state.previousEvalHashes, node.ID)
+			// Excluded nodes advertise ready=true — same rationale as
+			// contagious exclusion above.
+			w.eval.scope[node.ID] = map[string]any{"__ready": true}
+			w.eval.nodeReady[node.ID] = true
+			w.state.previousScope[node.ID] = w.eval.scope[node.ID]
 			w.notifyDependents(node.ID)
 			return
 		}

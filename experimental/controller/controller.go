@@ -690,12 +690,28 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// -----------------------------------------------------------------------
 	// Update status on Graph and revision
 	// -----------------------------------------------------------------------
+	// Build topological order map for status only when child topologies
+	// exist (e.g., RGD sub-Graphs with pre-compiled instance topology).
+	// Leaf Graphs skip this to minimize status overhead.
+	var topoOrder map[string]any
+	if compilationErr == nil && len(state.compiled.ChildTopologies) > 0 {
+		nodes := make([]string, len(dag.TopologicalOrder))
+		for i, idx := range dag.TopologicalOrder {
+			nodes[i] = dag.Nodes[idx].ID
+		}
+		topoOrder = map[string]any{"nodes": nodes}
+		for nodeID, childOrder := range state.compiled.ChildTopologies {
+			topoOrder[nodeID] = childOrder
+		}
+	}
+
 	rstate := &reconcileState{
-		compiled:    compilationErr == nil,
-		compiledErr: compilationErr,
-		PlanSummary: summary,
-		nodeErrors:  nodeErrors,
-		nodeNotes:   nodeNotes,
+		compiled:         compilationErr == nil,
+		compiledErr:      compilationErr,
+		PlanSummary:      summary,
+		nodeErrors:       nodeErrors,
+		nodeNotes:        nodeNotes,
+		topologicalOrder: topoOrder,
 	}
 	if err := r.updateStatus(ctx, graph, rstate); err != nil {
 		logger.Error(err, "status update")

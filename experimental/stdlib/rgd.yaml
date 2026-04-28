@@ -33,7 +33,7 @@ spec:
               storage: true
               schema:
                 openAPIV3Schema: >-
-                  ${simpleSchema.toOpenAPI({"types": {"ExternalRefMetadata": {"name": "string", "namespace": "string", "selector": "object"}, "ExternalRef": {"apiVersion": "string", "kind": "string", "metadata": "ExternalRefMetadata"}, "Resource": {"id": "string | required=true", "template": "any", "patch": "any", "ref": "any", "watch": "any", "def": "any", "externalRef": "ExternalRef", "readyWhen": "[]string", "includeWhen": "[]string", "propagateWhen": "[]string", "forEach": "[]map[string]string"}, "PrinterColumn": {"name": "string | required=true", "type": "string | required=true", "jsonPath": "string | required=true", "description": "string", "format": "string", "priority": "integer"}, "CRDMetadata": {"labels": "map[string]string", "annotations": "map[string]string"}}, "spec": {"schema": {"kind": "string | required=true pattern=\"^[A-Z][a-zA-Z0-9]{0,62}$\"", "apiVersion": "string", "group": "string | default=kro.run", "scope": "string | default=Namespaced", "spec": "object", "status": "object", "metadata": "CRDMetadata", "additionalPrinterColumns": "[]PrinterColumn"}, "resources": "[]Resource"}, "status": {"state": "string", "topologicalOrder": "[]string"}}, [])}
+                  ${simpleSchema.toOpenAPI({"types": {"ExternalRefMetadata": {"name": "string", "namespace": "string", "selector": "object"}, "ExternalRef": {"apiVersion": "string", "kind": "string", "metadata": "ExternalRefMetadata"}, "Resource": {"id": "string | required=true", "template": "any", "patch": "any", "ref": "any", "watch": "any", "def": "any", "externalRef": "ExternalRef", "readyWhen": "[]string", "includeWhen": "[]string", "propagateWhen": "[]string", "forEach": "[]map[string]string"}, "PrinterColumn": {"name": "string | required=true", "type": "string | required=true", "jsonPath": "string | required=true", "description": "string", "format": "string", "priority": "integer"}, "CRDMetadata": {"labels": "map[string]string", "annotations": "map[string]string"}}, "spec": {"schema": {"kind": "string | required=true pattern=\"^[A-Z][a-zA-Z0-9]{0,62}$\"", "apiVersion": "string", "group": "string | default=kro.run", "scope": "string | default=Namespaced", "spec": "object", "types": "object", "status": "object", "metadata": "CRDMetadata", "additionalPrinterColumns": "[]PrinterColumn"}, "resources": "[]Resource"}, "status": {"state": "string", "topologicalOrder": "[]string"}}, [])}
               subresources:
                 status: {}
               additionalPrinterColumns:
@@ -111,6 +111,10 @@ spec:
                     ? {"valid": false, "message": "forEach iterator conflicts with resource ID"}
                     : schema.?spec.?schema.?status.orValue({}).size() > 0 && schema.spec.schema.status.exists(k, !string(schema.spec.schema.status[k]).contains("${"))
                     ? {"valid": false, "message": "failed to build instance status schema: status fields without expressions are not supported"}
+                    : checks.resources.exists(r, !has(r.externalRef) && has(r.template) && (!has(r.template.apiVersion) || !has(r.template.kind) || !has(r.template.metadata)))
+                    ? {"valid": false, "message": "resource " + checks.resources.filter(r, !has(r.externalRef) && has(r.template) && (!has(r.template.apiVersion) || !has(r.template.kind) || !has(r.template.metadata)))[0].id + " is not a valid Kubernetes object: missing apiVersion, kind, or metadata"}
+                    : checks.resources.exists(r, !has(r.externalRef) && has(r.template) && has(r.template.apiVersion) && !string(r.template.apiVersion).contains("${") && !string(r.template.apiVersion).matches("^([a-zA-Z0-9][a-zA-Z0-9.-]*/)?v[0-9]+((?:alpha|beta)[0-9]+)?$"))
+                    ? {"valid": false, "message": "resource " + checks.resources.filter(r, !has(r.externalRef) && has(r.template) && has(r.template.apiVersion) && !string(r.template.apiVersion).contains("${") && !string(r.template.apiVersion).matches("^([a-zA-Z0-9][a-zA-Z0-9.-]*/)?v[0-9]+((?:alpha|beta)[0-9]+)?$"))[0].id + " has invalid apiVersion format"}
                     : {"valid": true, "message": ""}
                   }
 
@@ -200,7 +204,7 @@ spec:
                             : {}
                         )})
                       + schema.spec.resources.filter(r, !has(r.externalRef)).map(r, r.merge({
-                        "propagateWhen": has(r.propagateWhen) ? r.propagateWhen : ["${" + r.id + ".dependencies().all(d, d.ready())}"],
+                        "propagateWhen": r.?propagateWhen.orValue(r.?forEach.orValue([]).size() > 0 ? [] : ["${" + r.id + ".dependencies().all(d, d.ready())}"]),
                         "forceApply": true,
                         "template": r.template.merge({
                           "metadata": (has(r.template.metadata) ? r.template.metadata : {}).merge({
@@ -250,7 +254,6 @@ spec:
                   name: $${schema.metadata.name}
                 status:
                   state: '$${validation.result.valid && crd.ready().orValue(false) ? "Active" : "Inactive"}'
-                  topologicalOrder: '$${validation.result.valid ? schema.?spec.?resources.orValue([]).map(r, r.id) : []}'
                   conditions:
                     - type: Ready
                       status: '$${validation.result.valid && crd.ready().orValue(false) ? "True" : "False"}'
@@ -280,8 +283,9 @@ spec:
     # compilationStatus mirrors the sub-Graph's Compiled condition to the RGD.
     # When compilation fails, this node also claims Ready and state (with
     # Inactive / False) because the sub-Graph is inert and rgdStatus can't
-    # fire. When compilation succeeds, the patch includes only Compiled —
-    # SSA relinquishes Ready and state for rgdStatus to claim.
+    # fire. When compilation succeeds, the patch includes only Compiled and
+    # topologicalOrder — SSA relinquishes Ready and state for rgdStatus to
+    # claim.
     - id: compilationStatus
       forEach:
         - graph: ${rgds}
@@ -317,6 +321,7 @@ spec:
               "kind": "ResourceGraphDefinition",
               "metadata": {"name": graph.metadata.labels["kro.run/instance-name"]},
               "status": {
+                "topologicalOrder": graph.?status.?topologicalOrder.orValue({}).?instances.orValue([]).filter(id, id != "schema" && id != "rgdInstanceStatus"),
                 "conditions": [
                   {
                     "type": "Compiled",

@@ -163,6 +163,25 @@ ResourceGraphDefinition API. RGDs are translated into the same infrastructure as
 creation, instance watching, per-instance Graphs — but accept the upstream `spec.schema` +
 `spec.resources` shape instead of Kind's `spec.versions` + `spec.nodes`.
 
+### Validation
+
+An RGD is `Active` or `Inactive`. `Inactive` means the system detected a problem and will not
+create instances. The `Ready` condition carries the reason.
+
+**Resource IDs** must be lower camelCase (`^[a-z][a-zA-Z0-9]*$`), unique, and not reserved words
+(`spec`, `status`, `metadata`, `instance`, `self`, `kro`, etc.).
+
+**Template resources** must be valid Kubernetes objects: `apiVersion`, `kind`, and `metadata` are
+required. Literal `apiVersion` values must follow Kubernetes conventions (`v1`, `v1alpha1`,
+`apps/v1`). CEL expressions in these fields are evaluated at instance time.
+
+**Status fields** must be CEL expressions (`${...}`). Plain values are rejected.
+
+**ForEach iterators** must not collide with reserved words or resource IDs.
+
+**Expressions** must be valid CEL, reference existing nodes, and produce values assignable to the
+destination field's type. Cycles in the dependency graph are rejected.
+
 ## Constraints
 
 **Namespace scoping.** Collection watches (`watch:` nodes) follow k8s list/watch semantics: absent

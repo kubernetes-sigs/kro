@@ -3,6 +3,8 @@ kind: ConfigMap
 metadata:
   name: external-data
   namespace: upgrade-test
+  labels:
+    upgrade-test/collection: "true"
 data:
   appEnv: "production"
   logLevel: "info"

@@ -74,6 +74,11 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 		if _, ok := v.Value().(sentinels.Omit); ok {
 			return sentinels.Omit{}, nil
 		}
+		// Try ConvertToNative for custom types (like policy)
+		native, err := v.ConvertToNative(reflect.TypeOf((*interface{})(nil)).Elem())
+		if err == nil {
+			return native, nil
+		}
 		// For types we can't convert, return as is with an error
 		return v.Value(), fmt.Errorf("%w: %v", ErrUnsupportedType, v.Type())
 	}

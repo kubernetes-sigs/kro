@@ -638,7 +638,7 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 
 	obj := newConfigMapObject("demo", "default")
 	obj.SetLabels(map[string]string{"keep": "yes"})
-	controller.applyDecoratorLabels(rcx, obj, "configs", &CollectionInfo{Index: 1, Size: 3})
+	controller.applyDecoratorLabels(rcx, obj, "configs", &CollectionInfo{Index: 1, Size: 3}, krt.Policy{})
 
 	assert.Equal(t, "yes", obj.GetLabels()["keep"])
 	assert.Equal(t, "configs", obj.GetLabels()[metadata.NodeIDLabel])

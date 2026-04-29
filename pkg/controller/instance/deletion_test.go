@@ -66,7 +66,7 @@ func TestPlanNodesForDeletionSkipsUnresolvedIdentityAndPicksLastExistingNode(t *
 		Template: newDeploymentObject("demo", ""),
 	}
 
-	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(pendingNode, existingNode), newDeploymentObject("demo", "default"))
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(pendingNode, existingNode), withKROLabels(newDeploymentObject("demo", "default"), string(instance.GetUID()), "deploy"))
 	node, err := controller.planNodesForDeletion(rcx)
 	require.NoError(t, err)
 	require.NotNil(t, node)
@@ -262,7 +262,7 @@ func TestReconcileDeletionRequeuesWhileChildDeletionInFlight(t *testing.T) {
 		Template: newDeploymentObject("demo", ""),
 	}
 
-	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(node), newDeploymentObject("demo", "default"))
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(node), withKROLabels(newDeploymentObject("demo", "default"), string(instance.GetUID()), "deploy"))
 	err := controller.reconcileDeletion(rcx)
 	var retryAfter *requeue.RequeueNeededAfter
 	require.ErrorAs(t, err, &retryAfter)
@@ -388,7 +388,7 @@ func TestPlanNodesForDeletionObservesExternalRefRootBeforeManagedNode(t *testing
 	sourceCM.Object["data"] = map[string]interface{}{"managedName": "managed-deploy"}
 
 	// The managed resource exists under the name resolved from the external ref.
-	managedDeploy := newDeploymentObject("managed-deploy", "default")
+	managedDeploy := withKROLabels(newDeploymentObject("managed-deploy", "default"), string(instance.GetUID()), "deploy")
 
 	// Topological order: external first (root), then managed (leaf).
 	controller, rcx, _ := newControllerAndContext(t, instance,
@@ -449,7 +449,7 @@ func TestPlanNodesForDeletionObservesExternalCollectionRootBeforeManagedNode(t *
 	cm1.SetLabels(map[string]string{"app": "source"})
 	cm2 := newConfigMapObject("source-2", "default")
 	cm2.SetLabels(map[string]string{"app": "source"})
-	managedDeploy := newDeploymentObject("managed-deploy", "default")
+	managedDeploy := withKROLabels(newDeploymentObject("managed-deploy", "default"), string(instance.GetUID()), "deploy")
 
 	controller, rcx, _ := newControllerAndContext(t, instance,
 		newTestGraph(externalColNode, managedNode),

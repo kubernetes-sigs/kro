@@ -487,6 +487,12 @@ func (b *Builder) buildRGResource(
 		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
 	}
 
+	// 10. Parse lifecycle expression
+	lifecycleExpr, err := parseLifecycleExpression(rgResource.Lifecycle, rgResource.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// Determine node type.
 	nodeType := NodeTypeResource
 	if rgResource.ExternalRef != nil {
@@ -514,6 +520,7 @@ func (b *Builder) buildRGResource(
 		IncludeWhen: includeWhen,
 		ReadyWhen:   readyWhen,
 		ForEach:     forEachDimensions,
+		Lifecycle:   lifecycleExpr,
 	}
 	return node, resourceSchema, nil
 }
@@ -1108,6 +1115,7 @@ func lookupSchemaAtField(c *schema.Cache, s *spec.Schema, field string) *spec.Sc
 // - Template expressions (resource field values)
 // - includeWhen expressions (conditional resource creation)
 // - readyWhen expressions (resource readiness conditions)
+// - lifecycle expression (resource deletion policy)
 //
 // Uses the shared inspectorEnv for AST inspection and typed env for compilation.
 func validateAndCompileNode(bc *buildContext, node *Node, inspector *ast.Inspector, nodeSchema *spec.Schema) error {
@@ -1172,6 +1180,19 @@ func validateAndCompileNode(bc *buildContext, node *Node, inspector *ast.Inspect
 
 		if err := validateAndCompileReadyWhen(bc, readyEnv, node); err != nil {
 			return err
+		}
+	}
+
+	// Validate and compile lifecycle expression if present
+	if node.Lifecycle != nil {
+		// lifecycle expressions can only reference schema
+		allowedVars := []string{SchemaVarName}
+		if _, err := inspectExpressionRestricted(inspector, node.Lifecycle.Original, allowedVars); err != nil {
+			return fmt.Errorf("resource %q lifecycle: %w", node.Meta.ID, err)
+		}
+
+		if _, err := bc.compile(bc.env, node.Lifecycle); err != nil {
+			return fmt.Errorf("resource %q: compile lifecycle expression: %w", node.Meta.ID, err)
 		}
 	}
 
@@ -1391,4 +1412,20 @@ func collectNodeSchemas(c *schema.Cache, nodes map[string]*Node, nodeSchemas map
 		}
 	}
 	return result
+}
+
+// parseLifecycleExpression parses a lifecycle CEL expression string.
+func parseLifecycleExpression(lifecycleStr string, resourceID string) (*krocel.Expression, error) {
+	if lifecycleStr == "" {
+		return nil, nil
+	}
+
+	lifecycleExprs, err := parser.ParseConditionExpressions([]string{lifecycleStr})
+	if err != nil {
+		return nil, fmt.Errorf("parse lifecycle expression for resource %s: %w", resourceID, err)
+	}
+	if len(lifecycleExprs) > 0 {
+		return lifecycleExprs[0], nil
+	}
+	return nil, nil
 }

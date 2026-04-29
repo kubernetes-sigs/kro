@@ -231,6 +231,13 @@ spec:
                               items:
                                 type: string
                               type: array
+                            lifecycle:
+                              description: |-
+                                Lifecycle is a CEL expression that determines the lifecycle policy for this resource.
+                                Use the policy() builder to configure deletion behavior.
+                                Example: "${policy().withRetain()}" to keep the resource when the instance is deleted.
+                                Example with conditional: "${schema.spec.permanent ? policy().withRetain() : policy().withDelete()}"
+                              type: string
                             readyWhen:
                               description: |-
                                 ReadyWhen is a list of CEL expressions that determine when this resource is considered ready.

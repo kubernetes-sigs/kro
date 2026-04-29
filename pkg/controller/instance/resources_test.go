@@ -338,7 +338,7 @@ func TestProcessNodeCollectionTypes(t *testing.T) {
 	currentCollection := newConfigMapObject("one", "default")
 	currentCollection.SetLabels(map[string]string{
 		metadata.InstanceIDLabel: string(instance.GetUID()),
-		metadata.NodeIDLabel:     "configs",
+		metadata.NodeIDLabel:     metadata.SafeNodeID("configs"),
 	})
 	currentExternal := newConfigMapObject("ext", "default")
 	currentExternal.SetLabels(map[string]string{"app": "demo"})
@@ -409,7 +409,7 @@ func TestCollectionAndExternalCollectionProcessing(t *testing.T) {
 	current := newConfigMapObject("one", "default")
 	current.SetLabels(map[string]string{
 		metadata.InstanceIDLabel: string(instance.GetUID()),
-		metadata.NodeIDLabel:     "configs",
+		metadata.NodeIDLabel:     metadata.SafeNodeID("configs"),
 		"app":                    "demo",
 	})
 	matchingExternal := newConfigMapObject("ext", "default")
@@ -436,6 +436,30 @@ func TestCollectionAndExternalCollectionProcessing(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, v1alpha1.NodeStateSynced, extState.State)
+}
+
+func TestProcessCollectionNodeMatchesChildrenWithRawNodeIDLabel(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	_ = unstructured.SetNestedSlice(instance.Object, []interface{}{"one"}, "spec", "items")
+
+	collectionNode := newCollectionNodeForResources(t)
+
+	preHashChild := newConfigMapObject("one", "default")
+	preHashChild.SetLabels(map[string]string{
+		metadata.InstanceIDLabel: string(instance.GetUID()),
+		metadata.NodeIDLabel:     "configs",
+	})
+
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(collectionNode), preHashChild)
+
+	runtimeNode := rcx.Runtime.Nodes()[0]
+	desired, err := runtimeNode.GetDesired()
+	require.NoError(t, err)
+	resources, _, err := controller.processCollectionNode(rcx, runtimeNode, desired)
+	require.NoError(t, err)
+	require.Len(t, resources, 1)
+	assert.NotNil(t, resources[0].Current, "should match child with raw node-id label as current")
+	assert.Equal(t, "one", resources[0].Object.GetName())
 }
 
 func TestProcessExternalRefNodePaths(t *testing.T) {
@@ -641,10 +665,11 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 	controller.applyDecoratorLabels(rcx, obj, "configs", &CollectionInfo{Index: 1, Size: 3})
 
 	assert.Equal(t, "yes", obj.GetLabels()["keep"])
-	assert.Equal(t, "configs", obj.GetLabels()[metadata.NodeIDLabel])
+	assert.Equal(t, metadata.SafeNodeID("configs"), obj.GetLabels()[metadata.NodeIDLabel])
 	assert.Equal(t, "1", obj.GetLabels()[metadata.CollectionIndexLabel])
 	assert.Equal(t, string(instance.GetUID()), obj.GetLabels()[metadata.InstanceIDLabel])
 	assert.Empty(t, obj.GetLabels()[metadata.ManagedByLabelKey])
+	assert.Equal(t, "configs", obj.GetAnnotations()[metadata.NodeAnnotation])
 
 	require.NoError(t, controller.patchInstanceWithApplySetMetadata(rcx, applyset.Metadata{
 		ID:                   "demo",

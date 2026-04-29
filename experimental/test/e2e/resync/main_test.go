@@ -56,7 +56,7 @@ func TestMain(m *testing.M) {
 	defer logFile.Close()
 	fmt.Fprintf(os.Stderr, "resync test controller logs: %s\n", logPath)
 
-	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "experimental", "chart", "crds")
+	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "experimental", "crds")
 	testEnv = &envtest.Environment{
 		BinaryAssetsDirectory: resolveEnvtestAssets(),
 		CRDDirectoryPaths:     []string{chartCRDDir},
@@ -108,7 +108,7 @@ func TestMain(m *testing.M) {
 		panic("creating client: " + err.Error())
 	}
 
-	// No custom CRDs needed — chart/crds/ provides Graph, GraphRevision,
+	// No custom CRDs needed — crds/ provides Graph, GraphRevision,
 	// and Kind CRDs, and these tests only use ConfigMaps as managed resources.
 
 	healthAddr, cmd, err := startBinary(binaryPath, kubeconfigPath, logFile)

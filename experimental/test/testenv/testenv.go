@@ -44,7 +44,7 @@ import (
 type Environment struct {
 	// CRDDirectoryPaths are additional CRD directories to load into envtest
 	// (e.g., ACK CRDs for external ref tests). Graph and GraphRevision CRDs
-	// are always loaded from chart/crds/.
+	// are always loaded from crds/.
 	CRDDirectoryPaths []string
 
 	// ResyncInterval overrides the per-node resync timer interval for the
@@ -96,7 +96,7 @@ func (e *Environment) Start() (*rest.Config, error) {
 	}
 
 	// Start envtest with chart CRDs + any additional test CRDs.
-	chartCRDDir := filepath.Join(moduleRoot, "experimental", "chart", "crds")
+	chartCRDDir := filepath.Join(moduleRoot, "experimental", "crds")
 	crdPaths := append([]string{chartCRDDir}, e.CRDDirectoryPaths...)
 	e.testEnv = &envtest.Environment{
 		BinaryAssetsDirectory: ResolveEnvtestAssets(),

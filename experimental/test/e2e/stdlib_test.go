@@ -16,7 +16,7 @@ import (
 // Standard library integration tests
 //
 // These tests exercise the three stdlib types: Kind, Decorator, and Singleton.
-// CRDs are installed by envtest from chart/crds/, and stdlib resources are
+// CRDs are installed by envtest from crds/, and stdlib resources are
 // applied during test setup. By the time tests run, the type tower is
 // materialized:
 //

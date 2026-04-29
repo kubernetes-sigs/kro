@@ -63,7 +63,7 @@ vet: ## Run go vet against experimental code.
 
 .PHONY: run
 run: ## Run the graph controller locally (apply CRDs first).
-	cd $(ROOT) && kubectl apply -f experimental/chart/crds/
+	cd $(ROOT) && kubectl apply -f experimental/crds/
 	cd $(ROOT) && go run ./experimental/cmd/
 
 .PHONY: apply

@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 	// 3. Start envtest (kube-apiserver + etcd), logging to the shared file.
 	//    Chart CRDs (Graph, GraphRevision) are loaded by envtest.
 	// -----------------------------------------------------------------------
-	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "experimental", "chart", "crds")
+	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "experimental", "crds")
 	testEnv = &envtest.Environment{
 		BinaryAssetsDirectory: resolveEnvtestAssets(),
 		CRDDirectoryPaths:     []string{chartCRDDir},
@@ -142,7 +142,7 @@ func TestMain(m *testing.M) {
 
 	// -----------------------------------------------------------------------
 	// 4. Install test-specific CRDs (RGD, SimpleApp). Chart CRDs (Graph,
-	//    GraphRevision, Kind) are already loaded by envtest from chart/crds/.
+	//    GraphRevision, Kind) are already loaded by envtest from crds/.
 	// -----------------------------------------------------------------------
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	if err != nil {

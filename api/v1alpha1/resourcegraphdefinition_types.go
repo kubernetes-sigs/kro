@@ -14,6 +14,9 @@
 package v1alpha1
 
 import (
+	"bytes"
+	"strings"
+
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -120,7 +123,6 @@ type CRDMetadata struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// +kubebuilder:validation:XValidation:rule="(has(self.name) && !has(self.selector)) || (!has(self.name) && has(self.selector))",message="exactly one of name or selector must be provided"
 type ExternalRefMetadata struct {
 	// Name is the name of the external resource to reference.
 	// Mutually exclusive with Selector.
@@ -134,12 +136,27 @@ type ExternalRefMetadata struct {
 	//
 	// +kubebuilder:validation:Optional
 	Namespace string `json:"namespace,omitempty"`
+
 	// Selector is a label selector for collection external references.
 	// When set, all resources matching the selector are included.
+	// The selector may be a literal Kubernetes [metav1.LabelSelector] object or a full CEL
+	// expression that resolves to one at reconcile time.
+	//
 	// Mutually exclusive with Name.
 	//
 	// +kubebuilder:validation:Optional
-	Selector *metav1.LabelSelector `json:"selector,omitempty"`
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Selector runtime.RawExtension `json:"selector,omitempty"`
+}
+
+func (m ExternalRefMetadata) HasName() bool {
+	return strings.TrimSpace(m.Name) != ""
+}
+
+func (m ExternalRefMetadata) HasSelector() bool {
+	raw := bytes.TrimSpace(m.Selector.Raw)
+	return len(raw) > 0 && string(raw) != "null"
 }
 
 // ExternalRef is a reference to an external resource that already exists in the cluster.

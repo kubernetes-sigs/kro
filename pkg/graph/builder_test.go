@@ -24,7 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	apiservercel "k8s.io/apiserver/pkg/cel"
@@ -3847,9 +3846,27 @@ spec:
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{"app": "demo"},
-					},
+					Selector: toRawExtension(t, map[string]any{
+						"matchLabels": map[string]any{
+							"app": "demo",
+						},
+					}),
+				},
+			},
+		}, 0, true)
+		require.NoError(t, err)
+		assert.Equal(t, NodeTypeExternalCollection, node.Meta.Type)
+	})
+
+	t.Run("external selector CEL string becomes collection", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		node, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "external",
+			ExternalRef: &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: toRawExtension(t, "${schema.spec.selector}"),
 				},
 			},
 		}, 0, true)

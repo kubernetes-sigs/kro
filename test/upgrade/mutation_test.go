@@ -255,8 +255,9 @@ var _ = ginkgo.Describe("Post-Upgrade RGD Mutation", ginkgo.Ordered, func() {
 		// Skip RGDs intentionally mutated by other post-upgrade test suites:
 		//   - mutationRGDName: mutated by this suite (expected +1 GR)
 		//   - retentionRGDName: mutated by the rapid-mutations suite (GC'd to maxGraphRevisions)
+		//   - legacySelectorRGDName: mutated by the legacy-selector compatibility suite
 		for rgdName, currentCount := range grCountPerRGD {
-			if rgdName == mutationRGDName || rgdName == retentionRGDName {
+			if rgdName == mutationRGDName || rgdName == retentionRGDName || rgdName == legacySelectorRGDName {
 				continue
 			}
 			preCount := snapshot.GRCountPerRGD[rgdName]

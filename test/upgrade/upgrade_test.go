@@ -193,16 +193,21 @@ var _ = ginkgo.Describe("Post-Upgrade GraphRevision", ginkgo.Ordered, func() {
 		// post-upgrade mutations:
 		//   - mutationRGDName: exactly +1 (one deliberate mutation by mutation suite)
 		//   - retentionRGDName: capped at maxGraphRevisions (rapid-mutation suite)
+		//   - legacySelectorRGDName: exactly +1 (mutated by the legacy-selector
+		//     compatibility suite to force CRD regeneration)
 		//   - deletionRGDName: 0 or snapshot count (deletion suite may or may not have run)
 		//   - all others: unchanged from snapshot
 		for rgdName, preCount := range snapshot.GRCountPerRGD {
 			currentCount := currentGRCountPerRGD[rgdName]
+
 			var maxAllowed int
 			switch rgdName {
 			case mutationRGDName:
 				maxAllowed = min(preCount+1, maxGraphRevisions)
 			case retentionRGDName:
 				maxAllowed = min(preCount+retentionMutations, maxGraphRevisions)
+			case legacySelectorRGDName:
+				maxAllowed = preCount + 1
 			default:
 				maxAllowed = preCount
 			}

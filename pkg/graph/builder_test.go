@@ -25,6 +25,7 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	apiservercel "k8s.io/apiserver/pkg/cel"
@@ -4297,7 +4298,7 @@ func TestBuilderHelperCases(t *testing.T) {
 			name: "extractDependencies reports unknown functions",
 			run: func(t *testing.T) {
 				inspector := newUnitInspector(t, "resource")
-				_, _, err := extractDependencies(inspector, expr("missingFn()"), nil)
+				_, _, _, err := extractDependencies(inspector, expr("missingFn()"), nil)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "uses unknown functions")
 			},
@@ -4306,7 +4307,7 @@ func TestBuilderHelperCases(t *testing.T) {
 			name: "extractDependencies accepts omit as a known function",
 			run: func(t *testing.T) {
 				inspector := newUnitInspector(t, "schema", "resource")
-				deps, _, err := extractDependencies(inspector, expr("schema.spec.x != '' ? schema.spec.x : omit()"), nil)
+				deps, _, _, err := extractDependencies(inspector, expr("schema.spec.x != '' ? schema.spec.x : omit()"), nil)
 				require.NoError(t, err)
 				assert.Empty(t, deps, "omit() should not produce resource dependencies")
 			},
@@ -4315,7 +4316,7 @@ func TestBuilderHelperCases(t *testing.T) {
 			name: "extractDependencies accepts standalone omit call",
 			run: func(t *testing.T) {
 				inspector := newUnitInspector(t, "schema")
-				deps, _, err := extractDependencies(inspector, expr("omit()"), nil)
+				deps, _, _, err := extractDependencies(inspector, expr("omit()"), nil)
 				require.NoError(t, err)
 				assert.Empty(t, deps)
 			},
@@ -4325,9 +4326,35 @@ func TestBuilderHelperCases(t *testing.T) {
 			run: func(t *testing.T) {
 				disableOmitFeatureGate(t)
 				inspector := newUnitInspector(t, "schema")
-				_, _, err := extractDependencies(inspector, expr("omit()"), nil)
+				_, _, _, err := extractDependencies(inspector, expr("omit()"), nil)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "CELOmitFunction feature gate")
+			},
+		},
+		{
+			name: "extractDependencies detects function calls",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema")
+
+				// Expression with function call should return true
+				_, _, callsFn, err := extractDependencies(inspector, expr("size(schema.spec.items)"), nil)
+				require.NoError(t, err)
+				assert.True(t, callsFn, "expression with function call should set callsAtLeastOneFunction=true")
+
+				// Expression with only references should return false
+				_, _, callsFn, err = extractDependencies(inspector, expr("schema.spec.name"), nil)
+				require.NoError(t, err)
+				assert.False(t, callsFn, "expression with only references should set callsAtLeastOneFunction=false")
+
+				// Constant expression should return false
+				_, _, callsFn, err = extractDependencies(inspector, expr("'constant'"), nil)
+				require.NoError(t, err)
+				assert.False(t, callsFn, "constant expression should set callsAtLeastOneFunction=false")
+
+				// Operators don't count as function calls
+				_, _, callsFn, err = extractDependencies(inspector, expr("1 + 2"), nil)
+				require.NoError(t, err)
+				assert.False(t, callsFn, "operators should not set callsAtLeastOneFunction=true")
 			},
 		},
 		{
@@ -4414,4 +4441,98 @@ func TestBuilderHelperCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, tt.run)
 	}
+}
+
+func TestEvaluateAndReplaceConstants(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+
+	t.Run("constants are evaluated and replaced in template", func(t *testing.T) {
+		rgd := generator.NewResourceGraphDefinition("test-eval",
+			generator.WithSchema(
+				"TestApp", "v1alpha1",
+				map[string]interface{}{
+					"name": "string",
+				},
+				nil,
+			),
+			generator.WithResource("configmap", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "test-config",
+				},
+				"data": map[string]interface{}{
+					"result": "${'hello-world'}",
+				},
+			}, nil, nil),
+		)
+
+		graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+		require.NoError(t, err)
+		require.NotNil(t, graph)
+
+		cm := graph.Nodes["configmap"]
+		require.NotNil(t, cm)
+
+		// Constants should be removed from Variables
+		assert.Empty(t, cm.Variables, "constants should be removed from Variables")
+
+		// Template should contain literal value
+		data, found, err := unstructured.NestedString(cm.Template.Object, "data", "result")
+		require.NoError(t, err)
+		require.True(t, found, "data.result should exist")
+		assert.Equal(t, "hello-world", data, "constant should be replaced with evaluated value")
+	})
+
+	t.Run("constants are removed but static variables remain", func(t *testing.T) {
+		rgd := generator.NewResourceGraphDefinition("test-mixed",
+			generator.WithSchema(
+				"TestApp", "v1alpha1",
+				map[string]interface{}{
+					"name": "string",
+				},
+				nil,
+			),
+			generator.WithResource("configmap", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "test-config",
+				},
+				"data": map[string]interface{}{
+					"constant": "${'literal-value'}",
+					"static":   "${schema.spec.name}",
+				},
+			}, nil, nil),
+		)
+
+		graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+		require.NoError(t, err)
+		require.NotNil(t, graph)
+
+		cm := graph.Nodes["configmap"]
+		require.NotNil(t, cm)
+
+		// Only static variable should remain
+		assert.Len(t, cm.Variables, 1, "only static variable should remain")
+		assert.Equal(t, "data.static", cm.Variables[0].Path)
+		assert.Equal(t, variable.ResourceVariableKindStatic, cm.Variables[0].Kind)
+
+		// Constant should be replaced with literal
+		data, found, err := unstructured.NestedString(cm.Template.Object, "data", "constant")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "literal-value", data)
+
+		// Static should still have expression
+		staticData, found, err := unstructured.NestedString(cm.Template.Object, "data", "static")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "${schema.spec.name}", staticData, "static expression should remain")
+	})
 }

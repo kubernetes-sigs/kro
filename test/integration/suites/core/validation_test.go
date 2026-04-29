@@ -470,6 +470,52 @@ var _ = Describe("Validation", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 	})
+
+	Context("Constant Expression Evaluation", func() {
+		It("should reject RGDs with invalid constant expressions like division by zero", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-constant-division-by-zero",
+				generator.WithSchema(
+					"TestConstantError", "v1alpha1",
+					map[string]interface{}{},
+					nil,
+				),
+				generator.WithResource("deployment", map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata": map[string]interface{}{
+						"name": "test-deploy",
+					},
+					"spec": map[string]interface{}{
+						"replicas": "${5 / 0}",
+						"selector": map[string]interface{}{
+							"matchLabels": map[string]interface{}{
+								"app": "test",
+							},
+						},
+						"template": map[string]interface{}{
+							"metadata": map[string]interface{}{
+								"labels": map[string]interface{}{
+									"app": "test",
+								},
+							},
+							"spec": map[string]interface{}{
+								"containers": []interface{}{
+									map[string]interface{}{
+										"name":  "test",
+										"image": "nginx",
+									},
+								},
+							},
+						},
+					},
+				}, nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			expectRGDInactiveWithError(ctx, rgd, "division by zero")
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+	})
 })
 
 func validResourceDef() map[string]interface{} {

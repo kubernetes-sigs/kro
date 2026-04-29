@@ -17,7 +17,10 @@ package instance
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"sync"
 
+	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -209,8 +212,10 @@ func (c *Controller) processNodes(
 }
 
 // pruneOrphans deletes previously managed resources that are not in the current
-// apply set. It shrinks parent applyset metadata only when prune completes
-// without UID conflicts.
+// apply set. Orphans are deleted in reverse topological order (dependents before
+// dependencies) to avoid breaking cross-resource references during cleanup.
+// Within each dependency layer, deletes are concurrent. It shrinks parent
+// applyset metadata only when prune completes without UID conflicts.
 func (c *Controller) pruneOrphans(
 	rcx *ReconcileContext,
 	applier *applyset.ApplySet,
@@ -219,27 +224,95 @@ func (c *Controller) pruneOrphans(
 	batchMeta applyset.Metadata,
 ) (bool, bool, error) {
 	pruneScope := supersetPatch.PruneScope()
-	pruneResult, err := applier.Prune(rcx.Ctx, applyset.PruneOptions{
+	candidates, err := applier.ListOrphans(rcx.Ctx, applyset.PruneOptions{
 		KeepUIDs: result.ObservedUIDs(),
 		Scope:    pruneScope,
 	})
 	if err != nil {
-		return false, false, rcx.delayedRequeue(fmt.Errorf("prune failed: %w", err))
+		return false, false, rcx.delayedRequeue(fmt.Errorf("list orphans failed: %w", err))
+	}
+	if len(candidates) == 0 {
+		return false, false, nil
 	}
 
-	// Keep superset metadata and retry prune on UID conflicts.
-	if pruneResult.HasConflicts() {
+	// Build node-id → topological position map from the runtime graph.
+	nodes := rcx.Runtime.Nodes()
+	nodePosition := make(map[string]int, len(nodes))
+	for i, node := range nodes {
+		nodePosition[node.Spec.Meta.ID] = i
+	}
+	// Unmapped orphans (unknown or missing node-id) are assigned a position
+	// beyond the last node so they are deleted in the first wave (highest
+	// position = first in reverse order). These are resources whose node was
+	// removed from the graph entirely, so they have no known dependents.
+	unmappedPosition := len(nodes)
+
+	// Group candidates into waves by topological position.
+	waves := make(map[int][]applyset.OrphanCandidate)
+	for _, c := range candidates {
+		nodeID := c.Object.GetLabels()[metadata.NodeIDLabel]
+		pos, ok := nodePosition[nodeID]
+		if !ok {
+			pos = unmappedPosition
+		}
+		waves[pos] = append(waves[pos], c)
+	}
+
+	// Sort wave keys in descending order (reverse topological: dependents first).
+	waveKeys := make([]int, 0, len(waves))
+	for k := range waves {
+		waveKeys = append(waveKeys, k)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(waveKeys)))
+
+	// Delete wave by wave. Within each wave, deletions are concurrent.
+	var pruned []applyset.PruneResultItem
+	conflicts := 0
+
+	for _, key := range waveKeys {
+		waveCandidates := waves[key]
+
+		eg, egCtx := errgroup.WithContext(rcx.Ctx)
+		eg.SetLimit(len(waveCandidates))
+
+		var mu sync.Mutex
+		for _, candidate := range waveCandidates {
+			eg.Go(func() error {
+				res, err := applier.DeleteOrphan(egCtx, candidate)
+				if err != nil {
+					return err
+				}
+				mu.Lock()
+				if res.Pruned != nil {
+					pruned = append(pruned, *res.Pruned)
+				}
+				if res.Conflict {
+					conflicts++
+				}
+				mu.Unlock()
+				return nil
+			})
+		}
+		if err := eg.Wait(); err != nil {
+			return false, false, rcx.delayedRequeue(fmt.Errorf("prune failed: %w", err))
+		}
+	}
+
+	hasPruned := len(pruned) > 0
+	hasConflicts := conflicts > 0
+
+	if hasConflicts {
 		rcx.Log.V(1).Info("prune skipped resources due to UID conflicts; keeping superset applyset metadata for retry",
-			"conflicts", pruneResult.Conflicts,
+			"conflicts", conflicts,
 		)
-		return pruneResult.HasPruned(), true, nil
+		return hasPruned, true, nil
 	}
 
-	// Prune succeeded (errors return directly), safe to shrink metadata
+	// Prune succeeded without conflicts, safe to shrink metadata
 	if err := c.patchInstanceWithApplySetMetadata(rcx, batchMeta); err != nil {
 		rcx.Log.V(1).Info("failed to shrink instance annotations", "error", err)
 	}
-	return pruneResult.HasPruned(), false, nil
+	return hasPruned, false, nil
 }
 
 // createApplySet constructs an applyset configured for the current instance.

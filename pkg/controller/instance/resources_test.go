@@ -16,6 +16,9 @@ package instance
 
 import (
 	"errors"
+	"maps"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -672,7 +675,7 @@ func TestPruneOrphansPaths(t *testing.T) {
 			reactorVerb:     "list",
 			reactorResource: "configmaps",
 			reactorErr:      errors.New("list failed"),
-			wantErr:         "prune failed",
+			wantErr:         "list orphans failed",
 		},
 		{
 			name:            "uid conflicts request retry without error",
@@ -723,6 +726,152 @@ func TestPruneOrphansPaths(t *testing.T) {
 			assert.Equal(t, tt.wantRetry, retry)
 		})
 	}
+}
+
+func TestPruneOrphansRespectsReverseTopologicalOrder(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+
+	// Build a graph: nodeA (position 0) → nodeB (position 1) → nodeC (position 2)
+	// Topological order: A, B, C. Reverse deletion order should be: C, B, A.
+	nodeA := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "nodeA",
+			Type:       graph.NodeTypeResource,
+			GVR:        controllerTestCMGVR,
+			Namespaced: true,
+		},
+		Template: newConfigMapObject("a", ""),
+	}
+	nodeB := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:           "nodeB",
+			Type:         graph.NodeTypeResource,
+			GVR:          controllerTestCMGVR,
+			Namespaced:   true,
+			Dependencies: []string{"nodeA"},
+		},
+		Template: newConfigMapObject("b", ""),
+	}
+	nodeC := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:           "nodeC",
+			Type:         graph.NodeTypeResource,
+			GVR:          controllerTestCMGVR,
+			Namespaced:   true,
+			Dependencies: []string{"nodeB"},
+		},
+		Template: newConfigMapObject("c", ""),
+	}
+
+	// Create orphan objects with node-id labels matching the graph nodes.
+	orphanA := newApplysetManagedConfigMap(instance, "orphan-a", "default")
+	orphanA.SetLabels(mergeLabels(orphanA.GetLabels(), map[string]string{
+		metadata.NodeIDLabel: "nodeA",
+	}))
+	orphanB := newApplysetManagedConfigMap(instance, "orphan-b", "default")
+	orphanB.SetLabels(mergeLabels(orphanB.GetLabels(), map[string]string{
+		metadata.NodeIDLabel: "nodeB",
+	}))
+	orphanC := newApplysetManagedConfigMap(instance, "orphan-c", "default")
+	orphanC.SetLabels(mergeLabels(orphanC.GetLabels(), map[string]string{
+		metadata.NodeIDLabel: "nodeC",
+	}))
+
+	controller, rcx, raw := newControllerAndContext(t, instance,
+		newTestGraph(nodeA, nodeB, nodeC),
+		orphanA, orphanB, orphanC,
+	)
+
+	// Record deletion order via a reactor.
+	var deletionOrder []string
+	var deletionMu sync.Mutex
+	raw.PrependReactor("delete", "configmaps", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+		da := action.(k8stesting.DeleteAction)
+		deletionMu.Lock()
+		deletionOrder = append(deletionOrder, da.GetName())
+		deletionMu.Unlock()
+		return false, nil, nil // let default reactor handle it
+	})
+
+	applier := controller.createApplySet(rcx)
+	pruned, retry, err := controller.pruneOrphans(rcx, applier, &applyset.ApplyResult{}, applyset.Metadata{
+		GroupKinds: sets.New[schema.GroupKind](controllerTestCMGVK.GroupKind()),
+	}, applyset.Metadata{})
+
+	require.NoError(t, err)
+	assert.True(t, pruned, "should have pruned resources")
+	assert.False(t, retry, "should not need retry")
+	assert.Len(t, deletionOrder, 3, "all three orphans should be deleted")
+
+	// nodeC (position 2) must be deleted before nodeB (position 1),
+	// and nodeB before nodeA (position 0). Since each is in its own wave,
+	// the order is strictly: orphan-c, orphan-b, orphan-a.
+	posC := slices.Index(deletionOrder, "orphan-c")
+	posB := slices.Index(deletionOrder, "orphan-b")
+	posA := slices.Index(deletionOrder, "orphan-a")
+	assert.Less(t, posC, posB, "nodeC orphan should be deleted before nodeB orphan")
+	assert.Less(t, posB, posA, "nodeB orphan should be deleted before nodeA orphan")
+}
+
+func TestPruneOrphansUnmappedDeletedFirst(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+
+	// Graph has one node "known" at position 0.
+	knownNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "known",
+			Type:       graph.NodeTypeResource,
+			GVR:        controllerTestCMGVR,
+			Namespaced: true,
+		},
+		Template: newConfigMapObject("k", ""),
+	}
+
+	// Two orphans: one mapped to "known", one with an unknown node-id.
+	orphanKnown := newApplysetManagedConfigMap(instance, "orphan-known", "default")
+	orphanKnown.SetLabels(mergeLabels(orphanKnown.GetLabels(), map[string]string{
+		metadata.NodeIDLabel: "known",
+	}))
+	orphanUnknown := newApplysetManagedConfigMap(instance, "orphan-unknown", "default")
+	orphanUnknown.SetLabels(mergeLabels(orphanUnknown.GetLabels(), map[string]string{
+		metadata.NodeIDLabel: "removed-node",
+	}))
+
+	controller, rcx, raw := newControllerAndContext(t, instance,
+		newTestGraph(knownNode),
+		orphanKnown, orphanUnknown,
+	)
+
+	var deletionOrder []string
+	var deletionMu sync.Mutex
+	raw.PrependReactor("delete", "configmaps", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+		da := action.(k8stesting.DeleteAction)
+		deletionMu.Lock()
+		deletionOrder = append(deletionOrder, da.GetName())
+		deletionMu.Unlock()
+		return false, nil, nil
+	})
+
+	applier := controller.createApplySet(rcx)
+	pruned, _, err := controller.pruneOrphans(rcx, applier, &applyset.ApplyResult{}, applyset.Metadata{
+		GroupKinds: sets.New[schema.GroupKind](controllerTestCMGVK.GroupKind()),
+	}, applyset.Metadata{})
+
+	require.NoError(t, err)
+	assert.True(t, pruned)
+	assert.Len(t, deletionOrder, 2)
+
+	// Unmapped orphan gets position len(nodes)=1, "known" gets position 0.
+	// Reverse order: unmapped (1) first, then known (0).
+	posUnknown := slices.Index(deletionOrder, "orphan-unknown")
+	posKnown := slices.Index(deletionOrder, "orphan-known")
+	assert.Less(t, posUnknown, posKnown, "unmapped orphan should be deleted before known orphan")
+}
+
+func mergeLabels(base, extra map[string]string) map[string]string {
+	merged := maps.Clone(base)
+	maps.Copy(merged, extra)
+	return merged
 }
 
 func TestProcessApplyResultsAndReadiness(t *testing.T) {

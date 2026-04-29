@@ -95,8 +95,12 @@ func (c *Controller) processCollectionNode(
 	// Build resources list for apply
 	resources := make([]applyset.Resource, 0, collectionSize)
 	for i, expandedResource := range expandedResources {
-		// Apply decorator labels with collection info
+		// Add allowlisted labels & annotations from the instance first, so that
+		// kro's own decorator labels always take precedence on key conflicts.
 		collectionInfo := &CollectionInfo{Index: i, Size: collectionSize}
+		c.applyMetadataPropagation(rcx, expandedResource)
+
+		// Apply decorator labels with collection info
 		c.applyDecoratorLabels(rcx, expandedResource, id, collectionInfo)
 
 		// Look up current revision from LIST results

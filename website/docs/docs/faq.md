@@ -80,7 +80,7 @@ sidebar_position: 100
            blockOwnerDeletion: true
            controller: false
       annotations:
-        argocd.argoproj.io/tracking-id: ${schema.metadata.?annotations["argocd.argoproj.io/tracking-id"]}
+        argocd.argoproj.io/tracking-id: ${schema.metadata.?annotations["argocd.argoproj.io/tracking-id"].orValue("")}
    ```
 
    This annotation allows ArgoCD to properly track and manage the resources

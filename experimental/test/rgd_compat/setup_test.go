@@ -55,6 +55,7 @@ import (
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/experimental/test/testenv"
+	"github.com/kubernetes-sigs/kro/experimental/stdlib"
 	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
@@ -82,7 +83,12 @@ func TestCore(t *testing.T) {
 		}
 		cfg, err := testEnvironment.Start()
 		Expect(err).NotTo(HaveOccurred())
-		GinkgoWriter.Println("controller healthy, type tower bootstrapping...")
+		GinkgoWriter.Println("controller healthy, applying stdlib...")
+
+		// Apply stdlib — the controller is pure substrate, tests install
+		// what they need.
+		Expect(stdlib.Apply(context.Background(), logf.Log.WithName("stdlib"), cfg)).To(Succeed())
+		GinkgoWriter.Println("stdlib applied, type tower bootstrapping...")
 
 		// Register kro schemes for typed client operations.
 		Expect(krov1alpha1.AddToScheme(scheme.Scheme)).To(Succeed())

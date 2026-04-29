@@ -21,14 +21,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
 	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
-	"github.com/kubernetes-sigs/kro/experimental/deploy"
 )
 
 // GraphGVK is a local alias for the exported controller GVK.
@@ -38,28 +36,6 @@ var GraphGVK = graphcontroller.GraphGVK
 var GraphRevisionGVK = graphcontroller.GraphRevisionGVK
 
 // --- Helpers ---
-
-// loadEmbeddedCRD reads a CRD from the embedded deploy.CRDs filesystem.
-// Single source of truth: the same YAMLs used by bootstrap mode.
-func loadEmbeddedCRD(filename string) *apiextensionsv1.CustomResourceDefinition {
-	data, err := deploy.CRDs.ReadFile(filename)
-	if err != nil {
-		panic("reading embedded CRD " + filename + ": " + err.Error())
-	}
-	crd := &apiextensionsv1.CustomResourceDefinition{}
-	if err := yaml.UnmarshalStrict(data, crd); err != nil {
-		panic("unmarshalling embedded CRD " + filename + ": " + err.Error())
-	}
-	return crd
-}
-
-func buildGraphCRD() *apiextensionsv1.CustomResourceDefinition {
-	return loadEmbeddedCRD("experimental.kro.run_graphs.yaml")
-}
-
-func buildGraphRevisionCRD() *apiextensionsv1.CustomResourceDefinition {
-	return loadEmbeddedCRD("experimental.kro.run_graphrevisions.yaml")
-}
 
 func waitForCRD(ctx context.Context, c client.Client, name string, timeout ...time.Duration) error {
 	t := 30 * time.Second

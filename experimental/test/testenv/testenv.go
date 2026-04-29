@@ -44,7 +44,7 @@ import (
 type Environment struct {
 	// CRDDirectoryPaths are additional CRD directories to load into envtest
 	// (e.g., ACK CRDs for external ref tests). Graph and GraphRevision CRDs
-	// are installed by the binary's --bootstrap flag, not envtest.
+	// are always loaded from chart/crds/.
 	CRDDirectoryPaths []string
 
 	// ResyncInterval overrides the per-node resync timer interval for the
@@ -95,10 +95,12 @@ func (e *Environment) Start() (*rest.Config, error) {
 		fmt.Fprintf(os.Stderr, "controller logs: %s\n", logPath)
 	}
 
-	// Start envtest.
+	// Start envtest with chart CRDs + any additional test CRDs.
+	chartCRDDir := filepath.Join(moduleRoot, "experimental", "chart", "crds")
+	crdPaths := append([]string{chartCRDDir}, e.CRDDirectoryPaths...)
 	e.testEnv = &envtest.Environment{
 		BinaryAssetsDirectory: ResolveEnvtestAssets(),
-		CRDDirectoryPaths:     e.CRDDirectoryPaths,
+		CRDDirectoryPaths:     crdPaths,
 	}
 	cfg, err := e.testEnv.Start()
 	if err != nil {
@@ -241,7 +243,6 @@ func startBinary(binaryPath, kubeconfigPath string, logWriter io.Writer, resyncI
 	ln.Close()
 
 	args := []string{
-		"--bootstrap",
 		"--health-probe-bind-address=" + healthAddr,
 		"--metrics-bind-address=0",
 		"--pprof-bind-address=0",

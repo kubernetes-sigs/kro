@@ -1,9 +1,8 @@
-# Deployment for the experimental Graph controller.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: graph-controller
-  namespace: kro-system
+  namespace: {{ .Release.Namespace }}
   labels:
     app: graph-controller
 spec:
@@ -19,9 +18,7 @@ spec:
       serviceAccountName: graph-controller
       containers:
         - name: controller
-          image: ko://github.com/kubernetes-sigs/kro/experimental/cmd
-          args:
-            - --bootstrap
+          image: {{ .Values.image }}
           # Surface crash-time stderr in pod status when the CRI log
           # pipeline is healthy but the container is restarting, and as
           # a fallback when it isn't.

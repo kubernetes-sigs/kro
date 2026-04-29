@@ -27,6 +27,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/kubernetes-sigs/kro/experimental/stdlib"
 )
 
 var (
@@ -54,8 +56,10 @@ func TestMain(m *testing.M) {
 	defer logFile.Close()
 	fmt.Fprintf(os.Stderr, "resync test controller logs: %s\n", logPath)
 
+	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "experimental", "chart", "crds")
 	testEnv = &envtest.Environment{
 		BinaryAssetsDirectory: resolveEnvtestAssets(),
+		CRDDirectoryPaths:     []string{chartCRDDir},
 		ControlPlane: envtest.ControlPlane{
 			APIServer: &envtest.APIServer{Out: logFile, Err: logFile},
 			Etcd:      &envtest.Etcd{Out: logFile, Err: logFile},
@@ -104,8 +108,8 @@ func TestMain(m *testing.M) {
 		panic("creating client: " + err.Error())
 	}
 
-	// No custom CRDs needed — the binary's --bootstrap installs Graph and
-	// GraphRevision, and these tests only use ConfigMaps as managed resources.
+	// No custom CRDs needed — chart/crds/ provides Graph, GraphRevision,
+	// and Kind CRDs, and these tests only use ConfigMaps as managed resources.
 
 	healthAddr, cmd, err := startBinary(binaryPath, kubeconfigPath, logFile)
 	if err != nil {
@@ -120,6 +124,13 @@ func TestMain(m *testing.M) {
 	if err := waitForHealthy(ctx, healthAddr, binaryDied); err != nil {
 		cmd.Process.Signal(syscall.SIGKILL) //nolint:errcheck
 		panic("waiting for binary readiness: " + err.Error())
+	}
+
+	// Apply stdlib — the controller is pure substrate, tests install
+	// what they need.
+	if err := stdlib.Apply(ctx, logf.Log.WithName("stdlib"), cfg); err != nil {
+		cmd.Process.Signal(syscall.SIGKILL) //nolint:errcheck
+		panic("applying stdlib: " + err.Error())
 	}
 
 	code := m.Run()
@@ -231,7 +242,6 @@ func startBinary(binaryPath, kubeconfigPath string, logFile *os.File) (healthAdd
 	ln.Close()
 
 	cmd = exec.Command(binaryPath,
-		"--bootstrap",
 		"--health-probe-bind-address="+healthAddr,
 		"--metrics-bind-address=0",
 		"--pprof-bind-address=0",

@@ -1,17 +1,15 @@
 // Binary entrypoint for the experimental Graph controller.
 //
-// Run with --bootstrap to automatically install CRDs:
+// CRDs are installed by the Helm chart (experimental/chart/).
+// Stdlib Graphs are installed by the Helm chart (experimental/chart-stdlib/).
 //
-//	go run ./experimental/cmd/ --bootstrap
+// For local development, apply CRDs manually first:
 //
-// Or install manifests manually first:
-//
-//	kubectl apply -f experimental/deploy/
+//	kubectl apply -f experimental/chart/crds/
 //	go run ./experimental/cmd/
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -26,11 +24,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
-	"github.com/kubernetes-sigs/kro/experimental/stdlib"
 )
 
 func main() {
@@ -43,7 +39,6 @@ func main() {
 	log.Info("graph-controller starting")
 
 	var (
-		bootstrapFlag          bool
 		healthProbeBindAddress string
 		metricsBindAddress     string
 		pprofBindAddress       string
@@ -51,7 +46,6 @@ func main() {
 		nodeResyncInterval     time.Duration
 	)
 
-	flag.BoolVar(&bootstrapFlag, "bootstrap", false, "Install CRDs before starting the controller")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to. Use :0 for a random port.")
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", "0", "The address the metrics endpoint binds to. Use 0 to disable.")
 	flag.StringVar(&pprofBindAddress, "pprof-bind-address", "", "The address the pprof endpoint binds to. Empty to disable.")
@@ -68,13 +62,6 @@ func main() {
 	}
 
 	cfg := ctrl.GetConfigOrDie()
-
-	if bootstrapFlag {
-		if err := bootstrap(context.Background(), cfg); err != nil {
-			log.Error(err, "bootstrap failed")
-			os.Exit(1)
-		}
-	}
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme.Scheme,
@@ -102,17 +89,6 @@ func main() {
 	if err != nil {
 		log.Error(err, "setting up controller")
 		os.Exit(1)
-	}
-
-	// Apply stdlib after the controller starts. The Runnable runs after
-	// caches sync. Resources with unknown CRDs fail and are retried.
-	if bootstrapFlag {
-		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-			return stdlib.Apply(ctx, ctrl.Log.WithName("stdlib"), cfg)
-		})); err != nil {
-			log.Error(err, "registering stdlib")
-			os.Exit(1)
-		}
 	}
 
 	if pprofBindAddress != "" {

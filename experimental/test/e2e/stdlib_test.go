@@ -15,10 +15,10 @@ import (
 // ═══════════════════════════════════════════════════════════════════════════════
 // Standard library integration tests
 //
-// These tests exercise the three stdlib types that bootstrap installs:
-// Kind, Decorator, and Singleton. The controller binary starts with
-// --bootstrap, which installs Graph/GraphRevision CRDs and applies stdlib
-// resources. By the time tests run, the type tower is materialized:
+// These tests exercise the three stdlib types: Kind, Decorator, and Singleton.
+// CRDs are installed by envtest from chart/crds/, and stdlib resources are
+// applied during test setup. By the time tests run, the type tower is
+// materialized:
 //
 //   kind.yaml (Graph) → Kind CRD
 //   decorator.yaml (Kind) → Decorator CRD
@@ -28,9 +28,8 @@ import (
 // behavior through multiple layers of Graph reconciliation.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// stdlibCRDTimeout is how long to wait for a CRD that bootstrap creates.
-// Bootstrap may still be running when tests start (the health check only
-// confirms the HTTP endpoint, not that all CRDs are materialized).
+// stdlibCRDTimeout is how long to wait for a CRD that the controller creates.
+// The controller must reconcile stdlib Graphs before derived CRDs appear.
 const stdlibCRDTimeout = 60 * time.Second
 
 // stdlibReconcileTimeout is how long to wait for multi-layer reconciliation

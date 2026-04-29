@@ -25,6 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/kubernetes-sigs/kro/experimental/stdlib"
 )
 
 var (
@@ -66,9 +68,12 @@ func TestMain(m *testing.M) {
 
 	// -----------------------------------------------------------------------
 	// 3. Start envtest (kube-apiserver + etcd), logging to the shared file.
+	//    Chart CRDs (Graph, GraphRevision) are loaded by envtest.
 	// -----------------------------------------------------------------------
+	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "experimental", "chart", "crds")
 	testEnv = &envtest.Environment{
 		BinaryAssetsDirectory: resolveEnvtestAssets(),
+		CRDDirectoryPaths:     []string{chartCRDDir},
 		ControlPlane: envtest.ControlPlane{
 			APIServer: &envtest.APIServer{Out: logFile, Err: logFile},
 			Etcd:      &envtest.Etcd{Out: logFile, Err: logFile},
@@ -136,8 +141,8 @@ func TestMain(m *testing.M) {
 	defer os.Remove(kubeconfigPath)
 
 	// -----------------------------------------------------------------------
-	// 4. Install test-specific CRDs (RGD, SimpleApp). The binary's
-	//    --bootstrap installs Graph and GraphRevision from embedded manifests.
+	// 4. Install test-specific CRDs (RGD, SimpleApp). Chart CRDs (Graph,
+	//    GraphRevision, Kind) are already loaded by envtest from chart/crds/.
 	// -----------------------------------------------------------------------
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	if err != nil {
@@ -164,9 +169,8 @@ func TestMain(m *testing.M) {
 	}
 
 	// -----------------------------------------------------------------------
-	// 5. Start the kro binary as a subprocess. --bootstrap installs Graph
-	//    and GraphRevision CRDs and waits for them to become established.
-	//    Logs go to the same shared file as envtest.
+	// 5. Start the kro binary as a subprocess. CRDs are pre-installed by
+	//    envtest; stdlib is applied after the binary is healthy.
 	// -----------------------------------------------------------------------
 	healthAddr, cmd, err := startBinary(binaryPath, kubeconfigPath, logFile)
 	if err != nil {
@@ -186,6 +190,15 @@ func TestMain(m *testing.M) {
 		// Binary crashed or didn't become healthy — stop it and fail.
 		cmd.Process.Signal(syscall.SIGKILL) //nolint:errcheck
 		panic("waiting for binary readiness: " + err.Error())
+	}
+
+	// -----------------------------------------------------------------------
+	// 6b. Apply stdlib — the controller is pure substrate, tests install
+	//     what they need.
+	// -----------------------------------------------------------------------
+	if err := stdlib.Apply(ctx, logf.Log.WithName("stdlib"), cfg); err != nil {
+		cmd.Process.Signal(syscall.SIGKILL) //nolint:errcheck
+		panic("applying stdlib: " + err.Error())
 	}
 
 	// -----------------------------------------------------------------------
@@ -321,8 +334,8 @@ func writeKubeconfig(cfg *rest.Config) (string, error) {
 // ---------------------------------------------------------------------------
 
 // startBinary starts the kro binary as a subprocess and returns the health
-// probe address and the exec.Cmd. The binary bootstraps its own CRDs
-// (Graph, GraphRevision) before starting the controller.
+// probe address and the exec.Cmd. CRDs are pre-installed by envtest;
+// stdlib is applied separately after the binary is healthy.
 //
 // Controller logs are written to the shared log file (build/controller.log).
 // Each test creates a unique namespace (graph-test-xxxxx), so to debug a
@@ -359,7 +372,6 @@ func startBinary(binaryPath, kubeconfigPath string, logFile *os.File) (healthAdd
 	metricsLn.Close()
 
 	cmd = exec.Command(binaryPath,
-		"--bootstrap",
 		"--health-probe-bind-address="+healthAddr,
 		"--metrics-bind-address="+metricsAddr,
 		"--pprof-bind-address="+pprofAddr,

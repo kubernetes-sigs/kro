@@ -508,7 +508,7 @@ func TestHydrationStartupWithDynamicRevision(t *testing.T) {
 // an unresolved GVK. When the CRD is installed, the Graph recompiles and
 // converges.
 //
-// This is the critical bootstrap path — stdlib Kinds create CRDs, and
+// This is the critical startup path — stdlib Kinds create CRDs, and
 // downstream Graphs may reference those CRDs before they exist. Without
 // recompilation on CRD install, those Graphs remain stuck.
 func TestUnresolvedGVK_RegressionCRDInstallConvergence(t *testing.T) {

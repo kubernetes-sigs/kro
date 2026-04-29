@@ -42,6 +42,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	graphschema "github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
@@ -64,6 +65,110 @@ func disableOmitFeatureGate(t *testing.T) {
 }
 
 var defaultRGDConfig = RGDConfig{MaxCollectionDimensionSize: 5}
+
+func TestBuildInstanceSpecPrinterColumns(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       []simpleschema.PrinterColumn
+		want        []extv1.CustomResourceColumnDefinition
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "scalar columns are converted to CRD printer columns",
+			input: []simpleschema.PrinterColumn{
+				{
+					Path:       []string{"image"},
+					TargetType: "string",
+					Title:      "IMAGE",
+				},
+				{
+					Path:       []string{"port"},
+					TargetType: "float",
+					Title:      "PORT",
+				},
+			},
+			want: []extv1.CustomResourceColumnDefinition{
+				{
+					Name:     "IMAGE",
+					Type:     "string",
+					JSONPath: ".spec.image",
+				},
+				{
+					Name:     "PORT",
+					Type:     "number",
+					JSONPath: ".spec.port",
+				},
+			},
+		},
+		{
+			name: "explicit titles are preserved",
+			input: []simpleschema.PrinterColumn{
+				{
+					Path:       []string{"image"},
+					TargetType: "string",
+					Title:      "CONTAINERIMAGE",
+				},
+			},
+			want: []extv1.CustomResourceColumnDefinition{
+				{
+					Name:     "CONTAINERIMAGE",
+					Type:     "string",
+					JSONPath: ".spec.image",
+				},
+			},
+		},
+		{
+			name: "empty title is rejected by builder",
+			input: []simpleschema.PrinterColumn{
+				{
+					Path:       []string{"className"},
+					TargetType: "string",
+					Title:      "",
+				},
+			},
+			wantErr:     true,
+			errContains: `spec field "className": printColumn requires a non-empty title`,
+		},
+		{
+			name: "non scalar columns are rejected by builder",
+			input: []simpleschema.PrinterColumn{
+				{
+					Path:       []string{"config"},
+					TargetType: "object",
+				},
+			},
+			wantErr:     true,
+			errContains: `spec field "config": printColumn marker only supports scalar fields`,
+		},
+		{
+			name: "non identifier path segments are rejected",
+			input: []simpleschema.PrinterColumn{
+				{
+					Path:       []string{"image-tag"},
+					TargetType: "string",
+					Title:      "IMAGE",
+				},
+			},
+			wantErr:     true,
+			errContains: `spec field "image-tag": printColumn only supports identifier-safe field names`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildInstanceSpecPrinterColumns(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
 
 func TestLookupSchemaAtField_AdditionalProperties(t *testing.T) {
 	tests := []struct {
@@ -4005,7 +4110,7 @@ func TestBuildInstanceSpecSchema(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := buildInstanceSpecSchema(tt.schema)
+			_, _, err := buildInstanceSpecSchema(tt.schema)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})

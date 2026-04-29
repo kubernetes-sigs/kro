@@ -252,6 +252,8 @@ mode: string | enum="debug,info,warn,error" default="info"
 - `uniqueItems=true`: Ensures array elements are unique
 - `minItems=number`: Minimum number of items in arrays
 - `maxItems=number`: Maximum number of items in arrays
+- `listType=atomic|set|map`: Specifies how Kubernetes should treat the array for merge operations
+- `listMapKey=fieldName`: Specifies which field(s) to use as keys when `listType=map` (can be repeated for composite keys)
 
 Multiple markers can be combined using the `|` separator.
 
@@ -287,6 +289,8 @@ Array fields support validation markers to ensure data quality:
 - **`uniqueItems=false`**: Allows duplicate elements (default behavior)
 - **`minItems=number`**: Sets the minimum number of elements required in the array
 - **`maxItems=number`**: Sets the maximum number of elements allowed in the array
+- **`listType=atomic|set|map`**: Controls how Kubernetes handles array merges (atomic=replace all, set=merge unique values, map=merge by key)
+- **`listMapKey=fieldName`**: Specifies key field(s) when `listType=map` (must be required or have default value). Can be repeated for composite keys.
 
 Examples:
 
@@ -305,6 +309,14 @@ roles: '[]string | uniqueItems=true minItems=1 maxItems=5 required=true descript
 
 # Optional array with size constraints
 priorities: '[]integer | minItems=0 maxItems=3 description="Up to 3 priority levels"'
+
+# Array with map-based merging using custom type
+types:
+  Container:
+    name: string | required=true
+    port: integer | required=true
+spec:
+  containers: '[]Container | listType=map listMapKey=name listMapKey=port'
 ```
 
 For example:

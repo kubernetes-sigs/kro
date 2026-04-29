@@ -59,7 +59,18 @@ const (
 	// NodeTypeExternalCollection is an external reference with a label selector
 	// that matches multiple resources (read-only collection, not applied).
 	NodeTypeExternalCollection
+	// NodeTypeVariable is a variable node that computes values without creating resources.
+	NodeTypeVariable
+	// NodeTypeVariableCollection is a variable node with forEach that expands into
+	// multiple computed values. Like NodeTypeVariable, it has no cluster presence.
+	NodeTypeVariableCollection
 )
+
+// IsCollection reports whether the node type represents a multi-item result
+// (forEach collection, external collection, or variable collection).
+func (t NodeType) IsCollection() bool {
+	return t == NodeTypeCollection || t == NodeTypeExternalCollection || t == NodeTypeVariableCollection
+}
 
 // String returns a human-readable string for the node type.
 func (t NodeType) String() string {
@@ -70,6 +81,10 @@ func (t NodeType) String() string {
 		return "Collection"
 	case NodeTypeExternal:
 		return "External"
+	case NodeTypeVariable:
+		return "Variable"
+	case NodeTypeVariableCollection:
+		return "VariableCollection"
 	case NodeTypeInstance:
 		return "Instance"
 	case NodeTypeExternalCollection:

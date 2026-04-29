@@ -115,6 +115,24 @@ func (c *Controller) planNodesForDeletion(
 		// to find the next deletable node.
 		switch nodeMeta.Type {
 
+		case graph.NodeTypeVariable, graph.NodeTypeVariableCollection:
+			desired, err := node.GetDesired()
+			if err != nil {
+				if runtime.IsDataPending(err) {
+					// If variables can't be resolved during deletion, treat it as skipped. There is
+					// a case where identity depends on another resource that lost some data and we
+					// can't resolve it anymore. For that case we need a better deletion/versioning/tracking
+					// mechanism - as of today it is unsolved.
+					state.SetSkipped()
+					continue
+				}
+				state.SetError(err)
+				return nil, err
+			}
+			node.SetObserved(desired)
+			state.SetSkipped()
+			continue
+
 		case graph.NodeTypeInstance:
 			panic(fmt.Sprintf("unexpected instance node in deletion: %s", rid))
 

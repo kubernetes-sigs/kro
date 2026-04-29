@@ -176,7 +176,7 @@ type ForEachDimension map[string]string
 // Each resource can either be created using a template or reference an existing resource.
 // Resources can depend on each other through CEL expressions, creating a dependency graph.
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.template) && !has(self.externalRef)) || (!has(self.template) && has(self.externalRef))",message="exactly one of template or externalRef must be provided"
+// +kubebuilder:validation:XValidation:rule="(has(self.template) ? 1 : 0) + (has(self.externalRef) ? 1 : 0) + (has(self.variable) ? 1 : 0) == 1",message="exactly one of template, externalRef, or variable must be provided"
 type Resource struct {
 	// ID is a unique identifier for this resource within the ResourceGraphDefinition.
 	// It is used to reference this resource in CEL expressions from other resources.
@@ -186,16 +186,24 @@ type Resource struct {
 	ID string `json:"id,omitempty"`
 	// Template is the Kubernetes resource manifest to create.
 	// It can contain CEL expressions (using ${...} syntax) that reference other resources.
-	// Exactly one of template or externalRef must be provided.
+	// Exactly one if template, externalRef, or variable must be provided.
 	//
 	// +kubebuilder:validation:Optional
 	Template runtime.RawExtension `json:"template,omitempty"`
 	// ExternalRef references an existing resource in the cluster instead of creating one.
 	// This is useful for reading existing resources and using their values in other resources.
-	// Exactly one of template or externalRef must be provided.
+	// Exactly one if template, externalRef, or variable must be provided.
 	//
 	// +kubebuilder:validation:Optional
 	ExternalRef *ExternalRef `json:"externalRef,omitempty"`
+	// Variable defines a computed value that participates in the DAG without creating
+	// Kubernetes resources. Variables are maps of key-value pairs where values can be
+	// constants, CEL expressions referencing schema.spec, or expressions referencing
+	// other resources in the RGD.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Variable runtime.RawExtension `json:"variable,omitempty"`
 	// ReadyWhen is a list of CEL expressions that determine when this resource is considered ready.
 	// All expressions must evaluate to true for the resource to be ready.
 	// If not specified, the resource is considered ready when it exists.

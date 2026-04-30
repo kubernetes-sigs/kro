@@ -204,6 +204,7 @@ spec:
                             : {}
                         )})
                       + schema.spec.resources.filter(r, !has(r.externalRef)).map(r, r.merge({
+                        "readyWhen": r.?readyWhen.orValue([]).map(expr, expr.replace('each.', r.id + '.')),
                         "propagateWhen": r.?propagateWhen.orValue(r.?forEach.orValue([]).size() > 0 ? [] : ["${" + r.id + ".dependencies().all(d, d.ready())}"]),
                         "forceApply": true,
                         "template": r.template.merge({

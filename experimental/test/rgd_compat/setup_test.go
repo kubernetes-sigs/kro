@@ -121,6 +121,12 @@ func TestCore(t *testing.T) {
 	if files := os.Getenv("COMPAT_FOCUS_FILES"); files != "" {
 		suiteConfig.FocusFiles = append(suiteConfig.FocusFiles, strings.Fields(files)...)
 	}
+	// COMPAT_SKIP_SPECS allows partially-passing files to join the
+	// allowlist: specs matching any pattern are skipped in CI. Each
+	// space-separated token is a Ginkgo skip regex.
+	if skips := os.Getenv("COMPAT_SKIP_SPECS"); skips != "" {
+		suiteConfig.SkipStrings = append(suiteConfig.SkipStrings, strings.Fields(skips)...)
+	}
 	RunSpecs(t, "Graph Compat Suite", suiteConfig, reporterConfig)
 }
 

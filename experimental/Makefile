@@ -7,14 +7,19 @@ KO       := $(LOCALBIN)/ko
 TEST_FLAGS := -race -count=1
 TEST_PKGS  := ./experimental/...
 
-# Upstream compat test files currently known to pass fully against the
-# Graph controller. `make compat-presubmit` runs exactly these; `make
-# presubmit` invokes it, and CI (.github/workflows/krocodile.yaml) runs
-# `make -C experimental presubmit` on every PR targeting krocodile, so
-# the list IS the contract — regressions fail CI.
+# Upstream compat test files currently known to pass (fully or partially)
+# against the Graph controller. `make compat-presubmit` runs exactly
+# these with COMPAT_SKIP_SPECS filtering out known-failing specs;
+# `make presubmit` invokes it, and CI runs `make -C experimental
+# presubmit` on every PR targeting krocodile, so the list IS the
+# contract — regressions fail CI.
 #
-# To add a file: run `make compat-one FILE=<file>` and confirm
-# `failed: 0`, then append here.
+# To add a fully-passing file: run `make compat-one FILE=<file>`,
+# confirm `failed: 0`, then append here.
+#
+# To add a partially-passing file: run `make compat-one FILE=<file>`,
+# note which specs fail, append the file here, and add skip patterns
+# to COMPAT_SKIP_SPECS below.
 PASSING_COMPAT_FILES := \
   format_test.go \
   lifecycle_test.go \
@@ -33,7 +38,48 @@ PASSING_COMPAT_FILES := \
   externalref_deletion_test.go \
   unknown_fields_test.go \
   instance_conditions_test.go \
-  include_when_test.go
+  include_when_test.go \
+  collection_test.go \
+  status_test.go \
+  data_pending_test.go \
+  type_compatibility_test.go \
+  crd_test.go
+
+# Specs to skip in compat-presubmit. Each token is a Ginkgo skip regex
+# applied via COMPAT_SKIP_SPECS env var → suiteConfig.SkipStrings.
+# Group by root cause so fixes can remove entire blocks.
+#
+# Root cause: forEach cartesian product not supported
+SKIP_SPECS := cartesian.product
+# Root cause: forEach deep chaining scale up/down count mismatch
+SKIP_SPECS += deep.chaining.with.scale
+# Root cause: forEach readyWhen blocking requires workerPods.map() which
+#             fails because forEach nodes are typed as cel.AnyType
+SKIP_SPECS += block.dependent.resources.until.collection.readyWhen
+# Root cause: forEach per-item watch not retained on unchanged-item skip
+SKIP_SPECS += detect.and.restore.drift.in.collection
+# Root cause: flaky under shared envtest (pass in isolation, fail in batch)
+SKIP_SPECS += collection.with.dependency.on.regular.resource
+SKIP_SPECS += collection-to-collection.chaining
+SKIP_SPECS += readyWhen.per-item.expressions.with.each
+SKIP_SPECS += dependents.to.reference.empty.collections
+# Root cause: RGD Inactive transition not triggered on invalid spec
+SKIP_SPECS += reflect.failure.conditions.when.definition.is.invalid
+# Root cause: status fields not surfaced for unavailable resources
+SKIP_SPECS += only.show.status.fields.when.all.referenced
+SKIP_SPECS += surface.data.pending.condition
+# Root cause: type compatibility rejection requires Inactive transition
+SKIP_SPECS += reject.incompatible.types.comprehensively
+# Root cause: forEach cascading deletion / GC not implemented
+SKIP_SPECS += delete.all.collection.resources.when.instance.is.deleted
+SKIP_SPECS += delete.collection.resources.across.multiple.namespaces
+# Root cause: CRD update/ownership/breaking-change detection not implemented
+SKIP_SPECS += update.CRD.when.ResourceGraphDefinition.is.updated
+SKIP_SPECS += prevent.multiple.ResourceGraphDefinitions
+SKIP_SPECS += block.RGD.update.when.schema.has.breaking
+SKIP_SPECS += allow.RGD.update.when.schema.changes.are.non-breaking
+SKIP_SPECS += reconcile.the.ResourceGraphDefinition.back.when.CRD
+SKIP_SPECS += detect.externally.deleted.CRD
 
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
@@ -51,7 +97,7 @@ help: ## Display this help.
 
 .PHONY: presubmit
 presubmit: vet ## Run presubmit checks (vet, all tests including compat allowlist, mod tidy)
-	cd $(ROOT) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" KRO_TEST_TAG=presubmit \
+	cd $(ROOT) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" COMPAT_SKIP_SPECS="$(SKIP_SPECS)" KRO_TEST_TAG=presubmit \
 	  go test $(TEST_FLAGS) -tags graphcompat $(TEST_PKGS)
 	cd $(ROOT) && go mod tidy && git diff --exit-code go.mod go.sum
 
@@ -143,7 +189,7 @@ compat-one: ## Run one compat test file. Usage: make compat-one FILE=lifecycle_t
 
 .PHONY: compat-presubmit
 compat-presubmit: ## Run the passing-files allowlist in one shared envtest. Fails on any regression.
-	cd $(ROOT) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" KRO_TEST_TAG=presubmit \
+	cd $(ROOT) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" COMPAT_SKIP_SPECS="$(SKIP_SPECS)" KRO_TEST_TAG=presubmit \
 	  go test -tags graphcompat -v -count=1 -timeout 10m \
 	    ./experimental/test/rgd_compat/
 

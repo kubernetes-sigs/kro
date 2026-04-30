@@ -1,7 +1,7 @@
 name: postsubmit
 on:
   push:
-    branches: [main]
+    branches: [main, krocodile]
   workflow_dispatch:
 jobs:
   postsubmit:

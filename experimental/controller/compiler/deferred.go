@@ -15,7 +15,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/graph"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 

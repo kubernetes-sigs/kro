@@ -12,8 +12,8 @@ import (
 	"net"
 	"strings"
 
-	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 

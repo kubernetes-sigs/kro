@@ -25,8 +25,8 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
-	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	graphcontroller "github.com/ellistarn/kro/experimental/controller"
+	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 // GraphGVK is a local alias for the exported controller GVK.

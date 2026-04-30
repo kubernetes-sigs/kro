@@ -26,7 +26,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/kubernetes-sigs/kro/experimental/stdlib"
+	"github.com/ellistarn/kro/experimental/stdlib"
 )
 
 var (
@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 	// 3. Start envtest (kube-apiserver + etcd), logging to the shared file.
 	//    Chart CRDs (Graph, GraphRevision) are loaded by envtest.
 	// -----------------------------------------------------------------------
-	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "experimental", "crds")
+	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "crds")
 	testEnv = &envtest.Environment{
 		BinaryAssetsDirectory: resolveEnvtestAssets(),
 		CRDDirectoryPaths:     []string{chartCRDDir},
@@ -277,7 +277,7 @@ func buildBinary() (string, error) {
 	}
 
 	binaryPath := filepath.Join(buildDir, "kro-graph-controller")
-	cmd := exec.Command("go", "build", "-o", binaryPath, "./experimental/cmd/")
+	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/")
 	cmd.Dir = moduleRoot
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

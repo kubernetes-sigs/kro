@@ -3,7 +3,7 @@ package graphcontroller
 import (
 	"fmt"
 
-	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

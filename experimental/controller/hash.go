@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 const applyHashAnnotation = "internal.kro.run/template-hash"

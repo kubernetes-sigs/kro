@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 // cachedObject holds the last known state of a managed resource.

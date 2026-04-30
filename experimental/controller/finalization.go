@@ -26,9 +26,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
-	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
-	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
+	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/watches"
 )
 
 // FinalizationPhase represents the current state of a finalization sequence.

@@ -1,4 +1,4 @@
-image: ko://github.com/kubernetes-sigs/kro/experimental/cmd
+image: ko://github.com/ellistarn/kro/experimental/cmd
 command: []
 args: []
 env: []

@@ -18,8 +18,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
-	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
+	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 // collectPruneCandidates returns keys in previousKeys but not in currentKeys.

@@ -14,7 +14,7 @@ import (
 	celast "github.com/google/cel-go/common/ast"
 	"github.com/google/cel-go/common/operators"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 // extractFieldPathsFromAST walks a CEL AST and collects all (scopeVariable, FieldPath)

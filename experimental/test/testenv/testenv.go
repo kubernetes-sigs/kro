@@ -96,7 +96,7 @@ func (e *Environment) Start() (*rest.Config, error) {
 	}
 
 	// Start envtest with chart CRDs + any additional test CRDs.
-	chartCRDDir := filepath.Join(moduleRoot, "experimental", "crds")
+	chartCRDDir := filepath.Join(moduleRoot, "crds")
 	crdPaths := append([]string{chartCRDDir}, e.CRDDirectoryPaths...)
 	e.testEnv = &envtest.Environment{
 		BinaryAssetsDirectory: ResolveEnvtestAssets(),
@@ -189,7 +189,7 @@ func buildBinary(moduleRoot string) (string, error) {
 		return "", fmt.Errorf("creating build dir: %w", err)
 	}
 	binaryPath := filepath.Join(buildDir, "kro-graph-controller")
-	cmd := exec.Command("go", "build", "-o", binaryPath, "./experimental/cmd/")
+	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/")
 	cmd.Dir = moduleRoot
 	cmd.Stdout = os.Stderr // build output goes to stderr, not the log file
 	cmd.Stderr = os.Stderr

@@ -6,9 +6,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
-	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
-	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
+	"github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 // ---------------------------------------------------------------------------

@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
-	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
+	"github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 func TestParseKeyword_ExprEvaluatesToNonMap(t *testing.T) {

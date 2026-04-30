@@ -12,9 +12,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
-	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
-	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
+	"github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 // instanceState holds the mutable reconcile-time state for a single Graph

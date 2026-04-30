@@ -54,8 +54,8 @@ import (
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/experimental/test/testenv"
-	"github.com/kubernetes-sigs/kro/experimental/stdlib"
+	"github.com/ellistarn/kro/experimental/test/testenv"
+	"github.com/ellistarn/kro/experimental/stdlib"
 	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 

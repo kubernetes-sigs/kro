@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
-	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 // patchKeyPrefix marks applied-set entries whose fields are released (not

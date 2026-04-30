@@ -9,10 +9,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 // templateNode builds a Template-classified Node from a template map. Test-only helper;

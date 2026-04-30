@@ -28,9 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
-	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
-	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
+	"github.com/ellistarn/kro/experimental/controller/watches"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"

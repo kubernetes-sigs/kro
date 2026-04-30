@@ -16,9 +16,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
-	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
+	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
+	"github.com/ellistarn/kro/experimental/controller/watches"
 )
 
 // ---------------------------------------------------------------------------

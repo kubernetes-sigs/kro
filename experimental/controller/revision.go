@@ -29,8 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
-	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
+	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 // GraphRevisionGVK is the GVK for the GraphRevision custom resource.

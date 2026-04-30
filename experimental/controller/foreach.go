@@ -13,10 +13,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
-	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
-	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
+	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/watches"
 )
 
 // reconcileForEach iterates a collection and stamps the template per item.

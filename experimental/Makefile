@@ -1,11 +1,12 @@
-# Root of the repo (where go.mod lives). All go commands run from there.
+# Root of the repo. Go commands run from experimental/ (its own module).
 ROOT := $(shell git rev-parse --show-toplevel)
+EXPDIR := $(ROOT)/experimental
 
 LOCALBIN := $(shell go env GOPATH)/bin
 KO       := $(LOCALBIN)/ko
 
 TEST_FLAGS := -race -count=1
-TEST_PKGS  := ./experimental/...
+TEST_PKGS  := ./...
 
 # Upstream compat test files currently known to pass (fully or partially)
 # against the Graph controller. `make compat-presubmit` runs exactly
@@ -97,26 +98,26 @@ help: ## Display this help.
 
 .PHONY: presubmit
 presubmit: vet ## Run presubmit checks (vet, all tests including compat allowlist, mod tidy)
-	cd $(ROOT) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" COMPAT_SKIP_SPECS="$(SKIP_SPECS)" KRO_TEST_TAG=presubmit \
+	cd $(EXPDIR) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" COMPAT_SKIP_SPECS="$(SKIP_SPECS)" KRO_TEST_TAG=presubmit \
 	  go test $(TEST_FLAGS) -tags graphcompat $(TEST_PKGS)
-	cd $(ROOT) && go mod tidy && git diff --exit-code go.mod go.sum
+	cd $(EXPDIR) && go mod tidy && git diff --exit-code go.mod go.sum
 
 ##@ Development
 
 .PHONY: vet
 vet: ## Run go vet against experimental code.
-	cd $(ROOT) && go vet ./experimental/...
+	cd $(EXPDIR) && go vet ./...
 
 .PHONY: run
 run: ## Run the graph controller locally (apply CRDs first).
 	cd $(ROOT) && kubectl apply -f experimental/crds/
-	cd $(ROOT) && go run ./experimental/cmd/
+	cd $(EXPDIR) && go run ./cmd/
 
 .PHONY: apply
 apply: ## Build image with ko and deploy via helm.
-	cd $(ROOT) && helm upgrade --install krocodile experimental/chart/ \
+	cd $(EXPDIR) && helm upgrade --install krocodile $(EXPDIR)/chart/ \
 		-n kro-system --create-namespace \
-		--set image=$$($(KO) build --bare ./experimental/cmd/)
+		--set image=$$($(KO) build --bare ./cmd/)
 	cd $(ROOT) && helm upgrade --install krocodile-stdlib experimental/chart-stdlib/ \
 		-n kro-system
 
@@ -127,14 +128,14 @@ delete: ## Uninstall the charts from the current cluster.
 
 .PHONY: test
 test: ## Run tests with verbose output.
-	cd $(ROOT) && go test $(TEST_FLAGS) $(TEST_PKGS) -v
+	cd $(EXPDIR) && go test $(TEST_FLAGS) $(TEST_PKGS) -v
 
 .PHONY: bench
 bench: ## Run benchmarks with CPU and memory profiles.
-	@mkdir -p $(ROOT)/experimental/build
-	cd $(ROOT) && go test ./experimental/controller -bench=. -benchmem -count=1 -run='^$$' \
-		-cpuprofile=$(ROOT)/experimental/build/cpu.prof \
-		-memprofile=$(ROOT)/experimental/build/mem.prof
+	@mkdir -p $(EXPDIR)/build
+	cd $(EXPDIR) && go test ./controller -bench=. -benchmem -count=1 -run='^$$' \
+		-cpuprofile=$(EXPDIR)/build/cpu.prof \
+		-memprofile=$(EXPDIR)/build/mem.prof
 	@echo "Profiles written to experimental/build/{cpu,mem}.prof"
 	@echo "View with: go tool pprof -http=:8080 experimental/build/cpu.prof"
 
@@ -179,29 +180,29 @@ bench: ## Run benchmarks with CPU and memory profiles.
 
 .PHONY: compat-one
 compat-one: ## Run one compat test file. Usage: make compat-one FILE=lifecycle_test.go [TIMEOUT=3m]
-	@cd $(ROOT) && tag=$$(basename $(FILE) _test.go) && \
+	@cd $(EXPDIR) && tag=$$(basename $(FILE) _test.go) && \
 	  KRO_TEST_TAG=$$tag \
 	  go test -tags graphcompat -v -count=1 \
 	    -timeout $(if $(TIMEOUT),$(TIMEOUT),3m) \
-	    ./experimental/test/rgd_compat/ \
+	    ./test/rgd_compat/ \
 	    --ginkgo.focus-file=$(FILE) \
 	    --ginkgo.timeout=$(if $(TIMEOUT),$(TIMEOUT),3m)
 
 .PHONY: compat-presubmit
 compat-presubmit: ## Run the passing-files allowlist in one shared envtest. Fails on any regression.
-	cd $(ROOT) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" COMPAT_SKIP_SPECS="$(SKIP_SPECS)" KRO_TEST_TAG=presubmit \
+	cd $(EXPDIR) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" COMPAT_SKIP_SPECS="$(SKIP_SPECS)" KRO_TEST_TAG=presubmit \
 	  go test -tags graphcompat -v -count=1 -timeout 10m \
-	    ./experimental/test/rgd_compat/
+	    ./test/rgd_compat/
 
 .PHONY: compat-count
 compat-count: ## Show per-file spec + assertion counts, marking allowlisted files.
-	@cd $(ROOT) && \
+	@cd $(EXPDIR) && \
 	printf '%-42s %6s %6s %10s\n' FILE SPECS ASSERTS ALLOWLISTED; \
 	printf '%-42s %6s %6s %10s\n' ------------------------------------------ ----- ------- -----------; \
 	total_s=0; total_a=0; on_s=0; on_a=0; \
-	for f in $$(ls experimental/test/rgd_compat/*_test.go | xargs -n1 basename | grep -v '^\(setup\|compat_stubs\)_test.go$$' | sort); do \
-	  s=$$(grep -cE '^\s*It\(' experimental/test/rgd_compat/$$f || true); \
-	  a=$$(grep -cE '(g\.)?Expect\(' experimental/test/rgd_compat/$$f || true); \
+	for f in $$(ls test/rgd_compat/*_test.go | xargs -n1 basename | grep -v '^\(setup\|compat_stubs\)_test.go$$' | sort); do \
+	  s=$$(grep -cE '^\s*It\(' test/rgd_compat/$$f || true); \
+	  a=$$(grep -cE '(g\.)?Expect\(' test/rgd_compat/$$f || true); \
 	  on=""; for p in $(PASSING_COMPAT_FILES); do [ "$$p" = "$$f" ] && on="yes"; done; \
 	  printf '%-42s %6d %6d %10s\n' $$f $$s $$a "$$on"; \
 	  total_s=$$((total_s+s)); total_a=$$((total_a+a)); \

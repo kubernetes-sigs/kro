@@ -1,6 +1,6 @@
 package graphcontroller
 
-import "github.com/kubernetes-sigs/kro/experimental/controller/graph"
+import "github.com/ellistarn/kro/experimental/controller/graph"
 
 // node constructs a graph.Node and sets its classification type.
 // This is a test helper for building Node struct literals without

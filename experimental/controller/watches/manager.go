@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/graph"
 
 	"github.com/go-logr/logr"
 	"github.com/gobuffalo/flect"

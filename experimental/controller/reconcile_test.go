@@ -15,10 +15,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
-	dagpkg "github.com/kubernetes-sigs/kro/experimental/controller/dag"
-	graphpkg "github.com/kubernetes-sigs/kro/experimental/controller/graph"
-	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
+	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/watches"
 )
 
 // ---------------------------------------------------------------------------

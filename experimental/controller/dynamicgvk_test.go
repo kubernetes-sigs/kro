@@ -10,8 +10,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	openapi "k8s.io/kube-openapi/pkg/validation/spec"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
-	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
+	"github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 // TestMergeDynamicGVK_FirstResolution verifies that first resolution reports stale.

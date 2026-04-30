@@ -15,9 +15,9 @@ import (
 	"github.com/google/cel-go/common/types"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/kubernetes-sigs/kro/experimental/controller/compiler"
-	"github.com/kubernetes-sigs/kro/experimental/controller/graph"
-	"github.com/kubernetes-sigs/kro/experimental/controller/watches"
+	"github.com/ellistarn/kro/experimental/controller/compiler"
+	"github.com/ellistarn/kro/experimental/controller/graph"
+	"github.com/ellistarn/kro/experimental/controller/watches"
 )
 
 // gateResult represents the outcome of a propagateWhen evaluation.

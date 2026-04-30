@@ -1,1 +1,4 @@
 image: ko://github.com/kubernetes-sigs/kro/experimental/cmd
+command: []
+args: []
+env: []

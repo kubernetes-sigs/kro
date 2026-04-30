@@ -19,6 +19,15 @@ spec:
       containers:
         - name: controller
           image: {{ .Values.image }}
+          {{- with .Values.command }}
+          command: {{ toJson . }}
+          {{- end }}
+          {{- with .Values.args }}
+          args: {{ toJson . }}
+          {{- end }}
+          {{- with .Values.env }}
+          env: {{- toYaml . | nindent 12 }}
+          {{- end }}
           # Surface crash-time stderr in pod status when the CRI log
           # pipeline is healthy but the container is restarting, and as
           # a fallback when it isn't.

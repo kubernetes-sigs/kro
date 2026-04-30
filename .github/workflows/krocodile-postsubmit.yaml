@@ -1,7 +1,7 @@
-name: postsubmit
+name: krocodile-postsubmit
 on:
   push:
-    branches: [main]
+    branches: [krocodile]
   workflow_dispatch:
 jobs:
   postsubmit:
@@ -13,4 +13,4 @@ jobs:
           mkdir -p hydrate-goproxy
           cd hydrate-goproxy
           go mod init hydrate-goproxy
-          go get github.com/kubernetes-sigs/kro@${GITHUB_SHA}
+          go get github.com/ellistarn/kro/experimental@${GITHUB_SHA}

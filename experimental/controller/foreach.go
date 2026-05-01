@@ -15,24 +15,13 @@ import (
 	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	"github.com/ellistarn/kro/experimental/controller/compiler"
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
-	"github.com/ellistarn/kro/experimental/controller/watches"
 )
-
-// forEachState holds the per-node forEach state that is passed in from the
-// previous reconcile and returned as new state for the next reconcile.
-type forEachState struct {
-	items     map[string][]any              // collection items keyed by nodeID/varName
-	itemScope map[string]map[string]any     // per-item scope keyed by nodeID then itemID
-	itemKeys  map[string]map[string][]string // per-item keys keyed by nodeID then itemID
-}
 
 // reconcileForEach iterates a collection and stamps the template per item.
 //
-// resyncCorrection bypasses the apply-hash check in child applies.
-//
 // forEach state is passed in via prevState and returned as new state.
 // The caller merges the output back into the shared cache.
-func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool, prevState *forEachState) (*nodeOutput, error) {
+func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, resyncCorrection bool, prevState *forEachCarryForward) (*nodeOutput, error) {
 	logger := log.FromContext(ctx)
 	var keys []string
 	// Per-item propagateWhen gate. Per 001-graph.md § propagateWhen:
@@ -140,7 +129,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				// § Propagation Control: gated items on an old generation
 				// show updated()=false ("Pending" or "Stuck" state).
 				if m, ok := prevScope.(map[string]any); ok {
-					m["__updated"] = isForEachItemUpdated(m, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration)
+					m["__updated"] = isForEachItemUpdated(m, node.ID, rs.name, rs.namespace, eval.effectiveGeneration)
 				}
 			}
 			// If no previous scope (new item, never created), it is
@@ -185,7 +174,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		//   <parentID>.<name>.<namespace>.<kind>.<group>.<graph>.<graphns>.internal.kro.run/type
 		childObj := &unstructured.Unstructured{Object: evalMap}
 		if childObj.GetNamespace() == "" {
-			childObj.SetNamespace(graph.GetNamespace())
+			childObj.SetNamespace(rs.namespace)
 		}
 		gvk := childObj.GroupVersionKind()
 
@@ -207,14 +196,14 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		// runtime resolution.
 		childNodeType := node.Type()
 
-		graphpkg.StampForEachChildLabels(childObj, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, childNodeType)
+		graphpkg.StampForEachChildLabels(childObj, node.ID, rs.name, rs.namespace, eval.effectiveGeneration, childNodeType)
 		evalMap = childObj.Object
 
 		var applied *unstructured.Unstructured
 		if childNodeType == graphpkg.NodeTypePatch {
-			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, graphpkg.NodeTypePatch, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
+			applied, err = c.applySSA(ctx, rs, evalMap, node.ID, graphpkg.NodeTypePatch, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
 		} else {
-			applied, err = r.applySSA(ctx, graph, evalMap, watcher, node.ID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
+			applied, err = c.applySSA(ctx, rs, evalMap, node.ID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
 		}
 		if err != nil {
 			// Per 005-reconciliation.md § Parent State: track per-child errors
@@ -253,7 +242,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 	// Build the new forEach state to return.
 	cacheKey := node.ID + "/" + varName
-	newState := &forEachState{
+	newState := &forEachCarryForward{
 		items:     map[string][]any{cacheKey: items},
 		itemScope: map[string]map[string]any{node.ID: newItemScope},
 		itemKeys:  map[string]map[string][]string{node.ID: newItemKeys},
@@ -400,12 +389,9 @@ func forEachItemIdentity(item any) string {
 				return uid
 			}
 		}
-		// No metadata — use content hash
-		h, err := hashDesiredState(m)
-		if err != nil {
-			log.Log.V(1).Info("forEach item hash failed, using empty identity", "error", err)
-		}
-		return h
+		// No metadata — use deterministic string representation.
+		// fmt.Sprintf("%v") on Go maps sorts keys as of Go 1.12.
+		return fmt.Sprintf("%v", m)
 	}
 	// Scalar item — use string representation.
 	// %v on Go maps and slices is deterministic (sorts map keys as of Go 1.12),

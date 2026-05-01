@@ -25,8 +25,17 @@ import (
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
-	"github.com/ellistarn/kro/experimental/controller/watches"
 )
+
+// clusterAccess bundles the three dependencies needed to read and write
+// Kubernetes resources. It is the interface between the orchestration
+// layer (controller.go, walk.go) and the execution layer (apply.go,
+// node.go, prune.go, finalization.go).
+type clusterAccess struct {
+	client client.Client     // read-write client (SSA, Delete)
+	reader client.Reader     // direct API server reader (bypasses cache)
+	scope  GVKScopeResolver // namespace vs cluster-scope resolution
+}
 
 // ---------------------------------------------------------------------------
 // SSA configuration
@@ -89,14 +98,14 @@ func isAPIServerManager(manager string) bool {
 // deleteByKeys deletes resources identified by applied-set keys. Logs each
 // attempt. Ignores NotFound (resource already gone). Used by both prune and
 // teardown to clean up finalizer resources after a target is deleted.
-func (r *GraphReconciler) deleteByKeys(ctx context.Context, keys []string) {
+func (c *clusterAccess) deleteByKeys(ctx context.Context, keys []string) {
 	logger := log.FromContext(ctx)
 	for _, fk := range keys {
 		finDel, _, ok := unstructuredFromKey(fk)
 		if !ok {
 			continue
 		}
-		if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
+		if delErr := c.client.Delete(ctx, finDel); delErr != nil {
 			if client.IgnoreNotFound(delErr) != nil {
 				logger.V(1).Info("finalizer resource cleanup failed", "key", fk, "error", delErr)
 			}
@@ -118,35 +127,27 @@ func (r *GraphReconciler) deleteByKeys(ctx context.Context, keys []string) {
 //     Patch checks target existence (patches apply to existing resources).
 //   - Cache miss on NotFound: Template clears cache + returns ErrPending,
 //     Patch falls through to apply.
-//   - Apply hash annotation: Template only (Patch targets are owned by others).
 //
 // generation is the value to stamp on the identity-generation label. Normally
 // matches graph.GetGeneration(); callers pass the reconcile-scoped effective
 // generation (the active revision's generation when the current generation
 // failed to compile). Explicit parameter rather than reading from graph so
 // the choice is visible at the call site.
-//
-// resyncCorrection bypasses the content-addressed apply hash check.
-// Per 005-reconciliation.md § Reconcile: "The resync timer bypasses the
-// template-hash check — apply unconditionally, because server-side
-// defaulters and mutating webhooks can change fields without changing
-// the desired state hash. SSA is idempotent; the apply corrects drift
-// as a side effect."
-func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *watches.GraphWatcher, nodeID string, nodeType graphpkg.NodeType, generation int64, resyncCorrection bool, forceApply bool) (*unstructured.Unstructured, error) {
-	obj, err := prepareObject(evalMap, graph, nodeID, nodeType, generation, r.Scope)
+func (c *clusterAccess) applySSA(ctx context.Context, rs *reconcileScope, evalMap map[string]any, nodeID string, nodeType graphpkg.NodeType, generation int64, resyncCorrection bool, forceApply bool) (*unstructured.Unstructured, error) {
+	obj, err := prepareObject(evalMap, rs, nodeID, nodeType, generation, c.scope)
 	if err != nil {
 		return nil, err
 	}
-	registerWatch(watcher, nodeID, obj)
-	if err := checkOwnership(ctx, r, obj, graph, nodeType, watcher, forceApply); err != nil {
+	registerWatch(rs, nodeID, obj)
+	if err := checkOwnership(ctx, c, obj, rs, nodeType, forceApply); err != nil {
 		return nil, err
 	}
-	applied, err := r.ssaPatch(ctx, obj, graph, forceApply)
+	applied, err := ssaWrite(ctx, c.client, obj, graphFieldOwner(rs.graph), forceApply)
 	if err != nil {
 		return nil, err
 	}
 	if forceApply && nodeType == graphpkg.NodeTypeTemplate {
-		applied, err = evictThirdPartyManagers(ctx, r.Client, applied, graph, evalMap, nodeID)
+		applied, err = evictThirdPartyManagers(ctx, c.client, applied, rs.graph, evalMap, nodeID)
 		if err != nil {
 			return nil, err
 		}
@@ -155,9 +156,8 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 }
 
 // prepareObject creates an Unstructured from the evaluated map, defaults
-// namespace for namespace-scoped resources, stamps identity labels, and
-// sets the content-addressed apply hash annotation (template only).
-func prepareObject(evalMap map[string]any, graph *unstructured.Unstructured, nodeID string, nodeType graphpkg.NodeType, generation int64, scope GVKScopeResolver) (*unstructured.Unstructured, error) {
+// namespace for namespace-scoped resources, and stamps identity labels.
+func prepareObject(evalMap map[string]any, rs *reconcileScope, nodeID string, nodeType graphpkg.NodeType, generation int64, scope GVKScopeResolver) (*unstructured.Unstructured, error) {
 	obj := &unstructured.Unstructured{Object: evalMap}
 
 	// Only default namespace for namespace-scoped resources.
@@ -165,17 +165,7 @@ func prepareObject(evalMap map[string]any, graph *unstructured.Unstructured, nod
 	// namespace empty — setting it breaks watch event routing because
 	// the metadata informer reports events with namespace="" while
 	// the scalar index would store namespace="<graph-ns>".
-	if obj.GetNamespace() == "" {
-		clusterScoped := false
-		if scope != nil {
-			if isNS, known := scope.IsNamespaced(obj.GroupVersionKind()); known && !isNS {
-				clusterScoped = true
-			}
-		}
-		if !clusterScoped {
-			obj.SetNamespace(graph.GetNamespace())
-		}
-	}
+	obj.SetNamespace(defaultNamespace(obj.GroupVersionKind(), obj.GetNamespace(), rs.namespace, scope))
 
 	// Stamp identity labels per 005-reconciliation.md § API Server Interaction.
 	generationStr := fmt.Sprintf("%d", generation)
@@ -186,31 +176,15 @@ func prepareObject(evalMap map[string]any, graph *unstructured.Unstructured, nod
 	if nodeType == graphpkg.NodeTypeTemplate {
 		// Template: skip stamping if identity labels are already present (e.g., forEach
 		// children stamp their own child-scoped labels before calling applySSA).
-		if !graphpkg.HasGraphIdentityLabels(lbls, graph.GetName(), graph.GetNamespace()) {
-			lbls = graphpkg.SetIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, graphpkg.NodeTypeTemplate)
+		if !graphpkg.HasGraphIdentityLabels(lbls, rs.name, rs.namespace) {
+			lbls = graphpkg.SetIdentityLabels(lbls, nodeID, rs.name, rs.namespace, generationStr, graphpkg.NodeTypeTemplate)
 			obj.SetLabels(lbls)
 		}
 	} else {
 		// Patch: always stamp identity labels so resources are discoverable via
 		// deriveAppliedSet() after controller restart.
-		lbls = graphpkg.SetIdentityLabels(lbls, nodeID, graph.GetName(), graph.GetNamespace(), generationStr, graphpkg.NodeTypePatch)
+		lbls = graphpkg.SetIdentityLabels(lbls, nodeID, rs.name, rs.namespace, generationStr, graphpkg.NodeTypePatch)
 		obj.SetLabels(lbls)
-	}
-
-	// Content-addressed apply: hash the desired state for the annotation.
-	applyHash, err := hashDesiredState(obj.Object)
-	if err != nil {
-		return nil, fmt.Errorf("hashing template for %s: %w", obj.GetName(), err)
-	}
-
-	// Template: set the apply hash annotation for future comparisons.
-	if nodeType == graphpkg.NodeTypeTemplate {
-		annotations := obj.GetAnnotations()
-		if annotations == nil {
-			annotations = map[string]string{}
-		}
-		annotations[applyHashAnnotation] = applyHash
-		obj.SetAnnotations(annotations)
 	}
 
 	return obj, nil
@@ -218,10 +192,10 @@ func prepareObject(evalMap map[string]any, graph *unstructured.Unstructured, nod
 
 // registerWatch buffers a watch for the resource so that changes trigger
 // re-reconciliation. The watch is flushed at done(true).
-func registerWatch(watcher *watches.GraphWatcher, nodeID string, obj *unstructured.Unstructured) {
+func registerWatch(rs *reconcileScope, nodeID string, obj *unstructured.Unstructured) {
 	gvr := gvkToGVR(obj.GroupVersionKind())
-	if watcher != nil {
-		watcher.WatchScalar(nodeID, gvr, obj.GroupVersionKind().Kind, obj.GetName(), obj.GetNamespace())
+	if rs.watcher != nil {
+		rs.watcher.WatchScalar(nodeID, gvr, obj.GroupVersionKind().Kind, obj.GetName(), obj.GetNamespace())
 	}
 }
 
@@ -235,25 +209,25 @@ func registerWatch(watcher *watches.GraphWatcher, nodeID string, obj *unstructur
 //   - Patch: checks that the target resource exists — patches apply to
 //     existing resources only. Uses direct API server read to avoid stale
 //     cache giving false negatives.
-func checkOwnership(ctx context.Context, r *GraphReconciler, obj *unstructured.Unstructured, graph *unstructured.Unstructured, nodeType graphpkg.NodeType, watcher *watches.GraphWatcher, forceApply bool) error {
+func checkOwnership(ctx context.Context, c *clusterAccess, obj *unstructured.Unstructured, rs *reconcileScope, nodeType graphpkg.NodeType, forceApply bool) error {
 	if nodeType == graphpkg.NodeTypeTemplate {
 		gvr := gvkToGVR(obj.GroupVersionKind())
 		var existingLabels map[string]string
-		if watcher != nil {
-			existingLabels, _ = watcher.GetLabels(gvr, obj.GetNamespace(), obj.GetName())
+		if rs.watcher != nil {
+			existingLabels, _ = rs.watcher.GetLabels(gvr, obj.GetNamespace(), obj.GetName())
 		}
 		if existingLabels == nil {
 			existing := &unstructured.Unstructured{}
 			existing.SetGroupVersionKind(obj.GroupVersionKind())
-			if getErr := r.apiReader().Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing); getErr == nil {
+			if getErr := c.reader.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing); getErr == nil {
 				existingLabels = existing.GetLabels()
 			}
 		}
 		if existingLabels != nil {
-			if otherGraph, conflict := graphpkg.HasOtherGraphIdentityLabel(existingLabels, graph.GetName(), graph.GetNamespace()); conflict {
+			if otherGraph, conflict := graphpkg.HasOtherGraphIdentityLabel(existingLabels, rs.name, rs.namespace); conflict {
 				if !forceApply {
 					return fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use lifecycle.apply: Force to take ownership): %w",
-						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, graph.GetName(), compiler.ErrFieldConflict)
+						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, rs.name, compiler.ErrFieldConflict)
 				}
 			}
 		}
@@ -263,7 +237,7 @@ func checkOwnership(ctx context.Context, r *GraphReconciler, obj *unstructured.U
 	// Patch: target must exist — patches apply to existing resources.
 	targetCheck := &unstructured.Unstructured{}
 	targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
-	if err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
+	if err := c.reader.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("patch target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), compiler.ErrPending)
 		}
@@ -272,17 +246,14 @@ func checkOwnership(ctx context.Context, r *GraphReconciler, obj *unstructured.U
 	return nil
 }
 
-// ssaPatch performs the SSA Patch call and, when the object includes a .status
-// field, a separate status subresource patch. Returns the most recent
-// server-side state — the response from whichever patch runs last is used
-// instead of a separate readback GET (which goes through the controller-runtime
-// cache and can serve stale data).
-func (r *GraphReconciler) ssaPatch(ctx context.Context, obj *unstructured.Unstructured, graph *unstructured.Unstructured, forceApply bool) (*unstructured.Unstructured, error) {
-	fieldOwner := graphFieldOwner(graph)
-
+// ssaWrite performs an SSA patch, optionally with a separate status subresource patch.
+// When the object's .status field is non-nil it is split into a separate status
+// subresource patch. Returns the most recent server-side state — the response from
+// whichever patch runs last.
+func ssaWrite(ctx context.Context, c client.Client, obj *unstructured.Unstructured, fieldOwner client.FieldOwner, force bool) (*unstructured.Unstructured, error) {
 	var patchOpts []client.PatchOption
 	patchOpts = append(patchOpts, fieldOwner)
-	if forceApply {
+	if force {
 		patchOpts = append(patchOpts, client.ForceOwnership)
 	}
 
@@ -308,7 +279,10 @@ func (r *GraphReconciler) ssaPatch(ctx context.Context, obj *unstructured.Unstru
 	applied.SetName(obj.GetName())
 	applied.SetNamespace(obj.GetNamespace())
 
-	if err := r.Client.Patch(ctx, applied, client.RawPatch(types.ApplyPatchType, data), patchOpts...); err != nil {
+	if err := c.Patch(ctx, applied, client.RawPatch(types.ApplyPatchType, data), patchOpts...); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, err
+		}
 		if apierrors.IsConflict(err) {
 			return nil, fmt.Errorf("SSA conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), compiler.ErrFieldConflict, err)
 		}
@@ -336,10 +310,13 @@ func (r *GraphReconciler) ssaPatch(ctx context.Context, obj *unstructured.Unstru
 		statusApplied.SetNamespace(obj.GetNamespace())
 		var statusOpts []client.SubResourcePatchOption
 		statusOpts = append(statusOpts, fieldOwner)
-		if forceApply {
+		if force {
 			statusOpts = append(statusOpts, client.ForceOwnership)
 		}
-		if err := r.Client.Status().Patch(ctx, statusApplied, client.RawPatch(types.ApplyPatchType, sData), statusOpts...); err != nil {
+		if err := c.Status().Patch(ctx, statusApplied, client.RawPatch(types.ApplyPatchType, sData), statusOpts...); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, err
+			}
 			if apierrors.IsConflict(err) {
 				return nil, fmt.Errorf("SSA status conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), compiler.ErrFieldConflict, err)
 			}
@@ -401,17 +378,18 @@ func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionK
 			"namespace": namespace,
 		},
 	}
-
-	data, err := json.Marshal(release)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling release: %w", err)
+	if hasStatus {
+		// Include "status": {} so SSA releases all previously-owned status fields.
+		// An identity-only release body (apiVersion/kind/metadata) is ignored by
+		// the status endpoint — no fields are claimed, so no ownership is released.
+		release["status"] = map[string]any{}
 	}
 
-	target := &unstructured.Unstructured{}
-	target.SetGroupVersionKind(gvk)
-	target.SetName(name)
-	target.SetNamespace(namespace)
-	if err := c.Patch(ctx, target, client.RawPatch(types.ApplyPatchType, data), fieldOwner, client.ForceOwnership); err != nil {
+	obj := &unstructured.Unstructured{Object: release}
+	obj.SetGroupVersionKind(gvk)
+
+	result, err := ssaWrite(ctx, c, obj, fieldOwner, true)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// Resource already deleted — nothing to release.
 			// Callers must check the returned object for nil before use.
@@ -419,34 +397,5 @@ func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionK
 		}
 		return nil, fmt.Errorf("release apply for %s/%s: %w", namespace, name, err)
 	}
-
-	// result holds the most recent Patch response — the authoritative
-	// server-side state after this release.
-	result := target
-
-	if hasStatus {
-		// The status subresource endpoint only processes fields under .status.
-		// An identity-only release body (apiVersion/kind/metadata) is ignored by
-		// the status endpoint — no fields are claimed, so no ownership is released.
-		// Include "status": {} so SSA releases all previously-owned status fields.
-		release["status"] = map[string]any{}
-		statusData, err := json.Marshal(release)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling status release: %w", err)
-		}
-		statusTarget := &unstructured.Unstructured{}
-		statusTarget.SetGroupVersionKind(gvk)
-		statusTarget.SetName(name)
-		statusTarget.SetNamespace(namespace)
-		if err := c.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, statusData), fieldOwner, client.ForceOwnership); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return nil, fmt.Errorf("status release apply for %s/%s: %w", namespace, name, err)
-			}
-		} else {
-			// Status Patch response is strictly newer.
-			result = statusTarget
-		}
-	}
-
 	return result, nil
 }

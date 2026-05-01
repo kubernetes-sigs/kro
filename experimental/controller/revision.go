@@ -416,7 +416,7 @@ func (r *GraphReconciler) findSupersededRevisions(ctx context.Context, graphName
 // Revision status
 // ---------------------------------------------------------------------------
 
-// updateRevisionStatus garbage-collects superseded revisions once all
+// gcSupersededRevisions garbage-collects superseded revisions once all
 // resources are ready and pruning is complete.
 //
 // GC predicate: a superseded revision is safe to delete when its applied set
@@ -424,7 +424,7 @@ func (r *GraphReconciler) findSupersededRevisions(ctx context.Context, graphName
 // in the active set, those resources are still being pruned and the old
 // revision provides ordering metadata for the prune walk.
 // See: experimental/docs/design/002-revisions.md § Lifecycle
-func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active *unstructured.Unstructured, superseded []*unstructured.Unstructured, allReady bool, pruneClean bool) {
+func (r *GraphReconciler) gcSupersededRevisions(ctx context.Context, active *unstructured.Unstructured, superseded []*unstructured.Unstructured, allReady bool, pruneClean bool) {
 	if !allReady || !pruneClean {
 		return
 	}
@@ -439,4 +439,29 @@ func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active *unst
 	}
 }
 
+// deepCopyMap creates a deep copy of a map[string]any.
+func deepCopyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	result := make(map[string]any, len(m))
+	for k, v := range m {
+		result[k] = deepCopyValue(v)
+	}
+	return result
+}
 
+func deepCopyValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		return deepCopyMap(val)
+	case []any:
+		result := make([]any, len(val))
+		for i, item := range val {
+			result[i] = deepCopyValue(item)
+		}
+		return result
+	default:
+		return v // primitives are immutable
+	}
+}

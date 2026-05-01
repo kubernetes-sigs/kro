@@ -123,7 +123,6 @@ func IsPending(err error) bool {
 // thread-safe by the CEL spec, and BuildDAG produces a read-only topology.
 // Per-instance concrete node bodies are assembled separately via assembleDAG.
 type CompiledGraph struct {
-	CompilationKey string                            // structural hash of compilation inputs (ignores concrete values)
 	env            *cel.Env                          // CEL environment (immutable after Extend)
 	Programs       map[string]cel.Program            // expression string → compiled program
 	ExprPaths      map[string]map[string][]graph.FieldPath // expression string → (scope var → field paths)
@@ -329,11 +328,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 		krocel.WithResourceIDs(typeInfo.UntypedIDs),
 		krocel.WithListVariables(typeInfo.listIDs),
 		krocel.WithCustomDeclarations(typedDecls),
-		krocel.WithCustomDeclarations(celPluralFunction()),
-		krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
-		krocel.WithCustomDeclarations(celReadyFunction()),
-		krocel.WithCustomDeclarations(celUpdatedFunction()),
-		krocel.WithCustomDeclarations(celDependenciesFunction()),
+		krocel.WithCustomDeclarations(customCELFunctions()),
 		// __kroNodeReady carries per-Watch readyWhen verdicts, looked up
 		// by the AST rewrite of `<wk_id>.ready()` (see readyrewrite.go).
 		// Per 001-graph.md § readyWhen: "A Watch's `.ready()` returns
@@ -436,11 +431,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 			krocel.WithResourceIDs(refinedTypeInfo.UntypedIDs),
 			krocel.WithListVariables(refinedTypeInfo.listIDs),
 			krocel.WithCustomDeclarations(refinedDecls),
-			krocel.WithCustomDeclarations(celPluralFunction()),
-			krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
-			krocel.WithCustomDeclarations(celReadyFunction()),
-			krocel.WithCustomDeclarations(celUpdatedFunction()),
-			krocel.WithCustomDeclarations(celDependenciesFunction()),
+			krocel.WithCustomDeclarations(customCELFunctions()),
 			krocel.WithCustomDeclarations([]cel.EnvOption{
 				cel.Variable(ReservedNodeReadyVar, cel.MapType(cel.StringType, cel.BoolType)),
 				cel.Variable(ReservedDepsMapVar, cel.MapType(cel.StringType, cel.ListType(cel.DynType))),
@@ -528,11 +519,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 				cel.CustomTypeProvider(wrappedInner),
 				cel.Variable(node.ID, declType.CelType()), // element type, not list
 			}),
-			krocel.WithCustomDeclarations(celPluralFunction()),
-			krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
-			krocel.WithCustomDeclarations(celReadyFunction()),
-			krocel.WithCustomDeclarations(celUpdatedFunction()),
-			krocel.WithCustomDeclarations(celDependenciesFunction()),
+			krocel.WithCustomDeclarations(customCELFunctions()),
 			krocel.WithCustomDeclarations([]cel.EnvOption{
 				cel.Variable(ReservedNodeReadyVar, cel.MapType(cel.StringType, cel.BoolType)),
 				cel.Variable(ReservedDepsMapVar, cel.MapType(cel.StringType, cel.ListType(cel.DynType))),
@@ -644,7 +631,6 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 		dynamicGVKNodes = typeInfo.DynamicGVKNodes
 	}
 	return &CompiledGraph{
-		CompilationKey:  spec.CompilationKey(),
 		env:             env,
 		Programs:        programs,
 		ExprPaths:       exprPaths,
@@ -657,3 +643,5 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 		ResourceSchemas: typeInfo.ResourceSchemas,
 	}, nil
 }
+
+

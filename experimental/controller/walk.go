@@ -12,17 +12,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/cel-go/common/types"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
 	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
-	"github.com/ellistarn/kro/experimental/controller/watches"
 )
 
 // nodeResult carries a node's evaluation output back to the walk loop.
@@ -35,9 +32,7 @@ type nodeResult struct {
 	scope any
 
 	// forEach state — returned by forEach expansion for the walk to merge.
-	forEachNewItems map[string][]any               // cache key → collection items
-	forEachNewScope map[string]map[string]any      // nodeID → itemID → scope
-	forEachNewKeys  map[string]map[string][]string // nodeID → itemID → keys
+	forEach *forEachCarryForward
 
 	// resolvedGVK carries the GVK resolved by a dynamic-GVK node's template
 	// evaluation. Used to detect staleness per 004-compilation.md § Deferred Types.
@@ -62,8 +57,9 @@ type walkResult struct {
 // Each node is evaluated after all hard dependencies have completed. Lazy
 // dependencies are available as optionals in scope but do not gate evaluation.
 // The walk is sequential — no goroutines, no channels.
-func (r *GraphReconciler) walk(ctx context.Context, graph *unstructured.Unstructured, state *instanceState, eval *evaluator, dag *dagpkg.DAG, plan *dagpkg.PlanState, watcher *watches.GraphWatcher) *walkResult {
+func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *instanceState, eval *evaluator, dag *dagpkg.DAG, plan *dagpkg.PlanState) *walkResult {
 	logger := log.FromContext(ctx)
+	cluster := r.cluster()
 
 	result := &walkResult{
 		plan:      plan,
@@ -171,19 +167,8 @@ func (r *GraphReconciler) walk(ctx context.Context, graph *unstructured.Unstruct
 			}
 		}
 
-		// --- SystemError retry metric ---
-		// If this node was in SystemError on the previous reconcile and is now
-		// being re-evaluated, count it as a retry for operator observability.
-		if state.previousPlanStates != nil {
-			if prevState, ok := state.previousPlanStates.States[node.ID]; ok && prevState == dagpkg.NodeSystemError {
-				SystemErrorRetriesTotal.With(graphMetricLabels(
-					graph.GetName(), graph.GetNamespace(), node.ID,
-				)).Inc()
-			}
-		}
-
 		// --- Evaluate the node ---
-		nr := r.evaluateNode(ctx, graph, *node, eval, state, watcher)
+		nr := cluster.evaluateNode(ctx, rs, *node, eval, state)
 
 		// --- Process the result ---
 		if nr.state == dagpkg.NodeError {
@@ -232,14 +217,16 @@ func (r *GraphReconciler) walk(ctx context.Context, graph *unstructured.Unstruct
 		}
 
 		// Merge forEach state updates.
-		for k, v := range nr.forEachNewItems {
-			state.forEach.items[k] = v
-		}
-		for nodeID, itemScopes := range nr.forEachNewScope {
-			state.forEach.itemScope[nodeID] = itemScopes
-		}
-		for nodeID, itemKeys := range nr.forEachNewKeys {
-			state.forEach.itemKeys[nodeID] = itemKeys
+		if nr.forEach != nil {
+			for k, v := range nr.forEach.items {
+				state.forEach.items[k] = v
+			}
+			for nodeID, itemScopes := range nr.forEach.itemScope {
+				state.forEach.itemScope[nodeID] = itemScopes
+			}
+			for nodeID, itemKeys := range nr.forEach.itemKeys {
+				state.forEach.itemKeys[nodeID] = itemKeys
+			}
 		}
 
 		// Update plan state.
@@ -281,9 +268,6 @@ func (r *GraphReconciler) walk(ctx context.Context, graph *unstructured.Unstruct
 	// Derive aggregate state from the DAG plan.
 	result.summary = plan.Summary()
 
-	// Update node state gauge metrics.
-	updateNodeStateMetrics(graph.GetName(), graph.GetNamespace(), plan, dag)
-
 	return result
 }
 
@@ -294,9 +278,7 @@ func (r *GraphReconciler) walk(ctx context.Context, graph *unstructured.Unstruct
 //
 // The evaluator is used directly (no snapshot) since the walk is sequential.
 // Lazy dependencies are populated as optional values before dispatch.
-func (r *GraphReconciler) evaluateNode(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, state *instanceState, watcher *watches.GraphWatcher) nodeResult {
-	nodeType := node.Type()
-
+func (c *clusterAccess) evaluateNode(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, state *instanceState) nodeResult {
 	// Populate lazy dependencies as CEL optional values. Per 005-reconciliation.md:
 	// "Lazy dependencies are always in scope as optional values."
 	for depID, kind := range node.Dependencies {
@@ -315,25 +297,12 @@ func (r *GraphReconciler) evaluateNode(ctx context.Context, graph *unstructured.
 		}
 	}
 
-	evalStart := time.Now()
-	// Build previous forEach state from instanceState for forEach nodes.
-	var prevForEachState *forEachState
+	// Pass carry-forward forEach state directly for forEach nodes.
+	var prevForEachState *forEachCarryForward
 	if node.ForEach != nil {
-		prevForEachState = &forEachState{
-			items:     state.forEach.items,
-			itemScope: state.forEach.itemScope,
-			itemKeys:  state.forEach.itemKeys,
-		}
+		prevForEachState = state.forEach
 	}
-	out, err := r.reconcileNode(ctx, graph, node, nodeType, eval, watcher, false, prevForEachState)
-	evalDuration := time.Since(evalStart)
-
-	// Observe per-node evaluation duration.
-	if evalDuration > 0 {
-		NodeEvalDurationSeconds.With(graphMetricLabels(
-			graph.GetName(), graph.GetNamespace(), node.ID,
-		)).Observe(evalDuration.Seconds())
-	}
+	out, err := c.reconcileNode(ctx, rs, node, eval, false, prevForEachState)
 
 	nr := nodeResult{
 		state: dagpkg.NodeReady,
@@ -343,11 +312,7 @@ func (r *GraphReconciler) evaluateNode(ctx context.Context, graph *unstructured.
 	// Unpack nodeOutput fields.
 	if out != nil {
 		nr.keys = out.keys
-		if out.forEach != nil {
-			nr.forEachNewItems = out.forEach.items
-			nr.forEachNewScope = out.forEach.itemScope
-			nr.forEachNewKeys = out.forEach.itemKeys
-		}
+		nr.forEach = out.forEach
 	}
 
 	if err != nil {

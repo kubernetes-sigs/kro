@@ -178,6 +178,29 @@ func (e *evaluator) evalReadiness(nodeID string, readyWhen []string) error {
 	return nil
 }
 
+// evalConditions evaluates a list of boolean CEL conditions.
+// Returns gatePass if all pass, gateBlock if any returns false, gateError on eval error.
+// When wrapPending is true, pending errors are wrapped as ErrPending (for includeWhen).
+// When wrapPending is false, pending errors are mapped to ErrWaitingForReadiness (for readyWhen).
+func (e *evaluator) evalConditions(conditions []string, nodeID string, wrapPending bool) (gateResult, error) {
+	for _, cond := range conditions {
+		ok, err := e.evalBoolCondition(cond)
+		if err != nil {
+			if wrapPending && compiler.IsPending(err) {
+				return gateError, fmt.Errorf("data pending: %w", compiler.ErrPending)
+			}
+			if !wrapPending && compiler.IsPending(err) {
+				return gateError, fmt.Errorf("node %q: readyWhen %q: data not yet available: %w", nodeID, cond, compiler.ErrWaitingForReadiness)
+			}
+			return gateError, fmt.Errorf("node %q: condition %q: %w", nodeID, cond, err)
+		}
+		if !ok {
+			return gateBlock, nil
+		}
+	}
+	return gatePass, nil
+}
+
 // evalReadinessConditions evaluates readyWhen boolean conditions against the
 // full scope. Returns nil if all conditions pass, compiler.ErrWaitingForReadiness if
 // any are false or data-pending.
@@ -190,18 +213,12 @@ func (e *evaluator) evalReadinessConditions(conditions []string, nodeID string) 
 	if len(conditions) == 0 {
 		return nil
 	}
-
-	for _, cond := range conditions {
-		ok, err := e.evalBoolCondition(cond)
-		if err != nil {
-			if compiler.IsPending(err) {
-				return fmt.Errorf("node %q: readyWhen %q: data not yet available: %w", nodeID, cond, compiler.ErrWaitingForReadiness)
-			}
-			return fmt.Errorf("node %q: readyWhen %q: %w", nodeID, cond, err)
-		}
-		if !ok {
-			return fmt.Errorf("node %q: readyWhen %q evaluated to false: %w", nodeID, cond, compiler.ErrWaitingForReadiness)
-		}
+	gate, err := e.evalConditions(conditions, nodeID, false)
+	if err != nil {
+		return err
+	}
+	if gate == gateBlock {
+		return fmt.Errorf("node %q: readyWhen evaluated to false: %w", nodeID, compiler.ErrWaitingForReadiness)
 	}
 	return nil
 }
@@ -230,17 +247,8 @@ func (e *evaluator) checkPropagateWhen(conditions []string, nodeID string) gateR
 	if len(conditions) == 0 {
 		return gatePass
 	}
-
-	for _, cond := range conditions {
-		ok, err := e.evalBoolCondition(cond)
-		if err != nil {
-			return gateError
-		}
-		if !ok {
-			return gateBlock
-		}
-	}
-	return gatePass
+	gate, _ := e.evalConditions(conditions, nodeID, false)
+	return gate
 }
 
 // firstUnsatisfiedCondition returns the first condition expression that
@@ -377,17 +385,14 @@ func (e *evaluator) evalString(s string) (any, error) {
 
 // includeWhen evaluates all includeWhen conditions for a node.
 func (e *evaluator) includeWhen(conditions []string) (bool, error) {
-	for _, cond := range conditions {
-		ok, err := e.evalBoolCondition(cond)
-		if err != nil {
-			if compiler.IsPending(err) {
-				return false, fmt.Errorf("includeWhen data pending: %w", compiler.ErrPending)
-			}
-			return false, err
-		}
-		if !ok {
-			return false, nil
-		}
+	gate, err := e.evalConditions(conditions, "", true)
+	if gate == gatePass {
+		return true, nil
 	}
-	return true, nil
+	// gateBlock means a condition returned false — not an error.
+	if gate == gateBlock {
+		return false, nil
+	}
+	// gateError — propagate the wrapped error.
+	return false, err
 }

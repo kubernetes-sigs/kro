@@ -28,7 +28,6 @@ import (
 
 	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
-	"github.com/ellistarn/kro/experimental/controller/watches"
 )
 
 // FinalizationPhase represents the current state of a finalization sequence.
@@ -37,7 +36,6 @@ type FinalizationPhase string
 const (
 	FinalizationCreating     FinalizationPhase = "Creating"
 	FinalizationWaitingReady FinalizationPhase = "WaitingReady"
-	FinalizationComplete     FinalizationPhase = "Complete"
 )
 
 // finalizationEntry tracks a single in-flight finalization sequence.
@@ -75,15 +73,14 @@ type finalizationResult struct {
 //   - Delete targets in completedTargets (finalization done)
 //   - Skip targets with finalizers that aren't in completedTargets
 //   - Clean up children after successful target deletion
-func (r *GraphReconciler) advanceFinalization(
+func (c *clusterAccess) advanceFinalization(
 	ctx context.Context,
-	graph *unstructured.Unstructured,
+	rs *reconcileScope,
 	pruneCandidates []string,
 	keyToNodeID map[string]string,
 	nodeIDToKey map[string]string,
 	allDAGs []*dagpkg.DAG,
 	eval *evaluator,
-	watcher *watches.GraphWatcher,
 	state *instanceState,
 ) (*finalizationResult, error) {
 	logger := log.FromContext(ctx)
@@ -156,7 +153,7 @@ func (r *GraphReconciler) advanceFinalization(
 		if !ok {
 			continue
 		}
-		if getErr := r.apiReader().Get(ctx, nn, obj); getErr != nil {
+		if getErr := c.reader.Get(ctx, nn, obj); getErr != nil {
 			if apierrors.IsNotFound(getErr) {
 				// Target already gone — skip finalization.
 				logger.Info("finalization skipped: target resource does not exist",
@@ -170,7 +167,7 @@ func (r *GraphReconciler) advanceFinalization(
 		}
 
 		// Run the finalization sequence.
-		ready, childKeys, finErr := r.runFinalization(ctx, graph, obj, nodeID, finalizerNodeIDs, finDAG, eval, watcher)
+		ready, childKeys, finErr := c.runFinalization(ctx, rs, obj, nodeID, finalizerNodeIDs, finDAG, eval)
 
 		// Protect all child keys from pruning.
 		for _, ck := range childKeys {
@@ -229,15 +226,14 @@ func (r *GraphReconciler) advanceFinalization(
 // Returns (true, keys, nil) when all finalizer resources are ready.
 // Returns (false, keys, nil) when finalizers are in progress.
 // Returns (false, keys, err) when a finalizer can't be created.
-func (r *GraphReconciler) runFinalization(
+func (c *clusterAccess) runFinalization(
 	ctx context.Context,
-	graph *unstructured.Unstructured,
+	rs *reconcileScope,
 	target *unstructured.Unstructured,
 	targetNodeID string,
 	finalizerNodeIDs []string,
 	dag *dagpkg.DAG,
 	eval *evaluator,
-	watcher *watches.GraphWatcher,
 ) (bool, []string, error) {
 	logger := log.FromContext(ctx)
 	var keys []string
@@ -260,7 +256,7 @@ func (r *GraphReconciler) runFinalization(
 
 		// forEach + finalizes: expand collection.
 		if finNode.ForEach != nil {
-			ready, fKeys, err := r.runForEachFinalization(ctx, graph, finNode, dag, eval, watcher)
+			ready, fKeys, err := c.runForEachFinalization(ctx, rs, finNode, dag, eval)
 			keys = append(keys, fKeys...)
 			if err != nil {
 				return false, keys, err
@@ -279,11 +275,11 @@ func (r *GraphReconciler) runFinalization(
 
 		finObj := &unstructured.Unstructured{Object: evalMap}
 		if finObj.GetNamespace() == "" {
-			finObj.SetNamespace(graph.GetNamespace())
+			finObj.SetNamespace(rs.namespace)
 		}
 		existing := &unstructured.Unstructured{}
 		existing.SetGroupVersionKind(finObj.GroupVersionKind())
-		err = r.apiReader().Get(ctx, client.ObjectKey{
+		err = c.reader.Get(ctx, client.ObjectKey{
 			Namespace: finObj.GetNamespace(),
 			Name:      finObj.GetName(),
 		}, existing)
@@ -295,7 +291,7 @@ func (r *GraphReconciler) runFinalization(
 			// Create finalizer resource.
 			logger.Info("creating finalizer resource", "finalizer", finNodeID,
 				"target", target.GetName())
-			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNodeID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, false, false)
+			applied, applyErr := c.applySSA(ctx, rs, evalMap, finNodeID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, false, false)
 			if applyErr != nil {
 				return false, keys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
 			}
@@ -322,13 +318,12 @@ func (r *GraphReconciler) runFinalization(
 }
 
 // runForEachFinalization handles the forEach + finalizes case.
-func (r *GraphReconciler) runForEachFinalization(
+func (c *clusterAccess) runForEachFinalization(
 	ctx context.Context,
-	graph *unstructured.Unstructured,
+	rs *reconcileScope,
 	finNode *graphpkg.Node,
 	dag *dagpkg.DAG,
 	eval *evaluator,
-	watcher *watches.GraphWatcher,
 ) (bool, []string, error) {
 	logger := log.FromContext(ctx)
 	var createdKeys []string
@@ -360,14 +355,14 @@ func (r *GraphReconciler) runForEachFinalization(
 
 		childObj := &unstructured.Unstructured{Object: evalMap}
 		if childObj.GetNamespace() == "" {
-			childObj.SetNamespace(graph.GetNamespace())
+			childObj.SetNamespace(rs.namespace)
 		}
-		graphpkg.StampForEachChildLabels(childObj, finNode.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration, graphpkg.NodeTypeTemplate)
+		graphpkg.StampForEachChildLabels(childObj, finNode.ID, rs.name, rs.namespace, eval.effectiveGeneration, graphpkg.NodeTypeTemplate)
 		evalMap = childObj.Object
 
 		existing := &unstructured.Unstructured{}
 		existing.SetGroupVersionKind(childObj.GroupVersionKind())
-		getErr := r.apiReader().Get(ctx, client.ObjectKey{
+		getErr := c.reader.Get(ctx, client.ObjectKey{
 			Namespace: childObj.GetNamespace(),
 			Name:      childObj.GetName(),
 		}, existing)
@@ -378,7 +373,7 @@ func (r *GraphReconciler) runForEachFinalization(
 			}
 			logger.Info("creating forEach finalizer child",
 				"finalizer", finNode.ID, "name", childObj.GetName())
-			applied, applyErr := r.applySSA(ctx, graph, evalMap, watcher, finNode.ID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, false, false)
+			applied, applyErr := c.applySSA(ctx, rs, evalMap, finNode.ID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, false, false)
 			if applyErr != nil {
 				return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
 			}

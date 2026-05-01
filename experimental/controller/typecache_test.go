@@ -59,13 +59,11 @@ func TestCompileRevision_GenerationStaleness(t *testing.T) {
 
 // TestCompileRevision_RecompilesOnGenerationAdvance exercises the full
 // compileRevision method, proving that:
-//  1. First call compiles and caches the result
-//  2. Second call returns the cached artifact (fast path)
-//  3. After SchemaGeneration advances, the method recompiles
-//  4. The recompiled artifact records the new generation
+//  1. First call compiles from scratch
+//  2. After SchemaGeneration advances, the method recompiles and records the new generation
 //
-// This tests the production staleness detection path end-to-end through
-// compileRevision, not just the comparison in isolation.
+// compileRevision always recompiles (no compilation cache). The generation
+// counter is recorded on the artifact for staleness detection by callers.
 func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 	t.Parallel()
 
@@ -94,7 +92,7 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 	tc := compiler.NewSchemaGeneration()
 	r := &GraphReconciler{
 		SchemaGen: tc,
-		Caches:    newGraphCaches(),
+		Caches:    newInstanceMap(),
 	}
 
 	// First call: compiles from scratch.
@@ -103,33 +101,25 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 	require.NotNil(t, spec1)
 	require.NotNil(t, state1)
 	require.NotNil(t, state1.compiled)
-	firstCompiled := state1.compiled
+	assert.Equal(t, int64(0), state1.compiled.TypeCacheGen,
+		"first compilation should record generation 0")
 
-	// Second call: returns cached (fast path).
+	// Second call: recompiles (no compilation cache) but succeeds.
 	_, state2, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
-	assert.Same(t, firstCompiled, state2.compiled,
-		"steady-state reconcile should return same compiledGraph pointer")
+	require.NotNil(t, state2.compiled)
 
 	// Advance generation — simulates CRD install/update.
 	tc.AdvanceGeneration()
 
-	// Third call: detects staleness and recompiles.
+	// Third call: recompiles and records the new generation.
 	_, state3, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	require.NotNil(t, state3.compiled)
-	assert.NotSame(t, firstCompiled, state3.compiled,
-		"after generation advance, compileRevision must return a NEW compiledGraph")
 
 	// The new artifact records the current generation.
 	assert.Equal(t, tc.Generation(), state3.compiled.TypeCacheGen,
 		"recompiled artifact should record the current type cache generation")
-
-	// Subsequent call returns the new cached artifact (no further recompilation).
-	_, state4, err := r.compileRevision(context.Background(), "", revision)
-	require.NoError(t, err)
-	assert.Same(t, state3.compiled, state4.compiled,
-		"steady-state after recompilation should cache the new artifact")
 }
 
 // TestCompileRevision_SchemaUpdateViaGenerationAdvance proves that when a CRD
@@ -169,7 +159,7 @@ func TestCompileRevision_SchemaUpdateViaGenerationAdvance(t *testing.T) {
 	r := &GraphReconciler{
 		SchemaResolver: mutableResolver,
 		SchemaGen:      tc,
-		Caches:         newGraphCaches(),
+		Caches:         newInstanceMap(),
 	}
 
 	revision := &unstructured.Unstructured{Object: map[string]any{
@@ -294,7 +284,7 @@ func TestCRDUpdate_AdvanceGenerationInvalidatesArtifact(t *testing.T) {
 	r := &GraphReconciler{
 		SchemaResolver: mutableResolver,
 		SchemaGen:      sg,
-		Caches:         newGraphCaches(),
+		Caches:         newInstanceMap(),
 	}
 
 	revision := &unstructured.Unstructured{Object: map[string]any{

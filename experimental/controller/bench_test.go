@@ -17,7 +17,7 @@ import (
 // set, get, remove, and size tracking.
 func TestInstanceCacheLifecycle(t *testing.T) {
 	spec := buildBenchSpec(5)
-	caches := newGraphCaches()
+				caches := newInstanceMap()
 
 	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	if err != nil {
@@ -125,24 +125,6 @@ func BenchmarkBuildDAG(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				_, err := dagpkg.BuildDAG(nodes, nil, nil)
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-// BenchmarkHashDesiredState measures the FNV-64a hashing used for
-// content-addressed apply. This runs once per node per reconcile.
-func BenchmarkHashDesiredState(b *testing.B) {
-	for _, fieldCount := range []int{5, 20, 50, 100} {
-		b.Run(fmt.Sprintf("fields=%d", fieldCount), func(b *testing.B) {
-			obj := buildBenchObject(fieldCount)
-			b.ResetTimer()
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				_, err := hashDesiredState(obj)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -324,23 +306,6 @@ func buildBenchNodes(n int) []graph.Node {
 	return nodes
 }
 
-// buildBenchObject creates a map with the given number of data fields.
-func buildBenchObject(fieldCount int) map[string]any {
-	data := make(map[string]any, fieldCount)
-	for i := 0; i < fieldCount; i++ {
-		data[fmt.Sprintf("key%d", i)] = fmt.Sprintf("value%d", i)
-	}
-	return map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata": map[string]any{
-			"name":      "bench-hash",
-			"namespace": "default",
-		},
-		"data": data,
-	}
-}
-
 // buildBenchSpecWithExprs creates a 2-node spec where node 1 has N
 // CEL expressions referencing node 0.
 func buildBenchSpecWithExprs(exprCount int) *graph.GraphSpec {
@@ -390,7 +355,7 @@ func BenchmarkCompileRevisionPerInstance(b *testing.B) {
 				b.ResetTimer()
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
-					caches := newGraphCaches()
+	caches := newInstanceMap()
 					for j := 0; j < instanceCount; j++ {
 						instanceKey := fmt.Sprintf("ns/graph-%d-g00001", j)
 						compiled, err := compiler.CompileGraphSpec(spec, nil)

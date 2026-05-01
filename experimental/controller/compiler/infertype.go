@@ -570,14 +570,8 @@ func refineDefTypes(nodes []graph.Node, ts *TypeSource, exprTypes map[string]*ce
 	}
 }
 
-// narrowObjectType rebuilds a DeclType for a def body, replacing dyn fields
-// with their expression return types where known.
-func narrowObjectType(typeName string, body map[string]any, exprTypes map[string]*cel.Type) *apiservercel.DeclType {
-	var ignored bool
-	return narrowObjectTypeTracked(typeName, body, exprTypes, &ignored)
-}
-
-// narrowObjectTypeTracked is like narrowObjectType but sets *narrowed to true
+// narrowObjectTypeTracked rebuilds a DeclType for a def body, replacing dyn fields
+// with their expression return types where known. Sets *narrowed to true
 // if any field was narrowed from dyn to a concrete type.
 func narrowObjectTypeTracked(typeName string, body map[string]any, exprTypes map[string]*cel.Type, narrowed *bool) *apiservercel.DeclType {
 	fields := make(map[string]*apiservercel.DeclField, len(body))

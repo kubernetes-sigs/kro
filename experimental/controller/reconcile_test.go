@@ -842,7 +842,7 @@ func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
 	state := &reconcileState{
 		compiled: true,
-		PlanSummary: dagpkg.PlanSummary{
+		planSummary: dagpkg.PlanSummary{
 			HasPending: true,
 			HasBlocked: true,
 		},
@@ -859,7 +859,7 @@ func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
 func TestDeriveReadyCondition_PendingSurfacesReasons(t *testing.T) {
 	s := &reconcileState{
 		compiled:    true,
-		PlanSummary: dagpkg.PlanSummary{HasPending: true},
+		planSummary: dagpkg.PlanSummary{HasPending: true},
 		nodeErrors:  []string{"deploy: waiting for input from cfg"},
 	}
 	_, _, message := s.deriveReadyCondition()
@@ -1385,7 +1385,7 @@ func TestReconcileDefinition_StampsUpdated(t *testing.T) {
 
 	eval := &evaluator{compiled: compiled, scope: map[string]any{}}
 	r := &GraphReconciler{}
-	err = r.reconcileDefinition(context.Background(), spec.Nodes[0], eval)
+	err = r.cluster().reconcileDefinition(context.Background(), spec.Nodes[0], eval)
 	require.NoError(t, err)
 
 	m, ok := eval.scope["config"].(map[string]any)
@@ -1456,7 +1456,7 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 	}
 
 	// Pre-populate forEach state so items are "known" and can be carried forward.
-	prevState := &forEachState{
+	prevState := &forEachCarryForward{
 		items: map[string][]any{
 			"workers/item": {
 				map[string]any{"metadata": map[string]any{"name": "alpha"}},
@@ -1478,7 +1478,8 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 	}}
 
 	r := &GraphReconciler{}
-	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false, prevState)
+	rs := newReconcileScope(graph, nil)
+	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval, false, prevState)
 	// compiler.ErrWaitingForReadiness expected — propagateWhen halted expansion.
 	require.ErrorIs(t, err, compiler.ErrWaitingForReadiness)
 
@@ -1536,7 +1537,8 @@ func TestForEach_DefinitionItemsAlwaysReEvaluated(t *testing.T) {
 	}}
 
 	r := &GraphReconciler{}
-	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false, nil)
+	rs := newReconcileScope(graph, nil)
+	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval, false, nil)
 	require.NoError(t, err)
 
 	items, ok := eval.scope["results"].([]any)
@@ -1577,6 +1579,8 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 		"metadata": map[string]any{"name": "test", "namespace": "default"},
 	}}
 	r := &GraphReconciler{}
+	c := r.cluster()
+	rs := newReconcileScope(graph, nil)
 	names := []any{"alpha", "beta"}
 
 	// Phase 1: config.version = "v1"
@@ -1586,7 +1590,7 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval.scope["config"] = map[string]any{"version": "v1"}
 	eval.scope["source"] = map[string]any{"names": names}
 
-	out, err := r.reconcileForEach(context.Background(), graph, resultsNode, eval, nil, false, nil)
+	out, err := c.reconcileForEach(context.Background(), rs, resultsNode, eval, false, nil)
 	require.NoError(t, err)
 	items1, ok := eval.scope["results"].([]any)
 	require.True(t, ok)
@@ -1614,13 +1618,13 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval2.scope["config"] = map[string]any{"version": "v2"}
 	eval2.scope["source"] = map[string]any{"names": names}
 
-	prevState2 := &forEachState{
+	prevState2 := &forEachCarryForward{
 		items:     state.forEach.items,
 		itemScope: state.forEach.itemScope,
 		itemKeys:  state.forEach.itemKeys,
 	}
 
-	_, err = r.reconcileForEach(context.Background(), graph, resultsNode, eval2, nil, false, prevState2)
+	_, err = c.reconcileForEach(context.Background(), rs, resultsNode, eval2, false, prevState2)
 	require.NoError(t, err)
 	items2, ok := eval2.scope["results"].([]any)
 	require.True(t, ok)

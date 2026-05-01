@@ -94,6 +94,7 @@ func compileDefinesSpec(t *testing.T, spec *graphpkg.GraphSpec) *evaluator {
 
 func TestDefinesForEachReconcile(t *testing.T) {
 	r := &GraphReconciler{}
+	c := r.cluster()
 	ctx := context.Background()
 
 	t.Run("per-item CEL error is collected", func(t *testing.T) {
@@ -120,8 +121,9 @@ func TestDefinesForEachReconcile(t *testing.T) {
 		graph := &unstructured.Unstructured{Object: map[string]any{
 			"metadata": map[string]any{"name": "test", "namespace": "default"},
 		}}
+		rs := newReconcileScope(graph, nil)
 
-		_, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false, nil)
+		_, err = c.reconcileForEach(ctx, rs, spec.Nodes[1], eval, false, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "forEach defines items")
 	})
@@ -154,8 +156,9 @@ func TestDefinesForEachReconcile(t *testing.T) {
 		graph := &unstructured.Unstructured{Object: map[string]any{
 			"metadata": map[string]any{"name": "test", "namespace": "default"},
 		}}
+		rs := newReconcileScope(graph, nil)
 
-		_, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false, nil)
+		_, err = c.reconcileForEach(ctx, rs, spec.Nodes[1], eval, false, nil)
 		require.Error(t, err, "forEach with failing child templates must return an error")
 
 		_, published := eval.scope["items"]

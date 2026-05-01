@@ -40,7 +40,7 @@ type reconcileState struct {
 	compiled    bool
 	compiledErr error // non-nil when compiled=false
 
-	PlanSummary dagpkg.PlanSummary
+	planSummary dagpkg.PlanSummary
 	// nodeErrors carries error messages ("nodeID: reason") surfaced when any
 	// of the HasX flags fire. These are the reason text for NotReady/Error/
 	// Blocked conditions.
@@ -105,24 +105,24 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	if !s.compiled {
 		return ConditionFalse, "NotCompiled", "Spec is not valid; resources cannot be reconciled"
 	}
-	if s.PlanSummary.HasSystemError {
+	if s.planSummary.HasSystemError {
 		return ConditionFalse, "SystemError",
 			fmt.Sprintf("Resources with server/infrastructure errors: %s",
 				strings.Join(s.nodeErrors, "; "))
 	}
-	if s.PlanSummary.HasError {
+	if s.planSummary.HasError {
 		return ConditionFalse, "Error",
 			fmt.Sprintf("Resources with errors: %s",
 				strings.Join(s.nodeErrors, "; "))
 	}
-	if s.PlanSummary.HasConflict {
+	if s.planSummary.HasConflict {
 		msg := "One or more resources have SSA field ownership conflicts"
 		if len(s.nodeErrors) > 0 {
 			msg += ": " + strings.Join(s.nodeErrors, "; ")
 		}
 		return ConditionFalse, "Conflict", msg
 	}
-	if s.PlanSummary.HasBlocked {
+	if s.planSummary.HasBlocked {
 		msg := "One or more resources blocked by upstream errors"
 		// Surface TeardownBlocked reasons (third-party field managers,
 		// finalizer creation failure, finalizer not ready) so operators can
@@ -134,14 +134,14 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 		}
 		return ConditionUnknown, "Blocked", msg
 	}
-	if s.PlanSummary.HasPending {
+	if s.planSummary.HasPending {
 		msg := "One or more resources waiting for upstream data"
 		if len(s.nodeErrors) > 0 {
 			msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
 		}
 		return ConditionUnknown, "Pending", msg
 	}
-	if s.PlanSummary.HasNotReady {
+	if s.planSummary.HasNotReady {
 		msg := "One or more resources have not satisfied their readyWhen conditions"
 		// Surface readyWhen expression errors so operators can distinguish
 		// "waiting for Deployment to roll out" from "your CEL expression
@@ -152,7 +152,7 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 		}
 		return ConditionUnknown, "NotReady", msg
 	}
-	msg := fmt.Sprintf("All %d resources reconciled", s.PlanSummary.ReadyCount)
+	msg := fmt.Sprintf("All %d resources reconciled", s.planSummary.ReadyCount)
 	// Surface informational notes (e.g., FinalizerSkipped) that don't
 	// constitute errors but are operationally useful. Per 005-reconciliation.md
 	// § Finalization: "The Graph's status surfaces this: FinalizerSkipped

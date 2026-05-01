@@ -17,7 +17,6 @@ import (
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
-	"github.com/ellistarn/kro/experimental/controller/watches"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,19 +24,15 @@ import (
 // ---------------------------------------------------------------------------
 
 // nodeOutput is the return value of reconcileNode. It replaces the previous
-// ([]string, *forEachState, error) tuple so forEach-specific state doesn't
+// ([]string, *forEachCarryForward, error) tuple so forEach-specific state doesn't
 // thread through a generic interface — most node types leave forEach nil.
 type nodeOutput struct {
 	keys    []string
-	forEach *forEachState // nil for non-forEach nodes
+	forEach *forEachCarryForward // nil for non-forEach nodes
 }
 
 // reconcileNode dispatches to the appropriate handler based on node type.
 // NodeType is a parse-time property of the node; no runtime resolution.
-//
-// resyncCorrection is true when the node was triggered by the resync timer.
-// Per 005-reconciliation.md § Reconcile: resync-triggered nodes bypass the
-// apply-hash check and apply unconditionally via SSA.
 //
 // prevForEachState carries forEach state from the previous reconcile. It is
 // only used when the node has a forEach clause; nil otherwise.
@@ -51,25 +46,26 @@ type nodeOutput struct {
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, nodeType graphpkg.NodeType, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool, prevForEachState *forEachState) (*nodeOutput, error) {
+func (c *clusterAccess) reconcileNode(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, resyncCorrection bool, prevForEachState *forEachCarryForward) (*nodeOutput, error) {
 	if node.ForEach != nil {
-		return r.reconcileForEach(ctx, graph, node, eval, watcher, resyncCorrection, prevForEachState)
+		return c.reconcileForEach(ctx, rs, node, eval, resyncCorrection, prevForEachState)
 	}
 
+	nodeType := node.Type()
 	switch nodeType {
 	case graphpkg.NodeTypeDef:
-		if err := r.reconcileDefinition(ctx, node, eval); err != nil {
+		if err := c.reconcileDefinition(ctx, node, eval); err != nil {
 			return nil, err
 		}
 	case graphpkg.NodeTypeWatch:
-		err := r.reconcileWatch(ctx, graph, node, eval, watcher)
+		err := c.reconcileWatch(ctx, rs, node, eval)
 		return &nodeOutput{}, err // Watch handles its own readiness
 	case graphpkg.NodeTypeRef:
-		if err := r.reconcileRef(ctx, graph, node, eval, watcher); err != nil {
+		if err := c.reconcileRef(ctx, rs, node, eval); err != nil {
 			return nil, err
 		}
 	default: // NodeTypeTemplate, NodeTypePatch
-		key, err := r.reconcileApply(ctx, graph, node, nodeType, eval, watcher, resyncCorrection)
+		key, err := c.reconcileApply(ctx, rs, node, eval, resyncCorrection)
 		if err != nil {
 			if key != "" {
 				return &nodeOutput{keys: []string{key}}, err
@@ -86,7 +82,7 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 // reconcileDefinition evaluates a definition node — resolves values from the template
 // (literals and/or CEL expressions) and enters the result into scope as
 // map[string]any. No Kubernetes API calls are made.
-func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node graphpkg.Node, eval *evaluator) error {
+func (c *clusterAccess) reconcileDefinition(ctx context.Context, node graphpkg.Node, eval *evaluator) error {
 	result, err := eval.toMapNode(node)
 	if err != nil {
 		return fmt.Errorf("definition %s: %w", node.ID, err)
@@ -101,7 +97,7 @@ func (r *GraphReconciler) reconcileDefinition(ctx context.Context, node graphpkg
 // reconcileRef reads a single existing object from the API server into
 // scope. Serves a ref: node — a named dereference into the shared
 // kind-scoped informer.
-func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, watcher *watches.GraphWatcher) error {
+func (c *clusterAccess) reconcileRef(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator) error {
 	logger := log.FromContext(ctx)
 
 	tmpl, err := eval.toMapNode(node)
@@ -114,30 +110,20 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 
 	name, _ := md["name"].(string)
 	namespace, _ := md["namespace"].(string)
-	if namespace == "" {
-		// Only default namespace for namespace-scoped resources.
-		// Cluster-scoped resources (CRDs, ClusterRoles, etc.) must keep
-		// namespace empty — setting it breaks watch event routing because
-		// the metadata informer reports events with namespace="" while
-		// the scalar index would store namespace="<graph-ns>".
-		clusterScoped := false
-		if r.Scope != nil {
-			if isNS, known := r.Scope.IsNamespaced(gvk); known && !isNS {
-				clusterScoped = true
-			}
-		}
-		if !clusterScoped {
-			namespace = graph.GetNamespace()
-		}
-	}
+	// Only default namespace for namespace-scoped resources.
+	// Cluster-scoped resources (CRDs, ClusterRoles, etc.) must keep
+	// namespace empty — setting it breaks watch event routing because
+	// the metadata informer reports events with namespace="" while
+	// the scalar index would store namespace="<graph-ns>".
+	namespace = defaultNamespace(gvk, namespace, rs.namespace, c.scope)
 
-	if watcher != nil {
-		watcher.WatchScalar(node.ID, gvkToGVR(gvk), gvk.Kind, name, namespace)
+	if rs.watcher != nil {
+		rs.watcher.WatchScalar(node.ID, gvkToGVR(gvk), gvk.Kind, name, namespace)
 	}
 
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
-	if err := r.apiReader().Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
+	if err := c.reader.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("ref %s: resource %s %s/%s not found: %w", node.ID, gvk, namespace, name, compiler.ErrPending)
 		}
@@ -155,7 +141,7 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 
 // reconcileWatch reads a collection of resources matching a selector into scope.
 // A full List is performed every reconcile cycle — no incremental caching.
-func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, watcher *watches.GraphWatcher) error {
+func (c *clusterAccess) reconcileWatch(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator) error {
 	logger := log.FromContext(ctx)
 
 	tmpl, err := eval.toMapNode(node)
@@ -212,8 +198,8 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 		}
 	}
 
-	if watcher != nil {
-		watcher.WatchCollection(node.ID, gvkToGVR(gvk), gvk.Kind, watchNamespace, labelSelector)
+	if rs.watcher != nil {
+		rs.watcher.WatchCollection(node.ID, gvkToGVR(gvk), gvk.Kind, watchNamespace, labelSelector)
 	}
 
 	// Full list every cycle — simple and correct.
@@ -222,7 +208,7 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(listGVK)
-	if err := r.apiReader().List(ctx, list, &client.ListOptions{
+	if err := c.reader.List(ctx, list, &client.ListOptions{
 		LabelSelector: labelSelector,
 		Namespace:     watchNamespace,
 	}); err != nil {
@@ -282,20 +268,21 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 }
 
 // reconcileApply evaluates and applies a Template or Patch node.
-// The nodeType parameter controls SSA behavior (identity labels, pre-apply
+// The node type controls SSA behavior (identity labels, pre-apply
 // checks) and applied set key format: Template keys use resourceKey
 // (prune → delete), Patch keys use patchKey (prune → release apply to
 // release fields). See applySSA for the full type-dependent behavior.
-// resyncCorrection bypasses the apply-hash check in applySSA.
-func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, nodeType graphpkg.NodeType, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool) (string, error) {
+func (c *clusterAccess) reconcileApply(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, resyncCorrection bool) (string, error) {
 	logger := log.FromContext(ctx)
+
+	nodeType := node.Type()
 
 	evalMap, err := eval.toMapNode(node)
 	if err != nil {
 		return "", fmt.Errorf("%s %s: %w", nodeType, node.ID, err)
 	}
 
-	applied, err := r.applySSA(ctx, graph, evalMap, watcher, node.ID, nodeType, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
+	applied, err := c.applySSA(ctx, rs, evalMap, node.ID, nodeType, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
 	if err != nil {
 		return "", err
 	}

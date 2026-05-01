@@ -452,3 +452,13 @@ func GVKFromMap(m map[string]any) schema.GroupVersionKind {
 	gv, _ := schema.ParseGroupVersion(apiVersion)
 	return gv.WithKind(kind)
 }
+
+// IsGraphCRLiteral checks if literal apiVersion/kind values identify a Graph CR.
+// Expression-valued fields (containing ${...}) return false — the GVK is
+// unknown until runtime.
+func IsGraphCRLiteral(apiVersion, kind string) bool {
+	if strings.Contains(apiVersion, "${") || strings.Contains(kind, "${") {
+		return false
+	}
+	return apiVersion == "experimental.kro.run/v1alpha1" && kind == "Graph"
+}

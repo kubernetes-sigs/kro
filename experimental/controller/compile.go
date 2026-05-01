@@ -1,11 +1,9 @@
-// compile.go orchestrates compilation caching — turning a GraphRevision's
-// spec into a compiled graph artifact, managing schema staleness and dynamic
-// GVK resolution. Compilation itself lives in the compiler package; this
-// file manages the controller-side caching layer.
+// compile.go orchestrates compilation — turning a GraphRevision's spec into
+// a compiled graph artifact, managing schema staleness and dynamic GVK
+// resolution. Compilation itself lives in the compiler package; this file
+// manages the controller-side instance state.
 //
 // Instance state is keyed by namespace/revision-name (per-Graph mutable state).
-// Each reconcile checks whether the existing compilation is still fresh
-// (generation-based staleness + dynamic GVK resolution).
 package graphcontroller
 
 import (
@@ -20,8 +18,8 @@ import (
 )
 
 // compileRevision parses a GraphRevision's spec, compiles it, and returns the
-// compiled graph and per-instance state. Uses generation-based staleness to
-// avoid redundant recompilation.
+// compiled graph and per-instance state. Always recompiles; instance state is
+// preserved across reconciles for correctness fields (previousAppliedKeys, etc.).
 func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string, revision *unstructured.Unstructured) (*graphpkg.GraphSpec, *instanceState, error) {
 	instanceKey := revision.GetNamespace() + "/" + revision.GetName()
 
@@ -34,19 +32,7 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 		dynamicGVKHints = existing.resolvedDynamicGVKs
 	}
 
-	// Fast path: instance state already exists with a valid compilation
-	// (steady-state reconcile). Check generation-based staleness and
-	// whether dynamic GVK schemas can now be resolved.
-	if existing != nil && existing.compiled != nil {
-		genFresh := r.SchemaGen == nil || existing.compiled.TypeCacheGen >= r.SchemaGen.Generation()
-		schemasFresh := !dynamicGVKSchemasStale(existing.compiled, dynamicGVKHints)
-		if genFresh && schemasFresh {
-			return existing.spec, existing, nil
-		}
-		// Stale — fall through to recompile.
-	}
-
-	// Slow path: parse spec, resolve types, compile, assemble DAG.
+	// Parse spec, resolve types, compile, assemble DAG.
 	spec, err := extractRevisionSpec(revision)
 	if err != nil {
 		return nil, nil, err
@@ -101,22 +87,4 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 	state.dag = dag
 	r.Caches.set(instanceKey, state)
 	return spec, state, nil
-}
-
-// dynamicGVKSchemasStale reports whether the artifact has dynamic GVK nodes
-// whose schemas can now be resolved (the instance has resolved GVKs from a
-// previous reconcile, but the artifact was compiled without those schemas).
-func dynamicGVKSchemasStale(compiled *compiler.CompiledGraph, resolvedGVKs map[string]schema.GroupVersionKind) bool {
-	if len(compiled.DynamicGVKNodes) == 0 || len(resolvedGVKs) == 0 {
-		return false
-	}
-	for _, nodeID := range compiled.DynamicGVKNodes {
-		if _, resolved := resolvedGVKs[nodeID]; !resolved {
-			continue
-		}
-		if _, hasSchema := compiled.ResourceSchemas[nodeID]; !hasSchema {
-			return true // resolved GVK available but artifact compiled without schema
-		}
-	}
-	return false
 }

@@ -35,49 +35,37 @@ func celPluralFunction() []cel.EnvOption {
 	}
 }
 
-// celReadyFunction returns CEL env options for the .ready() member function.
+// celFlagFunction returns CEL env options for a boolean flag member function
+// (.ready() or .updated()). Both follow the same pattern: read a hidden field
+// (flagField) from the receiver map, aggregate over collections, and handle
+// optional receivers for lazy dependencies.
 //
-// .ready() returns whether the graph controller considers a node ready.
-// The readiness state is injected into the scope data as "__ready" after
-// each node is processed during the DAG walk:
-//   - No readyWhen: __ready = true (applied = ready)
-//   - With readyWhen: __ready = (all conditions passed)
-//
-// For scalar nodes (Template, Patch), .ready() reads __ready from
-// the object map. For forEach parents, .ready() returns true when ALL items
-// have __ready == true — the collection's readiness is a function of its
-// children's readiness.
-//
-// For Watch nodes, `.ready()` is rewritten at compile time to a
-// scope-variable lookup (see readyrewrite.go). That redirection surfaces
-// the node's readyWhen verdict directly — independent of the collection
-// being non-empty — so `pods.ready()` returns the correct value even when
-// the collection has zero items. This function's list branch is kept for
-// forEach parents whose readiness is aggregated from children's per-item
-// __ready stamping. Per 001-graph.md § readyWhen.
-func celReadyFunction() []cel.EnvOption {
-	readyConcreteImpl := func(val ref.Val) ref.Val {
+// For scalar nodes, reads flagField from the object map.
+// For collections (forEach parents), returns true when ALL items have
+// flagField == true. Empty collections are vacuously true.
+// For optional receivers (lazy deps), returns optional.none() when absent,
+// optional.of(bool) when present.
+func celFlagFunction(funcName, flagField string) []cel.EnvOption {
+	concreteImpl := func(val ref.Val) ref.Val {
 		native, err := conversion.GoNativeType(val)
 		if err != nil {
 			return types.Bool(false)
 		}
 		switch obj := native.(type) {
 		case map[string]any:
-			// Scalar node — read __ready directly
-			ready, _ := obj["__ready"].(bool)
-			return types.Bool(ready)
+			flag, _ := obj[flagField].(bool)
+			return types.Bool(flag)
 		case []any:
-			// Collection node — all items must be ready
 			if len(obj) == 0 {
-				return types.Bool(true) // empty collection is vacuously ready
+				return types.Bool(true) // empty collection is vacuously true
 			}
 			for _, item := range obj {
 				m, ok := item.(map[string]any)
 				if !ok {
 					return types.Bool(false)
 				}
-				ready, _ := m["__ready"].(bool)
-				if !ready {
+				flag, _ := m[flagField].(bool)
+				if !flag {
 					return types.Bool(false)
 				}
 			}
@@ -87,29 +75,34 @@ func celReadyFunction() []cel.EnvOption {
 		}
 	}
 	impl := func(val ref.Val) ref.Val {
-		// Handle optional receiver: when a lazy dependency is
-		// optional.none() (absent), .ready() returns optional.none().
-		// When present, .ready() unwraps and returns optional.of(bool).
-		// The user chains .orValue(false) to unwrap — this explicit
-		// handling is what makes the dep lazy. Without .orValue(),
-		// .ready() on a hard dep returns concrete bool directly.
 		if opt, ok := val.(*types.Optional); ok {
 			if !opt.HasValue() {
-				return types.OptionalNone // absent dep → optional.none()
+				return types.OptionalNone
 			}
-			return types.OptionalOf(readyConcreteImpl(opt.GetValue()))
+			return types.OptionalOf(concreteImpl(opt.GetValue()))
 		}
-		return readyConcreteImpl(val)
+		return concreteImpl(val)
 	}
 	return []cel.EnvOption{
-		cel.Function("ready",
-			cel.MemberOverload("dyn_ready",
+		cel.Function(funcName,
+			cel.MemberOverload("dyn_"+funcName,
 				[]*cel.Type{cel.DynType},
-				cel.DynType, // DynType: returns bool on concrete, optional(bool) on optional
+				cel.DynType,
 				cel.UnaryBinding(impl),
 			),
 		),
 	}
+}
+
+// celReadyFunction returns CEL env options for the .ready() member function.
+//
+// .ready() returns whether the graph controller considers a node ready.
+// The readiness state is injected into the scope data as "__ready" after
+// each node is processed during the DAG walk. For Watch nodes, `.ready()`
+// is rewritten at compile time to a scope-variable lookup (see readyrewrite.go).
+// Per 001-graph.md § readyWhen.
+func celReadyFunction() []cel.EnvOption {
+	return celFlagFunction("ready", "__ready")
 }
 
 // celSimpleSchemaFunction returns CEL env options for simpleSchema.toOpenAPI().
@@ -258,71 +251,10 @@ func injectConditionsSchema(statusSchema map[string]any) {
 // celUpdatedFunction returns CEL env options for the .updated() member function.
 //
 // .updated() returns whether a node's resource is on the latest graph
-// generation. Per 001-graph.md § CEL Functions: ".updated() — true when the
-// node is on the latest graph generation." Per 005-reconciliation.md
+// generation. Per 001-graph.md § CEL Functions. Per 005-reconciliation.md
 // § Propagation Control: used in propagateWhen for forEach rollout gating.
-//
-// Three paths determine __updated:
-//  1. Managed resources just applied → true (stamped by control flow).
-//  2. Non-managed nodes (Watch, Ref, Def) → true (vacuously — external
-//     observations have no graph generation to update).
-//  3. ForEach items not applied this pass → determined by comparing the
-//     resource's generation label against effectiveGeneration.
-//
-// For collections (forEach parents), .updated() returns true when ALL items
-// have __updated == true — the collection's updated state is a function of
-// its children.
 func celUpdatedFunction() []cel.EnvOption {
-	updatedConcreteImpl := func(val ref.Val) ref.Val {
-		native, err := conversion.GoNativeType(val)
-		if err != nil {
-			return types.Bool(false)
-		}
-		switch obj := native.(type) {
-		case map[string]any:
-			// Scalar node — read __updated directly.
-			updated, _ := obj["__updated"].(bool)
-			return types.Bool(updated)
-		case []any:
-			// Collection node — all items must be updated.
-			if len(obj) == 0 {
-				return types.Bool(true) // empty collection is vacuously updated
-			}
-			for _, item := range obj {
-				m, ok := item.(map[string]any)
-				if !ok {
-					return types.Bool(false)
-				}
-				updated, _ := m["__updated"].(bool)
-				if !updated {
-					return types.Bool(false)
-				}
-			}
-			return types.Bool(true)
-		default:
-			return types.Bool(false)
-		}
-	}
-	impl := func(val ref.Val) ref.Val {
-		// Handle optional receiver: same pattern as .ready().
-		// Returns optional.none() for absent, optional.of(bool) for present.
-		if opt, ok := val.(*types.Optional); ok {
-			if !opt.HasValue() {
-				return types.OptionalNone
-			}
-			return types.OptionalOf(updatedConcreteImpl(opt.GetValue()))
-		}
-		return updatedConcreteImpl(val)
-	}
-	return []cel.EnvOption{
-		cel.Function("updated",
-			cel.MemberOverload("dyn_updated",
-				[]*cel.Type{cel.DynType},
-				cel.DynType, // DynType: returns bool on concrete, optional(bool) on optional
-				cel.UnaryBinding(impl),
-			),
-		),
-	}
+	return celFlagFunction("updated", "__updated")
 }
 
 // celDependenciesFunction returns CEL env options for the .dependencies()
@@ -341,4 +273,18 @@ func celDependenciesFunction() []cel.EnvOption {
 			),
 		),
 	}
+}
+
+// customCELFunctions returns all custom CEL extension functions registered
+// into every compilation environment. Centralizes the registration list so
+// that CompileGraphSpec (outer, refined, forEach inner-scope) and
+// validateDeferredExprs all share a single definition.
+func customCELFunctions() []cel.EnvOption {
+	var opts []cel.EnvOption
+	opts = append(opts, celPluralFunction()...)
+	opts = append(opts, celReadyFunction()...)
+	opts = append(opts, celSimpleSchemaFunction()...)
+	opts = append(opts, celUpdatedFunction()...)
+	opts = append(opts, celDependenciesFunction()...)
+	return opts
 }

@@ -29,7 +29,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
@@ -153,9 +152,7 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *watches.
 //
 // Returns a shutdown function that stops the watch manager. The caller
 // must invoke this on teardown.
-func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int) (shutdown func(), caches *graphCaches, err error) {
-	RegisterMetrics(crmetrics.Registry)
-
+func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int) (shutdown func(), instances *InstanceMap, err error) {
 	if maxWorkers <= 0 {
 		maxWorkers = DefaultMaxConcurrentReconciles
 	}
@@ -204,7 +201,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int)
 		SchemaResolver: schemaResolver,
 		SchemaGen:      compiler.NewSchemaGeneration(),
 		Watcher:        coordinator,
-		Caches:         newGraphCaches(),
+		Caches:         newInstanceMap(),
 		// Scope is used by staticResourceKey to avoid namespacing
 		// cluster-scoped resource keys. Without this, prune/teardown
 		// silently miss cluster-scoped resources because their keys

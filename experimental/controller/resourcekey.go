@@ -17,13 +17,93 @@ package graphcontroller
 
 import (
 	"strings"
+	"sync"
 
+	"github.com/gobuffalo/flect"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
+
+// GVKScopeResolver reports whether a GVK is namespace-scoped.
+//
+// IsNamespaced returns (isNamespaced, known). When known is false the caller
+// must fall back to heuristics — the resolver has not observed this GVK or
+// lookup failed. A resolver with no backing mapper (e.g., tests) always
+// returns (false, false), preserving the pre-fix substitution heuristic.
+type GVKScopeResolver interface {
+	IsNamespaced(gvk schema.GroupVersionKind) (isNamespaced bool, known bool)
+}
+
+// restMapperGVKScopeResolver answers IsNamespaced queries using a RESTMapper.
+// Results are cached: RESTMapping is stable for the lifetime of a GVK's
+// registration, so repeat lookups per reconcile are wasteful. A miss (e.g.,
+// CRD not yet installed) is NOT cached — the next reconcile may succeed.
+type restMapperGVKScopeResolver struct {
+	mapper meta.RESTMapper
+	mu     sync.RWMutex
+	cache  map[schema.GroupVersionKind]bool // value = isNamespaced; absence = unknown
+}
+
+// newRESTMapperGVKScopeResolver wraps a RESTMapper. Returns nil if mapper is
+// nil — callers should treat nil as "no scope info available" and fall back
+// to the substitution heuristic.
+func newRESTMapperGVKScopeResolver(mapper meta.RESTMapper) *restMapperGVKScopeResolver {
+	if mapper == nil {
+		return nil
+	}
+	return &restMapperGVKScopeResolver{
+		mapper: mapper,
+		cache:  map[schema.GroupVersionKind]bool{},
+	}
+}
+
+func (r *restMapperGVKScopeResolver) IsNamespaced(gvk schema.GroupVersionKind) (bool, bool) {
+	if r == nil || r.mapper == nil {
+		return false, false
+	}
+	r.mu.RLock()
+	v, ok := r.cache[gvk]
+	r.mu.RUnlock()
+	if ok {
+		return v, true
+	}
+	mapping, err := r.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return false, false
+	}
+	isNamespaced := mapping.Scope != nil && mapping.Scope.Name() == meta.RESTScopeNameNamespace
+	r.mu.Lock()
+	r.cache[gvk] = isNamespaced
+	r.mu.Unlock()
+	return isNamespaced, true
+}
+
+// defaultNamespace returns the namespace for a resource. For cluster-scoped
+// kinds it returns "". For namespaced kinds with no namespace specified, it
+// returns fallbackNamespace. When scope is nil or the kind is unknown, the
+// fallback is used when ns is empty (preserving the pre-fix substitution heuristic).
+func defaultNamespace(gvk schema.GroupVersionKind, ns string, fallback string, scope GVKScopeResolver) string {
+	if scope != nil {
+		if isNS, known := scope.IsNamespaced(gvk); known {
+			if !isNS {
+				return "" // cluster-scoped — always empty
+			}
+			if ns == "" {
+				return fallback
+			}
+			return ns
+		}
+	}
+	// Scope unknown — fall back to substitution heuristic.
+	if ns == "" {
+		return fallback
+	}
+	return ns
+}
 
 // patchKeyPrefix marks applied-set entries whose fields are released (not
 // deleted) on prune, corresponding to patch: nodes in the graph spec.
@@ -69,26 +149,12 @@ func staticResourceKey(tmpl map[string]any, fallbackNamespace string, scope GVKS
 		return "" // dynamic name — can't determine key statically
 	}
 	ns, _ := md["namespace"].(string)
-	hasDynamicNS := strings.Contains(ns, "${")
-
-	// Scope-aware namespace resolution. For cluster-scoped kinds the
-	// namespace segment is always "", matching resourceKey(liveObj).
-	if scope != nil && gvk.Kind != "" {
-		if isNS, known := scope.IsNamespaced(gvk); known {
-			if !isNS {
-				ns = ""
-			} else if ns == "" || hasDynamicNS {
-				ns = fallbackNamespace
-			}
-			return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, ns, name}, "/")
-		}
+	// Treat dynamic namespace expressions as "no namespace specified" —
+	// they can't be resolved statically.
+	if strings.Contains(ns, "${") {
+		ns = ""
 	}
-	// Fallback heuristic: substitute fallbackNamespace for empty or dynamic
-	// namespace. Correct for namespaced kinds; produces a mismatched key for
-	// cluster-scoped kinds when scope is unknown.
-	if ns == "" || hasDynamicNS {
-		ns = fallbackNamespace
-	}
+	ns = defaultNamespace(gvk, ns, fallbackNamespace, scope)
 	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, ns, name}, "/")
 }
 
@@ -143,4 +209,15 @@ func parsePatchKey(key string) (resKey string, hasStatus bool) {
 func templateHasStatus(tmpl map[string]any) bool {
 	s, ok := tmpl["status"]
 	return ok && s != nil
+}
+
+// gvkToGVR converts a GVK to a GVR using English pluralization rules.
+// Uses flect.Pluralize for correct handling of irregular plurals
+// (e.g., NetworkPolicy → networkpolicies, Ingress → ingresses).
+func gvkToGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
+	return schema.GroupVersionResource{
+		Group:    gvk.Group,
+		Version:  gvk.Version,
+		Resource: flect.Pluralize(strings.ToLower(gvk.Kind)),
+	}
 }

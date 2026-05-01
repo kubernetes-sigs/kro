@@ -27,8 +27,7 @@ type ChildScope struct {
 
 // deferredExpr is a single deferred expression found in a parent node's body.
 type deferredExpr struct {
-	inner  string // expression text after stripping one $ (ready for child compilation)
-	source string // the original string containing the expression (for error messages)
+	inner string // expression text after stripping one $ (ready for child compilation)
 }
 
 // compileDeferredExpressions validates $${...} expressions at each deferral
@@ -65,7 +64,7 @@ func compileDeferredExpressions(spec *graph.GraphSpec) error {
 				}
 				pos = start + len(dollars) + len(expr) + 2
 				if len(dollars) == 2 { // $${...} — depth 1
-					deferred = append(deferred, deferredExpr{inner: expr, source: s})
+					deferred = append(deferred, deferredExpr{inner: expr})
 				}
 			}
 		}
@@ -109,7 +108,7 @@ func ExtractChildScopeFromBody(body map[string]any) ChildScope {
 	// Check if this is a Graph CR template.
 	apiVersion, _ := body["apiVersion"].(string)
 	kind, _ := body["kind"].(string)
-	if !IsGraphCRLiteral(apiVersion, kind) {
+	if !graph.IsGraphCRLiteral(apiVersion, kind) {
 		return ChildScope{}
 	}
 
@@ -170,15 +169,7 @@ func extractForEachVarNames(forEach any) []string {
 	return names
 }
 
-// IsGraphCRLiteral checks if literal apiVersion/kind values identify a Graph CR.
-// Expression-valued fields (containing ${...}) return false — the GVK is
-// unknown until runtime.
-func IsGraphCRLiteral(apiVersion, kind string) bool {
-	if strings.Contains(apiVersion, "${") || strings.Contains(kind, "${") {
-		return false
-	}
-	return apiVersion == "experimental.kro.run/v1alpha1" && kind == "Graph"
-}
+
 
 // validateDeferredExprs builds a child CEL environment from the child scope
 // and parses + type-checks each deferred expression against it.
@@ -187,11 +178,7 @@ func validateDeferredExprs(parentNodeID string, scope ChildScope, exprs []deferr
 	allIDs := append(scope.NodeIDs, scope.ForEachVars...)
 	env, err := krocel.DefaultEnvironment(
 		krocel.WithResourceIDs(allIDs),
-		krocel.WithCustomDeclarations(celPluralFunction()),
-		krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
-		krocel.WithCustomDeclarations(celReadyFunction()),
-		krocel.WithCustomDeclarations(celUpdatedFunction()),
-		krocel.WithCustomDeclarations(celDependenciesFunction()),
+		krocel.WithCustomDeclarations(customCELFunctions()),
 		krocel.WithCustomDeclarations([]cel.EnvOption{
 			cel.Variable(ReservedNodeReadyVar, cel.MapType(cel.StringType, cel.BoolType)),
 			cel.Variable(ReservedDepsMapVar, cel.MapType(cel.StringType, cel.ListType(cel.DynType))),

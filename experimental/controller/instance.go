@@ -7,6 +7,8 @@
 package graphcontroller
 
 import (
+	"sync"
+
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
@@ -82,4 +84,60 @@ func (s *instanceState) mergeDynamicGVK(nodeID string, resolved schema.GroupVers
 	stale = !hadPrev || prevGVK != resolved
 	s.resolvedDynamicGVKs[nodeID] = resolved
 	return stale
+}
+
+// ---------------------------------------------------------------------------
+// instanceMap — concurrent-safe wrapper around per-instance state.
+// Replaces the former graphCaches type.
+// ---------------------------------------------------------------------------
+
+// InstanceMap is a concurrent-safe map of per-instance state keyed by
+// namespace/revision-name.
+type InstanceMap struct {
+	mu        sync.RWMutex
+	instances map[string]*instanceState
+}
+
+func newInstanceMap() *InstanceMap {
+	return &InstanceMap{
+		instances: make(map[string]*instanceState),
+	}
+}
+
+func (m *InstanceMap) get(key string) *instanceState {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.instances[key]
+}
+
+func (m *InstanceMap) set(key string, s *instanceState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.instances[key] = s
+}
+
+func (m *InstanceMap) remove(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.instances, key)
+}
+
+// CacheSizes returns the number of cached instance states.
+func (m *InstanceMap) CacheSizes() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.instances)
+}
+
+// instanceKeys returns a snapshot of all instance cache keys.
+// Used by the SetOnNewType callback to requeue all cached graphs
+// when a new type becomes watchable.
+func (m *InstanceMap) instanceKeys() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	keys := make([]string, 0, len(m.instances))
+	for k := range m.instances {
+		keys = append(keys, k)
+	}
+	return keys
 }

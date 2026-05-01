@@ -18,11 +18,8 @@ package graphcontroller
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/gobuffalo/flect"
-	"github.com/prometheus/client_golang/prometheus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -69,17 +66,6 @@ const (
 	DefaultMaxConcurrentReconciles = 16
 )
 
-// gvkToGVR converts a GVK to a GVR using English pluralization rules.
-// Uses flect.Pluralize for correct handling of irregular plurals
-// (e.g., NetworkPolicy → networkpolicies, Ingress → ingresses).
-func gvkToGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
-	return schema.GroupVersionResource{
-		Group:    gvk.Group,
-		Version:  gvk.Version,
-		Resource: flect.Pluralize(strings.ToLower(gvk.Kind)),
-	}
-}
-
 // GraphReconciler reconciles Graph objects.
 type GraphReconciler struct {
 	Client         client.Client
@@ -87,18 +73,42 @@ type GraphReconciler struct {
 	SchemaResolver resolver.SchemaResolver         // nil = all resource nodes fall back to dyn
 	SchemaGen      *compiler.SchemaGeneration      // nil = no generation tracking; never triggers recompilation
 	Watcher        *watches.WatchCoordinator       // nil = no dynamic watches (backward compat with existing tests)
-	Caches         *graphCaches                    // per-revision compiled expression caches
+	Caches         *InstanceMap                    // per-revision compiled expression caches
 	Scope          GVKScopeResolver                // nil = unknown scope; staticResourceKey falls back to namespace-substitution heuristic
 }
 
-// apiReader returns the direct API server reader for managed resource reads.
-// Falls back to Client when APIReader is nil (unit tests that don't set up
-// a full manager).
-func (r *GraphReconciler) apiReader() client.Reader {
-	if r.APIReader != nil {
-		return r.APIReader
+// reconcileScope bundles the per-reconcile identity context that threads
+// through every call in the walk and prune paths. Created once at the
+// start of each Reconcile call. Fields are read-only after construction.
+type reconcileScope struct {
+	graph   *unstructured.Unstructured
+	watcher *watches.GraphWatcher
+	// Pre-derived fields to avoid repeated calls.
+	name      string
+	namespace string
+}
+
+func newReconcileScope(graph *unstructured.Unstructured, watcher *watches.GraphWatcher) *reconcileScope {
+	return &reconcileScope{
+		graph:     graph,
+		watcher:   watcher,
+		name:      graph.GetName(),
+		namespace: graph.GetNamespace(),
 	}
-	return r.Client
+}
+
+// cluster creates a clusterAccess that bundles the API server dependencies
+// needed by the execution layer (apply.go, node.go, prune.go, finalization.go).
+func (r *GraphReconciler) cluster() *clusterAccess {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	return &clusterAccess{
+		client: r.Client,
+		reader: reader,
+		scope:  r.Scope,
+	}
 }
 
 func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, reconcileErr error) {
@@ -121,14 +131,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	if err := r.Client.Get(ctx, req.NamespacedName, graph); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-
-	// Observe reconcile duration on return.
-	defer func() {
-		ReconcileDurationSeconds.With(prometheus.Labels{
-			"graph_name":      graph.GetName(),
-			"graph_namespace": graph.GetNamespace(),
-		}).Observe(time.Since(reconcileStart).Seconds())
-	}()
 
 	// -----------------------------------------------------------------------
 	// 2. Handle deletion
@@ -240,27 +242,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 	}
 
-	// On revision transition, clean up metric series for nodes removed between revisions.
-	if isRevisionTransition {
-		activeNodeIDs := make(map[string]bool, len(dag.Nodes))
-		for _, node := range dag.Nodes {
-			activeNodeIDs[node.ID] = true
-		}
-		removedIDs := make(map[string]bool)
-		for _, rev := range supersededRevisions {
-			if spec, err := extractRevisionSpec(rev); err == nil {
-				for _, node := range spec.Nodes {
-					if !activeNodeIDs[node.ID] {
-						removedIDs[node.ID] = true
-					}
-				}
-			}
-		}
-		if len(removedIDs) > 0 {
-			deleteNodeMetrics(graph.GetName(), graph.GetNamespace(), removedIDs)
-		}
-	}
-
 	// -----------------------------------------------------------------------
 	// 7. Walk the DAG
 	// -----------------------------------------------------------------------
@@ -269,7 +250,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		preWalkGen = r.SchemaGen.Generation()
 	}
 
-	walkRes := r.walk(ctx, graph, state, eval, dag, plan, watcher)
+	rs := newReconcileScope(graph, watcher)
+	walkRes := r.walk(ctx, rs, state, eval, dag, plan)
 	walkAttempted = true
 
 	// Post-walk recompile check: if schema generation advanced during
@@ -294,6 +276,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// -----------------------------------------------------------------------
 	// 8. Prune removed resources
 	// -----------------------------------------------------------------------
+	cluster := r.cluster()
 	pruneOK := true
 	prunePending := false
 	// Per 005-reconciliation.md § Prune: "Uncertain absence (Pending, Blocked,
@@ -306,7 +289,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 		// Derive the applied set from the watch cache.
 		if r.Watcher != nil {
-			appliedSet := r.Watcher.Watches.DeriveAppliedSet(graph.GetName(), graph.GetNamespace())
+			appliedSet := r.Watcher.Watches.DeriveAppliedSet(rs.name, rs.namespace)
 			for key := range appliedSet {
 				allPreviousKeys[key] = true
 			}
@@ -333,7 +316,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					if node.Finalizes != "" {
 						continue
 					}
-					if key := staticResourceKey(node.Identity(), graph.GetNamespace(), r.Scope); key != "" {
+					if key := staticResourceKey(node.Identity(), rs.namespace, cluster.scope); key != "" {
 						allPreviousKeys[key] = true
 					}
 				}
@@ -345,46 +328,27 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 
 		if len(allPreviousKeys) > 0 {
-			var deferred []string
-			var pruneBlockedReasons []string
-			var pruneNotes []string
+			candidates := collectPruneCandidates(allPreviousKeys, appliedKeys)
+			allDAGs := collectAllDAGs(dag, supersededDAGs)
 
-			// Phase 1: Advance finalization state machines.
-			pruneCandidates := collectPruneCandidates(allPreviousKeys, appliedKeys)
-			keyToNodeID, nodeIDToKey := buildKeyMaps(dag, supersededDAGs, graph.GetNamespace(), r.Scope)
-			finResult, finErr := r.advanceFinalization(ctx, graph, pruneCandidates, keyToNodeID, nodeIDToKey, collectAllDAGs(dag, supersededDAGs), eval, watcher, state)
-			if finErr != nil {
-				err = finErr
-			} else {
-				pruneBlockedReasons = append(pruneBlockedReasons, finResult.BlockedReasons...)
-				pruneNotes = append(pruneNotes, finResult.Notes...)
-				deferred = append(deferred, finResult.DeferredTargets...)
+			pr := cluster.pruneResources(ctx, rs, candidates, appliedKeys, allDAGs, eval, state, true)
 
-				// Phase 2: Pure deletion decisions.
-				var pruneDeferred []string
-				var pruneBR []string
-				var pruneN []string
-				pruneDeferred, pruneBR, pruneN, err = r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, finResult)
-				deferred = append(deferred, pruneDeferred...)
-				pruneBlockedReasons = append(pruneBlockedReasons, pruneBR...)
-				pruneNotes = append(pruneNotes, pruneN...)
-			}
-			nodeErrors = append(nodeErrors, pruneBlockedReasons...)
-			nodeNotes = append(nodeNotes, pruneNotes...)
-			if len(pruneBlockedReasons) > 0 {
+			nodeErrors = append(nodeErrors, pr.BlockedReasons...)
+			nodeNotes = append(nodeNotes, pr.Notes...)
+			if len(pr.BlockedReasons) > 0 {
 				summary.HasBlocked = true
 			}
-			if len(deferred) > 0 {
+			if len(pr.DeferredKeys) > 0 {
 				prunePending = true
-				state.deferredPruneKeys = make([]string, len(deferred))
-				copy(state.deferredPruneKeys, deferred)
+				state.deferredPruneKeys = make([]string, len(pr.DeferredKeys))
+				copy(state.deferredPruneKeys, pr.DeferredKeys)
 			} else {
 				state.deferredPruneKeys = nil
 			}
-			if err != nil {
-				logger.Error(err, "pruning removed resources")
+			if pr.Err != nil {
+				logger.Error(pr.Err, "pruning removed resources")
 				pruneOK = false
-				info := classifyAPIError(err)
+				info := classifyAPIError(pr.Err)
 				switch info.state {
 				case dagpkg.NodeSystemError:
 					summary.HasSystemError = true
@@ -416,7 +380,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	rstate := &reconcileState{
 		compiled:         compilationErr == nil,
 		compiledErr:      compilationErr,
-		PlanSummary:      summary,
+		planSummary:      summary,
 		nodeErrors:       nodeErrors,
 		nodeNotes:        nodeNotes,
 		topologicalOrder: topoOrder,
@@ -425,9 +389,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		logger.Error(err, "status update")
 	}
 
-	allReady := rstate.compiled && !rstate.PlanSummary.HasPending && !rstate.PlanSummary.HasNotReady &&
-		!rstate.PlanSummary.HasBlocked && !rstate.PlanSummary.HasConflict && !rstate.PlanSummary.HasError && !rstate.PlanSummary.HasSystemError
-	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK && !prunePending)
+	allReady := rstate.compiled && !rstate.planSummary.HasPending && !rstate.planSummary.HasNotReady &&
+		!rstate.planSummary.HasBlocked && !rstate.planSummary.HasConflict && !rstate.planSummary.HasError && !rstate.planSummary.HasSystemError
+	r.gcSupersededRevisions(ctx, activeRevision, supersededRevisions, allReady, pruneOK && !prunePending)
 
 	// -----------------------------------------------------------------------
 	// 10. Requeue if not fully ready

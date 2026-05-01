@@ -56,7 +56,7 @@ func TestMain(m *testing.M) {
 	defer logFile.Close()
 	fmt.Fprintf(os.Stderr, "resync test controller logs: %s\n", logPath)
 
-	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "crds")
+	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "chart-crds", "templates")
 	testEnv = &envtest.Environment{
 		BinaryAssetsDirectory: resolveEnvtestAssets(),
 		CRDDirectoryPaths:     []string{chartCRDDir},

@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 	// 3. Start envtest (kube-apiserver + etcd), logging to the shared file.
 	//    Chart CRDs (Graph, GraphRevision) are loaded by envtest.
 	// -----------------------------------------------------------------------
-	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "crds")
+	chartCRDDir := filepath.Join(filepath.Dir(filepath.Dir(binaryPath)), "chart-crds", "templates")
 	testEnv = &envtest.Environment{
 		BinaryAssetsDirectory: resolveEnvtestAssets(),
 		CRDDirectoryPaths:     []string{chartCRDDir},

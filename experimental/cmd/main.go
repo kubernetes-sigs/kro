@@ -5,7 +5,7 @@
 //
 // For local development, apply CRDs manually first:
 //
-//	kubectl apply -f experimental/crds/
+//	kubectl apply -f experimental/chart-crds/templates/
 //	go run ./experimental/cmd/
 package main
 

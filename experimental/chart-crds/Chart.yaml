@@ -1,0 +1,6 @@
+apiVersion: v2
+name: krocodile-crds
+description: CRDs for the krocodile Graph controller
+type: application
+version: 0.0.1
+appVersion: "0.0.1"

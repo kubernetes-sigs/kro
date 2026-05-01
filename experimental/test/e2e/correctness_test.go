@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -980,36 +981,12 @@ func TestDeclarationErrorMissingNodeID(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, k8sClient.Create(ctx, graph))
-
-	// Should be rejected with DeclarationError
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-missing-id", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		conditions, _ := status["conditions"].([]any)
-		cond, found := findCondition(conditions, "Compiled")
-		if !found {
-			return false, nil
-		}
-		return cond["status"] == "False" && cond["reason"] == "DeclarationError", nil
-	}))
-
-	g := &unstructured.Unstructured{}
-	g.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-missing-id", Namespace: ns}, g))
-	status, _ := g.Object["status"].(map[string]any)
-	conditions, _ := status["conditions"].([]any)
-	compiled, found := findCondition(conditions, "Compiled")
-	require.True(t, found, "Compiled condition should exist")
-	assert.Equal(t, "False", compiled["status"])
-	t.Log("Missing node ID correctly rejected with DeclarationError")
+	// The CRD schema requires id on each node — the API server rejects this
+	// at admission time.
+	err := k8sClient.Create(ctx, graph)
+	require.Error(t, err)
+	require.True(t, apierrors.IsInvalid(err), "expected Invalid status error, got: %v", err)
+	t.Log("Missing node ID correctly rejected by CRD schema at admission")
 }
 
 // TestDeclarationErrorDuplicateNodeID proves that a Graph with duplicate node IDs
@@ -2657,15 +2634,11 @@ func TestDeclarationError_HyphenInNodeID(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, k8sClient.Create(ctx, graph))
-
-	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
-		types.NamespacedName{Name: "hyphen-id", Namespace: ns}, "False"))
-	g := &unstructured.Unstructured{}
-	g.SetGroupVersionKind(GraphGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "hyphen-id", Namespace: ns}, g))
-	assert.Equal(t, "DeclarationError", graphCompiledReason(g))
+	// The CRD schema pattern ^[a-zA-Z_][a-zA-Z0-9_]*$ rejects hyphens at
+	// admission time.
+	err := k8sClient.Create(ctx, graph)
+	require.Error(t, err)
+	require.True(t, apierrors.IsInvalid(err), "expected Invalid status error, got: %v", err)
 }
 
 // TestDeclarationError_CaseCollision proves that node IDs that
@@ -3172,9 +3145,10 @@ func TestCompilationValidation(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		nodes  []any
-		reason string // expected Compiled condition reason
+		name      string
+		nodes     []any
+		reason    string // expected Compiled condition reason
+		crdReject bool   // true if CRD schema rejects at admission
 	}{
 		{
 			name: "mutual exclusion: template and patch on same node",
@@ -3278,7 +3252,8 @@ func TestCompilationValidation(t *testing.T) {
 				},
 				"readyWhen": []any{42},
 			}},
-			reason: "DeclarationError",
+			reason:    "DeclarationError",
+			crdReject: true,
 		},
 		{
 			name: "non-string includeWhen element",
@@ -3290,7 +3265,8 @@ func TestCompilationValidation(t *testing.T) {
 				},
 				"includeWhen": []any{true},
 			}},
-			reason: "DeclarationError",
+			reason:    "DeclarationError",
+			crdReject: true,
 		},
 		{
 			name: "invalid DNS label in node ID (underscore)",
@@ -3352,7 +3328,15 @@ func TestCompilationValidation(t *testing.T) {
 					"spec":       map[string]any{"nodes": tc.nodes},
 				},
 			}
-			require.NoError(t, k8sClient.Create(ctx, graph))
+			err := k8sClient.Create(ctx, graph)
+			if tc.crdReject {
+				// CRD schema catches this at admission — Create itself fails.
+				require.Error(t, err)
+				require.True(t, apierrors.IsInvalid(err),
+					"expected Invalid status error for %s, got: %v", tc.name, err)
+				return
+			}
+			require.NoError(t, err)
 
 			require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
 				types.NamespacedName{Name: graph.GetName(), Namespace: ns}, "False"))

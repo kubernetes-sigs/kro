@@ -16,15 +16,157 @@ spec:
       storage: true
       schema:
         openAPIV3Schema:
+          description: >-
+            GraphRevision is an immutable snapshot of a Graph's spec at a
+            given generation. Created automatically when a Graph spec
+            changes and compiles successfully.
           type: object
-          x-kubernetes-preserve-unknown-fields: true
           properties:
             spec:
+              description: >-
+                Immutable snapshot of the Graph spec. Cannot be modified
+                after creation.
               type: object
-              x-kubernetes-preserve-unknown-fields: true
+              required:
+                - nodes
               x-kubernetes-validations:
                 - rule: "self == oldSelf"
                   message: "GraphRevision spec is immutable"
+              properties:
+                nodes:
+                  description: >-
+                    Node declarations snapshotted from the parent Graph.
+                    Same schema as Graph spec.nodes.
+                  type: array
+                  maxItems: 128
+                  items:
+                    type: object
+                    required:
+                      - id
+                    x-kubernetes-preserve-unknown-fields: true
+                    properties:
+                      id:
+                        description: >-
+                          Unique identifier for this node within the Graph
+                          scope. Used as a CEL variable name in expressions.
+                          Must start with a letter or underscore, followed by
+                          alphanumeric or underscore characters.
+                        type: string
+                        pattern: '^[a-zA-Z_][a-zA-Z0-9_]*$'
+                      template:
+                        description: >-
+                          Full resource specification. The controller creates
+                          the resource if it doesn't exist, applies fields
+                          via SSA, and deletes on prune. Value is a resource
+                          map or a CEL expression string.
+                        x-kubernetes-preserve-unknown-fields: true
+                      patch:
+                        description: >-
+                          Partial resource fields. The controller applies
+                          exactly these fields via SSA and releases them on
+                          prune. Value is a resource map or a CEL expression
+                          string.
+                        x-kubernetes-preserve-unknown-fields: true
+                      ref:
+                        description: >-
+                          Single-object reference. Reads an existing resource
+                          into scope without managing it. Value is a map with
+                          apiVersion, kind, and metadata.name.
+                        x-kubernetes-preserve-unknown-fields: true
+                      watch:
+                        description: >-
+                          Collection observer. Enters matched resources into
+                          scope and re-reconciles on change. Value is a map
+                          with apiVersion, kind, and optional selector.
+                        x-kubernetes-preserve-unknown-fields: true
+                      def:
+                        description: >-
+                          Computed values. Produces no Kubernetes resource —
+                          puts values into scope. Value is a map of key-value
+                          pairs or a CEL expression string.
+                        x-kubernetes-preserve-unknown-fields: true
+                      forEach:
+                        description: >-
+                          Expands the node once per item in a collection.
+                          Map format: {varName: celExpr}. Array format:
+                          [{varName: celExpr}].
+                        x-kubernetes-preserve-unknown-fields: true
+                      finalizes:
+                        description: >-
+                          Target node id. The resource is created only when
+                          the target becomes a prune candidate and must reach
+                          readyWhen before the target's removal completes.
+                        type: string
+                      includeWhen:
+                        description: >-
+                          CEL expressions that all must evaluate to true for
+                          the node to be included. If any is false, the node
+                          is skipped and does not enter scope.
+                        type: array
+                        maxItems: 32
+                        items:
+                          type: string
+                      readyWhen:
+                        description: >-
+                          CEL expressions that all must evaluate to true for
+                          the node to be considered ready. Overrides the
+                          default readiness check (apply success).
+                        type: array
+                        maxItems: 32
+                        items:
+                          type: string
+                      propagateWhen:
+                        description: >-
+                          CEL expressions that all must evaluate to true for
+                          the node to evaluate. When unsatisfied, the node
+                          retains its last-applied state.
+                        type: array
+                        maxItems: 32
+                        items:
+                          type: string
+                      lifecycle:
+                        description: Node-level lifecycle policies.
+                        type: object
+                        properties:
+                          apply:
+                            description: >-
+                              SSA apply strategy. "Force" enables force
+                              server-side apply, taking ownership of
+                              contested fields.
+                            type: string
+                            enum:
+                              - Force
+            status:
+              description: >-
+                Controller-managed observation of the GraphRevision's state.
+              type: object
+              properties:
+                conditions:
+                  description: >-
+                    Active and Ready conditions reflecting whether this is
+                    the current revision and whether its resources have
+                    converged.
+                  type: array
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys:
+                    - type
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
       subresources:
         status: {}
       additionalPrinterColumns:

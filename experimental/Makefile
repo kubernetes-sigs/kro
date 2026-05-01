@@ -97,9 +97,8 @@ help: ## Display this help.
 ##@ Presubmit
 
 .PHONY: presubmit
-presubmit: vet ## Run presubmit checks (vet, all tests including compat allowlist, mod tidy)
-	cd $(EXPDIR) && COMPAT_FOCUS_FILES="$(PASSING_COMPAT_FILES)" COMPAT_SKIP_SPECS="$(SKIP_SPECS)" KRO_TEST_TAG=presubmit \
-	  go test $(TEST_FLAGS) -tags graphcompat $(TEST_PKGS)
+presubmit: vet ## Run presubmit checks (vet, unit tests, mod tidy). Use compat-presubmit for the full compat suite.
+	cd $(EXPDIR) && go test $(TEST_FLAGS) $(TEST_PKGS)
 	cd $(EXPDIR) && go mod tidy && git diff --exit-code go.mod go.sum
 
 ##@ Development

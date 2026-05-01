@@ -115,23 +115,13 @@ func TestDefinesForEachReconcile(t *testing.T) {
 		eval := &evaluator{
 			compiled: compiled,
 			scope:    map[string]any{},
-			dispatch: workerState{
-				forEachNewScope:   map[string]map[string]any{},
-				forEachNewKeys:    map[string]map[string][]string{},
-				forEachNewHashes:  map[string]map[string]string{},
-				forEachNewItems:   map[string][]any{},
-				forEachPrevItems:  map[string][]any{},
-				forEachPrevScope:  map[string]map[string]any{},
-				forEachPrevKeys:   map[string]map[string][]string{},
-				forEachPrevHashes: map[string]map[string]string{},
-			},
 		}
 
 		graph := &unstructured.Unstructured{Object: map[string]any{
 			"metadata": map[string]any{"name": "test", "namespace": "default"},
 		}}
 
-		_, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false)
+		_, _, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "forEach defines items")
 	})
@@ -159,23 +149,13 @@ func TestDefinesForEachReconcile(t *testing.T) {
 		eval := &evaluator{
 			compiled: compiled,
 			scope:    map[string]any{},
-			dispatch: workerState{
-				forEachNewScope:   map[string]map[string]any{},
-				forEachNewKeys:    map[string]map[string][]string{},
-				forEachNewHashes:  map[string]map[string]string{},
-				forEachNewItems:   map[string][]any{},
-				forEachPrevItems:  map[string][]any{},
-				forEachPrevScope:  map[string]map[string]any{},
-				forEachPrevKeys:   map[string]map[string][]string{},
-				forEachPrevHashes: map[string]map[string]string{},
-			},
 		}
 
 		graph := &unstructured.Unstructured{Object: map[string]any{
 			"metadata": map[string]any{"name": "test", "namespace": "default"},
 		}}
 
-		_, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false)
+		_, _, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false, nil)
 		require.Error(t, err, "forEach with failing child templates must return an error")
 
 		_, published := eval.scope["items"]

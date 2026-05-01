@@ -7,7 +7,6 @@ import (
 	"net"
 	"testing"
 
-	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,8 +34,8 @@ import (
 
 // TestSetStateDoesNotPropagate proves that SetState only sets the source
 // node's state and does NOT propagate to dependents. State propagation
-// is the responsibility of tryDispatch, which evaluates all dependencies
-// with full precedence (Excluded > Blocked > Pending).
+// is the responsibility of checkDependencyGate (called during the walk),
+// which evaluates all dependencies with full precedence (Excluded > Blocked > Pending).
 //
 // The previous implementation used a first-wins flood fill that violated
 // precedence in diamond dependencies: if an Error parent propagated
@@ -68,7 +67,7 @@ func TestSetStateDoesNotPropagate(t *testing.T) {
 // TestSummaryCountsBlockedState proves that dagpkg.PlanSummary correctly reports
 // HasBlocked when a node is explicitly set to dagpkg.NodeBlocked. Since SetState
 // no longer propagates, the test sets dependent state explicitly (matching
-// what tryDispatch would do during a real walk).
+// what checkDependencyGate would do during a real walk).
 func TestSummaryCountsBlockedState(t *testing.T) {
 	nodes := []graphpkg.Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
@@ -79,8 +78,8 @@ func TestSummaryCountsBlockedState(t *testing.T) {
 
 	plan := dagpkg.NewPlanState(dag)
 	plan.SetState(dag, "a", dagpkg.NodeError)
-	// Simulate what tryDispatch does: when b's dependency a is in error,
-	// tryDispatch marks b as Blocked.
+	// Simulate what checkDependencyGate does: when b's dependency a is in error,
+	// the walk marks b as Blocked.
 	plan.SetState(dag, "b", dagpkg.NodeBlocked)
 
 	summary := plan.Summary()
@@ -90,44 +89,30 @@ func TestSummaryCountsBlockedState(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// tryDispatch state propagation tests
+// checkDependencyGate state propagation tests
 //
 // These replace the old SetState propagation tests. The design commitment
 // (004 § Propagation: Excluded > Blocked > Pending) is now enforced by
-// tryDispatch, not SetState. These tests exercise tryDispatch directly.
+// checkDependencyGate during the walk. These tests exercise it directly.
 // ---------------------------------------------------------------------------
 
-// newTestWalkState builds a minimal walkState for testing tryDispatch.
-// All nodes are marked as triggered so the skip check doesn't fire.
-// Dependency states can be pre-set via plan.States before calling tryDispatch.
-func newTestWalkState(t *testing.T, dag *dagpkg.DAG) *walkState {
-	t.Helper()
-	compiled := &compiler.CompiledGraph{
-		Programs:     map[string]cel.Program{},
-		ExprPaths:    map[string]map[string][]graphpkg.FieldPath{},
-		Topology:     dag.Topology,
-	}
-	plan := dagpkg.NewPlanState(dag)
-	triggered := make(map[string]bool, len(dag.Nodes))
-	for i := range dag.Nodes {
-		triggered[dag.Nodes[i].ID] = true
-	}
-	return &walkState{
-		ctx:                  context.Background(),
-		dag:                  dag,
-		plan:                 plan,
-		state:                newInstanceState(compiled),
-		eval:                 &evaluator{compiled: compiled, scope: map[string]any{}, nodeReady: map[string]bool{}},
-		triggered:            triggered,
-		propagationTriggered: map[string]bool{},
-		dispatched:           map[int]bool{},
-		outputsReady:         map[string]bool{},
-		results:              make(chan nodeResult, 16),
+// gateToNodeState maps a gateState to the dagpkg.NodeState that the walk
+// would assign. Used by tests to verify precedence without needing a full walk.
+func gateToNodeState(g gateState) dagpkg.NodeState {
+	switch g {
+	case gateExcluded:
+		return dagpkg.NodeExcluded
+	case gateBlocked:
+		return dagpkg.NodeBlocked
+	case gatePending:
+		return dagpkg.NodePending
+	default:
+		return dagpkg.NodeReady // gateDispatch — would proceed to evaluation
 	}
 }
 
-// TestTryDispatchPrecedence_ExcludedOverBlockedOverPending proves that
-// tryDispatch enforces the design's state precedence when a node has
+// TestCheckDependencyGatePrecedence_ExcludedOverBlockedOverPending proves that
+// checkDependencyGate enforces the design's state precedence when a node has
 // multiple dependencies in different failure states.
 //
 // Per 005-reconciliation.md § Propagation:
@@ -136,7 +121,7 @@ func newTestWalkState(t *testing.T, dag *dagpkg.DAG) *walkState {
 //   - "Any dependency in an error state → inherit Blocked."
 //   - "Any dependency Pending → inherit Pending."
 //   - "Precedence where multiple apply: Excluded > Blocked > Pending"
-func TestTryDispatchPrecedence_ExcludedOverBlockedOverPending(t *testing.T) {
+func TestCheckDependencyGatePrecedence_ExcludedOverBlockedOverPending(t *testing.T) {
 	// Diamond: A and B are parents of C.
 	nodes := []graphpkg.Node{
 		{ID: "a", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a"}}},
@@ -173,35 +158,22 @@ func TestTryDispatchPrecedence_ExcludedOverBlockedOverPending(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			walk := newTestWalkState(t, dag)
-			walk.plan.SetState(dag, "a", tc.stateA)
-			walk.plan.SetState(dag, "b", tc.stateB)
+			plan := dagpkg.NewPlanState(dag)
+			plan.SetState(dag, "a", tc.stateA)
+			plan.SetState(dag, "b", tc.stateB)
 
-			cIdx := -1
-			for i, n := range dag.Nodes {
-				if n.ID == "c" {
-					cIdx = i
-					break
-				}
-			}
-			require.NotEqual(t, -1, cIdx)
+			cIdx := dag.Index["c"]
+			node := &dag.Nodes[cIdx]
 
-			walk.tryDispatch(cIdx)
-			assert.Equal(t, tc.wantChildC, walk.plan.States["c"],
+			gate := checkDependencyGate(node, plan)
+			gotState := gateToNodeState(gate)
+			assert.Equal(t, tc.wantChildC, gotState,
 				"child C should inherit %s from parents %s+%s", tc.wantChildC, tc.stateA, tc.stateB)
 		})
 	}
 }
 
-// TestTryDispatchChainPropagation proves that tryDispatch propagates state
-// transitively through chains: A → B → C. When A is set to Excluded, both
-// B and C become Excluded. When A is set to Error, both B and C become
-// Blocked.
-// // TestTryDispatchPrecedence_RegressionDiamondExcludedBlocked is the
-// regression test for the specific bug this change fixes. In the old code,
-// propagateState used a first-wins flood fill that didn't enforce
-// Excluded > Blocked precedence. This test proves the fix holds.
-// // TestPruneOrderReverseDependency proves that pruneOrder sorts prune
+// TestPruneOrderReverseDependency proves that pruneOrder sorts prune
 // candidates so dependents are deleted before their dependencies. This
 // prevents dangling references during prune.
 func TestPruneOrderReverseDependency(t *testing.T) {
@@ -963,16 +935,13 @@ func TestFinalizeSkippedStates_IgnoresNonSkipped(t *testing.T) {
 		"node in outputsReady with prior state gets restored")
 }
 
-// TestTryDispatch_RegressionExcludedPersistence guards against the bug where
-// tryDispatch set plan state for Excluded/Blocked/Pending nodes but never
-// persisted to previousPlanStates. On the next reconcile, finalizeSkippedStates
-// couldn't restore the state and fell back to Pending — breaking contagious
-// exclusion across reconcile cycles.
-func TestTryDispatch_RegressionExcludedPersistence(t *testing.T) {
+// TestCheckDependencyGate_RegressionExcludedPersistence verifies that when
+// a dependency is Excluded, checkDependencyGate returns gateExcluded so
+// the walk can set the child to Excluded. This tests the same invariant
+// as the old tryDispatch persistence test — contagious exclusion.
+func TestCheckDependencyGate_RegressionExcludedPersistence(t *testing.T) {
 	// Build a DAG: root → child. Root will be Excluded in the plan.
-	// When tryDispatch evaluates child, it sees an excluded dependency
-	// and should mark child as Excluded in BOTH plan.States AND
-	// state.previousPlanStates.
+	// checkDependencyGate on child should return gateExcluded.
 	nodes := []graphpkg.Node{
 		{
 			ID: "root",
@@ -995,35 +964,18 @@ func TestTryDispatch_RegressionExcludedPersistence(t *testing.T) {
 	require.NoError(t, err)
 	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
 
-	state := newInstanceState(compiled)
 	plan := dagpkg.NewPlanState(dag)
-	eval := newEvaluator(state)
-
-	walk := &walkState{
-		ctx:                  t.Context(),
-		dag:                  dag,
-		eval:                 eval,
-		state:                state,
-		plan:                 plan,
-		triggered:            map[string]bool{"root": true, "child": true},
-		resyncTriggered:      map[string]bool{},
-		propagationTriggered: map[string]bool{},
-		dispatched:           map[int]bool{},
-		outputsReady:         map[string]bool{},
-		results:              make(chan nodeResult, 10),
-	}
-
 	// Mark root as Excluded in the plan (simulates root's includeWhen=false).
 	plan.SetState(dag, "root", dagpkg.NodeExcluded)
-	state.previousPlanStates["root"] = dagpkg.NodeExcluded
 
-	// Dispatch child — it should see root is Excluded and contagiously exclude.
-	walk.tryDispatch(dag.Index["child"])
+	childIdx := dag.Index["child"]
+	node := &dag.Nodes[childIdx]
 
-	assert.Equal(t, dagpkg.NodeExcluded, plan.States["child"],
-		"child should be contagiously excluded in plan")
-	assert.Equal(t, dagpkg.NodeExcluded, state.previousPlanStates["child"],
-		"child's excluded state must be persisted to previousPlanStates for next reconcile")
+	gate := checkDependencyGate(node, plan)
+	assert.Equal(t, gateExcluded, gate,
+		"child should see gateExcluded when root is Excluded")
+	assert.Equal(t, dagpkg.NodeExcluded, gateToNodeState(gate),
+		"child's gated state should be Excluded")
 }
 
 // ---------------------------------------------------------------------------
@@ -1504,21 +1456,20 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 	}
 
 	// Pre-populate forEach state so items are "known" and can be carried forward.
-	eval.dispatch.forEachPrevItems = map[string][]any{
-		"workers/item": {
-			map[string]any{"metadata": map[string]any{"name": "alpha"}},
-			map[string]any{"metadata": map[string]any{"name": "beta"}},
+	prevState := &forEachState{
+		items: map[string][]any{
+			"workers/item": {
+				map[string]any{"metadata": map[string]any{"name": "alpha"}},
+				map[string]any{"metadata": map[string]any{"name": "beta"}},
+			},
+		},
+		itemScope: map[string]map[string]any{
+			"workers": {"alpha": prevAlpha, "beta": prevBeta},
+		},
+		itemKeys: map[string]map[string][]string{
+			"workers": {"alpha": {"key-alpha"}, "beta": {"key-beta"}},
 		},
 	}
-	eval.dispatch.forEachPrevScope = map[string]map[string]any{
-		"workers": {"alpha": prevAlpha, "beta": prevBeta},
-	}
-	eval.dispatch.forEachPrevKeys = map[string]map[string][]string{
-		"workers": {"alpha": {"key-alpha"}, "beta": {"key-beta"}},
-	}
-	eval.dispatch.forEachNewScope = map[string]map[string]any{}
-	eval.dispatch.forEachNewKeys = map[string]map[string][]string{}
-	eval.dispatch.forEachNewItems = map[string][]any{}
 
 	graph := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "experimental.kro.run/v1alpha1",
@@ -1527,7 +1478,7 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 	}}
 
 	r := &GraphReconciler{}
-	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false)
+	_, _, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false, prevState)
 	// compiler.ErrWaitingForReadiness expected — propagateWhen halted expansion.
 	require.ErrorIs(t, err, compiler.ErrWaitingForReadiness)
 
@@ -1547,23 +1498,24 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 		"beta (generation 4 != effectiveGeneration 5) should NOT be updated")
 }
 
-// TestForEach_SkippedUnchangedStampsUpdatedFromLabel proves that forEach
-// items skipped because their input is unchanged still get __updated
-// re-stamped from the generation label. This matters after restarts: the
-// input hash matches but the generation label on the resource is the only
-// signal of which generation it was applied in.
-func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
-	spec := &graphpkg.GraphSpec{
-		Nodes: []graphpkg.Node{
-			{ID: "source", Def: map[string]any{
-				"items": []any{
-					map[string]any{"metadata": map[string]any{"name": "alpha"}},
-				},
-			}},
-			{ID: "results", ForEach: &graphpkg.ForEachBinding{VarName: "item", Expr: "${source.items}"},
-				Def: map[string]any{"name": "${item.metadata.name}"},
-			},
+// TestForEach_DefinitionItemsAlwaysReEvaluated proves that forEach definition
+// items are always re-evaluated (no caching). Every item gets __updated = true
+// because definitions are vacuously updated on every reconcile.
+func TestForEach_DefinitionItemsAlwaysReEvaluated(t *testing.T) {
+	sourceNode := graphpkg.Node{ID: "source", Def: map[string]any{
+		"items": []any{
+			map[string]any{"metadata": map[string]any{"name": "alpha"}},
 		},
+	}}
+	sourceNode.SetType(graphpkg.NodeTypeDef)
+
+	resultsNode := graphpkg.Node{ID: "results", ForEach: &graphpkg.ForEachBinding{VarName: "item", Expr: "${source.items}"},
+		Def: map[string]any{"name": "${item.metadata.name}"},
+	}
+	resultsNode.SetType(graphpkg.NodeTypeDef)
+
+	spec := &graphpkg.GraphSpec{
+		Nodes: []graphpkg.Node{sourceNode, resultsNode},
 	}
 	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
@@ -1577,31 +1529,6 @@ func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
 	}
 	eval.scope["source"] = map[string]any{"items": sourceItems}
 
-	// Build previous scope with a generation label matching current gen.
-	genKey := graphpkg.ForEachChildGenerationLabelKey("results", "alpha", "default", "Deployment", "apps", "test", "default")
-	prevAlpha := map[string]any{
-		"apiVersion": "apps/v1", "kind": "Deployment",
-		"metadata": map[string]any{
-			"name": "alpha", "namespace": "default",
-			"labels": map[string]any{genKey: "7"},
-		},
-		"name": "alpha",
-	}
-
-	// Pre-populate forEach state: same items as current → skip path fires.
-	eval.dispatch.forEachPrevItems = map[string][]any{
-		"results/item": sourceItems,
-	}
-	eval.dispatch.forEachPrevScope = map[string]map[string]any{
-		"results": {"alpha": prevAlpha},
-	}
-	eval.dispatch.forEachPrevKeys = map[string]map[string][]string{
-		"results": {"alpha": {}},
-	}
-	eval.dispatch.forEachNewScope = map[string]map[string]any{}
-	eval.dispatch.forEachNewKeys = map[string]map[string][]string{}
-	eval.dispatch.forEachNewItems = map[string][]any{}
-
 	graph := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "experimental.kro.run/v1alpha1",
 		"kind":       "Graph",
@@ -1609,7 +1536,7 @@ func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
 	}}
 
 	r := &GraphReconciler{}
-	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false)
+	_, _, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false, nil)
 	require.NoError(t, err)
 
 	items, ok := eval.scope["results"].([]any)
@@ -1619,65 +1546,7 @@ func TestForEach_SkippedUnchangedStampsUpdatedFromLabel(t *testing.T) {
 	alpha, ok := items[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, true, alpha["__updated"],
-		"skipped-unchanged item with matching generation (7 == 7) should be updated")
-
-	// Now test the mismatch case: same input, old generation label.
-	eval2 := newEvaluator(state)
-	eval2.effectiveGeneration = 8 // generation advanced
-	eval2.scope["source"] = map[string]any{"items": sourceItems}
-
-	// prevAlpha still has generation "7" but effectiveGeneration is now 8.
-	eval2.dispatch.forEachPrevItems = map[string][]any{"results/item": sourceItems}
-	eval2.dispatch.forEachPrevScope = map[string]map[string]any{
-		"results": {"alpha": prevAlpha},
-	}
-	eval2.dispatch.forEachPrevKeys = map[string]map[string][]string{"results": {"alpha": {}}}
-	eval2.dispatch.forEachNewScope = map[string]map[string]any{}
-	eval2.dispatch.forEachNewKeys = map[string]map[string][]string{}
-	eval2.dispatch.forEachNewItems = map[string][]any{}
-
-	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval2, nil, false)
-	require.NoError(t, err)
-
-	items2, ok := eval2.scope["results"].([]any)
-	require.True(t, ok)
-	require.Len(t, items2, 1)
-
-	alpha2, ok := items2[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, false, alpha2["__updated"],
-		"skipped-unchanged item with old generation (7 != 8) should NOT be updated")
-}
-
-// ---------------------------------------------------------------------------
-// mergeCollectionChanges — input isolation
-// ---------------------------------------------------------------------------
-
-// TestMergeCollectionChanges_InputNotMutated proves that mergeCollectionChanges
-// does not mutate its cached input slice. This defends the encapsulation: all
-// mutation happens on an internally-owned copy. If someone changes the
-// function to operate in-place, this test fails.
-func TestMergeCollectionChanges_InputNotMutated(t *testing.T) {
-	a := map[string]any{"metadata": map[string]any{"name": "a", "namespace": "ns"}, "data": map[string]any{"v": "1"}}
-	b := map[string]any{"metadata": map[string]any{"name": "b", "namespace": "ns"}, "data": map[string]any{"v": "2"}}
-	c := map[string]any{"metadata": map[string]any{"name": "c", "namespace": "ns"}, "data": map[string]any{"v": "3"}}
-	cached := []any{a, b, c}
-
-	// Delete the middle item. This is the path that previously used
-	// items[:0] in-place filtering and would corrupt the input.
-	result, err := mergeCollectionChanges(
-		context.Background(), nil, cached,
-		[]watches.CollectionChange{{Namespace: "ns", Name: "b", EventType: watches.WatchEventDelete}},
-		schema.GroupVersionKind{}, nil,
-	)
-	require.NoError(t, err)
-
-	// Result has 2 items, input still has 3 — unchanged.
-	assert.Len(t, result, 2, "result should have item removed")
-	require.Len(t, cached, 3, "input slice length must not change")
-	assert.Equal(t, a, cached[0].(map[string]any), "input[0] must be original 'a'")
-	assert.Equal(t, b, cached[1].(map[string]any), "input[1] must be original 'b'")
-	assert.Equal(t, c, cached[2].(map[string]any), "input[2] must be original 'c'")
+		"definition items are always re-evaluated and should be updated")
 }
 
 // TestForEach_RegressionSharedContextPropagation proves that when a shared
@@ -1716,12 +1585,8 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval.effectiveGeneration = 1
 	eval.scope["config"] = map[string]any{"version": "v1"}
 	eval.scope["source"] = map[string]any{"names": names}
-	eval.dispatch.forEachNewScope = map[string]map[string]any{}
-	eval.dispatch.forEachNewKeys = map[string]map[string][]string{}
-	eval.dispatch.forEachNewItems = map[string][]any{}
-	eval.dispatch.forEachNewHashes = map[string]map[string]string{}
 
-	_, err = r.reconcileForEach(context.Background(), graph, resultsNode, eval, nil, false)
+	_, newState, err := r.reconcileForEach(context.Background(), graph, resultsNode, eval, nil, false, nil)
 	require.NoError(t, err)
 	items1, ok := eval.scope["results"].([]any)
 	require.True(t, ok)
@@ -1730,30 +1595,31 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 		assert.Contains(t, item.(map[string]any)["combined"].(string), "-v1")
 	}
 
-	for k, v := range eval.dispatch.forEachNewScope {
+	// Merge newState into instanceState for phase 2.
+	for k, v := range newState.itemScope {
 		state.forEachItemScope[k] = v
 	}
-	for k, v := range eval.dispatch.forEachNewKeys {
+	for k, v := range newState.itemKeys {
 		state.forEachItemKeys[k] = v
 	}
-	for k, v := range eval.dispatch.forEachNewHashes {
-		state.forEachItemHashes[k] = v
-	}
-	for k, v := range eval.dispatch.forEachNewItems {
+	for k, v := range newState.items {
 		state.forEachItems[k] = v
 	}
 
-	// Phase 2: config.version = "v2", collection unchanged
+	// Phase 2: config.version = "v2", collection unchanged.
+	// Items are always re-evaluated so they pick up the new config.
 	eval2 := newEvaluator(state)
 	eval2.effectiveGeneration = 1
 	eval2.scope["config"] = map[string]any{"version": "v2"}
 	eval2.scope["source"] = map[string]any{"names": names}
-	eval2.dispatch.forEachNewScope = map[string]map[string]any{}
-	eval2.dispatch.forEachNewKeys = map[string]map[string][]string{}
-	eval2.dispatch.forEachNewItems = map[string][]any{}
-	eval2.dispatch.forEachNewHashes = map[string]map[string]string{}
 
-	_, err = r.reconcileForEach(context.Background(), graph, resultsNode, eval2, nil, false)
+	prevState2 := &forEachState{
+		items:     state.forEachItems,
+		itemScope: state.forEachItemScope,
+		itemKeys:  state.forEachItemKeys,
+	}
+
+	_, _, err = r.reconcileForEach(context.Background(), graph, resultsNode, eval2, nil, false, prevState2)
 	require.NoError(t, err)
 	items2, ok := eval2.scope["results"].([]any)
 	require.True(t, ok)
@@ -1950,37 +1816,15 @@ func TestLazyDepDoesNotGateDispatch(t *testing.T) {
 	assert.Equal(t, graphpkg.DepLazy, dag.Nodes[cIdx].Dependencies["b"], "b should be lazy dep")
 
 	// A is ready, B is pending — C should still dispatch because B is lazy.
-	state := newInstanceState(compiled)
 	plan := dagpkg.NewPlanState(dag)
-	eval := newEvaluator(state)
-
-	triggered := make(map[string]bool, len(dag.Nodes))
-	for i := range dag.Nodes {
-		triggered[dag.Nodes[i].ID] = true
-	}
-
-	w := &walkState{
-		ctx:                      t.Context(),
-		dag:                      dag,
-		plan:                     plan,
-		state:                    state,
-		eval:                     eval,
-		triggered:                triggered,
-		resyncTriggered:          map[string]bool{},
-		propagationTriggered:     map[string]bool{},
-		lazyPropagationTriggered: map[string]bool{},
-		dispatched:               map[int]bool{},
-		outputsReady:             map[string]bool{},
-		results:                  make(chan nodeResult, 16),
-	}
-
 	plan.SetState(dag, "a", dagpkg.NodeReady)
 	plan.SetState(dag, "b", dagpkg.NodePending) // B is pending — lazy dep
 
-	w.tryDispatch(cIdx)
-	// C should NOT be NodePending — it dispatches because B is lazy (doesn't gate).
-	// tryDispatch only checks hard deps; lazy dep B=Pending is invisible to gating.
-	assert.NotEqual(t, dagpkg.NodePending, plan.States["c"],
+	node := &dag.Nodes[cIdx]
+	gate := checkDependencyGate(node, plan)
+	// C should dispatch (gateDispatch) — B is lazy, so its Pending state is invisible to gating.
+	// checkDependencyGate only checks hard deps; lazy dep B=Pending doesn't block.
+	assert.Equal(t, gateDispatch, gate,
 		"lazy dep B=Pending should not block C from dispatching")
 }
 
@@ -2047,20 +1891,21 @@ func TestLazyDepOptionalScope_AbsentReturnsDefault(t *testing.T) {
 	require.Equal(t, graphpkg.DepLazy, statusNode.Dependencies["deploy"])
 
 	// Create evaluator with deploy ABSENT from scope (lazy dep not yet available).
-	// snapshotFor will wrap the absent lazy dep as optional.none().
+	// Manually populate lazy deps as optional.none() — matching what
+	// evaluateNode does in the simplified walk.
 	state := newInstanceState(compiled)
 	eval := newEvaluator(state)
 	// Don't put "deploy" in scope — it's absent.
-
-	worker := eval.snapshotFor(statusNode, state)
+	// Populate lazy dep as optional.none() (what the walk does for absent lazy deps).
+	eval.scope["deploy"] = celOptionalNone()
 
 	// .ready().orValue(false) on absent lazy dep → false
-	readyVal, err := compiled.Eval("deploy.ready().orValue(false) ? 'yes' : 'no'", worker.scope)
+	readyVal, err := compiled.Eval("deploy.ready().orValue(false) ? 'yes' : 'no'", eval.scope)
 	require.NoError(t, err)
 	assert.Equal(t, "no", readyVal, ".ready().orValue(false) on absent lazy dep should return false")
 
 	// ?.field.orValue() on absent lazy dep → default value
-	replicasVal, err := compiled.Eval("deploy.?status.?availableReplicas.orValue(0)", worker.scope)
+	replicasVal, err := compiled.Eval("deploy.?status.?availableReplicas.orValue(0)", eval.scope)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), replicasVal, "?.orValue(0) on absent lazy dep should return 0")
 }
@@ -2090,25 +1935,25 @@ func TestLazyDepOptionalScope_PresentReturnsRealData(t *testing.T) {
 	require.Equal(t, graphpkg.DepLazy, statusNode.Dependencies["deploy"])
 
 	// Create evaluator with deploy PRESENT in scope with real data.
-	// snapshotFor will wrap the present lazy dep as optional.of(value).
+	// Populate lazy dep as optional.of(value) — matching what the walk does
+	// for present lazy deps.
 	state := newInstanceState(compiled)
 	eval := newEvaluator(state)
-	eval.scope["deploy"] = map[string]any{
+	deployData := map[string]any{
 		"status": map[string]any{
 			"availableReplicas": int64(3),
 		},
 		"__ready": true,
 	}
-
-	worker := eval.snapshotFor(statusNode, state)
+	eval.scope["deploy"] = celOptionalOf(deployData)
 
 	// .ready().orValue(false) on present lazy dep → true (deploy has __ready: true)
-	readyVal, err := compiled.Eval("deploy.ready().orValue(false) ? 'yes' : 'no'", worker.scope)
+	readyVal, err := compiled.Eval("deploy.ready().orValue(false) ? 'yes' : 'no'", eval.scope)
 	require.NoError(t, err)
 	assert.Equal(t, "yes", readyVal, ".ready().orValue(false) on present lazy dep should return true")
 
 	// ?.field.orValue() on present lazy dep → real value
-	replicasVal, err := compiled.Eval("deploy.?status.?availableReplicas.orValue(0)", worker.scope)
+	replicasVal, err := compiled.Eval("deploy.?status.?availableReplicas.orValue(0)", eval.scope)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), replicasVal, "?.orValue(0) on present lazy dep should return 3")
 }

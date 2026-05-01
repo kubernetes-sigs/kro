@@ -16,7 +16,6 @@ import (
 	_ "net/http/pprof" // registers /debug/pprof/* on DefaultServeMux
 	"os"
 	"runtime/debug"
-	"time"
 
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
@@ -43,14 +42,12 @@ func main() {
 		metricsBindAddress     string
 		pprofBindAddress       string
 		maxWorkers             int
-		nodeResyncInterval     time.Duration
 	)
 
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to. Use :0 for a random port.")
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", "0", "The address the metrics endpoint binds to. Use 0 to disable.")
 	flag.StringVar(&pprofBindAddress, "pprof-bind-address", "", "The address the pprof endpoint binds to. Empty to disable.")
 	flag.IntVar(&maxWorkers, "max-workers", 0, "Maximum concurrent reconcile workers. 0 uses the default.")
-	flag.DurationVar(&nodeResyncInterval, "node-resync-interval", 0, "Per-node resync timer interval. 0 uses the default (30m).")
 	flag.Parse()
 
 	if pprofBindAddress != "" {
@@ -85,7 +82,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	shutdown, caches, err := graphcontroller.SetupWithManager(mgr, cfg, maxWorkers, nodeResyncInterval)
+	shutdown, caches, err := graphcontroller.SetupWithManager(mgr, cfg, maxWorkers)
 	if err != nil {
 		log.Error(err, "setting up controller")
 		os.Exit(1)

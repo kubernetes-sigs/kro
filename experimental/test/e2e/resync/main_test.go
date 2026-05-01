@@ -246,7 +246,6 @@ func startBinary(binaryPath, kubeconfigPath string, logFile *os.File) (healthAdd
 		"--metrics-bind-address=0",
 		"--pprof-bind-address=0",
 		"--max-workers=32",
-		"--node-resync-interval=5s",
 	)
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	cmd.Stdout = logFile

@@ -152,9 +152,7 @@ func hydrateWatchCachesFromRevisions(restConfig *rest.Config, watchMgr *watches.
 //
 // Returns a shutdown function that stops the watch manager. The caller
 // must invoke this on teardown.
-//
-// resyncInterval overrides the per-node resync timer interval. 0 uses the default (30m).
-func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int, resyncInterval time.Duration) (shutdown func(), caches *graphCaches, err error) {
+func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int) (shutdown func(), caches *graphCaches, err error) {
 	RegisterMetrics(crmetrics.Registry)
 
 	if maxWorkers <= 0 {
@@ -207,7 +205,6 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int,
 		Watcher:        coordinator,
 		Caches:         newGraphCaches(),
 		Resources:      newResourceCache(),
-		ResyncInterval:  resyncInterval,
 		// Scope is used by staticResourceKey to avoid namespacing
 		// cluster-scoped resource keys. Without this, prune/teardown
 		// silently miss cluster-scoped resources because their keys

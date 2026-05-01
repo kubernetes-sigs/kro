@@ -15,7 +15,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -404,11 +403,6 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 		existing.forEachItems = map[string][]any{}
 		existing.forEachItemScope = map[string]map[string]any{}
 		existing.forEachItemKeys = map[string]map[string][]string{}
-		existing.forEachItemHashes = map[string]map[string]string{}
-		existing.collectionCache = make(map[string][]any)
-		existing.collectionDirty = make(map[string]bool)
-		existing.nodeReady = make(map[string]bool)
-		existing.systemErrorBackoff = make(map[string]time.Duration)
 		existing.deferredPruneKeys = nil
 		// Ensure the compiled graph is tracked in the content-addressed cache.
 		r.Caches.set(instanceKey, existing)

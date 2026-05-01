@@ -47,12 +47,6 @@ type Environment struct {
 	// are always loaded from crds/.
 	CRDDirectoryPaths []string
 
-	// ResyncInterval overrides the per-node resync timer interval for the
-	// controller subprocess. Zero uses the binary's default (30m).
-	// Test suites that depend on fast resync should set this explicitly
-	// rather than relying on shared infrastructure defaults.
-	ResyncInterval time.Duration
-
 	// LogWriter receives controller subprocess output. If nil, a file is
 	// created at build/controller.log.
 	LogWriter io.Writer
@@ -117,7 +111,7 @@ func (e *Environment) Start() (*rest.Config, error) {
 	}
 
 	// Start binary.
-	healthAddr, cmd, err := startBinary(binaryPath, e.kubeconfigPath, logWriter, e.ResyncInterval)
+	healthAddr, cmd, err := startBinary(binaryPath, e.kubeconfigPath, logWriter)
 	if err != nil {
 		e.cleanup()
 		return nil, fmt.Errorf("starting binary: %w", err)
@@ -234,7 +228,7 @@ func writeKubeconfig(cfg *rest.Config) (string, error) {
 	return f.Name(), nil
 }
 
-func startBinary(binaryPath, kubeconfigPath string, logWriter io.Writer, resyncInterval time.Duration) (string, *exec.Cmd, error) {
+func startBinary(binaryPath, kubeconfigPath string, logWriter io.Writer) (string, *exec.Cmd, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, fmt.Errorf("picking health port: %w", err)
@@ -247,9 +241,6 @@ func startBinary(binaryPath, kubeconfigPath string, logWriter io.Writer, resyncI
 		"--metrics-bind-address=0",
 		"--pprof-bind-address=0",
 		"--max-workers=32",
-	}
-	if resyncInterval > 0 {
-		args = append(args, "--node-resync-interval="+resyncInterval.String())
 	}
 
 	cmd := exec.Command(binaryPath, args...)

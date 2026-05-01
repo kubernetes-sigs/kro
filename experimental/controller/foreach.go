@@ -1,6 +1,6 @@
 // foreach.go implements forEach node expansion — stamping a template once per
-// item in a collection. Includes item diffing (identity comparison, unchanged
-// detection) and per-item state management.
+// item in a collection. Includes per-item state management and carry-forward
+// for gated items.
 package graphcontroller
 
 import (
@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -19,16 +18,21 @@ import (
 	"github.com/ellistarn/kro/experimental/controller/watches"
 )
 
+// forEachState holds the per-node forEach state that is passed in from the
+// previous reconcile and returned as new state for the next reconcile.
+type forEachState struct {
+	items     map[string][]any              // collection items keyed by nodeID/varName
+	itemScope map[string]map[string]any     // per-item scope keyed by nodeID then itemID
+	itemKeys  map[string]map[string][]string // per-item keys keyed by nodeID then itemID
+}
+
 // reconcileForEach iterates a collection and stamps the template per item.
-// Implements forEach item diffing from design 004: the parent diffs the
-// current collection against cached state and only re-evaluates changed items.
 //
 // resyncCorrection bypasses the apply-hash check in child applies.
 //
-// forEach state is passed in via the evaluator's forEachPrev* fields and
-// returned via forEachNew* fields. The coordinator merges the output back
-// into the shared cache — workers never touch shared state directly.
-func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool) ([]string, error) {
+// forEach state is passed in via prevState and returned as new state.
+// The caller merges the output back into the shared cache.
+func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool, prevState *forEachState) ([]string, *forEachState, error) {
 	logger := log.FromContext(ctx)
 	var keys []string
 	// Per-item propagateWhen gate. Per 001-graph.md § propagateWhen:
@@ -49,9 +53,9 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	collection, err := eval.evalString(collectionExpr)
 	if err != nil {
 		if compiler.IsPending(err) {
-			return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, compiler.ErrPending)
+			return nil, nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, compiler.ErrPending)
 		}
-		return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, err)
+		return nil, nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, err)
 	}
 
 	items, ok := collection.([]any)
@@ -69,7 +73,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		// unique across items. Duplicate identities silently drop one
 		// item (map overwrite) — that's data loss, not dedup.
 		if _, exists := currentItems[id]; exists {
-			return nil, fmt.Errorf("forEach %s: duplicate item identity %q — "+
+			return nil, nil, fmt.Errorf("forEach %s: duplicate item identity %q — "+
 				"two collection items resolve to the same identity", node.ID, id)
 		}
 		currentItems[id] = item
@@ -81,45 +85,25 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	// informer cache with non-deterministic iteration).
 	sort.Strings(currentOrder)
 
-	// Build previous identity → item map from the worker's snapshot.
-	// When cached hashes are available (Layer 1), the previous identity
-	// map is still needed for items that changed — hashDesiredState(prevItem)
-	// is replaced by the cached hash lookup, but new/removed item detection
-	// still needs the identity set.
-	cacheKey := node.ID + "/" + varName
-	prevItems := make(map[string]any)
-	if prev, ok := eval.dispatch.forEachPrevItems[cacheKey]; ok {
-		for _, item := range prev {
-			id := forEachItemIdentity(item)
-			prevItems[id] = item
-		}
+	// Load per-item previous state from prevState parameter.
+	var prevItemScope map[string]any
+	var prevItemKeys map[string][]string
+	if prevState != nil {
+		prevItemScope = prevState.itemScope[node.ID]
+		prevItemKeys = prevState.itemKeys[node.ID]
 	}
-
-	// Load per-item previous state from nested maps (keyed by node ID, then item ID).
-	prevItemScope := eval.dispatch.forEachPrevScope[node.ID]
 	if prevItemScope == nil {
 		prevItemScope = map[string]any{}
 	}
-	prevItemKeys := eval.dispatch.forEachPrevKeys[node.ID]
 	if prevItemKeys == nil {
 		prevItemKeys = map[string][]string{}
-	}
-	prevItemHashes := eval.dispatch.forEachPrevHashes[node.ID]
-	if prevItemHashes == nil {
-		prevItemHashes = map[string]string{}
 	}
 
 	// Prepare output maps for this node.
 	newItemScope := make(map[string]any)
 	newItemKeys := make(map[string][]string)
-	newItemHashes := make(map[string]string, len(currentItems))
 
-	// Compute shared dependency context hash once. Included in each per-item
-	// cached hash so that when a shared dep changes but collection items are
-	// stable, all cached hashes become stale and items are re-evaluated.
-	contextHash := hashForEachContext(eval.scope, node.Dependencies)
-
-	// Diff: identify changed, unchanged, and removed items.
+	// Evaluate every item every time (simple, correct).
 	var allApplied []any
 	var childErrors []error                     // track per-child errors for state derivation
 	seenResourceKeys := make(map[string]string) // resource key → item identity
@@ -149,7 +133,6 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				allApplied = append(allApplied, prevScope)
 				newItemScope[id] = prevScope
 				newItemKeys[id] = prevItemKeys[id]
-				newItemHashes[id] = prevItemHashes[id] // carry forward hash
 				// Re-stamp __updated: carried-forward items retain their
 				// generation label from when they were last applied. Compare
 				// against effectiveGeneration to determine if this item is
@@ -167,86 +150,6 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		}
 
 		item := currentItems[id]
-		_, existed := prevItems[id]
-
-		// Incremental skip (Layer 2): when forEachChangedItems is set
-		// and this item is NOT in the changed set, carry forward without
-		// any hash computation. The coordinator proved that only specific
-		// collection items changed and this isn't one of them.
-		if eval.dispatch.forEachChangedItems != nil && !eval.dispatch.forEachChangedItems[id] && existed {
-			if prevScope, ok := prevItemScope[id]; ok {
-				if prevKeys, ok := prevItemKeys[id]; ok {
-					keys = append(keys, prevKeys...)
-				}
-				allApplied = append(allApplied, prevScope)
-				newItemScope[id] = prevScope
-				newItemKeys[id] = prevItemKeys[id]
-				newItemHashes[id] = prevItemHashes[id] // carry forward hash
-				logger.V(2).Info("forEach item not in changed set, skipping", "node", node.ID, "item", id)
-				if m, ok := prevScope.(map[string]any); ok {
-					m["__updated"] = isForEachItemUpdated(m, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration)
-				}
-				if hasPerItemGate {
-					stampSingleItemReady(eval, node.ID, prevScope, node.ReadyWhen)
-				}
-				continue
-			}
-			// No previous scope — fall through to evaluate.
-		}
-
-		// Skip unchanged items: retain previous applied state.
-		// Cached hash includes context prefix — when shared deps change,
-		// no cached hash matches and all items re-evaluate.
-		itemUnchanged := false
-		if existed && !resyncCorrection {
-			cachedHash := prevItemHashes[id]
-			if cachedHash != "" {
-				itemUnchanged = forEachItemUnchangedCached(cachedHash, item, contextHash)
-			} else {
-				itemUnchanged = forEachItemUnchanged(prevItems[id], item)
-			}
-		}
-		if itemUnchanged {
-			if prevKeys, ok := prevItemKeys[id]; ok {
-				keys = append(keys, prevKeys...)
-			}
-			if prevScope, ok := prevItemScope[id]; ok {
-				allApplied = append(allApplied, prevScope)
-				// Carry forward to new state.
-				newItemScope[id] = prevScope
-				newItemKeys[id] = prevItemKeys[id]
-				// Carry forward cached hash or bootstrap the cache for
-				// future reconciles. The cached hash is already in
-				// composite format (contextHash/itemHash) — carry it
-				// forward as-is. Re-prefixing would double the context
-				// prefix, causing alternating cache hit/miss on every
-				// subsequent reconcile.
-				if h := prevItemHashes[id]; h != "" {
-					newItemHashes[id] = h
-				} else if currMap, ok := item.(map[string]any); ok {
-					if h, err := hashDesiredState(currMap); err == nil {
-						newItemHashes[id] = contextHash + "/" + h
-					}
-				}
-				logger.V(2).Info("forEach item unchanged, skipping", "node", node.ID, "item", id)
-				// Re-stamp __updated from generation label. Within the
-				// same generation, the label matches → true. Across a
-				// generation boundary (recompilation that preserved
-				// forEach state), the label won't match → false.
-				if m, ok := prevScope.(map[string]any); ok {
-					m["__updated"] = isForEachItemUpdated(m, node.ID, graph.GetName(), graph.GetNamespace(), eval.effectiveGeneration)
-				}
-				// Inline readyWhen stamp: carried-forward items preserve
-				// their previous __ready. Re-stamp so the gate expression
-				// sees current readiness if readyWhen depends on cross-node
-				// state that changed since the last reconcile.
-				if hasPerItemGate {
-					stampSingleItemReady(eval, node.ID, prevScope, node.ReadyWhen)
-				}
-				continue
-			}
-			// No previous scope — fall through to evaluate.
-		}
 
 		if !node.HasBody() {
 			continue
@@ -268,19 +171,13 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 			evalMap["__updated"] = true
 			allApplied = append(allApplied, evalMap)
 			newItemScope[id] = evalMap
-			// Cache content hash for the collection item.
-			if currMap, ok := item.(map[string]any); ok {
-				if h, err := hashDesiredState(currMap); err == nil {
-					newItemHashes[id] = contextHash + "/" + h
-				}
-			}
 			// No keys — definition nodes have no managed resources.
 			continue
 		}
 
 		evalMap, err := innerEval.toMapNode(node)
 		if err != nil {
-			return nil, fmt.Errorf("forEach %s item: %w", node.ID, err)
+			return nil, nil, fmt.Errorf("forEach %s item: %w", node.ID, err)
 		}
 
 		// Stamp forEach child identity labels per 005-reconciliation.md § Child Identity.
@@ -299,7 +196,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		// map and one child stops being managed.
 		childResKey := resourceCacheKey(childObj.GetAPIVersion(), gvk.Kind, childObj.GetNamespace(), childObj.GetName())
 		if prevItemID, exists := seenResourceKeys[childResKey]; exists {
-			return nil, fmt.Errorf("forEach %s: duplicate resource key %s from items %q and %q — "+
+			return nil, nil, fmt.Errorf("forEach %s: duplicate resource key %s from items %q and %q — "+
 				"each child must produce a unique resource (apiVersion/kind/namespace/name)", node.ID, childResKey, prevItemID, id)
 		}
 		seenResourceKeys[childResKey] = id
@@ -346,16 +243,6 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		newItemScope[id] = applied.Object
 		newItemKeys[id] = itemKeys
 
-		// Cache the content hash of the current collection item (not the
-		// applied object). This is the hash used for unchanged detection
-		// on the next reconcile — it reflects the collection item, not
-		// the template output.
-		if currMap, ok := item.(map[string]any); ok {
-			if h, err := hashDesiredState(currMap); err == nil {
-				newItemHashes[id] = contextHash + "/" + h
-			}
-		}
-
 		// Inline readyWhen stamp: required when per-item
 		// propagateWhen is active so the gate expression sees
 		// __ready on items processed earlier in this cycle.
@@ -364,25 +251,13 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		}
 	}
 
-	// Record updated state for coordinator to merge back.
-	if eval.dispatch.forEachNewScope == nil {
-		eval.dispatch.forEachNewScope = map[string]map[string]any{}
+	// Build the new forEach state to return.
+	cacheKey := node.ID + "/" + varName
+	newState := &forEachState{
+		items:     map[string][]any{cacheKey: items},
+		itemScope: map[string]map[string]any{node.ID: newItemScope},
+		itemKeys:  map[string]map[string][]string{node.ID: newItemKeys},
 	}
-	eval.dispatch.forEachNewScope[node.ID] = newItemScope
-	if eval.dispatch.forEachNewKeys == nil {
-		eval.dispatch.forEachNewKeys = map[string]map[string][]string{}
-	}
-	eval.dispatch.forEachNewKeys[node.ID] = newItemKeys
-	if eval.dispatch.forEachNewHashes == nil {
-		eval.dispatch.forEachNewHashes = map[string]map[string]string{}
-	}
-	eval.dispatch.forEachNewHashes[node.ID] = newItemHashes
-
-	// Record updated collection for next reconcile's diff.
-	if eval.dispatch.forEachNewItems == nil {
-		eval.dispatch.forEachNewItems = map[string][]any{}
-	}
-	eval.dispatch.forEachNewItems[cacheKey] = items
 
 	// Per 005-reconciliation.md § Parent State: derive parent state from children.
 	// Error states take precedence over Pending; deterministic errors (Error)
@@ -395,7 +270,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	// partially-applied array. Error-then-publish (not publish-then-error)
 	// makes the invariant structural rather than coordinator-dependent.
 	if len(childErrors) > 0 {
-		return keys, highestPriorityChildError(childErrors)
+		return keys, newState, highestPriorityChildError(childErrors)
 	}
 
 	eval.scope[node.ID] = allApplied
@@ -403,7 +278,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	// Per-item propagateWhen halted expansion — the collection is
 	// incomplete. Signal NotReady so the controller requeues.
 	if halted {
-		return keys, compiler.ErrWaitingForReadiness
+		return keys, newState, compiler.ErrWaitingForReadiness
 	}
 
 	// Check readyWhen per-item and stamp __ready on each item.
@@ -411,14 +286,14 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	// stamped inline during the loop — skip the post-loop pass.
 	if !hasPerItemGate {
 		if err := forEachStampReadyWhen(eval.scope, node.ID, node.ReadyWhen, eval); err != nil {
-			return keys, err
+			return keys, newState, err
 		}
 		if len(node.ReadyWhen) > 0 {
 			logger.V(1).Info("all forEach items ready", "node", node.ID)
 		}
 	}
 
-	return keys, nil
+	return keys, newState, nil
 }
 
 // forEachStampReadyWhen evaluates readyWhen per-item and stamps __ready on
@@ -537,39 +412,6 @@ func forEachItemIdentity(item any) string {
 	// and %v on numeric types stringifies float64(5) and int64(5) to the same
 	// "5", so CEL type drift does not cause phantom child churn.
 	return fmt.Sprintf("%v", item)
-}
-
-// forEachItemUnchanged returns true if two forEach items have the same content.
-// Uses a content hash comparison to avoid deep equality checks.
-func forEachItemUnchanged(prev, current any) bool {
-	prevMap, prevOk := prev.(map[string]any)
-	currMap, currOk := current.(map[string]any)
-	if prevOk && currOk {
-		prevHash, err1 := hashDesiredState(prevMap)
-		currHash, err2 := hashDesiredState(currMap)
-		if err1 != nil || err2 != nil {
-			log.Log.V(1).Info("forEach item comparison hash failed, treating as changed", "prevErr", err1, "currErr", err2)
-			return false // fail-safe: treat as changed
-		}
-		return prevHash == currHash
-	}
-	return fmt.Sprintf("%v", prev) == fmt.Sprintf("%v", current)
-}
-
-// forEachItemUnchangedCached returns true if a collection item is unchanged
-// from the previous reconcile, using a cached hash for the previous item.
-// The cached hash includes a context prefix (shared dependency scope) so
-// that when shared dependencies change, no cached hash matches.
-func forEachItemUnchangedCached(cachedPrevHash string, current any, contextHash string) bool {
-	currMap, currOk := current.(map[string]any)
-	if !currOk {
-		return strings.HasPrefix(cachedPrevHash, contextHash+"/")
-	}
-	currHash, err := hashDesiredState(currMap)
-	if err != nil {
-		return false
-	}
-	return cachedPrevHash == contextHash+"/"+currHash
 }
 
 // highestPriorityChildError returns the highest-priority error from a list

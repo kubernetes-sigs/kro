@@ -12,12 +12,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/cel-go/common/types"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-
 	"github.com/ellistarn/kro/experimental/controller/compiler"
 	"github.com/ellistarn/kro/experimental/controller/graph"
-	"github.com/ellistarn/kro/experimental/controller/watches"
 )
 
 // gateResult represents the outcome of a propagateWhen evaluation.
@@ -30,15 +26,8 @@ const (
 )
 
 // evaluator holds the pre-compiled expression cache and the current scope
-// for a single reconcile cycle. The scope is owned by the coordinator —
-// workers receive read-only snapshots and return results for the coordinator
-// to merge. No locking needed.
-//
-// Coordinator fields (compiled, scope, effectiveGeneration, nodeReady) persist
-// for the reconcile cycle. Worker fields live in the dispatch sub-struct —
-// populated by snapshotFor before each worker dispatch, consumed by the
-// node-type handler, and read by the goroutine closure to build nodeResult.
-// The coordinator's evaluator always has dispatch at zero value.
+// for a single reconcile cycle. The scope is mutable and shared — the
+// sequential walk updates it as nodes are evaluated.
 type evaluator struct {
 	compiled *compiler.CompiledGraph
 	scope    map[string]any
@@ -58,85 +47,26 @@ type evaluator struct {
 	// to flow through the per-item __ready stamping — those are unaffected
 	// by this sidecar. Per 001-graph.md § readyWhen.
 	nodeReady map[string]bool
-
-	// dispatch holds per-worker state populated by snapshotFor before each
-	// worker dispatch. Zero value for the coordinator's evaluator.
-	dispatch workerState
-}
-
-// workerState holds per-node-dispatch state for worker goroutines. Populated
-// by snapshotFor before dispatch, consumed by reconcileForEach and
-// reconcileWatch during evaluation, and read by the worker goroutine closure
-// to build nodeResult. Always zero for the coordinator's evaluator.
-type workerState struct {
-	// forEach input state — copied from instanceState by snapshotFor.
-	forEachPrevItems  map[string][]any               // cache key → previous collection items
-	forEachPrevScope  map[string]map[string]any      // nodeID → itemID → previous scope data
-	forEachPrevKeys   map[string]map[string][]string // nodeID → itemID → previous applied keys
-	forEachPrevHashes map[string]map[string]string   // nodeID → itemID → previous content hash
-
-	// forEach output state — written by reconcileForEach, read by goroutine closure.
-	forEachNewItems  map[string][]any               // cache key → updated collection items
-	forEachNewScope  map[string]map[string]any      // nodeID → itemID → updated scope data
-	forEachNewKeys   map[string]map[string][]string // nodeID → itemID → updated keys
-	forEachNewHashes map[string]map[string]string   // nodeID → itemID → updated content hash
-
-	// forEachChangedItems is set by the coordinator when a forEach dispatch
-	// is triggered exclusively by collection-item changes with stable
-	// identities. Contains the item identities (namespace/name) that changed.
-	// nil means full rehash — the coordinator absorbs ambiguity; the worker
-	// never hedges.
-	forEachChangedItems map[string]bool
-
-	// Watch incremental cache input — populated by the coordinator.
-	// Per 005-reconciliation.md § Propagation.
-	collectionNodeID       string                       // node ID for cache key
-	collectionCachedList   []any                        // previous cached list (nil = full list needed)
-	collectionChanges      []watches.CollectionChange   // buffered changes since last reconcile
-	collectionResyncOrFull bool                         // true = bypass cache, do full list
-
-	// Watch incremental cache output — written by reconcileWatch.
-	collectionUpdatedCache []any // updated list for coordinator to store
-	// collectionDidFullList is set true by reconcileWatch when the
-	// worker took the full-List path (as opposed to incremental merge).
-	// Per 005-reconciliation.md § Propagation.
-	collectionDidFullList bool
-
-	// dynamicGVKResolved maps node ID → resolved GVK for dynamic GVK nodes.
-	// Per 004-compilation.md § Deferred Types.
-	dynamicGVKResolved map[string]schema.GroupVersionKind
 }
 
 // newEvaluator creates an evaluator for a reconcile cycle.
 func newEvaluator(state *instanceState) *evaluator {
-	// nodeReady carries per-Watch readyWhen verdicts. It lives on
-	// instanceState so verdicts persist across reconciles — a Watch
-	// that isn't re-evaluated on a given reconcile must still expose its
-	// last verdict to downstream `<wk_id>.ready()` lookups. Scope
-	// reference is stable — later writes to the map are observable by
-	// all subsequent evaluations through the same scope entry. Per
-	// 001-graph.md § readyWhen.
-	if state.nodeReady == nil {
-		state.nodeReady = map[string]bool{}
-	}
+	// nodeReady carries per-Watch readyWhen verdicts. Created fresh per
+	// evaluator — the simplified walk evaluates all nodes every cycle so
+	// verdicts don't need to persist across reconciles.
+	nodeReady := map[string]bool{}
 	scope := map[string]any{
-		compiler.ReservedNodeReadyVar: state.nodeReady,
-	}
-	// Initialize dynamic GVK tracking if the compiled graph has dynamic nodes.
-	var dynamicGVKResolved map[string]schema.GroupVersionKind
-	if state.compiled != nil && len(state.compiled.DynamicGVKNodes) > 0 {
-		dynamicGVKResolved = make(map[string]schema.GroupVersionKind, len(state.compiled.DynamicGVKNodes))
+		compiler.ReservedNodeReadyVar: nodeReady,
 	}
 	return &evaluator{
 		compiled:  state.compiled,
 		scope:     scope,
-		nodeReady: state.nodeReady,
-		dispatch:  workerState{dynamicGVKResolved: dynamicGVKResolved},
+		nodeReady: nodeReady,
 	}
 }
 
 // withScope returns a new evaluator that shares the compiled graph but has its own scope.
-// Used for forEach inner scopes and worker snapshots.
+// Used for forEach inner scopes where the iterator variable is bound per-item.
 func (e *evaluator) withScope(scope map[string]any) *evaluator {
 	// Preserve the node-readiness sidecar across scope substitutions so
 	// inner forEach evaluations see the same verdicts as the outer walk.
@@ -146,17 +76,6 @@ func (e *evaluator) withScope(scope map[string]any) *evaluator {
 		}
 	}
 	return &evaluator{compiled: e.compiled, scope: scope, nodeReady: e.nodeReady, effectiveGeneration: e.effectiveGeneration}
-}
-
-// collectionCacheUpdate returns a map of Watch cache updates if the
-// evaluator's collectionUpdatedCache is set. Returns nil if no cache
-// update was produced (the worker was not a Watch node, or the
-// reconcileWatch call failed before producing a cache update).
-func (e *evaluator) collectionCacheUpdate() map[string][]any {
-	if e.dispatch.collectionUpdatedCache == nil || e.dispatch.collectionNodeID == "" {
-		return nil
-	}
-	return map[string][]any{e.dispatch.collectionNodeID: e.dispatch.collectionUpdatedCache}
 }
 
 // evalBoolCondition evaluates a CEL expression and coerces the result to bool.
@@ -181,14 +100,6 @@ func (e *evaluator) evalBoolCondition(expr string) (bool, error) {
 // markReady injects the __ready flag into a node's scope data. This is
 // read by the .ready() CEL member function to expose the graph controller's
 // readiness assessment to CEL expressions like propagateWhen and readyWhen.
-//
-// Safety: this mutates a map inside e.scope. The mutation is safe because
-// markReady runs only in two contexts: (1) inside a worker goroutine
-// operating on a snapshot created by snapshotFor — the map is private to
-// that worker, and (2) in the coordinator after the worker's result has
-// been merged into scope — single-threaded, no concurrent readers. If the
-// concurrency model changes (e.g., shared scope across workers), this
-// mutation would introduce a data race.
 func (e *evaluator) markReady(nodeID string, ready bool) {
 	if m, ok := e.scope[nodeID].(map[string]any); ok {
 		m["__ready"] = ready
@@ -198,9 +109,6 @@ func (e *evaluator) markReady(nodeID string, ready bool) {
 // markUpdated injects the __updated flag into a node's scope data. This is
 // read by the .updated() CEL member function. Per 001-graph.md § CEL Functions:
 // ".updated() — true when the node is on the latest graph generation."
-//
-// Same safety model as markReady: only mutated in worker-private snapshots
-// or coordinator-serial code.
 func (e *evaluator) markUpdated(nodeID string, updated bool) {
 	if m, ok := e.scope[nodeID].(map[string]any); ok {
 		m["__updated"] = updated
@@ -482,148 +390,4 @@ func (e *evaluator) includeWhen(conditions []string) (bool, error) {
 		}
 	}
 	return true, nil
-}
-
-// snapshotFor builds a worker evaluator for a specific node. The snapshot
-// contains the node's hard dependency data (read-only) and, for forEach nodes,
-// the previous forEach state from the instance. The worker writes to its own
-// maps — the coordinator merges them back after the worker returns.
-//
-// Hard dependencies are copied from the coordinator's scope — the node waited
-// for them before dispatching. Lazy dependencies (e.g., .ready() targets in
-// branch expressions) get empty-map fallbacks when their data isn't available
-// yet — .ready() returns false and the expression takes the branch that
-// doesn't need the data.
-func (e *evaluator) snapshotFor(node *graph.Node, state *instanceState) *evaluator {
-	snap := make(map[string]any, len(node.Dependencies)+1)
-	for depID, kind := range node.Dependencies {
-		if kind == graph.DepHard {
-			if v, ok := e.scope[depID]; ok {
-				snap[depID] = v
-			}
-		}
-	}
-	// Include lazy dep data as CEL optional values. Per 005-reconciliation.md:
-	// "Lazy dependencies are always in scope as optional values."
-	// Present lazy deps → optional.of(value), absent → optional.none().
-	//
-	// Present values are shallow-copied before wrapping. The coordinator
-	// may call markReady/markUpdated on the same underlying map after the
-	// worker starts — a concurrent map write vs. the worker's CEL read
-	// through the Optional's DynMap wrapper. Copying eliminates the race.
-	for depID, kind := range node.Dependencies {
-		if kind == graph.DepLazy {
-			if _, exists := snap[depID]; exists {
-				continue
-			}
-			if v, ok := e.scope[depID]; ok {
-				snap[depID] = types.OptionalOf(types.DefaultTypeAdapter.NativeToValue(shallowCopyScope(v)))
-			} else if state != nil {
-				if prev, ok := state.previousScope[depID]; ok {
-					snap[depID] = types.OptionalOf(types.DefaultTypeAdapter.NativeToValue(shallowCopyScope(prev)))
-				} else {
-					snap[depID] = types.OptionalNone
-				}
-			} else {
-				snap[depID] = types.OptionalNone
-			}
-		}
-	}
-	// The node-readiness sidecar must be visible to rewritten
-	// `<wk_id>.ready()` lookups, including those nested inside CEL
-	// comprehensions evaluated by the worker. The worker receives a
-	// COPY so its writes don't race with the coordinator or other
-	// workers; the coordinator merges the worker's verdict back via
-	// nodeResult.nodeReadyUpdate. Readiness is monotonic within a
-	// reconcile (a node's verdict is set once), so the copy sees a
-	// consistent snapshot.
-	var workerReady map[string]bool
-	if e.nodeReady != nil {
-		workerReady = make(map[string]bool, len(e.nodeReady))
-		for k, v := range e.nodeReady {
-			workerReady[k] = v
-		}
-		snap[compiler.ReservedNodeReadyVar] = workerReady
-	}
-
-	// Propagate dynamic GVK tracking to the worker if the compiled graph has
-	// dynamic nodes. Each worker gets its own map (no sharing) — the resolved
-	// GVK is returned via nodeResult.resolvedGVK.
-	var workerDynamicGVK map[string]schema.GroupVersionKind
-	if e.dispatch.dynamicGVKResolved != nil {
-		workerDynamicGVK = make(map[string]schema.GroupVersionKind, 1)
-	}
-
-	worker := &evaluator{
-		compiled:            e.compiled,
-		scope:               snap,
-		effectiveGeneration: e.effectiveGeneration,
-		nodeReady:           workerReady,
-		dispatch: workerState{
-			dynamicGVKResolved:  workerDynamicGVK,
-			forEachNewScope:     map[string]map[string]any{},
-			forEachNewKeys:      map[string]map[string][]string{},
-			forEachNewHashes:    map[string]map[string]string{},
-			forEachNewItems:     map[string][]any{},
-			forEachPrevItems:    map[string][]any{},
-			forEachPrevScope:    map[string]map[string]any{},
-			forEachPrevKeys:     map[string]map[string][]string{},
-			forEachPrevHashes:   map[string]map[string]string{},
-		},
-	}
-
-	// Copy forEach previous state from the shared instance for this node.
-	if node.ForEach != nil && state != nil {
-		cacheKey := node.ID + "/" + node.ForEach.VarName
-		if items, ok := state.forEachItems[cacheKey]; ok {
-			worker.dispatch.forEachPrevItems[cacheKey] = items
-		}
-		// Copy per-item state — keyed by node ID in outer map.
-		if itemScope, ok := state.forEachItemScope[node.ID]; ok {
-			copied := make(map[string]any, len(itemScope))
-			for k, v := range itemScope {
-				copied[k] = v
-			}
-			worker.dispatch.forEachPrevScope[node.ID] = copied
-		}
-		if itemKeys, ok := state.forEachItemKeys[node.ID]; ok {
-			copied := make(map[string][]string, len(itemKeys))
-			for k, v := range itemKeys {
-				copied[k] = v
-			}
-			worker.dispatch.forEachPrevKeys[node.ID] = copied
-		}
-		if itemHashes, ok := state.forEachItemHashes[node.ID]; ok {
-			copied := make(map[string]string, len(itemHashes))
-			for k, v := range itemHashes {
-				copied[k] = v
-			}
-			worker.dispatch.forEachPrevHashes[node.ID] = copied
-		}
-	}
-
-	return worker
-}
-
-// shallowCopyScope copies a scope value so that the worker's snapshot is
-// independent of the coordinator's scope. For maps, it copies the top-level
-// entries (enough to prevent races from markReady/markUpdated which write
-// top-level keys like __ready and __updated). For slices, it copies the
-// element references. Other types are returned as-is (immutable or not
-// subject to concurrent modification).
-func shallowCopyScope(v any) any {
-	switch val := v.(type) {
-	case map[string]any:
-		cp := make(map[string]any, len(val))
-		for k, v := range val {
-			cp[k] = v
-		}
-		return cp
-	case []any:
-		cp := make([]any, len(val))
-		copy(cp, val)
-		return cp
-	default:
-		return v
-	}
 }

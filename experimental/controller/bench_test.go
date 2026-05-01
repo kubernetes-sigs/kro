@@ -94,19 +94,17 @@ func TestInstanceStateIsolation(t *testing.T) {
 
 	// Mutate state1's mutable fields.
 	state1.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
-	state1.previousEvalHashes["node0"] = "hash-a"
-	state1.previousPlanStates["node0"] = dagpkg.NodeReady
+	state1.previousPlanStates = &dagpkg.PlanState{States: map[string]dagpkg.NodeState{"node0": dagpkg.NodeReady}}
 	state1.forEachItems["node0/item"] = []any{"a", "b"}
 
 	// state2 should be unaffected.
 	if _, ok := state2.previousScope["node0"]; ok {
 		t.Fatal("previousScope leaked between instances")
 	}
-	if _, ok := state2.previousEvalHashes["node0"]; ok {
-		t.Fatal("previousEvalHashes leaked between instances")
-	}
-	if _, ok := state2.previousPlanStates["node0"]; ok {
-		t.Fatal("previousPlanStates leaked between instances")
+	if state2.previousPlanStates != nil {
+		if _, ok := state2.previousPlanStates.States["node0"]; ok {
+			t.Fatal("previousPlanStates leaked between instances")
+		}
 	}
 	if _, ok := state2.forEachItems["node0/item"]; ok {
 		t.Fatal("forEachItems leaked between instances")
@@ -309,47 +307,6 @@ func BenchmarkExtractReferencedPaths(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_, _, _, _ = graph.ExtractReferencedPathsFromNode(node, exprPaths, nil)
-	}
-}
-
-// BenchmarkHashNodeInputs measures field-path-scoped input hashing — the
-// per-node cost of the evaluation check (step 4 of Wind). This runs once per
-// node per reconcile to decide whether evaluation can be skipped.
-func BenchmarkHashNodeInputs(b *testing.B) {
-	for _, depCount := range []int{1, 3, 5, 10} {
-		b.Run(fmt.Sprintf("deps=%d", depCount), func(b *testing.B) {
-			// Build a node with depCount dependencies, each referencing data.key1 and metadata.name.
-			depPaths := make(map[string][]graph.FieldPath, depCount)
-			scope := make(map[string]any, depCount)
-			for i := 0; i < depCount; i++ {
-				depID := fmt.Sprintf("dep%d", i)
-				depPaths[depID] = []graph.FieldPath{{"data", "key1"}, {"metadata", "name"}}
-				scope[depID] = map[string]any{
-					"apiVersion": "v1",
-					"kind":       "ConfigMap",
-					"metadata": map[string]any{
-						"name":            fmt.Sprintf("cm-%d", i),
-						"namespace":       "default",
-						"resourceVersion": "12345",
-						"uid":             "abc-123",
-					},
-					"data": map[string]any{
-						"key1": "value1",
-						"key2": "value2",
-						"key3": "value3",
-					},
-				}
-			}
-			node := &graph.Node{ID: "target", DepPaths: depPaths}
-			b.ResetTimer()
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				_, err := hashNodeInputs(node, scope)
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
 	}
 }
 
@@ -564,45 +521,6 @@ func BenchmarkPropagateStateLinearScan(b *testing.B) {
 	}
 }
 
-// BenchmarkHashSelfPaths measures the cost of hashSelfPaths — the propagation
-// hash that determines whether downstream dependents need re-evaluation.
-// This runs once per node per reconcile (step 8 of Wind). Without this
-// benchmark, GC pressure from per-call allocations would be invisible.
-//
-// Per 005-reconciliation.md § Hash Mechanics: "hash the output paths
-// downstream expressions reference [...] compare against in-memory
-// propagation-hash from previous evaluation."
-func BenchmarkHashSelfPaths(b *testing.B) {
-	for _, pathCount := range []int{1, 3, 5, 10} {
-		b.Run(fmt.Sprintf("paths=%d", pathCount), func(b *testing.B) {
-			// Build a node with pathCount self-paths, each at depth 2.
-			selfPaths := make([]graph.FieldPath, pathCount)
-			observed := map[string]any{
-				"metadata": map[string]any{
-					"name":      "test",
-					"namespace": "default",
-				},
-			}
-			statusFields := make(map[string]any, pathCount)
-			for i := 0; i < pathCount; i++ {
-				field := fmt.Sprintf("field%d", i)
-				selfPaths[i] = graph.FieldPath{"status", field}
-				statusFields[field] = fmt.Sprintf("value%d", i)
-			}
-			observed["status"] = statusFields
-			node := &graph.Node{ID: "target", SelfPaths: selfPaths}
-			b.ResetTimer()
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				_, err := hashSelfPaths(node, observed)
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
 // BenchmarkWalkSkip measures the cost of the O(1) skip check per untriggered
 // node during the DAG walk. The design commits: "Otherwise — skip. O(1) per
 // skipped node." (005-reconciliation.md § Reconcile). This benchmark compiles
@@ -672,61 +590,21 @@ func walkSkipBench(dag *dagpkg.DAG, plan *dagpkg.PlanState, scope, prevScope map
 // forEach item diffing benchmarks
 // ---------------------------------------------------------------------------
 
-// BenchmarkForEachItemDiff measures the cost of forEach item diffing — the
-// O(N) pass that identifies which collection items changed between reconciles.
-// This is the one hot-path operation whose cost scales with collection size
-// rather than change count. The diff consists of three phases:
-//
-//  1. Identity map construction: O(N) per reconcile — both the current and
-//     previous collections build identity maps (neither is persisted as a map;
-//     the raw []any is cached, identity maps are rebuilt each cycle).
-//  2. Identity extraction (forEachItemIdentity): O(1) per item — reads
-//     metadata.name/namespace from the collection item.
-//  3. Unchanged comparison (forEachItemUnchanged): two hashDesiredState calls
-//     per unchanged item.
-//
-// The benchmark exercises the realistic case: a large collection where K items
-// changed and N-K items are unchanged. The N-K items pay the full diff cost
-// (identity + two hashes) but skip template evaluation and apply. The K
-// changed items are not measured here — their cost is template eval + SSA
-// apply, already benchmarked separately.
-//
-// This is the architectural exception to the "work proportional to change"
-// property. The diff cost is O(N) regardless of K. The benchmark makes this
-// cost visible and establishes a regression baseline.
+// BenchmarkForEachItemDiff measures the cost of forEach item identity
+// extraction — the remaining per-item cost now that hash-based skip
+// detection has been removed. Every item is re-evaluated every cycle.
 //
 // Run: go test ./experimental/controller -bench=BenchmarkForEachItemDiff -benchmem
 func BenchmarkForEachItemDiff(b *testing.B) {
 	for _, itemCount := range []int{10, 100, 1000, 10000} {
-		b.Run(fmt.Sprintf("items=%d/changed=1", itemCount), func(b *testing.B) {
-			// Build current and previous collections. Previous has one
-			// changed item (item 0). Both are raw []any — the identity
-			// maps are built inside the measured region because
-			// reconcileForEach rebuilds them every cycle.
+		b.Run(fmt.Sprintf("items=%d", itemCount), func(b *testing.B) {
 			items := buildForEachItems(itemCount)
-			prevItemsRaw := buildForEachItems(itemCount)
-			prevItemsRaw[0].(map[string]any)["data"].(map[string]any)["key"] = "changed-value"
 
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				// Phase 1: Build previous identity map (rebuilt each reconcile).
-				prevByID := make(map[string]any, len(prevItemsRaw))
-				for _, item := range prevItemsRaw {
-					prevByID[forEachItemIdentity(item)] = item
-				}
-
-				// Phase 2-3: Identity extraction + unchanged comparison.
-				changed := 0
 				for _, item := range items {
-					id := forEachItemIdentity(item)
-					prev, existed := prevByID[id]
-					if !existed || !forEachItemUnchanged(prev, item) {
-						changed++
-					}
-				}
-				if changed != 1 {
-					b.Fatalf("expected 1 changed item, got %d", changed)
+					_ = forEachItemIdentity(item)
 				}
 			}
 		})
@@ -769,167 +647,6 @@ func BenchmarkSpecHash(b *testing.B) {
 				_ = spec.Hash()
 			}
 		})
-	}
-}
-
-// BenchmarkForEachItemDiffCached measures the forEach item diff with cached
-// per-item hashes (Layer 1). Compares against the uncached path above.
-// With cached hashes, the previous item hash is a map lookup instead of a
-// hashDesiredState call — eliminates N of the 2N hash computations.
-//
-// Run: go test ./experimental/controller -bench=BenchmarkForEachItemDiffCached -benchmem
-func BenchmarkForEachItemDiffCached(b *testing.B) {
-	for _, itemCount := range []int{10, 100, 1000, 10000} {
-		b.Run(fmt.Sprintf("items=%d/changed=1", itemCount), func(b *testing.B) {
-			benchForEachCached(b, itemCount)
-		})
-	}
-}
-
-// BenchmarkForEachItemDiffIncremental measures the forEach diff with the
-// changed-item annotation (Layer 2). Only items in the changed set are
-// hashed — unchanged items are skipped entirely. This is the O(K) path
-// where K = changed items.
-//
-// Run: go test ./experimental/controller -bench=BenchmarkForEachItemDiffIncremental -benchmem
-func BenchmarkForEachItemDiffIncremental(b *testing.B) {
-	for _, itemCount := range []int{10, 100, 1000, 10000} {
-		b.Run(fmt.Sprintf("items=%d/changed=1", itemCount), func(b *testing.B) {
-			benchForEachIncremental(b, itemCount)
-		})
-	}
-}
-
-// benchForEachOriginal runs the original O(2N) hash path.
-func benchForEachOriginal(b *testing.B, itemCount int) {
-	items := buildForEachItems(itemCount)
-	prevItemsRaw := buildForEachItems(itemCount)
-	prevItemsRaw[0].(map[string]any)["data"].(map[string]any)["key"] = "changed-value"
-
-	b.ResetTimer()
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		prevByID := make(map[string]any, len(prevItemsRaw))
-		for _, item := range prevItemsRaw {
-			prevByID[forEachItemIdentity(item)] = item
-		}
-		changed := 0
-		for _, item := range items {
-			id := forEachItemIdentity(item)
-			prev, existed := prevByID[id]
-			if !existed || !forEachItemUnchanged(prev, item) {
-				changed++
-			}
-		}
-		if changed != 1 {
-			b.Fatalf("expected 1 changed item, got %d", changed)
-		}
-	}
-}
-
-// benchForEachCached runs the Layer 1 cached-hash path (N hashes, not 2N).
-func benchForEachCached(b *testing.B, itemCount int) {
-	items := buildForEachItems(itemCount)
-	prevItemsRaw := buildForEachItems(itemCount)
-	prevItemsRaw[0].(map[string]any)["data"].(map[string]any)["key"] = "changed-value"
-
-	deps := map[string]graph.DepKind{"source": graph.DepHard}
-	scope := map[string]any{"source": map[string]any{"list": prevItemsRaw}}
-	ctxHash := hashForEachContext(scope, deps)
-
-	cachedHashes := make(map[string]string, len(prevItemsRaw))
-	for _, item := range prevItemsRaw {
-		id := forEachItemIdentity(item)
-		if m, ok := item.(map[string]any); ok {
-			h, _ := hashDesiredState(m)
-			cachedHashes[id] = ctxHash + "/" + h
-		}
-	}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		prevByID := make(map[string]any, len(prevItemsRaw))
-		for _, item := range prevItemsRaw {
-			prevByID[forEachItemIdentity(item)] = item
-		}
-		changed := 0
-		for _, item := range items {
-			id := forEachItemIdentity(item)
-			_, existed := prevByID[id]
-			if !existed || !forEachItemUnchangedCached(cachedHashes[id], item, ctxHash) {
-				changed++
-			}
-		}
-		if changed != 1 {
-			b.Fatalf("expected 1 changed item, got %d", changed)
-		}
-	}
-}
-
-// benchForEachIncremental runs the Layer 2 incremental path (K hashes, not N).
-func benchForEachIncremental(b *testing.B, itemCount int) {
-	items := buildForEachItems(itemCount)
-
-	cachedHashes := make(map[string]string, len(items))
-	for _, item := range items {
-		id := forEachItemIdentity(item)
-		if m, ok := item.(map[string]any); ok {
-			h, _ := hashDesiredState(m)
-			cachedHashes[id] = h
-		}
-	}
-
-	changedIDs := map[string]bool{"default/item-0": true}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		currentIDs := make([]string, 0, len(items))
-		for _, item := range items {
-			currentIDs = append(currentIDs, forEachItemIdentity(item))
-		}
-		for idx, id := range currentIDs {
-			if changedIDs[id] {
-				if m, ok := items[idx].(map[string]any); ok {
-					currHash, _ := hashDesiredState(m)
-					if cachedHashes[id] != currHash {
-						// changed
-					}
-				}
-			}
-		}
-	}
-}
-
-// TestForEachDiffOptimizationRegression verifies that the forEach incremental
-// diff optimization produces fewer allocations than the original path. Uses
-// testing.Benchmark to get deterministic alloc counts (not wall-clock time),
-// then asserts strict ordering: incremental < cached < original.
-//
-// If someone removes the cached-hash or incremental-annotation optimization,
-// alloc counts equalize and this test fails.
-func TestForEachDiffOptimizationRegression(t *testing.T) {
-	t.Parallel()
-	const N = 1000
-
-	original := testing.Benchmark(func(b *testing.B) { benchForEachOriginal(b, N) })
-	cached := testing.Benchmark(func(b *testing.B) { benchForEachCached(b, N) })
-	incremental := testing.Benchmark(func(b *testing.B) { benchForEachIncremental(b, N) })
-
-	origAllocs := original.AllocsPerOp()
-	cachedAllocs := cached.AllocsPerOp()
-	incrAllocs := incremental.AllocsPerOp()
-
-	t.Logf("allocs/op: original=%d  cached=%d  incremental=%d", origAllocs, cachedAllocs, incrAllocs)
-
-	if cachedAllocs >= origAllocs {
-		t.Errorf("Layer 1 (cached hash) regression: cached allocs (%d) should be less than original (%d)",
-			cachedAllocs, origAllocs)
-	}
-	if incrAllocs >= cachedAllocs {
-		t.Errorf("Layer 2 (incremental) regression: incremental allocs (%d) should be less than cached (%d)",
-			incrAllocs, cachedAllocs)
 	}
 }
 

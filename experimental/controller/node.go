@@ -10,14 +10,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 	"github.com/ellistarn/kro/experimental/controller/compiler"
+	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 	"github.com/ellistarn/kro/experimental/controller/watches"
 )
 
@@ -32,45 +31,48 @@ import (
 // Per 005-reconciliation.md § Reconcile: resync-triggered nodes bypass the
 // apply-hash check and apply unconditionally via SSA.
 //
+// prevForEachState carries forEach state from the previous reconcile. It is
+// only used when the node has a forEach clause; nil otherwise.
+//
 // After dispatch, reconcileNode evaluates readyWhen as a post-dispatch step
 // for node types that don't handle their own per-item readiness (Definition,
 // Template, Patch). Watch and ForEach return early — they handle
 // readiness internally (per-item for ForEach, per-collection for Watch).
 //
-// All paths return (keys, error) with a uniform error contract:
+// All paths return (keys, forEachState, error) with a uniform error contract:
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, nodeType graphpkg.NodeType, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool) ([]string, error) {
+func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, nodeType graphpkg.NodeType, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool, prevForEachState *forEachState) ([]string, *forEachState, error) {
 	if node.ForEach != nil {
-		return r.reconcileForEach(ctx, graph, node, eval, watcher, resyncCorrection)
+		return r.reconcileForEach(ctx, graph, node, eval, watcher, resyncCorrection, prevForEachState)
 	}
 
 	switch nodeType {
 	case graphpkg.NodeTypeDef:
 		if err := r.reconcileDefinition(ctx, node, eval); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	case graphpkg.NodeTypeWatch:
 		err := r.reconcileWatch(ctx, graph, node, eval, watcher)
-		return nil, err // Watch handles its own readiness
+		return nil, nil, err // Watch handles its own readiness
 	case graphpkg.NodeTypeRef:
 		if err := r.reconcileRef(ctx, graph, node, eval, watcher); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	default: // NodeTypeTemplate, NodeTypePatch
 		key, err := r.reconcileApply(ctx, graph, node, nodeType, eval, watcher, resyncCorrection)
 		if err != nil {
 			if key != "" {
-				return []string{key}, err
+				return []string{key}, nil, err
 			}
-			return nil, err
+			return nil, nil, err
 		}
-		return []string{key}, eval.evalReadiness(node.ID, node.ReadyWhen)
+		return []string{key}, nil, eval.evalReadiness(node.ID, node.ReadyWhen)
 	}
 
 	// Post-dispatch readyWhen for Definition and Watch (no keys to return).
-	return nil, eval.evalReadiness(node.ID, node.ReadyWhen)
+	return nil, nil, eval.evalReadiness(node.ID, node.ReadyWhen)
 }
 
 // reconcileDefinition evaluates a definition node — resolves values from the template
@@ -144,13 +146,7 @@ func (r *GraphReconciler) reconcileRef(ctx context.Context, graph *unstructured.
 }
 
 // reconcileWatch reads a collection of resources matching a selector into scope.
-//
-// Per 005-reconciliation.md § Propagation: "When a single resource changes,
-// update the cached list incrementally rather than re-listing — O(1) per
-// event, not O(matching)." The evaluator carries the cached list and buffered
-// collection changes from the coordinator. On incremental path, only changed
-// items are GET'd and merged. On resync or first reconcile, a full List is
-// performed and the cache is replaced.
+// A full List is performed every reconcile cycle — no incremental caching.
 func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, watcher *watches.GraphWatcher) error {
 	logger := log.FromContext(ctx)
 
@@ -212,50 +208,24 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 		watcher.WatchCollection(node.ID, gvkToGVR(gvk), gvk.Kind, watchNamespace, labelSelector)
 	}
 
-	var items []any
+	// Full list every cycle — simple and correct.
+	listGVK := gvk
+	listGVK.Kind = gvk.Kind + "List"
 
-	// Incremental path: cached list exists and collection changes are available.
-	// GET only the changed items and merge into the cached list.
-	if eval.dispatch.collectionCachedList != nil && !eval.dispatch.collectionResyncOrFull {
-		var err error
-		items, err = mergeCollectionChanges(
-			ctx, r.apiReader(), eval.dispatch.collectionCachedList, eval.dispatch.collectionChanges,
-			gvk, labelSelector,
-		)
-		if err != nil {
-			return fmt.Errorf("watch %s: %w", node.ID, err)
-		}
-
-		logger.V(1).Info("resolved watch (incremental)", "node", node.ID, "gvk", gvk,
-			"cachedCount", len(eval.dispatch.collectionCachedList), "changes", len(eval.dispatch.collectionChanges),
-			"resultCount", len(items))
-	} else {
-		// Full list path: first reconcile, resync timer, or no cache.
-		listGVK := gvk
-		listGVK.Kind = gvk.Kind + "List"
-
-		list := &unstructured.UnstructuredList{}
-		list.SetGroupVersionKind(listGVK)
-		if err := r.apiReader().List(ctx, list, &client.ListOptions{
-			LabelSelector: labelSelector,
-			Namespace:     watchNamespace,
-		}); err != nil {
-			return fmt.Errorf("listing %s with selector %s: %w", gvk, labelSelector, err)
-		}
-
-		items = make([]any, len(list.Items))
-		for i, item := range list.Items {
-			items[i] = graphpkg.NormalizeTypes(item.Object)
-		}
-		// Mark that this worker took the full-List path. The coordinator
-		// uses this to clear the collectionDirty flag — only a successful
-		// full re-List recovers from a lost incremental merge.
-		eval.dispatch.collectionDidFullList = true
-		logger.V(1).Info("resolved watch (full list)", "node", node.ID, "gvk", gvk, "count", len(items))
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(listGVK)
+	if err := r.apiReader().List(ctx, list, &client.ListOptions{
+		LabelSelector: labelSelector,
+		Namespace:     watchNamespace,
+	}); err != nil {
+		return fmt.Errorf("listing %s with selector %s: %w", gvk, labelSelector, err)
 	}
 
-	// Store the updated cache for the coordinator to persist.
-	eval.dispatch.collectionUpdatedCache = items
+	items := make([]any, len(list.Items))
+	for i, item := range list.Items {
+		items[i] = graphpkg.NormalizeTypes(item.Object)
+	}
+	logger.V(1).Info("resolved watch", "node", node.ID, "gvk", gvk, "count", len(items))
 
 	eval.scope[node.ID] = items
 
@@ -322,13 +292,6 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 		return "", err
 	}
 
-	// Per 004-compilation.md § Deferred Types: record the resolved GVK for
-	// dynamic GVK nodes. The staleness check compares this against what was
-	// compiled — if different, recompilation is needed on the next reconcile.
-	if eval.dispatch.dynamicGVKResolved != nil && node.HasDynamicGVR() {
-		eval.dispatch.dynamicGVKResolved[node.ID] = applied.GroupVersionKind()
-	}
-
 	eval.scope[node.ID] = graphpkg.NormalizeTypes(applied.Object)
 	// Just applied with effectiveGeneration — resource is on the latest generation.
 	eval.markUpdated(node.ID, true)
@@ -348,111 +311,8 @@ func (r *GraphReconciler) reconcileApply(ctx context.Context, graph *unstructure
 }
 
 // ---------------------------------------------------------------------------
-// Collection merge — incremental Watch cache update
+// Label selector parsing
 // ---------------------------------------------------------------------------
-
-// mergeCollectionChanges applies buffered collection changes to a cached list
-// and returns a new list. The cached list is read-only — all mutations happen
-// on an internally-owned slice. This makes cache corruption structurally
-// impossible regardless of how callers handle the returned list.
-//
-// Per 005-reconciliation.md § Propagation: "When a single resource
-// changes, update the cached list incrementally rather than re-listing —
-// O(1) per event, not O(matching)."
-func mergeCollectionChanges(
-	ctx context.Context,
-	k8s client.Reader,
-	cached []any,
-	changes []watches.CollectionChange,
-	gvk schema.GroupVersionKind,
-	selector labels.Selector,
-) ([]any, error) {
-	// Own the allocation. The cached list goes in read-only, a new list comes out.
-	items := make([]any, len(cached))
-	copy(items, cached)
-
-	if len(changes) == 0 {
-		return items, nil
-	}
-
-	// Deduplicate changes by namespace/name — only the latest event
-	// for each resource matters. Multiple events between reconciles
-	// collapse into one GET.
-	type changeKey struct{ namespace, name string }
-	deduped := make(map[changeKey]watches.CollectionChange, len(changes))
-	for _, change := range changes {
-		deduped[changeKey{change.Namespace, change.Name}] = change
-	}
-
-	for ck, change := range deduped {
-		if change.EventType == watches.WatchEventDelete {
-			items = removeItem(items, ck.namespace, ck.name)
-			continue
-		}
-
-		// Add or Update: GET the full object and merge.
-		obj := &unstructured.Unstructured{}
-		obj.SetGroupVersionKind(gvk)
-		if err := k8s.Get(ctx, types.NamespacedName{
-			Name:      ck.name,
-			Namespace: ck.namespace,
-		}, obj); err != nil {
-			if apierrors.IsNotFound(err) {
-				// Resource was deleted between event and reconcile.
-				items = removeItem(items, ck.namespace, ck.name)
-				continue
-			}
-			return nil, fmt.Errorf("getting changed resource %s/%s: %w", ck.namespace, ck.name, err)
-		}
-
-		// Re-check selector membership after GET. The watch informer is
-		// broad (no server-side label filter), so events arrive for
-		// resources whose labels changed in any direction — including
-		// resources that were never in the collection. A resource that
-		// doesn't match the selector must be removed from the cached
-		// list (if present) rather than merged.
-		if !selector.Matches(labels.Set(obj.GetLabels())) {
-			items = removeItem(items, ck.namespace, ck.name)
-			continue
-		}
-
-		normalized := graphpkg.NormalizeTypes(obj.Object)
-		if idx := findIndex(items, ck.namespace, ck.name); idx >= 0 {
-			items[idx] = normalized
-		} else {
-			items = append(items, normalized)
-		}
-	}
-
-	return items, nil
-}
-
-// findIndex returns the index of an item in a []any collection matching the
-// given namespace and name via metadata extraction. Returns -1 if not found.
-func findIndex(items []any, namespace, name string) int {
-	for i, item := range items {
-		if m, ok := item.(map[string]any); ok {
-			md, _ := m["metadata"].(map[string]any)
-			itemName, _ := md["name"].(string)
-			itemNS, _ := md["namespace"].(string)
-			if itemName == name && itemNS == namespace {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-// removeItem returns items with the matching namespace/name entry removed.
-// Items that aren't maps or lack metadata are kept — if we can't identify
-// them, dropping them risks data loss.
-func removeItem(items []any, namespace, name string) []any {
-	idx := findIndex(items, namespace, name)
-	if idx < 0 {
-		return items
-	}
-	return append(items[:idx], items[idx+1:]...)
-}
 
 // parseLabelSelector converts a structured selector map (with matchLabels
 // and/or matchExpressions) into a labels.Selector. This supports the full

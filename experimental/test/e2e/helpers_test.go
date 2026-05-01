@@ -668,27 +668,6 @@ func waitForRevision(ctx context.Context, c client.Client, key types.NamespacedN
 	return rev, err
 }
 
-// waitForRevisionCondition polls until a GraphRevision has a specific condition status.
-func waitForRevisionCondition(ctx context.Context, c client.Client, key types.NamespacedName, condType, expectedStatus string) error {
-	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		rev := &unstructured.Unstructured{}
-		rev.SetGroupVersionKind(GraphRevisionGVK)
-		if err := c.Get(ctx, key, rev); err != nil {
-			return false, nil
-		}
-		status, _ := rev.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		conditions, _ := status["conditions"].([]any)
-		cond, found := findCondition(conditions, condType)
-		if !found {
-			return false, nil
-		}
-		return cond["status"] == expectedStatus, nil
-	})
-}
-
 // assertRevisionLabels checks that a GraphRevision has the expected ownership labels.
 func assertRevisionLabels(t *testing.T, rev *unstructured.Unstructured, graphName string, generation int64) {
 	t.Helper()

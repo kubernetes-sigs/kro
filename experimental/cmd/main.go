@@ -90,8 +90,8 @@ func main() {
 
 	if pprofBindAddress != "" {
 		http.HandleFunc("/debug/cachestats", func(w http.ResponseWriter, r *http.Request) {
-			compiled, instances := caches.CacheSizes()
-			fmt.Fprintf(w, "compiled=%d instances=%d\n", compiled, instances)
+			instances := caches.CacheSizes()
+			fmt.Fprintf(w, "instances=%d\n", instances)
 		})
 		go func() {
 			log.Info("starting pprof server", "addr", pprofBindAddress)

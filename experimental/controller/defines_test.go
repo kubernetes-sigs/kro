@@ -121,7 +121,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 			"metadata": map[string]any{"name": "test", "namespace": "default"},
 		}}
 
-		_, _, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false, nil)
+		_, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "forEach defines items")
 	})
@@ -155,7 +155,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 			"metadata": map[string]any{"name": "test", "namespace": "default"},
 		}}
 
-		_, _, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false, nil)
+		_, err = r.reconcileForEach(ctx, graph, spec.Nodes[1], eval, nil, false, nil)
 		require.Error(t, err, "forEach with failing child templates must return an error")
 
 		_, published := eval.scope["items"]

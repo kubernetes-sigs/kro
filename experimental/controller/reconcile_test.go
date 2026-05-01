@@ -1478,7 +1478,7 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 	}}
 
 	r := &GraphReconciler{}
-	_, _, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false, prevState)
+	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false, prevState)
 	// compiler.ErrWaitingForReadiness expected — propagateWhen halted expansion.
 	require.ErrorIs(t, err, compiler.ErrWaitingForReadiness)
 
@@ -1536,7 +1536,7 @@ func TestForEach_DefinitionItemsAlwaysReEvaluated(t *testing.T) {
 	}}
 
 	r := &GraphReconciler{}
-	_, _, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false, nil)
+	_, err = r.reconcileForEach(context.Background(), graph, spec.Nodes[1], eval, nil, false, nil)
 	require.NoError(t, err)
 
 	items, ok := eval.scope["results"].([]any)
@@ -1586,7 +1586,7 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval.scope["config"] = map[string]any{"version": "v1"}
 	eval.scope["source"] = map[string]any{"names": names}
 
-	_, newState, err := r.reconcileForEach(context.Background(), graph, resultsNode, eval, nil, false, nil)
+	out, err := r.reconcileForEach(context.Background(), graph, resultsNode, eval, nil, false, nil)
 	require.NoError(t, err)
 	items1, ok := eval.scope["results"].([]any)
 	require.True(t, ok)
@@ -1596,14 +1596,15 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	}
 
 	// Merge newState into instanceState for phase 2.
+	newState := out.forEach
 	for k, v := range newState.itemScope {
-		state.forEachItemScope[k] = v
+		state.forEach.itemScope[k] = v
 	}
 	for k, v := range newState.itemKeys {
-		state.forEachItemKeys[k] = v
+		state.forEach.itemKeys[k] = v
 	}
 	for k, v := range newState.items {
-		state.forEachItems[k] = v
+		state.forEach.items[k] = v
 	}
 
 	// Phase 2: config.version = "v2", collection unchanged.
@@ -1614,12 +1615,12 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval2.scope["source"] = map[string]any{"names": names}
 
 	prevState2 := &forEachState{
-		items:     state.forEachItems,
-		itemScope: state.forEachItemScope,
-		itemKeys:  state.forEachItemKeys,
+		items:     state.forEach.items,
+		itemScope: state.forEach.itemScope,
+		itemKeys:  state.forEach.itemKeys,
 	}
 
-	_, _, err = r.reconcileForEach(context.Background(), graph, resultsNode, eval2, nil, false, prevState2)
+	_, err = r.reconcileForEach(context.Background(), graph, resultsNode, eval2, nil, false, prevState2)
 	require.NoError(t, err)
 	items2, ok := eval2.scope["results"].([]any)
 	require.True(t, ok)

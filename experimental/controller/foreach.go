@@ -32,7 +32,7 @@ type forEachState struct {
 //
 // forEach state is passed in via prevState and returned as new state.
 // The caller merges the output back into the shared cache.
-func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool, prevState *forEachState) ([]string, *forEachState, error) {
+func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool, prevState *forEachState) (*nodeOutput, error) {
 	logger := log.FromContext(ctx)
 	var keys []string
 	// Per-item propagateWhen gate. Per 001-graph.md § propagateWhen:
@@ -53,9 +53,9 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	collection, err := eval.evalString(collectionExpr)
 	if err != nil {
 		if compiler.IsPending(err) {
-			return nil, nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, compiler.ErrPending)
+			return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, compiler.ErrPending)
 		}
-		return nil, nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, err)
+		return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, err)
 	}
 
 	items, ok := collection.([]any)
@@ -73,7 +73,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		// unique across items. Duplicate identities silently drop one
 		// item (map overwrite) — that's data loss, not dedup.
 		if _, exists := currentItems[id]; exists {
-			return nil, nil, fmt.Errorf("forEach %s: duplicate item identity %q — "+
+			return nil, fmt.Errorf("forEach %s: duplicate item identity %q — "+
 				"two collection items resolve to the same identity", node.ID, id)
 		}
 		currentItems[id] = item
@@ -177,7 +177,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 
 		evalMap, err := innerEval.toMapNode(node)
 		if err != nil {
-			return nil, nil, fmt.Errorf("forEach %s item: %w", node.ID, err)
+			return nil, fmt.Errorf("forEach %s item: %w", node.ID, err)
 		}
 
 		// Stamp forEach child identity labels per 005-reconciliation.md § Child Identity.
@@ -196,7 +196,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		// map and one child stops being managed.
 		childResKey := resourceCacheKey(childObj.GetAPIVersion(), gvk.Kind, childObj.GetNamespace(), childObj.GetName())
 		if prevItemID, exists := seenResourceKeys[childResKey]; exists {
-			return nil, nil, fmt.Errorf("forEach %s: duplicate resource key %s from items %q and %q — "+
+			return nil, fmt.Errorf("forEach %s: duplicate resource key %s from items %q and %q — "+
 				"each child must produce a unique resource (apiVersion/kind/namespace/name)", node.ID, childResKey, prevItemID, id)
 		}
 		seenResourceKeys[childResKey] = id
@@ -270,7 +270,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	// partially-applied array. Error-then-publish (not publish-then-error)
 	// makes the invariant structural rather than coordinator-dependent.
 	if len(childErrors) > 0 {
-		return keys, newState, highestPriorityChildError(childErrors)
+		return &nodeOutput{keys: keys, forEach: newState}, highestPriorityChildError(childErrors)
 	}
 
 	eval.scope[node.ID] = allApplied
@@ -278,7 +278,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	// Per-item propagateWhen halted expansion — the collection is
 	// incomplete. Signal NotReady so the controller requeues.
 	if halted {
-		return keys, newState, compiler.ErrWaitingForReadiness
+		return &nodeOutput{keys: keys, forEach: newState}, compiler.ErrWaitingForReadiness
 	}
 
 	// Check readyWhen per-item and stamp __ready on each item.
@@ -286,14 +286,14 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	// stamped inline during the loop — skip the post-loop pass.
 	if !hasPerItemGate {
 		if err := forEachStampReadyWhen(eval.scope, node.ID, node.ReadyWhen, eval); err != nil {
-			return keys, newState, err
+			return &nodeOutput{keys: keys, forEach: newState}, err
 		}
 		if len(node.ReadyWhen) > 0 {
 			logger.V(1).Info("all forEach items ready", "node", node.ID)
 		}
 	}
 
-	return keys, newState, nil
+	return &nodeOutput{keys: keys, forEach: newState}, nil
 }
 
 // forEachStampReadyWhen evaluates readyWhen per-item and stamps __ready on
@@ -453,4 +453,11 @@ func childErrorPriority(err error) int {
 	default:
 		return 3 // NodeError — deterministic
 	}
+}
+
+// resourceCacheKey builds a composite key from a resource's identifying fields.
+// Used by forEach duplicate-key detection to ensure each child produces a
+// unique resource identity.
+func resourceCacheKey(apiVersion, kind, namespace, name string) string {
+	return apiVersion + "/" + kind + "/" + namespace + "/" + name
 }

@@ -9,11 +9,8 @@
 // Graph spec is first seen (or when it changes). The reconcile loop only evaluates
 // pre-compiled programs — no compilation happens during the resource walk.
 //
-// Compiled graph sharing: compiled artifacts (CEL env, programs, topology) are
-// content-addressed by compilation key. Multiple Graph instances with identical
-// structural inputs (e.g., nested graphs stamped by forEach) share a single
-// CompiledGraph. Per-instance mutable state (scope, input hashes, forEach state)
-// is tracked separately in instanceState, keyed by namespace/revision-name.
+// Per-instance mutable state (scope, input hashes, forEach state) is tracked
+// separately in instanceState, keyed by namespace/revision-name.
 package compiler
 
 import (
@@ -117,23 +114,14 @@ func IsPending(err error) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Compiled graph (immutable, shareable, content-addressed)
+// Compiled graph (immutable)
 // ---------------------------------------------------------------------------
 
 // CompiledGraph holds the immutable compilation artifacts for a Graph spec.
-// All fields are derived from the spec and are safe to share across multiple
-// Graph instances with identical specs (e.g., nested graphs stamped by forEach).
-//
-// Content-addressed by compilationKey: two Graph specs with the same structural
-// inputs (expressions, node IDs, types, conditions) share a single CompiledGraph.
-// Concrete values (literal strings, numbers) are excluded from the key — forEach
-// children with different values share one compiled artifact.
-//
-// The DAG topology, CEL programs, and CEL environment are all immutable after
-// construction — cel.Program is thread-safe by the CEL spec, and BuildDAG
-// produces a read-only topology (verified: zero writes to topology fields
-// during reconciliation). Per-instance concrete node bodies are assembled
-// separately via assembleDAG.
+// All fields are derived from the spec. The DAG topology, CEL programs, and
+// CEL environment are all immutable after construction — cel.Program is
+// thread-safe by the CEL spec, and BuildDAG produces a read-only topology.
+// Per-instance concrete node bodies are assembled separately via assembleDAG.
 type CompiledGraph struct {
 	CompilationKey string                            // structural hash of compilation inputs (ignores concrete values)
 	env            *cel.Env                          // CEL environment (immutable after Extend)
@@ -162,9 +150,7 @@ type CompiledGraph struct {
 	CollectionIDs map[string]bool
 
 	// ChildTopologies maps forEach node ID → pre-compiled child topological
-	// order, populated by precompileExpressionChildGraphs. Available before
-	// any child Graph CR exists. Nil when no expression-valued child Graphs
-	// exist.
+	// order. Nil when no expression-valued child Graphs exist.
 	ChildTopologies map[string][]string
 
 	// resourceSchemas maps node ID → resolved OpenAPI schema. Used at Eval

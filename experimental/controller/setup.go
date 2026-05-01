@@ -7,6 +7,7 @@ package graphcontroller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -204,7 +205,6 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int)
 		SchemaGen:      compiler.NewSchemaGeneration(),
 		Watcher:        coordinator,
 		Caches:         newGraphCaches(),
-		Resources:      newResourceCache(),
 		// Scope is used by staticResourceKey to avoid namespacing
 		// cluster-scoped resource keys. Without this, prune/teardown
 		// silently miss cluster-scoped resources because their keys
@@ -214,29 +214,36 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int)
 	}
 
 	// When the watch infrastructure observes a new type (first informer for a
-	// GVR), check if any compiled graph had that specific GVR unresolved. If
-	// so, evict and recompile — the schema may now be available. Handles
-	// CRDs, aggregated APIs, and any other mechanism that makes a new type
-	// watchable. Filtering by GVR prevents thundering-herd recompilation when
-	// only one type becomes available.
+	// GVR), advance the schema generation so compiled artifacts become stale,
+	// then requeue all cached graphs. The next reconcile for each graph will
+	// detect staleness via the TypeCacheGen check and recompile. This is a
+	// rare event (CRD installation) so iterating all cached instances is fine.
 	watchMgr.SetOnNewType(func(gvr schema.GroupVersionResource) {
-		affected := reconciler.Caches.evictUnresolved(gvr)
-		if len(affected) == 0 {
-			return
-		}
-		// Per 004-compilation.md § Type Cache: "Any schema change advances [the
-		// generation counter]." Only advance when a genuinely unresolved GVK
-		// becomes available — not for every first-watched type (core types like
-		// ConfigMap are always resolvable and don't represent schema changes).
 		if reconciler.SchemaGen != nil {
 			reconciler.SchemaGen.AdvanceGeneration()
 		}
-		log.Log.Info("new type observed; recompiling affected graphs",
-			"gvr", gvr, "affectedGraphs", len(affected))
-		for _, gk := range affected {
+		keys := reconciler.Caches.instanceKeys()
+		if len(keys) == 0 {
+			return
+		}
+		log.Log.Info("new type observed; requeuing all graphs for staleness check",
+			"gvr", gvr, "instanceCount", len(keys))
+		for _, key := range keys {
+			slash := strings.Index(key, "/")
+			if slash < 0 {
+				continue
+			}
+			ns := key[:slash]
+			revName := key[slash+1:]
+			// Revision name format: "graphname-gNNNNN" — extract graph name.
+			lastDash := strings.LastIndex(revName, "-g")
+			graphName := revName
+			if lastDash >= 0 && lastDash+2 < len(revName) {
+				graphName = revName[:lastDash]
+			}
 			obj := &unstructured.Unstructured{}
-			obj.SetName(gk.Name)
-			obj.SetNamespace(gk.Namespace)
+			obj.SetName(graphName)
+			obj.SetNamespace(ns)
 			select {
 			case watchChan <- event.GenericEvent{Object: obj}:
 			default:

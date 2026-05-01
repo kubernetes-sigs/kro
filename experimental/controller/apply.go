@@ -102,7 +102,6 @@ func (r *GraphReconciler) deleteByKeys(ctx context.Context, keys []string) {
 			}
 		} else {
 			logger.V(1).Info("cleaned up finalizer resource", "key", fk)
-			r.Resources.remove(fk)
 		}
 	}
 }
@@ -134,18 +133,42 @@ func (r *GraphReconciler) deleteByKeys(ctx context.Context, keys []string) {
 // the desired state hash. SSA is idempotent; the apply corrects drift
 // as a side effect."
 func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *watches.GraphWatcher, nodeID string, nodeType graphpkg.NodeType, generation int64, resyncCorrection bool, forceApply bool) (*unstructured.Unstructured, error) {
-	fieldOwner := graphFieldOwner(graph)
+	obj, err := prepareObject(evalMap, graph, nodeID, nodeType, generation, r.Scope)
+	if err != nil {
+		return nil, err
+	}
+	registerWatch(watcher, nodeID, obj)
+	if err := checkOwnership(ctx, r, obj, graph, nodeType, watcher, forceApply); err != nil {
+		return nil, err
+	}
+	applied, err := r.ssaPatch(ctx, obj, graph, forceApply)
+	if err != nil {
+		return nil, err
+	}
+	if forceApply && nodeType == graphpkg.NodeTypeTemplate {
+		applied, err = evictThirdPartyManagers(ctx, r.Client, applied, graph, evalMap, nodeID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return applied, nil
+}
+
+// prepareObject creates an Unstructured from the evaluated map, defaults
+// namespace for namespace-scoped resources, stamps identity labels, and
+// sets the content-addressed apply hash annotation (template only).
+func prepareObject(evalMap map[string]any, graph *unstructured.Unstructured, nodeID string, nodeType graphpkg.NodeType, generation int64, scope GVKScopeResolver) (*unstructured.Unstructured, error) {
 	obj := &unstructured.Unstructured{Object: evalMap}
 
+	// Only default namespace for namespace-scoped resources.
+	// Cluster-scoped resources (CRDs, ClusterRoles, etc.) must keep
+	// namespace empty — setting it breaks watch event routing because
+	// the metadata informer reports events with namespace="" while
+	// the scalar index would store namespace="<graph-ns>".
 	if obj.GetNamespace() == "" {
-		// Only default namespace for namespace-scoped resources.
-		// Cluster-scoped resources (CRDs, ClusterRoles, etc.) must keep
-		// namespace empty — setting it breaks watch event routing because
-		// the metadata informer reports events with namespace="" while
-		// the scalar index would store namespace="<graph-ns>".
 		clusterScoped := false
-		if r.Scope != nil {
-			if isNS, known := r.Scope.IsNamespaced(obj.GroupVersionKind()); known && !isNS {
+		if scope != nil {
+			if isNS, known := scope.IsNamespaced(obj.GroupVersionKind()); known && !isNS {
 				clusterScoped = true
 			}
 		}
@@ -174,38 +197,11 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		obj.SetLabels(lbls)
 	}
 
-	// Buffer a watch for this resource (flushed at done(true)).
-	gvr := gvkToGVR(obj.GroupVersionKind())
-	if watcher != nil {
-		watcher.WatchScalar(nodeID, gvr, obj.GroupVersionKind().Kind, obj.GetName(), obj.GetNamespace())
-	}
-
-	// Content-addressed apply: hash the desired state to detect changes.
+	// Content-addressed apply: hash the desired state for the annotation.
 	applyHash, err := hashDesiredState(obj.Object)
 	if err != nil {
 		return nil, fmt.Errorf("hashing template for %s: %w", obj.GetName(), err)
 	}
-	cacheKey := resourceCacheKey(obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName())
-
-	// Resync correction bypasses the cache check entirely — the resync timer's
-	// purpose is to re-apply unconditionally so SSA corrects any live-state
-	// divergence from the desired state.
-	if !resyncCorrection {
-		if cached, ok := r.Resources.get(cacheKey); ok && cached.applyHash == applyHash {
-			if watcher != nil {
-				liveRV := watcher.GetResourceVersion(gvr, obj.GetNamespace(), obj.GetName())
-				if liveRV != "" && liveRV == cached.resourceVersion {
-					return &unstructured.Unstructured{Object: cached.object}, nil
-				}
-			}
-			// Watcher RV differs from cached or watcher unavailable —
-			// resource changed externally or freshness unknown. Fall
-			// through to SSA apply whose Patch response is authoritative.
-			// No intermediate GET: the controller-runtime cache can lag
-			// the metadata informer, and the SSA Patch response is
-			// strictly newer than any cached read.
-		}
-	} // !resyncCorrection
 
 	// Template: set the apply hash annotation for future comparisons.
 	if nodeType == graphpkg.NodeTypeTemplate {
@@ -217,14 +213,31 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		obj.SetAnnotations(annotations)
 	}
 
-	// Pre-apply check differs by node type.
+	return obj, nil
+}
+
+// registerWatch buffers a watch for the resource so that changes trigger
+// re-reconciliation. The watch is flushed at done(true).
+func registerWatch(watcher *watches.GraphWatcher, nodeID string, obj *unstructured.Unstructured) {
+	gvr := gvkToGVR(obj.GroupVersionKind())
+	if watcher != nil {
+		watcher.WatchScalar(nodeID, gvr, obj.GroupVersionKind().Kind, obj.GetName(), obj.GetNamespace())
+	}
+}
+
+// checkOwnership performs the pre-apply check that differs by node type:
+//   - Template: checks identity label conflict — if the existing resource has
+//     a different Graph's identity label, returns an error unless forceApply.
+//     Read labels from the metadata informer first (fast path, no API call).
+//     Falls back to direct API read when the informer hasn't observed the
+//     resource yet — preserves the cross-Graph safety guarantee during
+//     informer startup or watch reconnect.
+//   - Patch: checks that the target resource exists — patches apply to
+//     existing resources only. Uses direct API server read to avoid stale
+//     cache giving false negatives.
+func checkOwnership(ctx context.Context, r *GraphReconciler, obj *unstructured.Unstructured, graph *unstructured.Unstructured, nodeType graphpkg.NodeType, watcher *watches.GraphWatcher, forceApply bool) error {
 	if nodeType == graphpkg.NodeTypeTemplate {
-		// kro label check: if the existing resource has a different Graph's identity
-		// label, require Force to proceed. Prevents accidental cross-Graph ownership.
-		// Read labels from the metadata informer first (fast path, no API call).
-		// Fall back to direct API read when the informer hasn't observed the
-		// resource yet — preserves the cross-Graph safety guarantee during
-		// informer startup or watch reconnect.
+		gvr := gvkToGVR(obj.GroupVersionKind())
 		var existingLabels map[string]string
 		if watcher != nil {
 			existingLabels, _ = watcher.GetLabels(gvr, obj.GetNamespace(), obj.GetName())
@@ -239,23 +252,33 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		if existingLabels != nil {
 			if otherGraph, conflict := graphpkg.HasOtherGraphIdentityLabel(existingLabels, graph.GetName(), graph.GetNamespace()); conflict {
 				if !forceApply {
-					return nil, fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use lifecycle.apply: Force to take ownership): %w",
+					return fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use lifecycle.apply: Force to take ownership): %w",
 						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, graph.GetName(), compiler.ErrFieldConflict)
 				}
 			}
 		}
-	} else {
-		// Patch: target must exist — patches apply to existing resources.
-		// Direct API server read to avoid stale cache giving false negatives.
-		targetCheck := &unstructured.Unstructured{}
-		targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
-		if err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
-			if apierrors.IsNotFound(err) {
-				return nil, fmt.Errorf("patch target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), compiler.ErrPending)
-			}
-			return nil, fmt.Errorf("checking patch target %s: %w", obj.GetName(), err)
-		}
+		return nil
 	}
+
+	// Patch: target must exist — patches apply to existing resources.
+	targetCheck := &unstructured.Unstructured{}
+	targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("patch target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), compiler.ErrPending)
+		}
+		return fmt.Errorf("checking patch target %s: %w", obj.GetName(), err)
+	}
+	return nil
+}
+
+// ssaPatch performs the SSA Patch call and, when the object includes a .status
+// field, a separate status subresource patch. Returns the most recent
+// server-side state — the response from whichever patch runs last is used
+// instead of a separate readback GET (which goes through the controller-runtime
+// cache and can serve stale data).
+func (r *GraphReconciler) ssaPatch(ctx context.Context, obj *unstructured.Unstructured, graph *unstructured.Unstructured, forceApply bool) (*unstructured.Unstructured, error) {
+	fieldOwner := graphFieldOwner(graph)
 
 	var patchOpts []client.PatchOption
 	patchOpts = append(patchOpts, fieldOwner)
@@ -292,11 +315,6 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		return nil, fmt.Errorf("applying %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
 	}
 
-	// Status subresource patch if .status is present.
-	// The response from whichever patch runs last is the most current
-	// server-side state — use it as the scope value instead of doing
-	// a separate readback GET (which goes through the controller-runtime
-	// cache and can serve stale data).
 	readBack := applied
 	if hasStatus && statusData != nil {
 		statusPayload := map[string]any{
@@ -322,7 +340,6 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 			statusOpts = append(statusOpts, client.ForceOwnership)
 		}
 		if err := r.Client.Status().Patch(ctx, statusApplied, client.RawPatch(types.ApplyPatchType, sData), statusOpts...); err != nil {
-			r.Resources.remove(cacheKey)
 			if apierrors.IsConflict(err) {
 				return nil, fmt.Errorf("SSA status conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), compiler.ErrFieldConflict, err)
 			}
@@ -333,36 +350,37 @@ func (r *GraphReconciler) applySSA(ctx context.Context, graph *unstructured.Unst
 		readBack = statusApplied
 	}
 
-	// Eviction release: after a force-apply on a template, evict all third-party
-	// Apply-type field managers. Per 003-ownership.md § Release Apply (eviction
-	// release): issue a full release impersonating each third-party manager so
-	// their managedFields entry is garbage-collected and their solely-owned fields
-	// (e.g., identity labels) are deleted from the object.
-	if forceApply && nodeType == graphpkg.NodeTypeTemplate {
-		ownManager := string(fieldOwner)
-		if managers := thirdPartyFieldManagers(readBack, ownManager); len(managers) > 0 {
-			hasStatus := templateHasStatus(evalMap)
-			for _, mgr := range managers {
-				evicted, err := releaseApply(ctx, r.Client, obj.GroupVersionKind(), obj.GetNamespace(), obj.GetName(), client.FieldOwner(mgr), hasStatus)
-				if err != nil {
-					return nil, fmt.Errorf("eviction release for manager %q on %s: %w", mgr, obj.GetName(), err)
-				}
-				// Use the last release's Patch response — it reflects
-				// the cumulative effect of all evictions.
-				if evicted != nil {
-					readBack = evicted
-				}
-				log.FromContext(ctx).Info("evicted field manager", "node", nodeID, "manager", mgr, "name", obj.GetName())
-			}
-		}
+	return readBack, nil
+}
+
+// evictThirdPartyManagers removes all third-party Apply-type field managers
+// from a template resource after a force-apply. Per 003-ownership.md § Release
+// Apply (eviction release): issue a full release impersonating each third-party
+// manager so their managedFields entry is garbage-collected and their
+// solely-owned fields (e.g., identity labels) are deleted from the object.
+func evictThirdPartyManagers(ctx context.Context, c client.Client, readBack *unstructured.Unstructured, graph *unstructured.Unstructured, evalMap map[string]any, nodeID string) (*unstructured.Unstructured, error) {
+	fieldOwner := graphFieldOwner(graph)
+	ownManager := string(fieldOwner)
+	managers := thirdPartyFieldManagers(readBack, ownManager)
+	if len(managers) == 0 {
+		return readBack, nil
 	}
-
-	r.Resources.set(cacheKey, &cachedObject{
-		resourceVersion: readBack.GetResourceVersion(),
-		applyHash:       applyHash,
-		object:          readBack.Object,
-	})
-
+	gvk := readBack.GroupVersionKind()
+	namespace := readBack.GetNamespace()
+	name := readBack.GetName()
+	hasStatus := templateHasStatus(evalMap)
+	for _, mgr := range managers {
+		evicted, err := releaseApply(ctx, c, gvk, namespace, name, client.FieldOwner(mgr), hasStatus)
+		if err != nil {
+			return nil, fmt.Errorf("eviction release for manager %q on %s: %w", mgr, name, err)
+		}
+		// Use the last release's Patch response — it reflects
+		// the cumulative effect of all evictions.
+		if evicted != nil {
+			readBack = evicted
+		}
+		log.FromContext(ctx).Info("evicted field manager", "node", nodeID, "manager", mgr, "name", name)
+	}
 	return readBack, nil
 }
 

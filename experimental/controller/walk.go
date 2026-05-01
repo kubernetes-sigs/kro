@@ -51,9 +51,7 @@ type walkResult struct {
 	plan             *dagpkg.PlanState    // per-node states
 	scope            map[string]any       // final scope after walk
 	nodeReady        map[string]bool      // per-node readiness for .ready() CEL function
-	forEachItems     map[string][]any
-	forEachItemScope map[string]map[string]any
-	forEachItemKeys  map[string]map[string][]string
+	forEach          *forEachCarryForward
 	needsRecompile   bool                 // dynamic GVK resolved or changed
 	nodeErrors       []string             // "nodeID: reason" for status reporting
 	summary          dagpkg.PlanSummary
@@ -68,12 +66,10 @@ func (r *GraphReconciler) walk(ctx context.Context, graph *unstructured.Unstruct
 	logger := log.FromContext(ctx)
 
 	result := &walkResult{
-		plan:             plan,
-		scope:            eval.scope,
-		nodeReady:        eval.nodeReady,
-		forEachItems:     state.forEachItems,
-		forEachItemScope: state.forEachItemScope,
-		forEachItemKeys:  state.forEachItemKeys,
+		plan:      plan,
+		scope:     eval.scope,
+		nodeReady: eval.nodeReady,
+		forEach:   state.forEach,
 	}
 
 	// Per-node applied keys — flattened into result.keys after the walk.
@@ -237,13 +233,13 @@ func (r *GraphReconciler) walk(ctx context.Context, graph *unstructured.Unstruct
 
 		// Merge forEach state updates.
 		for k, v := range nr.forEachNewItems {
-			state.forEachItems[k] = v
+			state.forEach.items[k] = v
 		}
 		for nodeID, itemScopes := range nr.forEachNewScope {
-			state.forEachItemScope[nodeID] = itemScopes
+			state.forEach.itemScope[nodeID] = itemScopes
 		}
 		for nodeID, itemKeys := range nr.forEachNewKeys {
-			state.forEachItemKeys[nodeID] = itemKeys
+			state.forEach.itemKeys[nodeID] = itemKeys
 		}
 
 		// Update plan state.
@@ -275,13 +271,6 @@ func (r *GraphReconciler) walk(ctx context.Context, graph *unstructured.Unstruct
 	}
 
 	// --- Post-walk ---
-
-	// Retain watches for all DAG nodes.
-	if watcher != nil {
-		for _, node := range dag.Nodes {
-			watcher.RetainWatches(node.ID)
-		}
-	}
 
 	// Flatten per-node keys into the applied key set.
 	result.nodeKeys = nodeKeys
@@ -331,12 +320,12 @@ func (r *GraphReconciler) evaluateNode(ctx context.Context, graph *unstructured.
 	var prevForEachState *forEachState
 	if node.ForEach != nil {
 		prevForEachState = &forEachState{
-			items:     state.forEachItems,
-			itemScope: state.forEachItemScope,
-			itemKeys:  state.forEachItemKeys,
+			items:     state.forEach.items,
+			itemScope: state.forEach.itemScope,
+			itemKeys:  state.forEach.itemKeys,
 		}
 	}
-	keys, newForEachState, err := r.reconcileNode(ctx, graph, node, nodeType, eval, watcher, false, prevForEachState)
+	out, err := r.reconcileNode(ctx, graph, node, nodeType, eval, watcher, false, prevForEachState)
 	evalDuration := time.Since(evalStart)
 
 	// Observe per-node evaluation duration.
@@ -347,16 +336,18 @@ func (r *GraphReconciler) evaluateNode(ctx context.Context, graph *unstructured.
 	}
 
 	nr := nodeResult{
-		keys:  keys,
 		state: dagpkg.NodeReady,
 		scope: eval.scope[node.ID],
 	}
 
-	// Propagate forEach state from reconcileForEach into nodeResult.
-	if newForEachState != nil {
-		nr.forEachNewItems = newForEachState.items
-		nr.forEachNewScope = newForEachState.itemScope
-		nr.forEachNewKeys = newForEachState.itemKeys
+	// Unpack nodeOutput fields.
+	if out != nil {
+		nr.keys = out.keys
+		if out.forEach != nil {
+			nr.forEachNewItems = out.forEach.items
+			nr.forEachNewScope = out.forEach.itemScope
+			nr.forEachNewKeys = out.forEach.itemKeys
+		}
 	}
 
 	if err != nil {

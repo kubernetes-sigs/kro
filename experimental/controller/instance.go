@@ -16,69 +16,47 @@ import (
 
 // instanceState holds the mutable reconcile-time state for a single Graph
 // instance. Each Graph CR gets its own instanceState even when sharing a
-// compiledGraph with other instances. This is correct because the mutable
-// state tracks per-instance Kubernetes resources with different observed states.
+// compiledGraph with other instances.
 type instanceState struct {
+	// --- Compilation artifacts ---
 	compiled *compiler.CompiledGraph
+	spec     *graphpkg.GraphSpec
+	dag      *dagpkg.DAG
 
-	// Per-instance spec and DAG. The compiled graph is shared across instances
-	// with the same compilation key; the spec and DAG contain per-instance
-	// node bodies (template maps with concrete values).
-	spec *graphpkg.GraphSpec
-	dag  *dagpkg.DAG
+	// --- Walk carry-forward (preserved across reconciles for propagateWhen,
+	// dependency gating, and forEach state) ---
+	previousScope      map[string]any
+	previousKeys       map[string][]string
+	previousPlanStates *dagpkg.PlanState
+	forEach            *forEachCarryForward // nil until first forEach evaluation
 
-	// State retained across reconciles for prune diffing and state
-	// carry-forward on skip.
-	previousScope      map[string]any          // node ID → last scope data
-	previousKeys       map[string][]string     // node ID → applied keys from last reconcile
-	previousPlanStates *dagpkg.PlanState       // node states from last reconcile
-
-	// forEach collection state retained across reconciles for prune key tracking.
-	forEachItems     map[string][]any              // node ID → cached collection items
-	forEachItemScope map[string]map[string]any     // nodeID → itemID → scope data
-	forEachItemKeys  map[string]map[string][]string // nodeID → itemID → applied keys
-
-	// Previous applied key set — used to detect intra-revision prune need
-	// via deriveAppliedSet on cold start.
+	// --- Prune and finalization ---
 	previousAppliedKeys map[string]bool
+	deferredPruneKeys   []string
+	activeFinalization  map[string]*finalizationEntry
 
-	// deferredPruneKeys carries keys whose deletion was deferred in the last
-	// reconcile (finalization in progress, third-party field managers, etc.).
-	// These are injected into allPreviousKeys on the next reconcile so they
-	// remain visible as prune candidates regardless of watch-cache lag.
-	deferredPruneKeys []string
-
-	// previousPruneNotes carries informational notes (e.g., FinalizerSkipped)
-	// from the last prune cycle. Surfaced in status for one additional
-	// reconcile after the prune completes so the transient note is observable.
-	previousPruneNotes []string
-
-	// activeFinalization tracks in-flight finalization sequences. Maps the
-	// target resource key → finalization state (phase + child keys). The prune
-	// walk consults this before deleting anything: keys that appear as child
-	// keys are protected from pruning. Cleared when the target is successfully
-	// deleted (finalization complete). Persists across reconciles so
-	// subsequent prune cycles don't race with in-progress finalization.
-	activeFinalization map[string]*finalizationEntry
-
-	// resolvedDynamicGVKs maps node ID → last-resolved GVK for dynamic GVK nodes.
-	// Per 004-compilation.md § Deferred Types: "When the reconciler evaluates
-	// a dynamic GVK expression and gets a different type than what was compiled
-	// against, that node's compilation is stale." The reconciler updates this
-	// map after evaluating each dynamic GVK node and compares it on subsequent
-	// reconciles to detect staleness.
+	// --- Deferred typing (dynamic GVK resolution) ---
 	resolvedDynamicGVKs map[string]schema.GroupVersionKind
+}
+
+// forEachCarryForward holds forEach collection state retained across reconciles.
+type forEachCarryForward struct {
+	items     map[string][]any               // nodeID/varName → collection items
+	itemScope map[string]map[string]any      // nodeID → itemID → scope data
+	itemKeys  map[string]map[string][]string // nodeID → itemID → applied keys
 }
 
 // newInstanceState creates a fresh instanceState for a compiledGraph.
 func newInstanceState(compiled *compiler.CompiledGraph) *instanceState {
 	return &instanceState{
-		compiled:         compiled,
-		previousScope:    make(map[string]any),
-		previousKeys:     make(map[string][]string),
-		forEachItems:     make(map[string][]any),
-		forEachItemScope: make(map[string]map[string]any),
-		forEachItemKeys:  make(map[string]map[string][]string),
+		compiled: compiled,
+		previousScope: make(map[string]any),
+		previousKeys:  make(map[string][]string),
+		forEach: &forEachCarryForward{
+			items:     make(map[string][]any),
+			itemScope: make(map[string]map[string]any),
+			itemKeys:  make(map[string]map[string][]string),
+		},
 	}
 }
 

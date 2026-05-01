@@ -88,7 +88,6 @@ type GraphReconciler struct {
 	SchemaGen      *compiler.SchemaGeneration      // nil = no generation tracking; never triggers recompilation
 	Watcher        *watches.WatchCoordinator       // nil = no dynamic watches (backward compat with existing tests)
 	Caches         *graphCaches                    // per-revision compiled expression caches
-	Resources      *resourceCache                  // per-resource full object cache
 	Scope          GVKScopeResolver                // nil = unknown scope; staticResourceKey falls back to namespace-substitution heuristic
 }
 
@@ -207,7 +206,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// -----------------------------------------------------------------------
 	// 6. Compile revision
 	// -----------------------------------------------------------------------
-	revisionSpec, state, err := r.compileRevision(ctx, graph.GetNamespace(), activeRevision)
+	_, state, err := r.compileRevision(ctx, graph.GetNamespace(), activeRevision)
 	if err != nil {
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{compiled: false, compiledErr: err}); statusErr != nil {
 			return ctrl.Result{}, fmt.Errorf("updating status after compilation error: %w", statusErr)
@@ -241,33 +240,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 	}
 
-	// On revision transition, transfer previous state from the superseded
-	// revision's cache for unchanged nodes. The evaluation hash check will
-	// then skip unchanged nodes.
+	// On revision transition, clean up metric series for nodes removed between revisions.
 	if isRevisionTransition {
-		changedNodes := diffRevisionNodes(revisionSpec, supersededRevisions)
-		if changedNodes != nil {
-			baseline := supersededRevisions[len(supersededRevisions)-1]
-			oldKey := baseline.GetNamespace() + "/" + baseline.GetName()
-			if oldState := r.Caches.get(oldKey); oldState != nil {
-				for _, node := range dag.Nodes {
-					if !changedNodes[node.ID] {
-						if v, ok := oldState.previousScope[node.ID]; ok {
-							state.previousScope[node.ID] = v
-						}
-						if oldState.previousPlanStates != nil {
-							if v, ok := oldState.previousPlanStates.States[node.ID]; ok {
-								if state.previousPlanStates == nil {
-									state.previousPlanStates = &dagpkg.PlanState{States: make(map[string]dagpkg.NodeState)}
-								}
-								state.previousPlanStates.States[node.ID] = v
-							}
-						}
-					}
-				}
-			}
-		}
-		// Clean up metric series for nodes removed between revisions.
 		activeNodeIDs := make(map[string]bool, len(dag.Nodes))
 		for _, node := range dag.Nodes {
 			activeNodeIDs[node.ID] = true
@@ -285,13 +259,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		if len(removedIDs) > 0 {
 			deleteNodeMetrics(graph.GetName(), graph.GetNamespace(), removedIDs)
 		}
-	}
-
-	// Drain watch triggers/collection changes so they don't accumulate.
-	// The simplified walk evaluates all nodes every cycle.
-	if watcher != nil {
-		_ = watcher.DrainTriggers()
-		_ = watcher.DrainCollectionChanges()
 	}
 
 	// -----------------------------------------------------------------------
@@ -404,8 +371,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			}
 			nodeErrors = append(nodeErrors, pruneBlockedReasons...)
 			nodeNotes = append(nodeNotes, pruneNotes...)
-			// Persist prune notes so they're visible for one additional reconcile.
-			state.previousPruneNotes = pruneNotes
 			if len(pruneBlockedReasons) > 0 {
 				summary.HasBlocked = true
 			}
@@ -431,15 +396,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				nodeErrors = append(nodeErrors, fmt.Sprintf("prune: %s", info.reason))
 			}
 		}
-	}
-
-	// Carry forward prune notes from the previous cycle if no new notes were
-	// generated. This ensures transient notes (e.g., FinalizerSkipped) are
-	// visible for at least one additional reconcile, preventing the status
-	// update from being overwritten before the operator can observe it.
-	if len(nodeNotes) == 0 && len(state.previousPruneNotes) > 0 {
-		nodeNotes = state.previousPruneNotes
-		state.previousPruneNotes = nil // consumed — don't carry forward again
 	}
 
 	// -----------------------------------------------------------------------

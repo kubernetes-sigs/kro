@@ -11,71 +11,39 @@ import (
 
 // ---------------------------------------------------------------------------
 // Unit tests — cache mechanism
-//
-// EXCEPTION to integration-first guidance. These test the
-// compiled graph cache's sharing and isolation invariants. The cache is
-// invisible at the integration boundary — the observable outcome is identical
-// with or without sharing. A bug here (stale compiled graph served after spec
-// change, or mutable state leaking between instances sharing a compiledGraph)
-// would manifest as non-deterministic reconciliation that is effectively
-// impossible to diagnose from integration tests. The integration test
-// TestIdenticalGraphsConvergeIndependently covers correctness of the
-// observable behavior; these cover the mechanism.
 // ---------------------------------------------------------------------------
 
-// TestCompiledGraphCacheLifecycle exercises the full lifecycle of the compiled
-// graph cache: sharing across identical specs, isolation between different
-// specs, and cleanup on instance removal.
-func TestCompiledGraphCacheLifecycle(t *testing.T) {
+// TestInstanceCacheLifecycle exercises the per-instance cache lifecycle:
+// set, get, remove, and size tracking.
+func TestInstanceCacheLifecycle(t *testing.T) {
 	spec := buildBenchSpec(5)
 	caches := newGraphCaches()
-	compilationKey := spec.CompilationKey()
 
-	// --- Phase 1: Two instances with identical specs share one compiledGraph ---
 	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	caches.set("ns/graph-a-g00001", newInstanceState(compiled))
+	caches.set("ns/graph-b-g00001", newInstanceState(compiled))
 
-	// Second instance finds the shared compiledGraph by hash.
-	shared := caches.getCompiled(compilationKey)
-	if shared == nil {
-		t.Fatal("expected shared compiledGraph, got nil")
-	}
-	caches.set("ns/graph-b-g00001", newInstanceState(shared))
-
-	if caches.get("ns/graph-a-g00001").compiled != caches.get("ns/graph-b-g00001").compiled {
-		t.Fatal("instances with identical specs should share a compiledGraph")
+	if caches.CacheSizes() != 2 {
+		t.Fatalf("expected 2 instances, got %d", caches.CacheSizes())
 	}
 
-	// --- Phase 2: Different spec produces a separate compiledGraph ---
-	differentSpec := buildBenchSpec(10)
-	differentCompiled, err := compiler.CompileGraphSpec(differentSpec, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caches.set("ns/graph-c-g00001", newInstanceState(differentCompiled))
-
-	if caches.get("ns/graph-c-g00001").compiled == caches.get("ns/graph-a-g00001").compiled {
-		t.Fatal("different specs should not share a compiledGraph")
-	}
-
-	// --- Phase 3: Removing one instance retains shared compiledGraph ---
 	caches.remove("ns/graph-a-g00001")
-	if caches.getCompiled(compilationKey) == nil {
-		t.Fatal("compiledGraph should survive with remaining references")
+	if caches.CacheSizes() != 1 {
+		t.Fatalf("expected 1 instance after remove, got %d", caches.CacheSizes())
+	}
+	if caches.get("ns/graph-a-g00001") != nil {
+		t.Fatal("removed instance should be nil")
+	}
+	if caches.get("ns/graph-b-g00001") == nil {
+		t.Fatal("remaining instance should still exist")
 	}
 
-	// --- Phase 4: Removing last instance cleans up compiledGraph ---
 	caches.remove("ns/graph-b-g00001")
-	if caches.getCompiled(compilationKey) != nil {
-		t.Fatal("compiledGraph should be cleaned up when last reference is removed")
-	}
-
-	// Different spec's compiledGraph should be unaffected.
-	if caches.getCompiled(differentSpec.CompilationKey()) == nil {
-		t.Fatal("unrelated compiledGraph should survive other spec's cleanup")
+	if caches.CacheSizes() != 0 {
+		t.Fatalf("expected 0 instances after all removed, got %d", caches.CacheSizes())
 	}
 }
 
@@ -95,7 +63,7 @@ func TestInstanceStateIsolation(t *testing.T) {
 	// Mutate state1's mutable fields.
 	state1.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
 	state1.previousPlanStates = &dagpkg.PlanState{States: map[string]dagpkg.NodeState{"node0": dagpkg.NodeReady}}
-	state1.forEachItems["node0/item"] = []any{"a", "b"}
+	state1.forEach.items["node0/item"] = []any{"a", "b"}
 
 	// state2 should be unaffected.
 	if _, ok := state2.previousScope["node0"]; ok {
@@ -106,7 +74,7 @@ func TestInstanceStateIsolation(t *testing.T) {
 			t.Fatal("previousPlanStates leaked between instances")
 		}
 	}
-	if _, ok := state2.forEachItems["node0/item"]; ok {
+	if _, ok := state2.forEach.items["node0/item"]; ok {
 		t.Fatal("forEachItems leaked between instances")
 	}
 
@@ -409,17 +377,12 @@ func buildBenchSpecWithExprs(exprCount int) *graph.GraphSpec {
 }
 
 // ---------------------------------------------------------------------------
-// Compiled graph sharing benchmarks
+// Instance cache benchmarks
 // ---------------------------------------------------------------------------
 
-// BenchmarkCompileRevisionSharing measures the headline number for content-
-// addressed compiled graph sharing. Simulates N child graphs with identical
-// specs (the nested graph pattern). Without sharing, each graph independently
-// compiles CEL programs and builds a DAG. With sharing, the first graph
-// compiles and subsequent graphs do a hash lookup.
-//
-// The benchmark measures the amortized cost of compileRevision for N instances.
-func BenchmarkCompileRevisionSharing(b *testing.B) {
+// BenchmarkCompileRevisionPerInstance measures per-instance compilation cost.
+// Each instance compiles independently (no sharing layer).
+func BenchmarkCompileRevisionPerInstance(b *testing.B) {
 	for _, nodeCount := range []int{5, 10, 25, 50} {
 		for _, instanceCount := range []int{1, 10, 50, 100} {
 			b.Run(fmt.Sprintf("nodes=%d/instances=%d", nodeCount, instanceCount), func(b *testing.B) {
@@ -429,17 +392,10 @@ func BenchmarkCompileRevisionSharing(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					caches := newGraphCaches()
 					for j := 0; j < instanceCount; j++ {
-						// Simulate N revisions with the same spec but different names.
-						specHash := spec.CompilationKey()
 						instanceKey := fmt.Sprintf("ns/graph-%d-g00001", j)
-
-						compiled := caches.getCompiled(specHash)
-						if compiled == nil {
-							var err error
-							compiled, err = compiler.CompileGraphSpec(spec, nil)
-							if err != nil {
-								b.Fatal(err)
-							}
+						compiled, err := compiler.CompileGraphSpec(spec, nil)
+						if err != nil {
+							b.Fatal(err)
 						}
 						state := newInstanceState(compiled)
 						caches.set(instanceKey, state)

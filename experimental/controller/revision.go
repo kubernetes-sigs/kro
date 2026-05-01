@@ -43,15 +43,6 @@ var GraphRevisionGVK = schema.GroupVersionKind{
 // NOTE: Identity labels for managed resources are defined in labels.go.
 // The constants below are for revision objects only (flat labels for selection).
 
-// RevisionConditionType identifies a condition on a GraphRevision.
-type RevisionConditionType string
-
-// Revision condition types.
-const (
-	RevisionConditionReady  RevisionConditionType = "Ready"
-	RevisionConditionActive RevisionConditionType = "Active"
-)
-
 // ---------------------------------------------------------------------------
 // Naming
 // ---------------------------------------------------------------------------
@@ -275,74 +266,6 @@ func listRevisions(ctx context.Context, c client.Client, graphName, namespace st
 	return result, nil
 }
 
-// ---------------------------------------------------------------------------
-// Revision status helpers
-// ---------------------------------------------------------------------------
-
-// setRevisionCondition sets a condition on a GraphRevision's status.
-// lastTransitionTime is set to now when the condition status changes;
-// it is preserved when the status is unchanged — matching the Kubernetes
-// condition convention (design 001-graph § Conditions).
-func setRevisionCondition(ctx context.Context, c client.Client, revision *unstructured.Unstructured, condType RevisionConditionType, status ConditionStatus, reason, message string) error {
-	// Get fresh copy to avoid conflicts
-	latest, err := getRevision(ctx, c, revision.GetName(), revision.GetNamespace())
-	if err != nil {
-		return err
-	}
-
-	existingStatus, _ := latest.Object["status"].(map[string]any)
-	if existingStatus == nil {
-		existingStatus = map[string]any{}
-	}
-
-	conditions, _ := existingStatus["conditions"].([]any)
-	newCondition := buildCondition(string(condType), status, reason, message)
-	preserveTransitionTime(conditions, newCondition, status)
-
-	// Replace or append the condition.
-	found := false
-	for i, cond := range conditions {
-		cMap, ok := cond.(map[string]any)
-		if !ok {
-			continue
-		}
-		if cMap["type"] == string(condType) {
-			conditions[i] = newCondition
-			found = true
-			break
-		}
-	}
-	if !found {
-		conditions = append(conditions, newCondition)
-	}
-
-	existingStatus["conditions"] = conditions
-	latest.Object["status"] = existingStatus
-
-	return c.Status().Update(ctx, latest)
-}
-
-// revisionConditionStatus reads a condition's status from a revision.
-// Returns empty string if the condition is not found.
-func revisionConditionStatus(revision *unstructured.Unstructured, condType RevisionConditionType) ConditionStatus {
-	status, _ := revision.Object["status"].(map[string]any)
-	if status == nil {
-		return ""
-	}
-	conditions, _ := status["conditions"].([]any)
-	for _, c := range conditions {
-		cMap, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		if cMap["type"] == string(condType) {
-			s, _ := cMap["status"].(string)
-			return ConditionStatus(s)
-		}
-	}
-	return ""
-}
-
 // revisionGeneration extracts the graph generation from a revision's labels.
 func revisionGeneration(revision *unstructured.Unstructured) int64 {
 	lbls := revision.GetLabels()
@@ -430,19 +353,8 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	// Compile to verify validity before creating the revision.
 	// Phase 1-2: resolve types (I/O) before pure compilation.
 	typeInfo := compiler.ResolveNodeTypes(graphSpec.Nodes, r.SchemaResolver)
-	compiled, err := compiler.CompileGraphSpec(graphSpec, typeInfo)
+	_, err = compiler.CompileGraphSpec(graphSpec, typeInfo)
 	if err != nil {
-		return nil, nil, err
-	}
-
-	// Phase 5: Pre-compile child graphs with expression-valued spec.nodes.
-	// When a forEach node stamps child Graphs whose node list is a CEL
-	// expression (e.g., ${schema.spec.resources...}), the normal pre-compilation
-	// in deferred.go bails because it can't extract scope statically. Here we
-	// resolve referenced ref nodes from the API and evaluate the expression to
-	// get the child node list, then compile it. This catches cycles and other
-	// structural errors at the parent's compile time.
-	if err := r.precompileExpressionChildGraphs(ctx, graph.GetNamespace(), graphSpec, compiled, nil); err != nil {
 		return nil, nil, err
 	}
 
@@ -500,65 +412,12 @@ func (r *GraphReconciler) findSupersededRevisions(ctx context.Context, graphName
 	return result
 }
 
-// diffRevisionNodes compares the node specs of two revisions and returns the
-// set of node IDs that changed (or are new). Unchanged nodes retain their
-// previous state and are not triggered on revision transition.
-//
-// Per 005-reconciliation.md § Revision transition: "Nodes that differ are
-// triggered." The comparison covers all fields that affect a node's behavior:
-// Template, IncludeWhen, ReadyWhen, PropagateWhen, ForEach, Finalizes.
-//
-// Returns nil if the old revision's spec cannot be parsed (fall back to
-// triggering all nodes).
-func diffRevisionNodes(active *graphpkg.GraphSpec, superseded []*unstructured.Unstructured) map[string]bool {
-	if len(superseded) == 0 {
-		return nil
-	}
-	// Use the most recent superseded revision as the baseline.
-	// listRevisions returns sorted by generation ascending, so the last
-	// superseded element is the one immediately before the active.
-	baseline := superseded[len(superseded)-1]
-	oldSpec, err := extractRevisionSpec(baseline)
-	if err != nil {
-		return nil // parse failure — fall back to trigger all
-	}
-
-	// Build a map of old node ID → snapshot hash.
-	oldHashes := make(map[string]string, len(oldSpec.Nodes))
-	for _, node := range oldSpec.Nodes {
-		snap := snapshotNode(node)
-		h, err := hashDesiredState(snap)
-		if err != nil {
-			return nil // hash failure — fall back to trigger all
-		}
-		oldHashes[node.ID] = h
-	}
-
-	// Compare each active node against the old snapshot.
-	changed := make(map[string]bool)
-	for _, node := range active.Nodes {
-		snap := snapshotNode(node)
-		h, err := hashDesiredState(snap)
-		if err != nil {
-			return nil // hash failure — fall back to trigger all
-		}
-		oldHash, existed := oldHashes[node.ID]
-		if !existed || h != oldHash {
-			// New node or changed node — must be triggered.
-			changed[node.ID] = true
-		}
-	}
-	return changed
-}
-
 // ---------------------------------------------------------------------------
 // Revision status
 // ---------------------------------------------------------------------------
 
-// updateRevisionStatus updates the conditions on the active and previous
-// revisions based on the reconcile outcome. When the active revision is
-// fully ready, superseded revisions whose unique resources have been pruned
-// are garbage collected.
+// updateRevisionStatus garbage-collects superseded revisions once all
+// resources are ready and pruning is complete.
 //
 // GC predicate: a superseded revision is safe to delete when its applied set
 // is a subset of the active revision's applied set. If it has resources not
@@ -566,46 +425,16 @@ func diffRevisionNodes(active *graphpkg.GraphSpec, superseded []*unstructured.Un
 // revision provides ordering metadata for the prune walk.
 // See: experimental/docs/design/002-revisions.md § Lifecycle
 func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active *unstructured.Unstructured, superseded []*unstructured.Unstructured, allReady bool, pruneClean bool) {
+	if !allReady || !pruneClean {
+		return
+	}
 	logger := log.FromContext(ctx)
-
-	if allReady {
-		// All resources are ready — activate this revision
-		if err := setRevisionCondition(ctx, r.Client, active, RevisionConditionReady, ConditionTrue, "Ready", "All resources reconciled"); err != nil {
-			logger.V(1).Info("failed to set revision Ready", "error", err)
-		}
-		if revisionConditionStatus(active, RevisionConditionActive) != ConditionTrue {
-			if err := setRevisionCondition(ctx, r.Client, active, RevisionConditionActive, ConditionTrue, "Active", "This is the current revision"); err != nil {
-				logger.V(1).Info("failed to set revision Active", "error", err)
-			}
-			// Deactivate all superseded revisions
-			for _, prev := range superseded {
-				if err := setRevisionCondition(ctx, r.Client, prev, RevisionConditionActive, ConditionFalse, "Superseded", "Superseded by newer revision"); err != nil {
-					logger.V(1).Info("failed to deactivate superseded revision", "error", err, "revision", prev.GetName())
-				}
-			}
-		}
-
-		// GC superseded revisions. When allReady is true and prune
-		// completed without error, all superseded revisions are safe to
-		// delete: their resources have either been migrated to the active
-		// revision or pruned from the cluster.
-		if pruneClean {
-			for _, prev := range superseded {
-				if err := deleteRevision(ctx, r.Client, prev); err != nil {
-					logger.V(1).Info("failed to GC superseded revision", "error", err, "revision", prev.GetName())
-				} else {
-					logger.Info("garbage collected superseded revision", "revision", prev.GetName())
-					r.Caches.remove(prev.GetNamespace() + "/" + prev.GetName())
-				}
-			}
-		}
-	} else {
-		// Resources still converging — mark as not yet ready.
-		// Use Unknown (not False) to distinguish "not yet evaluated" from
-		// "evaluated and failed." Per the design: Ready starts Unknown,
-		// converges to True when fully propagated.
-		if err := setRevisionCondition(ctx, r.Client, active, RevisionConditionReady, ConditionUnknown, "Progressing", "Resources not yet fully reconciled"); err != nil {
-			logger.V(1).Info("failed to set revision Ready=Unknown", "error", err)
+	for _, prev := range superseded {
+		if err := deleteRevision(ctx, r.Client, prev); err != nil {
+			logger.V(1).Info("failed to GC superseded revision", "error", err, "revision", prev.GetName())
+		} else {
+			logger.Info("garbage collected superseded revision", "revision", prev.GetName())
+			r.Caches.remove(prev.GetNamespace() + "/" + prev.GetName())
 		}
 	}
 }

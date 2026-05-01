@@ -73,34 +73,6 @@ func TestHashDesiredStateDeterministic(t *testing.T) {
 	}
 }
 
-// TestResourceCache tests the resource cache operations.
-func TestResourceCache(t *testing.T) {
-	rc := newResourceCache()
-	key := "v1/ConfigMap/default/test"
-
-	// Cache miss on empty cache.
-	_, ok := rc.get(key)
-	require.False(t, ok, "cache should miss on empty cache")
-
-	// Simulate a successful apply that populates the cache.
-	rc.set(key, &cachedObject{
-		resourceVersion: "1000",
-		applyHash:       "abc123",
-		object:          map[string]any{"kind": "ConfigMap"},
-	})
-
-	// Cache hit — normal steady-state behavior.
-	cached, ok := rc.get(key)
-	require.True(t, ok, "cache should hit after set")
-	assert.Equal(t, "abc123", cached.applyHash)
-
-	// Simulate the status-fail fix: remove the entry.
-	rc.remove(key)
-
-	_, ok = rc.get(key)
-	require.False(t, ok, "cache should miss after remove")
-}
-
 // ---------------------------------------------------------------------------
 // Spec hash completeness guard
 //

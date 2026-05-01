@@ -24,6 +24,14 @@ import (
 // Node reconciliation methods
 // ---------------------------------------------------------------------------
 
+// nodeOutput is the return value of reconcileNode. It replaces the previous
+// ([]string, *forEachState, error) tuple so forEach-specific state doesn't
+// thread through a generic interface — most node types leave forEach nil.
+type nodeOutput struct {
+	keys    []string
+	forEach *forEachState // nil for non-forEach nodes
+}
+
 // reconcileNode dispatches to the appropriate handler based on node type.
 // NodeType is a parse-time property of the node; no runtime resolution.
 //
@@ -39,11 +47,11 @@ import (
 // Template, Patch). Watch and ForEach return early — they handle
 // readiness internally (per-item for ForEach, per-collection for Watch).
 //
-// All paths return (keys, forEachState, error) with a uniform error contract:
+// Error contract:
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, nodeType graphpkg.NodeType, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool, prevForEachState *forEachState) ([]string, *forEachState, error) {
+func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node graphpkg.Node, nodeType graphpkg.NodeType, eval *evaluator, watcher *watches.GraphWatcher, resyncCorrection bool, prevForEachState *forEachState) (*nodeOutput, error) {
 	if node.ForEach != nil {
 		return r.reconcileForEach(ctx, graph, node, eval, watcher, resyncCorrection, prevForEachState)
 	}
@@ -51,28 +59,28 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 	switch nodeType {
 	case graphpkg.NodeTypeDef:
 		if err := r.reconcileDefinition(ctx, node, eval); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	case graphpkg.NodeTypeWatch:
 		err := r.reconcileWatch(ctx, graph, node, eval, watcher)
-		return nil, nil, err // Watch handles its own readiness
+		return &nodeOutput{}, err // Watch handles its own readiness
 	case graphpkg.NodeTypeRef:
 		if err := r.reconcileRef(ctx, graph, node, eval, watcher); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	default: // NodeTypeTemplate, NodeTypePatch
 		key, err := r.reconcileApply(ctx, graph, node, nodeType, eval, watcher, resyncCorrection)
 		if err != nil {
 			if key != "" {
-				return []string{key}, nil, err
+				return &nodeOutput{keys: []string{key}}, err
 			}
-			return nil, nil, err
+			return nil, err
 		}
-		return []string{key}, nil, eval.evalReadiness(node.ID, node.ReadyWhen)
+		return &nodeOutput{keys: []string{key}}, eval.evalReadiness(node.ID, node.ReadyWhen)
 	}
 
-	// Post-dispatch readyWhen for Definition and Watch (no keys to return).
-	return nil, nil, eval.evalReadiness(node.ID, node.ReadyWhen)
+	// Post-dispatch readyWhen for Definition and Ref (no keys to return).
+	return &nodeOutput{}, eval.evalReadiness(node.ID, node.ReadyWhen)
 }
 
 // reconcileDefinition evaluates a definition node — resolves values from the template

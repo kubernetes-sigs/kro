@@ -304,34 +304,6 @@ func GVRKindFromInformer(gvr schema.GroupVersionResource, item interface{}) stri
 	return gvr.Resource
 }
 
-// GetResourceVersion returns the resourceVersion of an object from the
-// metadata informer cache, if a watch is active for the GVR. Returns ""
-// if the object is not found or no watch exists.
-func (m *WatchManager) GetResourceVersion(gvr schema.GroupVersionResource, namespace, name string) string {
-	m.mu.RLock()
-	w, ok := m.watches[gvr]
-	m.mu.RUnlock()
-	if !ok {
-		return ""
-	}
-
-	key := name
-	if namespace != "" {
-		key = namespace + "/" + name
-	}
-
-	item, exists, err := w.informer.GetStore().GetByKey(key)
-	if err != nil || !exists {
-		return ""
-	}
-
-	accessor, err := meta.Accessor(item)
-	if err != nil {
-		return ""
-	}
-	return accessor.GetResourceVersion()
-}
-
 // GetLabels returns the labels of an object from the metadata informer cache.
 // Returns nil, false if the object is not found or no watch exists for the GVR.
 func (m *WatchManager) GetLabels(gvr schema.GroupVersionResource, namespace, name string) (map[string]string, bool) {

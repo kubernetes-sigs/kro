@@ -165,58 +165,26 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 				logger.Error(err, "releasing contribution fields", "key", resKey)
 			} else {
 				logger.Info("released contribution fields", "key", resKey)
-				r.Resources.remove(resKey)
 			}
 			continue
 		}
 
-		// Template keys: delete the resource.
-		obj, nn, ok := unstructuredFromKey(key)
-		if !ok {
+		// Template keys: shared ownership + field manager preflight check.
+		// Prune enables identity-label verification because previous-applied-
+		// key sets can include stale entries.
+		pf := r.deletePreflight(ctx, key, graph, true)
+		switch pf.Outcome {
+		case deleteSkipParseFailed, deleteNotFound, deleteNotOwned:
 			continue
-		}
-
-		// Check if it exists and is ours before deleting.
-		// Direct API server read for authoritative ownership data.
-		if err := r.apiReader().Get(ctx, nn, obj); err != nil {
-			// Target already gone — nothing to delete.
-			r.Resources.remove(key)
-			continue // already gone
-		}
-
-		// Verify ownership: must have our identity label and apply hash
-		objLabels := obj.GetLabels()
-		hasOurLabel := false
-		if objLabels != nil {
-			for key := range objLabels {
-				if graphpkg.IsGraphIdentityLabel(key, graph.GetName(), graph.GetNamespace()) {
-					hasOurLabel = true
-					break
-				}
-			}
-		}
-		if !hasOurLabel {
-			continue // not ours
-		}
-		objAnnotations := obj.GetAnnotations()
-		if objAnnotations == nil || objAnnotations[applyHashAnnotation] == "" {
-			continue // never successfully applied by us
-		}
-
-		// Contributor-aware deletion: check managedFields for other field
-		// managers before deleting. If present, deletion is blocked — the
-		// resource stays in the applied set for retry on the next reconcile.
-		ownManager := string(graphFieldOwner(graph))
-		if blockers := thirdPartyFieldManagers(obj, ownManager); len(blockers) > 0 {
+		case deleteBlockedByFieldManagers:
 			logger.Info("prune blocked: resource has other field managers",
-				"key", key, "blockers", blockers)
-			blockedReasons = append(blockedReasons, fmt.Sprintf(
-				"TeardownBlocked: %s (third-party field managers: %s)",
-				key, strings.Join(blockers, ", ")))
+				"key", key, "blockers", pf.Blockers)
+			blockedReasons = append(blockedReasons, formatBlockedReason(key, pf.Blockers))
 			deferredKeys = append(deferredKeys, key)
 			continue // resource stays in applied set — retry next reconcile
 		}
 
+		// deleteReady: resource exists, is ours, no third-party field managers.
 		// Finalization check: if this target has finalizers, only delete if
 		// advanceFinalization marked it complete. Otherwise skip — finalization
 		// handles deferral and blocking reasons.
@@ -232,13 +200,12 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue // finalization not complete — already deferred by advanceFinalization
 		}
 
-		if err := r.Client.Delete(ctx, obj); err != nil {
+		if err := r.Client.Delete(ctx, pf.Obj); err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return deferredKeys, blockedReasons, notes, fmt.Errorf("pruning %s: %w", key, err)
 			}
 		} else {
 			logger.Info("pruned resource", "key", key)
-			r.Resources.remove(key)
 			// Clean up finalization children now that target is deleted.
 			if childKeys, ok := finResult.ChildKeysToCleanup[key]; ok {
 				deferredDeletes = append(deferredDeletes, childKeys...)

@@ -41,9 +41,6 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		logger.Error(listErr, "listing revisions during teardown; proceeding with watch cache and live spec fallbacks")
 	}
 
-	// Clean up the resource cache for this Graph only.
-	r.Resources.removeForGraph(graph.GetName(), graph.GetNamespace())
-
 	// Clean up all metric time series for this Graph via partial match.
 	// Covers every node that ever emitted a metric, even if revision specs
 	// are no longer parseable.
@@ -243,22 +240,19 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if finalizerNodeKeys[key] {
 			continue
 		}
-		gvk, nn := parseResourceKey(key)
-		if gvk.Kind == "" {
-			continue
-		}
-		obj, _, ok := unstructuredFromKey(key)
-		if !ok {
-			continue
-		}
 
-		// Check if we successfully owned this resource (has our hash annotation).
-		// Target absent is not a teardown block — the design classifies it as
-		// FinalizerSkipped when a finalizer was declared, or a silent no-op
-		// otherwise. Emit the note so operators can tell finalization was
-		// bypassed vs never needed.
-		// Direct API server read for authoritative existence/ownership data.
-		if err := r.apiReader().Get(ctx, nn, obj); err != nil {
+		// Shared ownership + field manager preflight check.
+		// Teardown skips identity-label verification because keys are
+		// collected from revision specs and the watch cache — they are
+		// already known to belong to this Graph.
+		pf := r.deletePreflight(ctx, key, graph, false)
+		switch pf.Outcome {
+		case deleteSkipParseFailed:
+			continue
+		case deleteNotFound:
+			// Target absent is not a teardown block — the design
+			// classifies it as FinalizerSkipped when a finalizer was
+			// declared, or a silent no-op otherwise.
 			if teardownDAG != nil {
 				if nodeID := keyToNodeID[key]; nodeID != "" {
 					if finalizerNodeIDs, ok := teardownDAG.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
@@ -269,34 +263,24 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 					}
 				}
 			}
-			continue // already gone
-		}
-		objAnnotations := obj.GetAnnotations()
-		if objAnnotations == nil || objAnnotations[applyHashAnnotation] == "" {
-			logger.V(1).Info("skipping delete for resource without apply hash (never successfully applied)", "key", key)
+			continue
+		case deleteNotOwned:
+			continue
+		case deleteBlockedByFieldManagers:
+			logger.Info("teardown blocked: resource has other field managers",
+				"key", key, "blockers", pf.Blockers)
+			teardownBlockedReasons = append(teardownBlockedReasons,
+				formatBlockedReason(key, pf.Blockers))
 			continue
 		}
 
-		// Contributor-aware deletion: check managedFields for other field
-		// managers before deleting. If present, deletion is blocked — the
-		// finalizer holds until the other manager releases.
-		ownManager := string(graphFieldOwner(graph))
-		if blockers := thirdPartyFieldManagers(obj, ownManager); len(blockers) > 0 {
-			logger.Info("teardown blocked: resource has other field managers",
-				"key", key, "blockers", blockers)
-			teardownBlockedReasons = append(teardownBlockedReasons,
-				fmt.Sprintf("TeardownBlocked: %s (third-party field managers: %s)",
-					key, strings.Join(blockers, ", ")))
-			continue // skip delete — finalizer holds
-		}
-
-		// Finalization: if this target has finalizer nodes, run the
-		// finalization sequence before deleting.
+		// deleteReady: resource exists, is ours, no third-party field managers.
+		// Run finalization before issuing the delete.
 		var finKeys []string
 		if teardownDAG != nil && teardownEval != nil {
 			nodeID := keyToNodeID[key]
 			if finalizerNodeIDs, ok := teardownDAG.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
-				ready, fk, finErr := r.runFinalization(ctx, graph, obj, nodeID, finalizerNodeIDs, teardownDAG, teardownEval, nil)
+				ready, fk, finErr := r.runFinalization(ctx, graph, pf.Obj, nodeID, finalizerNodeIDs, teardownDAG, teardownEval, nil)
 				finKeys = fk
 				if finErr != nil {
 					logger.Error(finErr, "teardown finalization failed", "key", key)
@@ -317,7 +301,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 
 		deletedKeys[key] = true
-		if err := r.Client.Delete(ctx, obj); err != nil {
+		if err := r.Client.Delete(ctx, pf.Obj); err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return ctrl.Result{}, fmt.Errorf("deleting managed resource %s: %w", key, err)
 			}

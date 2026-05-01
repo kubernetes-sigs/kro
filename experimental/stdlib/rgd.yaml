@@ -91,9 +91,9 @@ spec:
 
             - id: checks
               def:
-                resources: '$${schema.?spec.?resources.orValue([])}'
+                resources: "$${schema.?spec.?resources.orValue([])}"
                 reserved: '$${["apiVersion","context","dependency","dependencies","each","externalRef","externalReference","externalRefs","externalReferences","graph","instance","item","items","kind","kro","metadata","namespace","object","resource","resourcegraphdefinition","resourceGraphDefinition","resources","root","runtime","schema","self","serviceAccountName","spec","status","this","variables","vars","version"]}'
-                allIDs: '$${schema.?spec.?resources.orValue([]).map(r, r.id)}'
+                allIDs: "$${schema.?spec.?resources.orValue([]).map(r, r.id)}"
 
             - id: validation
               def:
@@ -126,8 +126,8 @@ spec:
                 kind: CustomResourceDefinition
                 metadata:
                   name: $${plural(schema.spec.schema.kind).lowerAscii()}.$${schema.spec.schema.group}
-                  labels: '$${schema.?spec.?schema.?metadata.?labels.orValue({})}'
-                  annotations: '$${schema.?spec.?schema.?metadata.?annotations.orValue({})}'
+                  labels: "$${schema.?spec.?schema.?metadata.?labels.orValue({})}"
+                  annotations: "$${schema.?spec.?schema.?metadata.?annotations.orValue({})}"
                 spec:
                   group: $${schema.spec.schema.group}
                   names:
@@ -141,8 +141,8 @@ spec:
                       subresources:
                         status: {}
                       schema:
-                        openAPIV3Schema: '$${simpleSchema.toOpenAPI(schema.spec.schema, has(schema.spec.resources) ? schema.spec.resources : [])}'
-                      additionalPrinterColumns: '$${schema.?spec.?schema.?additionalPrinterColumns.orValue([])}'
+                        openAPIV3Schema: "$${simpleSchema.toOpenAPI(schema.spec.schema, has(schema.spec.resources) ? schema.spec.resources : [])}"
+                      additionalPrinterColumns: "$${schema.?spec.?schema.?additionalPrinterColumns.orValue([])}"
 
             - id: watchInstances
               includeWhen:
@@ -167,9 +167,9 @@ spec:
                   namespace: '$${has(instance.metadata.namespace) && instance.metadata.namespace != "" ? instance.metadata.namespace : "kro-system"}'
                   ownerReferences:
                     - apiVersion: '$${schema.spec.schema.group + "/" + schema.spec.schema.apiVersion}'
-                      kind: '$${schema.spec.schema.kind}'
-                      name: '$${instance.metadata.name}'
-                      uid: '$${instance.metadata.uid}'
+                      kind: "$${schema.spec.schema.kind}"
+                      name: "$${instance.metadata.name}"
+                      uid: "$${instance.metadata.uid}"
                       controller: true
                       blockOwnerDeletion: true
                 spec:
@@ -220,7 +220,7 @@ spec:
                           })
                         })
                       }))
-                      + [{"id": "rgdInstanceStatus",
+                      + [{"id": "rgdInstancePatch",
                          "patch": {
                         "apiVersion": schema.spec.schema.group + "/" + schema.spec.schema.apiVersion,
                         "kind": schema.spec.schema.kind,
@@ -246,7 +246,7 @@ spec:
 
             - id: rgdStatus
               propagateWhen:
-                - '$${!validation.result.valid || crd.ready().orValue(false)}'
+                - "$${!validation.result.valid || crd.ready().orValue(false)}"
               forceApply: true
               patch:
                 apiVersion: kro.run/v1alpha1
@@ -322,7 +322,7 @@ spec:
               "kind": "ResourceGraphDefinition",
               "metadata": {"name": graph.metadata.labels["kro.run/instance-name"]},
               "status": {
-                "topologicalOrder": graph.?status.?topologicalOrder.orValue({}).?instances.orValue([]).filter(id, id != "schema" && id != "rgdInstanceStatus"),
+                "topologicalOrder": graph.?status.?topologicalOrder.orValue({}).?instances.orValue([]).filter(id, id != "schema" && id != "rgdInstancePatch"),
                 "conditions": [
                   {
                     "type": "Compiled",

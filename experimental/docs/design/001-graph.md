@@ -1,13 +1,10 @@
 # Graph
 
-A Graph is kro's primitive for composing Kubernetes resources. It is a scope — a set of resources
-with a shared lifecycle, dependency order, and data flow. Create a Graph and its resources are
-created and continuously reconciled. Delete it and its resources are cleaned up. Nested Graphs
-create nested scopes.
-
-## Object
-
-A Graph is a namespace-scoped Kubernetes custom resource.
+A Graph is kro's primitive for composing Kubernetes resources. Graphs define a scope of nodes that
+can reference other nodes using [CEL expressions](https://cel.dev/). The graph manages the lifecycle
+of its nodes, including the dependencies between them. Create a Graph and its nodes are created in
+their topological order. Mutate it, and the graph converges on the newly desired state. Delete it
+and nodes are pruned in the reverse order.
 
 ```yaml
 apiVersion: experimental.kro.run/v1alpha1
@@ -47,46 +44,33 @@ spec:
             - port: 80
 ```
 
-Template fields can contain `${...}` CEL expressions that reference other nodes by `id`. Each node's
-`id` is a scope variable — after a node is applied, its full Kubernetes object (including status) is
-available to downstream expressions. A standalone expression (`${expr}` as the entire string)
-preserves the CEL return type. An embedded expression (`prefix-${expr}-suffix`) string-interpolates.
-
 ## Spec
 
 ### Nodes
 
-`spec.nodes` is a list of node entries. Each entry has an `id` and a `template`. Declaration order
-is not significant — evaluation order is determined by the dependency graph.
+`spec.nodes` is a list of nodes. The order of the nodes does not matter — evaluation order is
+determined by the dependencies between nodes.
 
 #### id
 
-A string that names the node within the Graph's scope. Other nodes reference it by this name in CEL
-expressions. Must be unique within the Graph (case-insensitive). Hyphens are not allowed — they are
-parsed as subtraction by the CEL evaluator (e.g., `my-app` is `my` minus `app`). May be camelCased
-for readability.
-
-After a node is applied, its `id` enters scope as a variable available to CEL expressions in
-downstream nodes. The value depends on the node's type — see below.
+A string that identifies the node within the Graph's scope. Other nodes can reference this id CEL
+expressions. Must be an alphanumeric string (case-insensitive) and unique within the Graph's scope.
 
 #### type
 
 A node's type is the keyword it declares. Five types exist:
 
-- **`template:`** — A full resource specification. The controller creates the resource if it
-  doesn't exist, applies the specified fields via SSA, and tracks the resource for cleanup. The
-  template declares the complete desired state — `apiVersion`, `kind`, `metadata`, and the
-  resource fields (spec, data, etc.). Deleted on prune.
-- **`patch:`** — A subset of fields on a resource another actor manages (e.g., only status, or
-  only labels). The controller applies exactly those fields via SSA and tracks them for cleanup.
-  Each field has exactly one writer — a `template:` can delegate specific fields to a `patch:`,
-  but two nodes cannot write the same field. On prune, the fields are released; the resource is
-  never deleted.
-- **`ref:`** — Reference a resource outside this graph. The controller reads it without managing
-  it.
-- **`watch:`** — Observe a collection of resources. The controller enters the matched resources
-  into scope and re-reconciles when they change.
-- **`def:`** — Computed values into scope. The node produces no Kubernetes resource.
+- **`template:`** — Template a Kubernetes resource. The controller creates the resource if it
+  doesn't exist, applies changes when the template changes, and deletes the resource on prune.
+- **`patch:`** — Patch fields on an existing resource. Each field has exactly one writer — if two
+  nodes write the same field, the second write is rejected. A patch may apply fields to a resource
+  in another graph. On prune, the fields are released from the resource.
+- **`ref:`** — Reference a resource outside of this graph and make its fields available to other
+  nodes in this graph.
+- **`watch:`** — Watch all resources of a GroupKind and make their fields to other nodes in this
+  graph.
+- **`def:`** — Define raw data for use by other nodes in this graph. Def nodes do not read or write
+  Kubernetes resources.
 
 ```yaml
 # def: — reusable naming values, no Kubernetes resource created
@@ -143,22 +127,60 @@ A node's type is the keyword it declares. Five types exist:
       app: ${naming.prefix}
 ```
 
-#### forEach
+## Dependencies
 
-Expands a node once per item in an array. The forEach declaration is a template for children —
-everything on it (template, readyWhen, propagateWhen, CEL functions) applies per-child. The forEach
-node is a logical parent that aggregates child outputs. Each child is a real node that manages one
-resource. Child identity is derived from the parent's ID combined with the rendered resource key
-(GVK + namespace + name).
+Dependencies between nodes are defined by CEL expressions. If node B's template contains
+`${A.metadata.name}`, B has a dependency on A. Each CEL expression creates an edge in the graph. A
+node cannot be evaluated until all of its edges can been evaluated.
 
-The parent is ready when all children are ready, and updated when all children are updated.
+### Soft Dependencies
 
-For `def:` nodes, forEach produces an array of values instead of managed resources — no children
-are created.
+Nodes can have soft dependencies on other nodes by defining CEL expressions with
+[Optional Types](https://pkg.go.dev/github.com/google/cel-go/cel#OptionalTypes) (`?`, `.orValue()`).
+A node's expression uses the data of another node if its availabile, but defines alternative values
+if it's not.
 
-After evaluation, the parent enters scope as an array of child outputs. Downstream nodes depend on
-the parent, not individual children. The parent enters scope (enabling downstream evaluation) once
-all children have applied successfully.
+```yaml
+- id: deployment
+  template: ...
+
+- id: appStatus
+  patch:
+    status:
+      conditions:
+        - type: DeploymentReady
+          status: ${deployment.ready().orValue(false) ? 'True' : 'Unknown'}
+          message: ${deployment.ready().orValue(false) ? 'Deployment available' : 'Waiting for deployment'}
+      replicas: ${deployment.?status.?availableReplicas.orValue(0)}
+```
+
+`appStatus` evaluates immediately. While `deployment` is absent, `.ready().orValue(false)` returns
+`false` — the condition reports `Unknown`, and `.?replicas.orValue(0)` returns `0`. When
+`deployment` completes and becomes ready, the `appStatus` re-evaluates and the condition flips to
+`True`.
+
+### CEL Functions
+
+Nodes expose functions that enable other nodes to reason about their state.
+
+- **`.ready()`** — true when the node is applied and its `readyWhen` conditions pass.
+- **`.updated()`** — true when the has been evaluated against the latest graph generation.
+- **`.dependencies()`** — a list of hard and soft dependencies of the node. Useful to chain
+  dependency readiness `readyWhen: [${node.dependencies().all(d, d.ready())}]`.
+
+## Modifiers
+
+Modifiers modify the behavior of a node. They use CEL expressions that can reference other nodes.
+
+### ForEach
+
+The forEach modifier is a key-value pair that repeats a node for each value in a list CEL
+expression. These child nodes are a set of logical nodes that depend on the parent. The forEach key
+can be referenced in the node's CEL expressions. Additional node modifiers apply to the child nodes,
+not the parent. The parent's `.ready()` is true when all children are ready, and `.updated()` is
+true when all children are updated — these are health signals and do not gate downstream nodes.
+Each child's identity is derived from the parent's ID and the child's GVK, Namespace, and
+Name. Other nodes in the graph see the forEach node as a list of children when referenced in CEL.
 
 ```yaml
 - id: policies
@@ -196,11 +218,11 @@ all children have applied successfully.
           containers: ${containers}
 ```
 
-#### includeWhen
+### includeWhen
 
-A list of CEL expressions. All must evaluate to `true` for the node to be included. If any condition
-is false, the node is skipped — nothing is applied and it does not enter scope. Downstream nodes
-that depend on it cannot evaluate (the data is not in scope) and are also Excluded.
+The `includeWhen` modifier is a list of boolean CEL expressions. When all are true, the node is
+included in the graph, else it is skipped and its resource becomes a prune candidate. Nodes that
+depend on excluded nodes are also excluded.
 
 ```yaml
 - id: ingress
@@ -209,45 +231,28 @@ that depend on it cannot evaluate (the data is not in scope) and are also Exclud
   template: ...
 ```
 
-#### readyWhen
+### readyWhen
 
-A node is ready when its CEL expressions resolve and its apply or read succeeds — no implicit status
-conditions check is performed. This is the default behavior when readyWhen is absent.
+The `readyWhen` modifier is a list of boolean CEL expressions. When all are true, the node is ready.
+If readyWhen is not defined, the node is ready as soon as it is evaluated. readyWhen is a health
+signal — it does not gate dependents. Dependents proceed regardless of readyWhen. Use propagateWhen
+to gate dependents on readiness. The graph is considered ready once all of its nodes are ready.
 
-readyWhen overrides this default with explicit CEL conditions. All expressions must evaluate to
-`true` for the node to be considered ready. readyWhen is a health signal — it feeds the Graph's
-aggregated status and tells operators whether the system has converged. It does not gate downstream
-execution.
-
-Each node exposes a `.ready()` CEL function. `.ready()` is not transitive — if you want to assert
-dependency readiness, do so explicitly:
+Each node exposes its readiness through a `.ready()` CEL function as a convenience for other nodes.
 
 ```yaml
 - id: deployment
   readyWhen:
     - ${deployment.status.availableReplicas > 0}
   template: ...
-
-# .ready() in propagateWhen — gate inputs until dependency converges
-- id: consumer
-  propagateWhen:
-    - ${deployment.ready()}
-  template: ...
-
-# Explicit transitive readiness — assert each dependency
-- id: output
-  propagateWhen:
-    - ${deployment.ready()}
-    - ${database.ready()}
-  template: ...
 ```
 
-#### propagateWhen
+### propagateWhen
 
-A list of CEL expressions. All must evaluate to `true` for the node to evaluate. When unsatisfied,
-the node skips evaluation — it retains its last-applied state and is not re-applied. When satisfied,
-the node evaluates normally against dependency outputs only — the node's own data is not in scope. A
-common pattern is `propagateWhen: [${dep.ready()}]` — gate on a dependency's readiness.
+The `propagateWhen` modifier is a list of boolean CEL expressions. When unsatisfied, the node and
+its dependents are not re-evaluated. When satisfied, the node evaluates normally.
+
+It's common to leverage readyWhen and propagateWhen to control evaluation between nodes.
 
 ```yaml
 - id: deployment
@@ -267,42 +272,40 @@ common pattern is `propagateWhen: [${dep.ready()}]` — gate on a dependency's r
       selector: ${deployment.spec.selector.matchLabels}
 ```
 
-With forEach, `.ready()` and `.updated()` can control how quickly changes propagate — the
-expression references the parent collection to gate evaluation.
+It's common to combine forEach with propagateWhen to control how quickly changes happen in parallel
+within a graph. Each child's propagateWhen counts it siblings to determine whether or not it should
+propagate. The forEach evaluates serially and retains the stable order of inputs to avoid races.
 
 ```yaml
 # Exponential rollout — budget doubles each wave
-- id: deploys
+- id: deployments
   forEach:
     app: ${apps}
   propagateWhen:
     - >-
-      ${deploys.filter(d, d.updated() && !d.ready()).size()
-       < max(1, deploys.filter(d, d.updated() && d.ready()).size())}
-  template: ...
-
-# Linear rollout — 2 at a time
-- id: deploys
-  forEach:
-    app: ${apps}
-  propagateWhen:
-    - ${deploys.filter(d, d.updated() && !d.ready()).size() < 2}
-  template: ...
-
-# Gate on ALL dependencies
-- id: service
-  propagateWhen:
-    - ${service.dependencies().all(d, d.ready())}
+      ${deployments.filter(d, d.updated() && !d.ready()).size()
+       < max(1, deployments.filter(d, d.updated() && d.ready()).size())}
   template: ...
 ```
 
-#### finalizes
+```yaml
+# Linear rollout — 2 at a time
+- id: deployments
+  forEach:
+    app: ${apps}
+  propagateWhen:
+    - ${deployments.filter(d, d.updated() && !d.ready()).size() < 2}
+  template: ...
+```
 
-A node `id`. The resource is created when the target becomes a prune candidate — it does not exist
-during normal operation. It must reach readyWhen before the target's removal completes.
+### finalizes
 
-Finalizers fire regardless of why the target is being removed — Graph teardown, spec mutation,
-includeWhen toggle, or forEach scale-down.
+The finalizes modifier causes a node to enter the graph when its target node becomes a prune
+candidate, and does not exist otherwise. The target cannot be pruned until its finalizer is
+evaluated. Finalizers trigger regardless of why the target is being pruned -- graph deletion, graph
+mutation, includeWhen, or forEach.
+
+It's common to combine `finalizes` with `readyWhen` to coordinate graceful removal of resources.
 
 ```yaml
 - id: snapshot
@@ -319,75 +322,27 @@ includeWhen toggle, or forEach scale-down.
     - ${snapshot.status.readyToUse == true}
 ```
 
-## CEL Functions
-
-Any object in scope exposes functions maintained by the graph controller.
-
-- **`.ready()`** — true when the node is applied and its readyWhen conditions pass.
-- **`.updated()`** — true when the node is on the latest graph generation.
-- **`.dependencies()`** — returns the scope values of all dependency nodes as a list.
-  Enables `${node.dependencies().all(d, d.ready())}` — gate until every dependency is ready without
-  naming them.
-
-## Dependencies
-
-Dependencies are inferred from CEL expression references. If node B's template contains
-`${A.metadata.name}`, B depends on A. A consumer re-evaluates when the specific fields it depends on
-change — not on every change to the dependency.
-
-The dependency graph must be acyclic — cycles are rejected at compile time. Nodes with no dependency
-relationship are independent and processed in parallel. All dependencies are hard by default — the
-consumer waits for each dependency to be in scope before evaluating.
-
-## Lazy Evaluation
-
-A node that depends on another waits for it before evaluating. Some expressions have a meaningful
-value even when a dependency is absent — a status condition can report `Unknown` while the nodes it
-depends on are still being resolved.
-
-Lazy dependencies are optional values in the evaluation context. CEL's optional types handle absent
-data natively — `?` for field access, `.orValue()` for defaults:
-
-```yaml
-- id: deployment
-  template: ...
-
-- id: appStatus
-  patch:
-    status:
-      conditions:
-        - type: DeploymentReady
-          status: ${deployment.ready().orValue(false) ? 'True' : 'Unknown'}
-          message: ${deployment.ready().orValue(false)
-            ? 'Deployment available'
-            : 'Waiting for deployment'}
-      replicas: ${deployment.?status.?availableReplicas.orValue(0)}
-```
-
-`appStatus` evaluates immediately. While `deployment` is absent, `.ready().orValue(false)` returns
-`false` — the condition reports `Unknown`, and `.?replicas.orValue(0)` returns `0`. When `deployment`
-completes and becomes ready, the consumer re-evaluates and the condition flips to `True`.
-
-A lazy dependency does not make the consumer wait — it evaluates when its hard dependencies are
-satisfied, regardless of whether lazy dependencies are present. `.ready()` on a hard dep returns
-concrete `bool`. `.ready()` on a lazy dep (optional receiver) returns `optional(bool)` — the user
-chains `.orValue(false)` to unwrap. Field access uses CEL optional types:
-`.?field.orValue(default)` returns the default when the dependency is absent. When a lazy dependency
-later completes, the consumer re-evaluates.
-
-The compiler infers which dependencies are lazy from the expression syntax — a dependency accessed
-only through `?.`, `[?]`, or `.ready().orValue()` / `.updated().orValue()` is lazy; a dependency
-accessed directly (including bare `.ready()` without `.orValue()`) is hard.
-
 ## Nested Graphs
 
-A Graph whose template contains another Graph creates a nested scope. The inner Graph is a regular
-Kubernetes object — it is created via the API server and reconciled independently by its own
-reconciliation. Each level is a separate reconciliation loop with its own resource scope.
+A node can define a Graph as its template to create a nested graph. The nested graph is a Kubernetes
+object applied like any other template node. This relationship causes the nested graph to evaluate
+independently from the parent graph. Like any other node, the parent can define fields of a nested
+graph via CEL expressions, which are templated when the object is applied to the Kubernetes API.
+However, the child graph executes independently from the parent -- the child's nodes cannot
+reference the parent's, and vice versa.
 
-The combination of `watch:`, forEach, and nested Graphs creates per-instance controllers. A parent
-Graph observes a kind via `watch:`, forEach creates one child Graph per item, and each child Graph
-independently reconciles resources for its item.
+When a graph is evaluated, each CEL expression `${...}` is evaluated into a concrete value. However,
+child graphs need to define their own expressions separate from the parent graph's scope. CEL
+expressions can be escaped using `$${...}` -- syntactic sugar for the string literal equivalent
+`'{}'`. When a node is evaluated, the outer `$` is removed, and the inner `${...}` is written as a
+string to the Kubernetes API in the child Graph's spec. The parent graph treats the child graph
+purely as data during its evaluation, and does not evaluate the child graph's nodes.
+
+It's common to combine nested graphs and CEL escapting with `watch`, `forEach`, `ref`, to create a
+nested scope that evaluates in isolation. Below, the parent graph intentionally does not directly
+reference parent's forEach `ns`, except by name, as any change to `ns` would cause the nested graph
+to be mutated. Instead, the nested graph is configured to directly refence the `ns` itself within
+its own scope.
 
 ```yaml
 # Parent Graph — watches all Namespaces, creates a child Graph per Namespace
@@ -426,34 +381,10 @@ independently reconciles resources for its item.
                 - Ingress
 ```
 
-The parent's scope and the child's scope are independent. A spec change to one Namespace triggers
-reconciliation of that child only — O(1) per instance, not O(N) re-evaluation of the collection.
-
-### Evaluation Boundary
-
-The parent's CEL evaluation produces the child Graph's spec as data. The child's controller
-evaluates that spec independently. No shared state between levels beyond what is persisted to the
-Kubernetes API server. The API server is the boundary between evaluation passes.
-
-Each controller does exactly one pass on its own spec. Expressions in resource fields (e.g.,
-`${...}` strings stored in a resource's spec) survive as opaque strings — they are not re-scanned.
-Nested evaluation is recursive through Kubernetes persistence, not through string re-scanning.
-
-To pass an expression through to a child Graph, use `$${...}`. The controller strips one `$`,
-producing `${...}` in the output. The child's controller evaluates the resulting expression against
-its own scope.
-
-Escaping depth by target level:
-
-- `${...}` — evaluated by this Graph
-- `$${...}` — evaluated by the child Graph (one level down)
-- `$$${...}` — evaluated two levels down
-
 ## Status
 
-The Graph's status is the controller's observation of the Graph's current state. Status conditions
-exist to make the operator's mental model correct — they answer "is this Graph healthy, and if not,
-who needs to act?"
+The Graph's status exposes the the Graph's current state. Status conditions exist to make the
+operator's mental model correct — they answer "is this Graph healthy, and if not, who needs to act?"
 
 Two failure domains require different responses: a user error is a Graph developer problem (fix the
 spec, resolve conflicts, correct permissions); a system error is an operator problem (infrastructure
@@ -528,8 +459,8 @@ topologicalOrder:
 
 The child's topology is available before any child Graph CR exists.
 
-The Graph's status contains only controller-managed fields. There are no user-defined status
-fields on the Graph itself. User-defined status (e.g., `deploymentReady`, `address`) lives on custom
+The Graph's status contains only controller-managed fields. There are no user-defined status fields
+on the Graph itself. User-defined status (e.g., `deploymentReady`, `address`) lives on custom
 resource types and is written via `patch:` nodes targeting the custom resource's status subresource.
 
 ## Owner References
@@ -539,8 +470,8 @@ The controller does not cascade-delete — teardown is ordered by the DAG. A Gra
 controller self-deletes the Graph. The resulting teardown runs the full ordered path — `finalizes`
 sequences fire, prune walks the reverse DAG.
 
-To hold the owner in Terminating during teardown, combine ownerReferences with a `patch:` node
-that places a finalizer on the owner:
+To hold the owner in Terminating during teardown, combine ownerReferences with a `patch:` node that
+places a finalizer on the owner:
 
 ```yaml
 metadata:
@@ -563,5 +494,5 @@ spec:
       template: ...
 ```
 
-The ownerReference triggers self-deletion. The patch holds the owner until teardown prunes it —
-SSA releases the finalizer, the owner completes deletion.
+The ownerReference triggers self-deletion. The patch holds the owner until teardown prunes it — SSA
+releases the finalizer, the owner completes deletion.

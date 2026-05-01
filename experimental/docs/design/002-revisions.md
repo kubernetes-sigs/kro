@@ -15,7 +15,7 @@ Kinds.
 
 A GraphRevision is namespace-scoped, in the same namespace as its parent Graph. It is a snapshot of
 the Graph's spec at a point in time. CEL expressions (`${...}`) are preserved as authored — they are
-evaluated at reconcile time against live cluster state, not at snapshot time. Ownership labels and
+evaluated at reconcile time against live cluster state, not at snapshot time. Identity labels and
 other operational metadata are applied at reconciliation, not stored in the revision.
 
 ```yaml
@@ -72,8 +72,7 @@ The spec contains the Graph's node declarations — the same structure as Graph 
 is immutable. A structural change to the Graph produces a new GraphRevision, never an update to an
 existing one.
 
-Dependencies between nodes are derived from CEL expression references and cached in memory, not
-persisted.
+Dependencies between nodes are derived from CEL expression references, not persisted.
 
 ### Status
 
@@ -83,9 +82,9 @@ persisted.
   state, not a live signal.
 
   The revision spec is immutable (what to apply). The revision status is a write-only observation
-  surface — it records what happened, but the controller's operational inputs are the informer store
-  and the DAG, not revision status. The applied set is derived from the watch cache (resources
-  carrying the Graph's identity label in the controller's informer stores), not persisted in
+  surface — it records what happened, but the controller's operational inputs are the DAG and the
+  applied set, not revision status. The applied set is derived from
+  [identity labels](003-ownership.md#identity-labels) on managed resources, not persisted in
   revision status.
 
 ## Lifecycle
@@ -109,10 +108,9 @@ reverse dependency order. Once the finalizer clears and the Graph is removed, th
 cascading-deletes any remaining revisions.
 
 Revisions are derived artifacts. If manually deleted, the controller regenerates the active revision
-from the current Graph spec on the next reconcile. On startup, the controller hydrates watch caches
-from all existing revisions before any reconcile fires, so the applied set is accurate from the
-first post-restart reconcile. The applied set — derived from the watch cache, not the revision — is
-the authoritative record of what was written to the cluster.
+from the current Graph spec on the next reconcile. The applied set — derived from
+[identity labels](003-ownership.md#identity-labels), not the revision — is the authoritative record
+of what was written to the cluster.
 
 ## Why Not
 

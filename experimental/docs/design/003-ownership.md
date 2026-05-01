@@ -77,12 +77,13 @@ The label value is the source of truth for a resource's prune action. On control
 current DAG may not contain the node that wrote the resource; the label decides whether cleanup
 deletes the resource (`template`) or releases its fields (`patch` — see § Release Apply).
 
-Before applying a `template:`, the controller checks for existing identity labels from other
-Graphs. If present, the resource is managed by another kro Graph — the apply is rejected unless
-`lifecycle.apply: Force` is set. The label check runs before SSA and rejects every kro-to-kro
-identity conflict — SSA alone cannot, because it assigns silent co-ownership when two managers
-apply identical values. For non-kro resources (no `*.internal.kro.run/type` label), the identity
-check passes unconditionally.
+Before applying a `template:`, the controller includes the identity label in the SSA payload. If
+another Graph's identity label already exists on the resource, SSA detects the conflict on the label
+field — the apply is rejected unless `lifecycle.apply: Force` is set. This makes ownership checking
+atomic with the write — no separate read-then-check step. SSA alone cannot catch the case where two
+managers apply identical values (silent co-ownership), but identity labels are unique per Graph, so
+the field conflict is always detectable. For non-kro resources (no `*.internal.kro.run/type` label),
+the identity check passes unconditionally.
 
 The label check runs only for `template:`. Two `patch:` nodes on the same target — the
 steady-state pattern — are allowed. When two `patch:` nodes write the same field, SSA 409 catches

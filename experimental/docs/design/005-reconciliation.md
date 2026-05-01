@@ -3,33 +3,23 @@
 Reconciliation operates on a [compiled Graph](004-compilation.md) — per-node compiled programs, field
 path dependencies defining each node's input surface, and a DAG. When the
 [revision](002-revisions.md) changes, the controller diffs it against the previous — nodes that
-differ are triggered, removed nodes become prune candidates. Performance is structural — work is
-proportional to change, not to DAG size. Changes propagate forward through the DAG and stop when
-they stop mattering.
+differ are triggered, removed nodes become prune candidates.
 
 ## Trigger
 
-A Graph reconciles on:
-
-- **Changes** — detected via watch. This includes resources referenced by nodes, the Graph itself,
-  and CRDs (schema changes advance the schema generation; the compiled artifact is stale on the
-  next reconcile; see [004-compilation](004-compilation.md#compilation-cache)).
-- **Resync** — per-node, jittered; corrects configuration drift. On startup, all resync timers are
-  reset.
-
-Zero triggers → no work; the controller schedules the next reconcile at the earliest resync.
+A Graph reconciles when its resources or the Graph itself change (detected via watch), and when
+CRDs change (a referenced CRD's `metadata.generation` advances; the compiled artifact is stale on
+the next reconcile; see [004-compilation](004-compilation.md#algorithm)).
 
 Deterministic errors (4xx) are not retried — same inputs produce the same failure. They resolve via
-changes or resync. Transient errors (5xx) retry with exponential backoff [1s, resyncInterval].
+new inputs. Transient errors (5xx) retry with exponential backoff.
 
 ## Reconcile
 
-Reconcile is two walks — propagation (forward) and prune (reverse). Each walk uses dependency-driven
-scheduling: level-0 nodes are seeded, and each completion dispatches dependents whose dependencies
-have all been processed. Independent nodes are dispatched concurrently. Only triggered nodes and
-their affected downstream are visited; the rest retain their previous state. Propagation walks the
-forward DAG: evaluates triggered nodes, publishes results to scope. Prune walks the reverse DAG:
-removes resources absent from the desired set.
+Reconcile is two walks — propagation (forward) and prune (reverse). Propagation walks the forward
+DAG: evaluates nodes in dependency order, publishes results to scope. A node evaluates after its hard
+dependencies have been processed. Prune walks the reverse DAG: removes resources absent from the
+desired set.
 
 Each Graph converges one revision at a time. When a new revision is compiled, in-progress evaluation
 of the previous revision is abandoned — partially applied resources either match the new revision's
@@ -42,7 +32,7 @@ Nodes communicate through a scope — the graph's resolved data keyed by node ID
 resolved, its output is published to the scope. Scope is the single source of data for template
 evaluation, readyWhen, propagateWhen, and includeWhen — if it's not in scope, the expression can't
 see it. Workers receive read-only views of the scope containing their dependencies' outputs. Hard
-dependencies are always present in the view (the node waited for them). Lazy dependencies are
+dependencies are always present in the view (the node waited for them). Soft dependencies are
 optional — `optional.of(object)` when available at dispatch time, `optional.none()` otherwise.
 
 ### Node States
@@ -56,13 +46,14 @@ Each node's evaluation resolves to exactly one state:
 | Pending     | Data not yet available         | Pending    | Upstream resolves                   |
 | Excluded    | includeWhen false              | Excluded   | includeWhen inputs change           |
 | Blocked     | Dependency in error state      | Blocked    | Dependency resolves                 |
-| Conflict    | Field ownership contested      | Blocked    | Propagation, revision, or resync    |
-| Error       | Client request failed (4xx)    | Blocked    | Propagation, revision, or resync    |
-| SystemError | Server/infra failure (5xx)     | Blocked    | Exponential backoff, caps at resync |
+| Conflict    | Field ownership contested      | Blocked    | Propagation or revision             |
+| Error       | Client request failed (4xx)    | Blocked    | Propagation or revision             |
+| SystemError | Server/infra failure (5xx)     | Blocked    | Exponential backoff                 |
 
 Ready and NotReady are both "applied and in scope." readyWhen is a health signal — it does not gate
-dependents. Pending and Blocked both represent uncertain absence — previous applied keys are
-retained, not safe to prune. Excluded propagates as Excluded (definitive absence — safe to prune).
+dependents. Errored nodes (Conflict, Error, SystemError) do not publish to scope — dependents become
+Blocked. Pending and Blocked both represent uncertain absence — previous applied keys are retained,
+not safe to prune. Excluded propagates as Excluded (definitive absence — safe to prune).
 
 `def:` nodes can be Ready, NotReady (readyWhen unsatisfied), Pending (upstream dependency unresolved
 — the CEL expression references scope data that is not yet available), or Error (CEL evaluation
@@ -76,84 +67,49 @@ Blocked > Pending > NotReady. SystemError surfaces first because it signals degr
 
 ### Propagation
 
-The forward walk visits only triggered nodes and their affected downstream — untriggered nodes
-retain their previous state and scope entry.
+The forward walk evaluates nodes in dependency order — a node evaluates after its hard dependencies
+have been processed.
 
-A node is **triggered** when:
-
-- its resourceVersion in the informer store differs from the value recorded at last evaluation.
-  Absence counts — a resource deleted since last evaluation (present → absent) or not yet evaluated
-  (no recorded value) both trigger. nil != anything.
-- its resync timer has expired
-- the node changed in the latest compilation
-
-A node enters the frontier when all its hard dependencies have been processed AND either:
-
-- a dependency's output changed (propagation trigger), or
-- the node is triggered
-
-After processing, a node's output-hash determines whether dependents receive a propagation trigger.
-Unchanged output → untriggered dependents don't enter the frontier. This narrows the walk to the
-affected subgraph. SSA is idempotent — no-diff applies don't bump resourceVersion, so triggered
-nodes that re-evaluate to the same state cause no churn.
-
-At each frontier node:
+At each node:
 
 1. **Dependencies**
-   - Lazy dependencies are always in scope as optional values. If any other dependency is not in
+   - Soft dependencies are always in scope as optional values. If any hard dependency is not in
      scope, the consumer cannot evaluate. The consumer inherits a state from the unavailable
      dependency. Precedence: Excluded > Blocked > Pending.
 
-2. **propagateWhen**
-   - The node's propagateWhen unsatisfied → skip. Previous evaluation and state retained. If never
-     evaluated, the node remains Pending — its output is genuinely unavailable, not stale.
-   - Takes precedence even on spec changes where changed nodes enter the frontier
+2. **includeWhen**
+   - includeWhen == false → Excluded. Structural decisions (should this node exist?) take
+     precedence over temporal decisions (is it safe to re-evaluate?).
 
-3. **Inputs changed**
-   - input-hash mismatch → continue
-   - input-hash match + resourceVersion unchanged → skip
-   - input-hash match + resourceVersion changed → GET live object, re-evaluate readyWhen, check
-     output-hash. Template not re-evaluated. For `ref:` and `watch:`, this is the primary evaluation
-     path — their output depends on cluster state, not template inputs, so input-hash stability
-     doesn't imply output stability.
-   - Resync → continue
+3. **propagateWhen**
+   - The node's propagateWhen unsatisfied → skip. The node's output is not published to scope for
+     this evaluation. If never evaluated, the node remains Pending. Dependents of a skipped node
+     are also skipped — no mixed-generation evaluation.
+   - Takes precedence even on spec changes
 
-4. **includeWhen**
-   - includeWhen == false → Excluded
-   - Evaluated after input-hash because it depends on the same inputs — unchanged inputs → unchanged
-     inclusion
-
-5. **Resolve**
+4. **Resolve**
    - `ref:` — GET the named object. Data enters scope. Pending if absent.
    - `watch:` — list matching objects by label selector. List enters scope (supports `.filter()`,
-     `.map()`, etc.). When a single resource changes, update the cached list incrementally rather
-     than re-listing — O(1) per event, not O(matching).
-   - forEach parent — evaluate collection, determine children, dispatch changed children.
+     `.map()`, etc.).
+   - forEach parent — evaluate collection, determine children, dispatch children.
    - `def:` — resolve all values against the current scope. No API calls.
-   - `template:` — evaluate, hash desired state (apply-hash), compare against previous. Match → omit
-     write. Resync bypasses — apply unconditionally. Differs → SSA apply. 409 → Conflict.
-   - `patch:` — same as `template:`. 409 → Conflict. Auto-splits status subresource.
+   - `template:` — evaluate desired state, SSA apply. 409 → Conflict.
+   - `patch:` — evaluate desired state, SSA apply to existing resource. Pending if target absent.
+     409 → Conflict. Auto-splits status subresource.
 
-   The apply-hash within Resolve is the third hash layer — it skips the SSA write when the desired
-   state is unchanged. When a template targets both the main resource and the status subresource,
-   the controller splits the apply into two operations.
+   When a template targets both the main resource and the status subresource, the controller splits
+   the apply into two operations.
 
-6. **Result changed**
+5. **Result**
    - Evaluate readyWhen → Ready or NotReady. Publish to scope.
-   - output-hash == previous → dependents don't enter the frontier
-   - output-hash != previous → all dependents enter the frontier (propagation trigger)
-
-Three hashes at progressively deeper layers: input-hash (step 3) skips template evaluation,
-apply-hash (step 5) skips the write, output-hash (step 6) determines propagation.
 
 ### Prune
 
 After propagation determines the desired set, prune removes resources that should no longer exist.
 
-The applied set is a live view derived from identity labels in the controller's informer stores —
-all resources where the Graph's identity label exists. Not persisted. Hydrated on startup from
-informer list and kept current by watch events. Resources written by both `template:` and `patch:`
-nodes are in the applied set; the label value (`template` or `patch`) determines the prune action.
+The applied set is derived from [identity labels](003-ownership.md#identity-labels) — all resources
+where the Graph's identity label exists. Resources written by both `template:` and `patch:` nodes
+are in the applied set; the label value (`template` or `patch`) determines the prune action.
 
 Prune candidates are the set difference: resources in the applied set minus the current reconcile's
 output set. Revision transitions, includeWhen toggles, and forEach scale-down all produce prune
@@ -165,12 +121,12 @@ revision transitions — the old revision's resource is removed, the new creates
 contested field ownership.
 
 Prune walks the reverse DAG — the same algorithm as propagation, edges pointing from dependent to
-dependency. The frontier is seeded by leaf nodes (no dependents in the forward DAG = no dependencies
-in the reverse DAG). `template:` → delete. `patch:` → release fields via skeleton SSA apply (omit
-managed fields, relinquishing ownership; see [003-ownership](003-ownership.md)).
-`ref:`/`watch:`/`def:` → no action. Independent nodes in the frontier can be removed concurrently.
-If the DAG is unavailable, prune is blocked — never degrade to unordered deletion. If another node
-declares `finalizes` targeting a prune candidate, finalization runs first.
+dependency. The walk starts at leaf nodes (no dependents in the forward DAG = no dependencies in the
+reverse DAG). `template:` → delete. `patch:` → [release apply](003-ownership.md#release-apply)
+(omit managed fields, relinquishing ownership).
+`ref:`/`watch:`/`def:` → no action. If the DAG is unavailable, prune is blocked — never degrade to
+unordered deletion. If another node declares `finalizes` targeting a prune candidate, finalization
+runs first.
 
 Reverse dependency ordering comes from the most recent revision that defined the resource.
 Superseded revisions must be retained until their unique resources are pruned — they carry the
@@ -226,16 +182,17 @@ Side effects from completed finalizer resources are not rolled back on partial f
 finalizer reaches Ready but a sibling fails, the completed finalizer's effects persist. Finalization
 is not transactional.
 
-| Condition                                                                           | Behavior                                | Status             |
-| ----------------------------------------------------------------------------------- | --------------------------------------- | ------------------ |
-| Target absent (creation failed, deleted externally)                                 | Skip finalization, proceed with cleanup | `FinalizerSkipped` |
-| Finalizer can't be created (dependency failure, admission, quota, invalid template) | Block target deletion                   | `TeardownBlocked`  |
-| Finalizer created but never reaches readyWhen                                       | Block target deletion                   | `TeardownBlocked`  |
+| Condition                                                                           | Behavior                                |
+| ----------------------------------------------------------------------------------- | --------------------------------------- |
+| Target absent (creation failed, deleted externally)                                 | Skip finalization, proceed with cleanup |
+| Finalizer can't be created (dependency failure, admission, quota, invalid template) | Block target deletion                   |
+| Finalizer created but never reaches readyWhen                                       | Block target deletion                   |
 
-`TeardownBlocked` is not a skip — the target has data the user intended to finalize. The condition
-message distinguishes creation failure from readyWhen failure. To unblock: update the Graph spec to
-remove or fix the finalizer resource. The revision transition prunes the orphaned finalizer resource
-and deletes the target without finalization.
+Finalizer nodes use normal node states — Pending (can't create), Error (creation failed), NotReady
+(readyWhen unsatisfied). These roll up through the standard Graph Ready condition. When teardown is
+blocked, the condition message identifies the blocking finalizer node. To unblock: update the Graph
+spec to remove or fix the finalizer resource. The revision transition prunes the orphaned finalizer
+resource and deletes the target without finalization.
 
 ## forEach
 
@@ -309,17 +266,18 @@ The parent's state is derived from its children:
 - **Error/Conflict/SystemError** — any child in an error state. Error states take precedence over
   Pending — a child that attempted apply and got a Conflict is in Conflict state, not Pending.
   Deterministic errors (Error) take precedence over transient errors (SystemError, Conflict) — if
-  any child's failure is deterministic, retrying cannot resolve the parent. Per-child detail
-  surfaces in Graph status.
+   any child's failure is deterministic, retrying cannot resolve the parent. Per-child detail
+   (child resource GVK, namespace, name, and state) surfaces in the Graph's Ready condition message.
 
 ### Propagation Control
 
 When a forEach node declares propagateWhen, it gates each child's evaluation. ForEach children are
-normally independent — no dependency edges between them, dispatched concurrently. But when
-propagateWhen references the parent collection, each child's gate depends on sibling state. This is
-a lateral dependency the DAG does not model. The forEach loop handles it: the parent iterates
-children sequentially, evaluating propagateWhen and updating the parent aggregate after each
-dispatch.
+normally independent — no dependency edges between them. Without propagateWhen, children can be
+evaluated in any order (or concurrently — see
+[007-optimizations](007-optimizations.md#parallel-evaluation)). But when propagateWhen references
+the parent collection, each child's gate depends on sibling state. This is a lateral dependency the
+DAG does not model. The forEach loop handles it: the parent iterates children sequentially,
+evaluating propagateWhen and updating the parent aggregate after each dispatch.
 
 Each child has one of four states relative to the latest generation:
 
@@ -332,9 +290,8 @@ Each child has one of four states relative to the latest generation:
 
 **Dispatch loop.** The parent iterates all children in order. For each child:
 
-1. Input-hash match → skip. Already on the latest generation.
-2. propagateWhen satisfied → dispatch, update parent aggregate.
-3. propagateWhen unsatisfied → skip, retain previous state.
+1. propagateWhen satisfied → dispatch, update parent aggregate.
+2. propagateWhen unsatisfied → skip, retain previous state.
 
 The loop always completes. Children whose propagateWhen is unsatisfied are skipped — the loop
 continues to the next child.
@@ -362,65 +319,7 @@ scale-down logic — the applied set diff handles it.
 If the collection expression cannot evaluate (upstream is Pending), the intended child set is
 unknown — prune is blocked and existing children persist until the next successful evaluation.
 
-## Optimizations
-
-### Hash Mechanics
-
-The input-hash and output-hash are ephemeral — recomputed on cold start. The apply-hash is persisted
-as an annotation (`internal.kro.run/template-hash`); recomputing it requires re-applying via SSA, so
-without it cold start produces an N-write burst. Resync bypasses the apply-hash (apply
-unconditionally) but the output-hash still applies — if corrected output matches previous output,
-dependents are not added to the frontier.
-
-Compilation extracts a field path per expression — a (node, field chain) pair identifying the
-observed state the expression depends on (see [004-compilation](004-compilation.md#algorithm)). The
-reconcile loop reads each path from the node's current state and hashes the value. Input-hash and
-output-hash share the same reference paths. Absent paths hash to a sentinel — absent to present is a
-change, not a skip.
-
-### API Server Interaction
-
-The controller uses metadata-only informers — spec and status are not fetched in the watch path.
-Full object reads happen only during Resolve, on demand. Each managed resource carries an identity
-label per Graph-node pair:
-
-    <node>.<graph>.<ns>.internal.kro.run/type = template | patch
-
-The label key encodes the node ID using DNS subdomain structure, enabling watch event routing and
-prune selection. Multiple Graphs targeting the same resource coexist without collision (2N labels
-for N Graphs). A generation label propagates `metadata.generation` for observability (see
-[002-revisions](002-revisions.md)).
-
-Each node has an in-memory resync timer with a jittered interval (default 30 minutes) — a
-consistency floor bounding how long any divergence can persist. On expiry, the node bypasses hash
-checks — propagateWhen still gates. Between resyncs, the hash layers eliminate all no-op writes. SSA
-corrects drift as a side effect. A skipped node does not reset its timer. Jitter decorrelates across
-nodes. On restart, timers start fresh — bounded burst (10k nodes over 30 minutes ≈ 5.5 applies/sec).
-
-The controller's operational inputs are the informer store and the DAG. Revision status is a
-write-only observation surface.
-
 ## Why Not
-
-**Periodic full-graph resync.** Informer resyncs trigger all nodes simultaneously — correlated,
-expensive. Per-node resync with jitter amortizes the cost across reconciles. Simpler scheduling, but
-more moving parts than a single resync interval.
-
-**Bespoke object caching for partial evaluation.** Caching full objects per node between reconciles
-enables skipping nodes entirely, but introduces coherence obligations — the cache can go stale, and
-the controller is responsible for invalidation. Dirty propagation through the full graph achieves
-the same performance (work proportional to change) without maintaining object state. Informer stores
-provide the read path using standard Kubernetes watch machinery.
-
-**Explicit subgraph scoping per trigger.** Maintaining a walk scope per trigger — tracking which
-subgraph to visit, restoring previous state for out-of-scope nodes — achieves the same result as the
-output-hash frontier pruning but with more bookkeeping. The output-hash achieves scoping as a side
-effect of change detection: nodes whose inputs didn't change aren't visited because no dependency's
-output changed. Same result, no explicit scope tracking.
-
-**Continuous drift correction.** Apply unconditionally on every reconcile. Catches drift immediately
-but imposes an N-write steady-state tax. Per-node resync with jitter corrects drift within the
-interval at near-zero steady-state cost.
 
 **forEach as a single node with internal iteration.** The forEach handler reimplements scheduling,
 state tracking, readyWhen, and change detection inside a mini-coordinator — a parallel system

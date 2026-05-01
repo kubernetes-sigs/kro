@@ -13,7 +13,8 @@ Stdlib:  Kind      — define a new Kubernetes Kind (CRD + per-instance Graphs)
 ## Kind
 
 A Kind defines a new Kubernetes Kind and implements it. It declares a schema and nodes (the
-resources to create per instance). Schemas use kro's simpleSchema syntax. A Kind with empty
+resources to create per instance). Schemas use kro's simpleSchema syntax —
+`fieldName: type | default=value` — that compiles to OpenAPI. A Kind with empty
 `nodes: []` creates the CRD but produces no per-instance resources.
 
 ```yaml
@@ -77,7 +78,8 @@ evaluate in the same scope as the Kind's nodes.
   The Kind's overall readiness rolls up: all instances `.ready()` → Kind Ready.
 - **`propagateWhen`** controls rollout pace across instances. It is a per-instance input gate with
   sibling visibility — the expression references the instances collection and uses `.ready()` and
-  `.updated()` per-item. Semantics are identical to forEach propagateWhen.
+  `.updated()` per-item. Semantics are identical to
+  [forEach propagateWhen](005-reconciliation.md#propagation-control).
 
 Both are optional. Without them, all instances receive updates simultaneously and readiness rolls up
 from node states.

@@ -775,18 +775,17 @@ func TestPatchMetadataAndStatus(t *testing.T) {
 
 	// Record the field manager name for later assertions.
 	graphManager := graphName + "." + ns + ".internal.kro.run"
+	statusManager := graphManager + ".status"
 
 	// Verify the field manager has entries for BOTH subresources.
 	managedFields := check.GetManagedFields()
 	var hasMainEntry, hasStatusEntry bool
 	for _, mf := range managedFields {
-		if mf.Manager == graphManager {
-			if mf.Subresource == "" {
-				hasMainEntry = true
-			}
-			if mf.Subresource == "status" {
-				hasStatusEntry = true
-			}
+		if mf.Manager == graphManager && mf.Subresource == "" {
+			hasMainEntry = true
+		}
+		if mf.Manager == statusManager && mf.Subresource == "status" {
+			hasStatusEntry = true
 		}
 	}
 	assert.True(t, hasMainEntry,
@@ -837,18 +836,16 @@ func TestPatchMetadataAndStatus(t *testing.T) {
 	finalMF := finalTarget.GetManagedFields()
 	var graphOwnsMainFields, graphOwnsStatusFields bool
 	for _, mf := range finalMF {
-		if mf.Manager == graphManager {
-			if mf.Subresource == "" && mf.FieldsV1 != nil {
-				fields := string(mf.FieldsV1.Raw)
-				if strings.Contains(fields, "kro.run/managed") {
-					graphOwnsMainFields = true
-				}
+		if mf.Manager == graphManager && mf.Subresource == "" && mf.FieldsV1 != nil {
+			fields := string(mf.FieldsV1.Raw)
+			if strings.Contains(fields, "kro.run/managed") {
+				graphOwnsMainFields = true
 			}
-			if mf.Subresource == "status" && mf.FieldsV1 != nil {
-				fields := string(mf.FieldsV1.Raw)
-				if strings.Contains(fields, "message") {
-					graphOwnsStatusFields = true
-				}
+		}
+		if mf.Manager == statusManager && mf.Subresource == "status" && mf.FieldsV1 != nil {
+			fields := string(mf.FieldsV1.Raw)
+			if strings.Contains(fields, "message") {
+				graphOwnsStatusFields = true
 			}
 		}
 	}

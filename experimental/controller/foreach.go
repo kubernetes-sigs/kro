@@ -23,7 +23,7 @@ import (
 // The caller merges the output back into the shared cache.
 func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, resyncCorrection bool, prevState *forEachCarryForward) (*nodeOutput, error) {
 	logger := log.FromContext(ctx)
-	var keys []string
+	var keys []Applied
 	// Per-item propagateWhen gate. Per 001-graph.md § propagateWhen:
 	// "With forEach, [...] the controller evaluates propagateWhen
 	// per-item and halts when the condition is first false."
@@ -76,7 +76,7 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 
 	// Load per-item previous state from prevState parameter.
 	var prevItemScope map[string]any
-	var prevItemKeys map[string][]string
+	var prevItemKeys map[string][]Applied
 	if prevState != nil {
 		prevItemScope = prevState.itemScope[node.ID]
 		prevItemKeys = prevState.itemKeys[node.ID]
@@ -85,12 +85,12 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 		prevItemScope = map[string]any{}
 	}
 	if prevItemKeys == nil {
-		prevItemKeys = map[string][]string{}
+		prevItemKeys = map[string][]Applied{}
 	}
 
 	// Prepare output maps for this node.
 	newItemScope := make(map[string]any)
-	newItemKeys := make(map[string][]string)
+	newItemKeys := make(map[string][]Applied)
 
 	// Evaluate every item every time (simple, correct).
 	var allApplied []any
@@ -219,13 +219,11 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 		allApplied = append(allApplied, applied.Object)
 		// Just applied with effectiveGeneration — child is on the latest generation.
 		applied.Object["__updated"] = true
-		var itemKeys []string
-		if childNodeType == graphpkg.NodeTypePatch {
-			hasStatus := evalMap["status"] != nil
-			itemKeys = []string{patchKey(applied, hasStatus)}
-		} else {
-			itemKeys = []string{resourceKey(applied)}
-		}
+		itemKeys := []Applied{{
+			Key:       resourceKey(applied),
+			NodeType:  childNodeType,
+			HasStatus: evalMap["status"] != nil,
+		}}
 		keys = append(keys, itemKeys...)
 
 		// Record per-item state.
@@ -245,7 +243,7 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 	newState := &forEachCarryForward{
 		items:     map[string][]any{cacheKey: items},
 		itemScope: map[string]map[string]any{node.ID: newItemScope},
-		itemKeys:  map[string]map[string][]string{node.ID: newItemKeys},
+		itemKeys:  map[string]map[string][]Applied{node.ID: newItemKeys},
 	}
 
 	// Per 005-reconciliation.md § Parent State: derive parent state from children.

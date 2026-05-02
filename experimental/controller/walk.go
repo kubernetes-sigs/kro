@@ -24,7 +24,7 @@ import (
 
 // nodeResult carries a node's evaluation output back to the walk loop.
 type nodeResult struct {
-	keys  []string
+	keys  []Applied
 	state dagpkg.NodeState
 	err   error
 
@@ -41,14 +41,14 @@ type nodeResult struct {
 
 // walkResult is the output of a complete DAG walk, consumed by the reconciler.
 type walkResult struct {
-	keys             []string             // flattened applied keys from all nodes
-	nodeKeys         map[string][]string  // per-node applied keys (for carry-forward on next reconcile)
-	plan             *dagpkg.PlanState    // per-node states
-	scope            map[string]any       // final scope after walk
-	nodeReady        map[string]bool      // per-node readiness for .ready() CEL function
+	keys             []Applied             // flattened applied keys from all nodes
+	nodeKeys         map[string][]Applied   // per-node applied keys (for carry-forward on next reconcile)
+	plan             *dagpkg.PlanState     // per-node states
+	scope            map[string]any        // final scope after walk
+	nodeReady        map[string]bool       // per-node readiness for .ready() CEL function
 	forEach          *forEachCarryForward
-	needsRecompile   bool                 // dynamic GVK resolved or changed
-	nodeErrors       []string             // "nodeID: reason" for status reporting
+	needsRecompile   bool                  // dynamic GVK resolved or changed
+	nodeErrors       []string              // "nodeID: reason" for status reporting
 	summary          dagpkg.PlanSummary
 }
 
@@ -69,7 +69,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 	}
 
 	// Per-node applied keys — flattened into result.keys after the walk.
-	nodeKeys := make(map[string][]string, len(dag.Nodes))
+	nodeKeys := make(map[string][]Applied, len(dag.Nodes))
 
 	for _, nodeIdx := range dag.TopologicalOrder {
 		node := &dag.Nodes[nodeIdx]
@@ -400,7 +400,7 @@ func checkDependencyGate(node *graphpkg.Node, plan *dagpkg.PlanState) gateState 
 // per-node key map. Used when a node is blocked, pending, or in error — the
 // resource may still exist in the cluster, so its keys must remain in the
 // applied set to prevent spurious pruning.
-func carryForwardKeys(nodeKeys map[string][]string, nodeID string, state *instanceState) {
+func carryForwardKeys(nodeKeys map[string][]Applied, nodeID string, state *instanceState) {
 	if prev, ok := state.previousKeys[nodeID]; ok {
 		nodeKeys[nodeID] = prev
 	}

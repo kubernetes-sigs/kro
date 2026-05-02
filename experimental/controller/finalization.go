@@ -156,9 +156,18 @@ func (c *clusterAccess) advanceFinalization(
 		if getErr := c.reader.Get(ctx, nn, obj); getErr != nil {
 			if apierrors.IsNotFound(getErr) {
 				// Target already gone — skip finalization.
+				// If a previous cycle created finalizer children, schedule
+				// them for cleanup and unprotect their keys so the prune
+				// walk can reach them.
 				logger.Info("finalization skipped: target resource does not exist",
 					"key", key, "finalizers", finalizerNodeIDs)
 				result.Notes = append(result.Notes, fmt.Sprintf("FinalizerSkipped: %s (target absent)", key))
+				if entry, ok := state.activeFinalization[key]; ok {
+					result.ChildKeysToCleanup[key] = entry.ChildKeys
+					for _, ck := range entry.ChildKeys {
+						delete(result.ProtectedKeys, ck)
+					}
+				}
 				delete(state.activeFinalization, key)
 				result.CompletedTargets[key] = true
 				continue

@@ -27,6 +27,7 @@ import (
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
 	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
+	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 	"github.com/ellistarn/kro/experimental/controller/watches"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -140,7 +141,19 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	// -----------------------------------------------------------------------
-	// 3. Handle owner lifecycle — self-delete if owner is terminating
+	// 3. Ensure finalizer — must run before owner lifecycle check so that
+	//    self-delete triggers reconcileDelete (teardown) instead of immediate
+	//    garbage collection.
+	// -----------------------------------------------------------------------
+	if !controllerutil.ContainsFinalizer(graph, finalizer) {
+		controllerutil.AddFinalizer(graph, finalizer)
+		if err := r.Client.Update(ctx, graph); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// 4. Handle owner lifecycle — self-delete if owner is terminating
 	// -----------------------------------------------------------------------
 	if r.ownerDeleting(ctx, graph) {
 		if err := r.Client.Delete(ctx, graph); err != nil && !apierrors.IsNotFound(err) {
@@ -148,16 +161,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 		logger.Info("self-deleted graph — owner is terminating")
 		return ctrl.Result{}, nil
-	}
-
-	// -----------------------------------------------------------------------
-	// 4. Ensure finalizer
-	// -----------------------------------------------------------------------
-	if !controllerutil.ContainsFinalizer(graph, finalizer) {
-		controllerutil.AddFinalizer(graph, finalizer)
-		if err := r.Client.Update(ctx, graph); err != nil {
-			return ctrl.Result{}, err
-		}
 	}
 
 	// Set up watch tracking for this reconcile cycle.
@@ -232,11 +235,11 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		for _, rev := range supersededRevisions {
 			oldKey := rev.GetNamespace() + "/" + rev.GetName()
 			if oldState := r.Caches.get(oldKey); oldState != nil {
-				for k := range oldState.previousAppliedKeys {
+				for k, a := range oldState.previousAppliedKeys {
 					if state.previousAppliedKeys == nil {
-						state.previousAppliedKeys = make(map[string]bool)
+						state.previousAppliedKeys = make(map[string]Applied)
 					}
-					state.previousAppliedKeys[k] = true
+					state.previousAppliedKeys[k] = a
 				}
 			}
 		}
@@ -284,25 +287,32 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// blocker resolves."
 	pruneSafe := !summary.HasPending && !summary.HasBlocked && !summary.HasError && !summary.HasSystemError
 	if pruneSafe {
-		allPreviousKeys := map[string]bool{}
+		allPreviousKeys := map[string]Applied{}
 		logger.V(1).Info("prune gate open", "previousAppliedKeys", len(state.previousAppliedKeys), "deferredPruneKeys", len(state.deferredPruneKeys), "superseded", len(supersededRevisions))
 
 		// Derive the applied set from the watch cache.
+		// DeriveAppliedSet returns plain resource keys — we pair them with
+		// NodeType from the entry. HasStatus is derived from the revision
+		// spec's templateHasStatus for known nodes; defaults to false for
+		// dynamically-discovered resources.
 		if r.Watcher != nil {
 			appliedSet := r.Watcher.Watches.DeriveAppliedSet(rs.name, rs.namespace)
-			for key := range appliedSet {
-				allPreviousKeys[key] = true
+			for key, entry := range appliedSet {
+				allPreviousKeys[key] = Applied{
+					Key:      key,
+					NodeType: entry.NodeType,
+				}
 			}
 		}
 
 		// Include the previous reconcile's applied keys to cover the
 		// informer lag window.
-		for k := range state.previousAppliedKeys {
-			allPreviousKeys[k] = true
+		for k, a := range state.previousAppliedKeys {
+			allPreviousKeys[k] = a
 		}
 		// Include keys whose deletion was deferred in the previous reconcile.
-		for _, k := range state.deferredPruneKeys {
-			allPreviousKeys[k] = true
+		for _, a := range state.deferredPruneKeys {
+			allPreviousKeys[a.Key] = a
 		}
 		// Update the previous key set for the next reconcile.
 		state.updateAppliedKeys(appliedKeys)
@@ -316,8 +326,16 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					if node.Finalizes != "" {
 						continue
 					}
+					nodeType := node.Type()
+					if nodeType == graphpkg.NodeTypeRef || nodeType == graphpkg.NodeTypeWatch {
+						continue
+					}
 					if key := staticResourceKey(node.Identity(), rs.namespace, cluster.scope); key != "" {
-						allPreviousKeys[key] = true
+						allPreviousKeys[key] = Applied{
+							Key:       key,
+							NodeType:  nodeType,
+							HasStatus: templateHasStatus(node.Payload()),
+						}
 					}
 				}
 			}
@@ -328,20 +346,25 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 
 		if len(allPreviousKeys) > 0 {
-			candidates := collectPruneCandidates(allPreviousKeys, appliedKeys)
+			// Build currentSet from walk applied keys.
+			currentSet := map[string]Applied{}
+			for _, a := range appliedKeys {
+				currentSet[a.Key] = a
+			}
+			candidates := collectPruneCandidates(allPreviousKeys, currentSet)
 			allDAGs := collectAllDAGs(dag, supersededDAGs)
 
-			pr := cluster.pruneResources(ctx, rs, candidates, appliedKeys, allDAGs, eval, state, true)
+			pr := cluster.pruneResources(ctx, rs, candidates, currentSet, allDAGs, eval, state, true)
 
 			nodeErrors = append(nodeErrors, pr.BlockedReasons...)
 			nodeNotes = append(nodeNotes, pr.Notes...)
 			if len(pr.BlockedReasons) > 0 {
 				summary.HasBlocked = true
 			}
-			if len(pr.DeferredKeys) > 0 {
+			deferredKeys := collectDeferredKeys(pr.Outcomes, allPreviousKeys)
+			if len(deferredKeys) > 0 {
 				prunePending = true
-				state.deferredPruneKeys = make([]string, len(pr.DeferredKeys))
-				copy(state.deferredPruneKeys, pr.DeferredKeys)
+				state.deferredPruneKeys = deferredKeys
 			} else {
 				state.deferredPruneKeys = nil
 			}

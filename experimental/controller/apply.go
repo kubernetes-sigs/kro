@@ -67,8 +67,8 @@ func thirdPartyFieldManagers(obj *unstructured.Unstructured, ownFieldManager str
 		if mf.Operation != metav1.ManagedFieldsOperationApply {
 			continue
 		}
-		// Exclude our own field manager
-		if manager == ownFieldManager {
+		// Exclude our own field manager and its status sub-manager
+		if manager == ownFieldManager || manager == ownFieldManager+".status" {
 			continue
 		}
 		// Exclude the API server's defaulting field managers
@@ -308,8 +308,12 @@ func ssaWrite(ctx context.Context, c client.Client, obj *unstructured.Unstructur
 		statusApplied.SetGroupVersionKind(obj.GroupVersionKind())
 		statusApplied.SetName(obj.GetName())
 		statusApplied.SetNamespace(obj.GetNamespace())
+		// Use a distinct sub-field-manager for the status subresource so the
+		// status-only body does not cause SSA to release main-resource fields
+		// (annotations, labels) owned by the same manager name.
+		statusFieldOwner := client.FieldOwner(string(fieldOwner) + ".status")
 		var statusOpts []client.SubResourcePatchOption
-		statusOpts = append(statusOpts, fieldOwner)
+		statusOpts = append(statusOpts, statusFieldOwner)
 		if force {
 			statusOpts = append(statusOpts, client.ForceOwnership)
 		}
@@ -366,6 +370,19 @@ func evictThirdPartyManagers(ctx context.Context, c client.Client, readBack *uns
 // ---------------------------------------------------------------------------
 
 func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, namespace, name string, fieldOwner client.FieldOwner, hasStatus bool) (*unstructured.Unstructured, error) {
+	// Pre-check existence — SSA apply creates resources that don't exist,
+	// which would re-create a resource that was already deleted (e.g., when
+	// the first release apply removes a finalizer, the resource is GC'd, and
+	// a second release apply would create a zombie).
+	check := &unstructured.Unstructured{}
+	check.SetGroupVersionKind(gvk)
+	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, check); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("checking existence before release apply for %s/%s: %w", namespace, name, err)
+	}
+
 	apiVersion := gvk.Group + "/" + gvk.Version
 	if gvk.Group == "" {
 		apiVersion = gvk.Version
@@ -388,11 +405,10 @@ func releaseApply(ctx context.Context, c client.Client, gvk schema.GroupVersionK
 	obj := &unstructured.Unstructured{Object: release}
 	obj.SetGroupVersionKind(gvk)
 
-	result, err := ssaWrite(ctx, c, obj, fieldOwner, true)
+	result, err := ssaWrite(ctx, c, obj, fieldOwner, false)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			// Resource already deleted — nothing to release.
-			// Callers must check the returned object for nil before use.
+			// Resource deleted between our check and the apply — nothing to release.
 			return nil, nil
 		}
 		return nil, fmt.Errorf("release apply for %s/%s: %w", namespace, name, err)

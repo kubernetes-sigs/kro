@@ -28,13 +28,13 @@ type instanceState struct {
 	// --- Walk carry-forward (preserved across reconciles for propagateWhen,
 	// dependency gating, and forEach state) ---
 	previousScope      map[string]any
-	previousKeys       map[string][]string
+	previousKeys       map[string][]Applied
 	previousPlanStates *dagpkg.PlanState
 	forEach            *forEachCarryForward // nil until first forEach evaluation
 
 	// --- Prune and finalization ---
-	previousAppliedKeys map[string]bool
-	deferredPruneKeys   []string
+	previousAppliedKeys map[string]Applied
+	deferredPruneKeys   []Applied
 	activeFinalization  map[string]*finalizationEntry
 
 	// --- Deferred typing (dynamic GVK resolution) ---
@@ -43,9 +43,9 @@ type instanceState struct {
 
 // forEachCarryForward holds forEach collection state retained across reconciles.
 type forEachCarryForward struct {
-	items     map[string][]any               // nodeID/varName → collection items
-	itemScope map[string]map[string]any      // nodeID → itemID → scope data
-	itemKeys  map[string]map[string][]string // nodeID → itemID → applied keys
+	items     map[string][]any                // nodeID/varName → collection items
+	itemScope map[string]map[string]any       // nodeID → itemID → scope data
+	itemKeys  map[string]map[string][]Applied // nodeID → itemID → applied keys
 }
 
 // newInstanceState creates a fresh instanceState for a compiledGraph.
@@ -53,21 +53,21 @@ func newInstanceState(compiled *compiler.CompiledGraph) *instanceState {
 	return &instanceState{
 		compiled: compiled,
 		previousScope: make(map[string]any),
-		previousKeys:  make(map[string][]string),
+		previousKeys:  make(map[string][]Applied),
 		forEach: &forEachCarryForward{
 			items:     make(map[string][]any),
 			itemScope: make(map[string]map[string]any),
-			itemKeys:  make(map[string]map[string][]string),
+			itemKeys:  make(map[string]map[string][]Applied),
 		},
 	}
 }
 
 // updateAppliedKeys stores the current key set as the comparison baseline.
 // Call this after prune completes successfully.
-func (s *instanceState) updateAppliedKeys(keys []string) {
-	s.previousAppliedKeys = make(map[string]bool, len(keys))
-	for _, k := range keys {
-		s.previousAppliedKeys[k] = true
+func (s *instanceState) updateAppliedKeys(keys []Applied) {
+	s.previousAppliedKeys = make(map[string]Applied, len(keys))
+	for _, a := range keys {
+		s.previousAppliedKeys[a.Key] = a
 	}
 }
 

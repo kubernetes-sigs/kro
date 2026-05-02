@@ -1,16 +1,8 @@
 // resourcekey.go defines the applied-set key format for managed resources.
 //
-// Keys in the applied set identify resources the controller has written to.
-// Two formats:
-//
-//	Template:   group/version/Kind/namespace/name
-//	Patch:      patch:group/version/Kind/namespace/name[+status]
-//
-// The "patch:" prefix distinguishes resources where cleanup means
-// release apply (release field ownership) from resources where cleanup
-// means delete. The "+status" suffix marks patches that included
-// status subresource fields, so release apply must release both the
-// main resource and the status subresource.
+// Resource keys are identity-only strings: group/version/Kind/namespace/name.
+// Dispatch metadata (NodeType, HasStatus) travels in the Applied struct
+// alongside the key, separating resource identity from cleanup semantics.
 //
 // Per 003-ownership.md § Applied Set.
 package graphcontroller
@@ -105,13 +97,15 @@ func defaultNamespace(gvk schema.GroupVersionKind, ns string, fallback string, s
 	return ns
 }
 
-// patchKeyPrefix marks applied-set entries whose fields are released (not
-// deleted) on prune, corresponding to patch: nodes in the graph spec.
-const patchKeyPrefix = "patch:"
-
-// patchStatusSuffix marks that the patch included status subresource fields,
-// so release apply must target both the main resource and status subresource.
-const patchStatusSuffix = "+status"
+// Applied identifies a resource the controller has written to.
+// Key is identity (group/version/Kind/namespace/name); NodeType and HasStatus
+// are cleanup dispatch metadata — NodeType determines delete vs release,
+// HasStatus determines whether release must also target the status subresource.
+type Applied struct {
+	Key       string
+	NodeType  graphpkg.NodeType
+	HasStatus bool
+}
 
 func resourceKey(obj *unstructured.Unstructured) string {
 	gvk := obj.GroupVersionKind()
@@ -179,28 +173,6 @@ func unstructuredFromKey(key string) (*unstructured.Unstructured, types.Namespac
 	obj.SetName(nn.Name)
 	obj.SetNamespace(nn.Namespace)
 	return obj, nn, true
-}
-
-// patchKey builds a Patch applied set key.
-func patchKey(obj *unstructured.Unstructured, hasStatus bool) string {
-	key := patchKeyPrefix + resourceKey(obj)
-	if hasStatus {
-		key += patchStatusSuffix
-	}
-	return key
-}
-
-// parsePatchKey extracts the resource key and status flag from a
-// patch applied set key. Returns ("", false) if not a patch key.
-func parsePatchKey(key string) (resKey string, hasStatus bool) {
-	if !strings.HasPrefix(key, patchKeyPrefix) {
-		return "", false
-	}
-	rest := strings.TrimPrefix(key, patchKeyPrefix)
-	if strings.HasSuffix(rest, patchStatusSuffix) {
-		return strings.TrimSuffix(rest, patchStatusSuffix), true
-	}
-	return rest, false
 }
 
 // templateHasStatus returns true if a template map contains a non-nil

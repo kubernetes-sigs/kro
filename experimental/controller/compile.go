@@ -74,7 +74,7 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 		existing.forEach = &forEachCarryForward{
 			items:     map[string][]any{},
 			itemScope: map[string]map[string]any{},
-			itemKeys:  map[string]map[string][]string{},
+			itemKeys:  map[string]map[string][]Applied{},
 		}
 		existing.deferredPruneKeys = nil
 		r.Caches.set(instanceKey, existing)

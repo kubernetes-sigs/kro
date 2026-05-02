@@ -27,7 +27,7 @@ import (
 // ([]string, *forEachCarryForward, error) tuple so forEach-specific state doesn't
 // thread through a generic interface — most node types leave forEach nil.
 type nodeOutput struct {
-	keys    []string
+	keys    []Applied
 	forEach *forEachCarryForward // nil for non-forEach nodes
 }
 
@@ -65,14 +65,14 @@ func (c *clusterAccess) reconcileNode(ctx context.Context, rs *reconcileScope, n
 			return nil, err
 		}
 	default: // NodeTypeTemplate, NodeTypePatch
-		key, err := c.reconcileApply(ctx, rs, node, eval, resyncCorrection)
+		appliedEntry, err := c.reconcileApply(ctx, rs, node, eval, resyncCorrection)
 		if err != nil {
-			if key != "" {
-				return &nodeOutput{keys: []string{key}}, err
+			if appliedEntry.Key != "" {
+				return &nodeOutput{keys: []Applied{appliedEntry}}, err
 			}
 			return nil, err
 		}
-		return &nodeOutput{keys: []string{key}}, eval.evalReadiness(node.ID, node.ReadyWhen)
+		return &nodeOutput{keys: []Applied{appliedEntry}}, eval.evalReadiness(node.ID, node.ReadyWhen)
 	}
 
 	// Post-dispatch readyWhen for Definition and Ref (no keys to return).
@@ -269,22 +269,22 @@ func (c *clusterAccess) reconcileWatch(ctx context.Context, rs *reconcileScope, 
 
 // reconcileApply evaluates and applies a Template or Patch node.
 // The node type controls SSA behavior (identity labels, pre-apply
-// checks) and applied set key format: Template keys use resourceKey
-// (prune → delete), Patch keys use patchKey (prune → release apply to
-// release fields). See applySSA for the full type-dependent behavior.
-func (c *clusterAccess) reconcileApply(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, resyncCorrection bool) (string, error) {
+// checks) and cleanup semantics: Template resources are deleted on prune,
+// Patch resources have their fields released via release apply.
+// See applySSA for the full type-dependent behavior.
+func (c *clusterAccess) reconcileApply(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, resyncCorrection bool) (Applied, error) {
 	logger := log.FromContext(ctx)
 
 	nodeType := node.Type()
 
 	evalMap, err := eval.toMapNode(node)
 	if err != nil {
-		return "", fmt.Errorf("%s %s: %w", nodeType, node.ID, err)
+		return Applied{}, fmt.Errorf("%s %s: %w", nodeType, node.ID, err)
 	}
 
 	applied, err := c.applySSA(ctx, rs, evalMap, node.ID, nodeType, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
 	if err != nil {
-		return "", err
+		return Applied{}, err
 	}
 
 	eval.scope[node.ID] = graphpkg.NormalizeTypes(applied.Object)
@@ -295,14 +295,11 @@ func (c *clusterAccess) reconcileApply(ctx context.Context, rs *reconcileScope, 
 	logger.Info("applied resource", "node", node.ID, "nodeType", nodeType,
 		"gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
-	if nodeType == graphpkg.NodeTypePatch {
-		// Track the patch in the applied set with a "patch:" prefix.
-		// This lets prune and teardown distinguish patch keys (release apply
-		// to release fields) from template keys (delete).
-		hasStatus := evalMap["status"] != nil
-		return patchKey(applied, hasStatus), nil
-	}
-	return resourceKey(applied), nil
+	return Applied{
+		Key:       resourceKey(applied),
+		NodeType:  nodeType,
+		HasStatus: evalMap["status"] != nil,
+	}, nil
 }
 
 // ---------------------------------------------------------------------------

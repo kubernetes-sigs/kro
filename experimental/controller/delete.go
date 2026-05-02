@@ -47,11 +47,9 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// 2. Watch cache — informer stores scanned for identity labels
 	// 3. Label selector — dynamic resources (forEach, CEL names)
 	// -----------------------------------------------------------------------
-	ownKeys := map[string]bool{}
-	patchKeys := map[string]bool{}
+	allKeys := map[string]Applied{}
 
-	// Build hasStatus map and static keys from revision specs.
-	patchStatusMap := map[string]bool{}
+	// Build static keys from revision specs.
 	staticKeys := map[string]bool{}
 	for _, rev := range revisions {
 		spec, err := extractRevisionSpec(rev)
@@ -65,11 +63,6 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if key := staticResourceKey(node.Identity(), graph.GetNamespace(), cluster.scope); key != "" {
 				staticKeys[key] = true
 			}
-			if templateHasStatus(node.Payload()) {
-				if key := staticResourceKey(node.Identity(), graph.GetNamespace(), cluster.scope); key != "" {
-					patchStatusMap[key] = true
-				}
-			}
 			nodeType := node.Type()
 			if nodeType == graphpkg.NodeTypeRef || nodeType == graphpkg.NodeTypeWatch {
 				continue
@@ -78,7 +71,11 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 				continue
 			}
 			if key := staticResourceKey(node.Identity(), graph.GetNamespace(), cluster.scope); key != "" {
-				ownKeys[key] = true
+				allKeys[key] = Applied{
+					Key:       key,
+					NodeType:  nodeType,
+					HasStatus: templateHasStatus(node.Payload()),
+				}
 			}
 		}
 	}
@@ -94,27 +91,22 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if corrected, ok := normalizedToStatic[strings.ToLower(key)]; ok {
 				key = corrected
 			}
-			if entry.NodeType == graphpkg.NodeTypePatch {
-				cKey := patchKeyPrefix + key
-				if patchStatusMap[key] {
-					cKey += patchStatusSuffix
-				}
-				patchKeys[cKey] = true
-			} else {
-				ownKeys[key] = true
+			// Derive HasStatus from revision specs when available.
+			hasStatus := false
+			if existing, ok := allKeys[key]; ok {
+				hasStatus = existing.HasStatus
+			}
+			allKeys[key] = Applied{
+				Key:       key,
+				NodeType:  entry.NodeType,
+				HasStatus: hasStatus,
 			}
 		}
 	}
 
-	// Release watch state now that patch keys have been collected.
+	// Release watch state now that keys have been collected.
 	if r.Watcher != nil {
 		r.Watcher.RemoveGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
-	}
-
-	// Convert template keys to slice.
-	var keys []string
-	for k := range ownKeys {
-		keys = append(keys, k)
 	}
 
 	// Include dynamically-named resources found by label selector.
@@ -123,10 +115,16 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	if findErr != nil {
 		logger.Error(findErr, "finding dynamically-named resources during teardown; forEach children may be orphaned if not in watch cache")
 	}
-	for _, k := range dynamicKeys {
-		if !ownKeys[k] {
-			keys = append(keys, k)
+	for _, a := range dynamicKeys {
+		if _, exists := allKeys[a.Key]; !exists {
+			allKeys[a.Key] = a
 		}
+	}
+
+	// Convert to candidate slice.
+	candidates := make([]Applied, 0, len(allKeys))
+	for _, a := range allKeys {
+		candidates = append(candidates, a)
 	}
 
 	// -----------------------------------------------------------------------
@@ -172,30 +170,30 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// Delegate to pruneResources: all keys are candidates, currentKeys empty.
 	// Teardown skips identity-label verification (checkIdentityLabels=false).
 	// -----------------------------------------------------------------------
-	pr := cluster.pruneResources(ctx, rs, keys, nil, teardownDAGs, teardownEval, teardownState, false)
+	pr := cluster.pruneResources(ctx, rs, candidates, nil, teardownDAGs, teardownEval, teardownState, false)
 
-	// Verify deleted resources are gone.
-	deferredSet := map[string]bool{}
-	for _, dk := range pr.DeferredKeys {
-		deferredSet[dk] = true
-	}
-	for _, key := range keys {
-		if key == "" {
+	// Verify deleted resources are gone — only check keys with pruneDeleted outcome.
+	for _, a := range candidates {
+		if a.Key == "" {
 			continue
 		}
-		// Skip patch keys and keys that were deferred.
-		if resKey, _ := parsePatchKey(key); resKey != "" {
-			continue
+		// Only verify template resources that were actually deleted.
+		outcome, hasOutcome := pr.Outcomes[a.Key]
+		if a.NodeType == graphpkg.NodeTypePatch {
+			continue // patches are released, not deleted
 		}
-		if deferredSet[key] {
-			continue
+		if hasOutcome && outcome != pruneDeleted {
+			continue // not deleted — skip verification
 		}
-		check, _, ok := unstructuredFromKey(key)
+		if !hasOutcome {
+			// No outcome recorded — may have been deleted. Verify.
+		}
+		check, _, ok := unstructuredFromKey(a.Key)
 		if !ok {
 			continue
 		}
 		if err := cluster.reader.Get(ctx, client.ObjectKeyFromObject(check), check); err == nil {
-			logger.V(1).Info("waiting for managed resource to be deleted", "key", key)
+			logger.V(1).Info("waiting for managed resource to be deleted", "key", a.Key)
 			return ctrl.Result{RequeueAfter: 500 * time.Millisecond}, nil
 		}
 	}
@@ -225,24 +223,6 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 
 	if pr.Err != nil {
 		return ctrl.Result{}, pr.Err
-	}
-
-	// Release Patch fields via SSA release apply.
-	fieldOwner := graphFieldOwner(graph)
-	for key := range patchKeys {
-		resKey, hasStatus := parsePatchKey(key)
-		if resKey == "" {
-			continue
-		}
-		gvk, nn := parseResourceKey(resKey)
-		if gvk.Kind == "" {
-			continue
-		}
-		if _, err := releaseApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
-			logger.Error(err, "releasing patch fields during teardown", "key", resKey)
-		} else {
-			logger.Info("released patch fields during teardown", "key", resKey)
-		}
 	}
 
 	// Delete all GraphRevisions.

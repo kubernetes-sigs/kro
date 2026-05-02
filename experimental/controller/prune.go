@@ -26,16 +26,27 @@ import (
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
+// pruneOutcome describes what happened to a single prune candidate.
+type pruneOutcome int
+
+const (
+	pruneDeleted  pruneOutcome = iota // template resource deleted
+	pruneReleased                     // patch fields released
+	pruneBlocked                      // third-party managers block deletion
+	pruneDeferred                     // finalization not ready
+	pruneSkipped                      // not owned or not found
+)
+
 // pruneResult carries the output of pruneResources to the caller.
 type pruneResult struct {
-	DeferredKeys   []string // keys whose deletion was deferred
-	BlockedReasons []string // TeardownBlocked messages
-	Notes          []string // informational (FinalizerSkipped)
-	Err            error    // hard API error
+	Outcomes       map[string]pruneOutcome // key → what happened
+	BlockedReasons []string                // TeardownBlocked messages
+	Notes          []string                // informational (FinalizerSkipped)
+	Err            error                   // hard API error
 }
 
 // pruneResources handles both normal prune (partial candidates) and teardown
-// (all keys are candidates). Returns a pruneResult with deferred keys, blocked
+// (all keys are candidates). Returns a pruneResult with outcomes, blocked
 // reasons, notes, and errors.
 //
 // checkIdentityLabels controls whether the identity-label check is performed
@@ -45,15 +56,17 @@ type pruneResult struct {
 func (c *clusterAccess) pruneResources(
 	ctx context.Context,
 	rs *reconcileScope,
-	candidates []string,
-	currentKeys []string,
+	candidates []Applied,
+	currentKeys map[string]Applied,
 	dags []*dagpkg.DAG,
 	eval *evaluator,
 	state *instanceState,
 	checkIdentityLabels bool,
 ) *pruneResult {
 	logger := log.FromContext(ctx)
-	result := &pruneResult{}
+	result := &pruneResult{
+		Outcomes: map[string]pruneOutcome{},
+	}
 
 	if len(candidates) == 0 {
 		return result
@@ -80,23 +93,25 @@ func (c *clusterAccess) pruneResources(
 		state.activeFinalization = map[string]*finalizationEntry{}
 	}
 
-	finResult, finErr := c.advanceFinalization(ctx, rs, candidates, keyToNodeID, nodeIDToKey, dags, eval, state)
+	// Build candidate key slice for finalization (plain resource keys).
+	candidateKeys := make([]string, len(candidates))
+	for i, c := range candidates {
+		candidateKeys[i] = c.Key
+	}
+
+	finResult, finErr := c.advanceFinalization(ctx, rs, candidateKeys, keyToNodeID, nodeIDToKey, dags, eval, state)
 	if finErr != nil {
 		result.Err = finErr
 		return result
 	}
 	result.BlockedReasons = append(result.BlockedReasons, finResult.BlockedReasons...)
 	result.Notes = append(result.Notes, finResult.Notes...)
-	result.DeferredKeys = append(result.DeferredKeys, finResult.DeferredTargets...)
+	for _, dt := range finResult.DeferredTargets {
+		result.Outcomes[dt] = pruneDeferred
+	}
 
 	// Phase 2: Order candidates for deletion (reverse topological).
-	ordered := pruneOrder(candidates, dags, rs.namespace, c.scope)
-
-	// Build current key set for fast lookup.
-	currentSet := map[string]bool{}
-	for _, k := range currentKeys {
-		currentSet[k] = true
-	}
+	ordered := pruneOrderApplied(candidates, dags, rs.namespace, c.scope)
 
 	fieldOwner := graphFieldOwner(rs.graph)
 
@@ -104,12 +119,13 @@ func (c *clusterAccess) pruneResources(
 	// successfully deleted in this walk. Processed after the walk completes.
 	var deferredDeletes []string
 
-	for _, key := range ordered {
+	for _, candidate := range ordered {
+		key := candidate.Key
 		if key == "" {
 			continue
 		}
 		// Skip keys that are in the current applied set.
-		if currentSet[key] {
+		if _, inCurrent := currentKeys[key]; inCurrent {
 			continue
 		}
 
@@ -117,80 +133,93 @@ func (c *clusterAccess) pruneResources(
 		if finResult.ProtectedKeys[key] {
 			logger.Info("prune deferred: resource is protected by in-flight finalization",
 				"key", key)
-			result.DeferredKeys = append(result.DeferredKeys, key)
+			result.Outcomes[key] = pruneDeferred
 			continue
 		}
 
-		// Patch keys use release apply (release fields), not delete.
-		if resKey, hasStatus := parsePatchKey(key); resKey != "" {
-			gvk, nn := parseResourceKey(resKey)
+		// Dispatch based on NodeType.
+		switch candidate.NodeType {
+		case graphpkg.NodeTypePatch:
+			// Patch keys use release apply (release fields), not delete.
+			gvk, nn := parseResourceKey(key)
 			if gvk.Kind == "" {
+				result.Outcomes[key] = pruneSkipped
 				continue
 			}
-			if _, err := releaseApply(ctx, c.client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
-				logger.Error(err, "releasing contribution fields", "key", resKey)
+			if _, err := releaseApply(ctx, c.client, gvk, nn.Namespace, nn.Name, fieldOwner, candidate.HasStatus); err != nil {
+				logger.Error(err, "releasing contribution fields", "key", key)
 			} else {
-				logger.Info("released contribution fields", "key", resKey)
+				logger.Info("released contribution fields", "key", key)
 			}
+			result.Outcomes[key] = pruneReleased
 			continue
-		}
 
-		// Template keys: shared ownership + field manager preflight check.
-		pf := c.deletePreflight(ctx, key, rs, checkIdentityLabels)
-		switch pf.Outcome {
-		case deleteSkipParseFailed:
-			continue
-		case deleteNotFound:
-			// Target absent — check if we should emit FinalizerSkipped.
-			nodeID := keyToNodeID[key]
-			if nodeID != "" {
-				for _, d := range dags {
-					if finalizerNodeIDs, ok := d.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
-						logger.Info("finalization skipped: target resource does not exist",
-							"key", key, "finalizers", finalizerNodeIDs)
-						result.Notes = append(result.Notes,
-							fmt.Sprintf("FinalizerSkipped: %s (target absent)", key))
-						break
+		default:
+			// Template keys: shared ownership + field manager preflight check.
+			pf := c.deletePreflight(ctx, key, rs, checkIdentityLabels)
+			switch pf.Outcome {
+			case deleteSkipParseFailed:
+				result.Outcomes[key] = pruneSkipped
+				continue
+			case deleteNotFound:
+				result.Outcomes[key] = pruneSkipped
+				// Target absent — clean up finalization children if mid-finalization.
+				if childKeys, ok := finResult.ChildKeysToCleanup[key]; ok {
+					deferredDeletes = append(deferredDeletes, childKeys...)
+				}
+				// Emit FinalizerSkipped note if this target had finalizers.
+				nodeID := keyToNodeID[key]
+				if nodeID != "" {
+					for _, d := range dags {
+						if finalizerNodeIDs, ok := d.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
+							logger.Info("finalization skipped: target resource does not exist",
+								"key", key, "finalizers", finalizerNodeIDs)
+							result.Notes = append(result.Notes,
+								fmt.Sprintf("FinalizerSkipped: %s (target absent)", key))
+							break
+						}
 					}
 				}
+				continue
+			case deleteNotOwned:
+				result.Outcomes[key] = pruneSkipped
+				continue
+			case deleteBlockedByFieldManagers:
+				logger.Info("prune blocked: resource has other field managers",
+					"key", key, "blockers", pf.Blockers)
+				result.BlockedReasons = append(result.BlockedReasons,
+					formatBlockedReason(key, pf.Blockers))
+				result.Outcomes[key] = pruneBlocked
+				continue
 			}
-			continue
-		case deleteNotOwned:
-			continue
-		case deleteBlockedByFieldManagers:
-			logger.Info("prune blocked: resource has other field managers",
-				"key", key, "blockers", pf.Blockers)
-			result.BlockedReasons = append(result.BlockedReasons,
-				formatBlockedReason(key, pf.Blockers))
-			result.DeferredKeys = append(result.DeferredKeys, key)
-			continue
-		}
 
-		// deleteReady: resource exists, is ours, no third-party field managers.
-		// Finalization check: if this target has finalizers, only delete if
-		// advanceFinalization marked it complete.
-		nodeID := keyToNodeID[key]
-		hasFinalizers := false
-		for _, d := range dags {
-			if fins, ok := d.Finalizers[nodeID]; ok && len(fins) > 0 {
-				hasFinalizers = true
-				break
+			// deleteReady: resource exists, is ours, no third-party field managers.
+			// Finalization check: if this target has finalizers, only delete if
+			// advanceFinalization marked it complete.
+			nodeID := keyToNodeID[key]
+			hasFinalizers := false
+			for _, d := range dags {
+				if fins, ok := d.Finalizers[nodeID]; ok && len(fins) > 0 {
+					hasFinalizers = true
+					break
+				}
 			}
-		}
-		if hasFinalizers && !finResult.CompletedTargets[key] {
-			continue // finalization not complete — already deferred by advanceFinalization
-		}
+			if hasFinalizers && !finResult.CompletedTargets[key] {
+				continue // finalization not complete — already deferred by advanceFinalization
+			}
 
-		if err := c.client.Delete(ctx, pf.Obj); err != nil {
-			if client.IgnoreNotFound(err) != nil {
-				result.Err = fmt.Errorf("pruning %s: %w", key, err)
-				return result
-			}
-		} else {
-			logger.Info("pruned resource", "key", key)
-			// Clean up finalization children after the target is deleted.
-			if childKeys, ok := finResult.ChildKeysToCleanup[key]; ok {
-				deferredDeletes = append(deferredDeletes, childKeys...)
+			if err := c.client.Delete(ctx, pf.Obj); err != nil {
+				if client.IgnoreNotFound(err) != nil {
+					result.Err = fmt.Errorf("pruning %s: %w", key, err)
+					return result
+				}
+			} else {
+				logger.Info("pruned resource", "key", key)
+				result.Outcomes[key] = pruneDeleted
+				// Clean up finalization children after the target is deleted.
+				if childKeys, ok := finResult.ChildKeysToCleanup[key]; ok {
+					deferredDeletes = append(deferredDeletes, childKeys...)
+				}
 			}
 		}
 	}
@@ -201,19 +230,29 @@ func (c *clusterAccess) pruneResources(
 	return result
 }
 
-// collectPruneCandidates returns keys in previousKeys but not in currentKeys.
-func collectPruneCandidates(previousKeys map[string]bool, currentKeys []string) []string {
-	currentSet := map[string]bool{}
-	for _, k := range currentKeys {
-		currentSet[k] = true
-	}
-	var candidates []string
-	for key := range previousKeys {
-		if !currentSet[key] {
-			candidates = append(candidates, key)
+// collectPruneCandidates returns Applied entries from prev whose Key is not in curr.
+func collectPruneCandidates(prev map[string]Applied, curr map[string]Applied) []Applied {
+	var candidates []Applied
+	for key, a := range prev {
+		if _, ok := curr[key]; !ok {
+			candidates = append(candidates, a)
 		}
 	}
 	return candidates
+}
+
+// collectDeferredKeys extracts Applied entries from allPrevious whose outcome
+// is pruneDeferred or pruneBlocked (need to be retried next reconcile).
+func collectDeferredKeys(outcomes map[string]pruneOutcome, allPrevious map[string]Applied) []Applied {
+	var deferred []Applied
+	for key, outcome := range outcomes {
+		if outcome == pruneDeferred || outcome == pruneBlocked {
+			if a, ok := allPrevious[key]; ok {
+				deferred = append(deferred, a)
+			}
+		}
+	}
+	return deferred
 }
 
 // collectAllDAGs returns the active DAG plus all superseded DAGs.
@@ -229,12 +268,12 @@ func collectAllDAGs(dag *dagpkg.DAG, supersededDAGs map[string]*dagpkg.DAG) []*d
 }
 
 // findManagedResourceKeys discovers dynamically-named resources (forEach, CEL
-// names) by listing resources with our graph-name label. Returns resource keys.
+// names) by listing resources with our graph-name label. Returns Applied entries.
 //
 // The GVK list is derived from the revision specs — every resource template
 // declares its apiVersion and kind, so we know exactly which types to scan.
 // This avoids a hardcoded GVK list that would silently miss new resource types.
-func (c *clusterAccess) findManagedResourceKeys(ctx context.Context, rs *reconcileScope) ([]string, error) {
+func (c *clusterAccess) findManagedResourceKeys(ctx context.Context, rs *reconcileScope) ([]Applied, error) {
 	// Collect unique GVKs from all revisions for this Graph.
 	revisions, err := listRevisions(ctx, c.client, rs.name, rs.namespace)
 	if err != nil {
@@ -264,7 +303,7 @@ func (c *clusterAccess) findManagedResourceKeys(ctx context.Context, rs *reconci
 		}
 	}
 
-	var keys []string
+	var keys []Applied
 	suffix := graphpkg.GraphLabelSuffix(rs.name, rs.namespace)
 	for gvk := range gvkSet {
 		list := &unstructured.UnstructuredList{}
@@ -282,9 +321,18 @@ func (c *clusterAccess) findManagedResourceKeys(ctx context.Context, rs *reconci
 
 		for _, item := range list.Items {
 			itemLabels := item.GetLabels()
-			for key := range itemLabels {
-				if strings.HasSuffix(key, suffix) {
-					keys = append(keys, resourceKey(&item))
+			for labelKey, labelValue := range itemLabels {
+				if strings.HasSuffix(labelKey, suffix) {
+					rk := resourceKey(&item)
+					nodeType := graphpkg.NodeTypeTemplate // default
+					if nt, ok := graphpkg.NodeTypeFromLabelValue(labelValue); ok {
+						nodeType = nt
+					}
+					keys = append(keys, Applied{
+						Key:       rk,
+						NodeType:  nodeType,
+						HasStatus: false, // unknown from labels
+					})
 					break
 				}
 			}
@@ -337,12 +385,6 @@ func pruneOrder(keys []string, dags []*dagpkg.DAG, defaultNS string, scope GVKSc
 	for _, key := range keys {
 		pos, ok := keyPosition[key]
 		if !ok {
-			// Also check patch keys against their underlying resource key.
-			if resKey, _ := parsePatchKey(key); resKey != "" {
-				pos, ok = keyPosition[resKey]
-			}
-		}
-		if !ok {
 			pos = maxPosition + 1 // unmatched → deleted first
 		}
 		scoredKeys = append(scoredKeys, scored{key: key, position: pos})
@@ -356,6 +398,61 @@ func pruneOrder(keys []string, dags []*dagpkg.DAG, defaultNS string, scope GVKSc
 	result := make([]string, len(scoredKeys))
 	for i, s := range scoredKeys {
 		result[i] = s.key
+	}
+	return result
+}
+
+// pruneOrderApplied sorts Applied entries in reverse dependency order.
+// Same algorithm as pruneOrder but operates on Applied entries.
+func pruneOrderApplied(candidates []Applied, dags []*dagpkg.DAG, defaultNS string, scope GVKScopeResolver) []Applied {
+	// Build a map from resource key → topological position across all DAGs.
+	keyPosition := map[string]int{}
+	maxPosition := 0
+
+	for _, d := range dags {
+		topoPosition := make(map[int]int, len(d.TopologicalOrder))
+		for pos, nodeIdx := range d.TopologicalOrder {
+			topoPosition[nodeIdx] = pos
+		}
+
+		for i, node := range d.Nodes {
+			if node.Identity() == nil {
+				continue
+			}
+			rk := staticResourceKey(node.Identity(), defaultNS, scope)
+			if rk == "" {
+				continue
+			}
+			pos := topoPosition[i]
+			if pos > maxPosition {
+				maxPosition = pos
+			}
+			if existing, ok := keyPosition[rk]; !ok || pos > existing {
+				keyPosition[rk] = pos
+			}
+		}
+	}
+
+	type scored struct {
+		applied  Applied
+		position int
+	}
+	scoredKeys := make([]scored, 0, len(candidates))
+	for _, a := range candidates {
+		pos, ok := keyPosition[a.Key]
+		if !ok {
+			pos = maxPosition + 1
+		}
+		scoredKeys = append(scoredKeys, scored{applied: a, position: pos})
+	}
+
+	sort.Slice(scoredKeys, func(i, j int) bool {
+		return scoredKeys[i].position > scoredKeys[j].position
+	})
+
+	result := make([]Applied, len(scoredKeys))
+	for i, s := range scoredKeys {
+		result[i] = s.applied
 	}
 	return result
 }
@@ -445,8 +542,30 @@ func (c *clusterAccess) deletePreflight(
 	// Contributor-aware deletion: check managedFields for other field
 	// managers before deleting. If present, deletion is blocked — the
 	// finalizer holds until the other manager releases.
+	//
+	// Exception: during teardown (checkIdentityLabels=false), resources
+	// that the controller never successfully applied (no identity labels)
+	// are skipped rather than blocking. A conflicted resource that was
+	// never owned should not prevent Graph deletion.
 	ownManager := string(graphFieldOwner(rs.graph))
 	if blockers := thirdPartyFieldManagers(obj, ownManager); len(blockers) > 0 {
+		// If we're in teardown mode AND the resource has no identity labels,
+		// skip it — we never owned it, so we shouldn't block teardown on it.
+		if !checkIdentityLabels {
+			objLabels := obj.GetLabels()
+			hasOurLabel := false
+			if objLabels != nil {
+				for k := range objLabels {
+					if graphpkg.IsGraphIdentityLabel(k, rs.name, rs.namespace) {
+						hasOurLabel = true
+						break
+					}
+				}
+			}
+			if !hasOurLabel {
+				return deletePreflightResult{Outcome: deleteNotOwned, Obj: obj}
+			}
+		}
 		return deletePreflightResult{
 			Outcome:  deleteBlockedByFieldManagers,
 			Obj:      obj,

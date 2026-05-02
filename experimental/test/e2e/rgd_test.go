@@ -191,11 +191,10 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 
 	// --- Reactivity: update SimpleApp spec, verify L2 propagates ---
 
-	latestApp := &unstructured.Unstructured{}
-	latestApp.SetGroupVersionKind(simpleAppGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "my-app", Namespace: ns}, latestApp))
-	unstructured.SetNestedField(latestApp.Object, "redis:7", "spec", "image")
-	require.NoError(t, k8sClient.Update(ctx, latestApp))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, simpleAppGVK,
+		types.NamespacedName{Name: "my-app", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedField(obj.Object, "redis:7", "spec", "image")
+		}))
 	t.Log("Updated SimpleApp: image=redis:7")
 
 	// ConfigMap should update to reflect the new image
@@ -651,16 +650,12 @@ func TestRGDLifecyclePort(t *testing.T) {
 	t.Log("Deployment verified: replicas=1, image=nginx:1.19, port=80")
 
 	// Update instance spec — same as lifecycle_test.go
-	latestInstance := &unstructured.Unstructured{}
-	latestInstance.SetGroupVersionKind(instanceGVK)
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
-		Name: "test-instance-for-updates", Namespace: ns,
-	}, latestInstance))
-
-	unstructured.SetNestedField(latestInstance.Object, int64(3), "spec", "replicas")
-	unstructured.SetNestedField(latestInstance.Object, "nginx:1.20", "spec", "image")
-	unstructured.SetNestedField(latestInstance.Object, int64(443), "spec", "port")
-	require.NoError(t, k8sClient.Update(ctx, latestInstance))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, instanceGVK,
+		types.NamespacedName{Name: "test-instance-for-updates", Namespace: ns}, func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedField(obj.Object, int64(3), "spec", "replicas")
+			unstructured.SetNestedField(obj.Object, "nginx:1.20", "spec", "image")
+			unstructured.SetNestedField(obj.Object, int64(443), "spec", "port")
+		}))
 	t.Log("Instance updated: replicas=3, image=nginx:1.20, port=443")
 
 	// Verify Deployment converges to new values.
@@ -704,10 +699,12 @@ func TestRGDLifecyclePort(t *testing.T) {
 	t.Log("Deployment converged: replicas=3, image=nginx:1.20, port=443")
 
 	// Delete instance — verify cascade cleanup
+	toDelete := &unstructured.Unstructured{}
+	toDelete.SetGroupVersionKind(instanceGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
 		Name: "test-instance-for-updates", Namespace: ns,
-	}, latestInstance))
-	require.NoError(t, k8sClient.Delete(ctx, latestInstance))
+	}, toDelete))
+	require.NoError(t, k8sClient.Delete(ctx, toDelete))
 
 	// Verify Deployment is cleaned up (L2 finalizer deletes it).
 	// Multi-level cascade cleanup can take longer under parallel test load.

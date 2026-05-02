@@ -1466,8 +1466,8 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 		itemScope: map[string]map[string]any{
 			"workers": {"alpha": prevAlpha, "beta": prevBeta},
 		},
-		itemKeys: map[string]map[string][]string{
-			"workers": {"alpha": {"key-alpha"}, "beta": {"key-beta"}},
+		itemKeys: map[string]map[string][]Applied{
+			"workers": {"alpha": {{Key: "key-alpha"}}, "beta": {{Key: "key-beta"}}},
 		},
 	}
 

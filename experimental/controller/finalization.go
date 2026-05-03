@@ -231,6 +231,65 @@ func (c *clusterAccess) advanceFinalization(
 // Finalization execution (stateless — re-derives position from cluster state)
 // ---------------------------------------------------------------------------
 
+// ensureFinalizerResource implements the shared GET → create-if-absent →
+// evaluate-readyWhen pattern used by both single-resource and forEach
+// finalization. Returns (ready, key, error).
+//
+// When the resource already exists on the cluster, scope is updated to
+// the actual cluster object BEFORE evaluating readyWhen. This is
+// critical: readyWhen expressions (e.g., `${finalizerJob.status.succeeded
+// > 0}`) must evaluate against real status fields, not the template
+// output which lacks controller-set fields.
+func (c *clusterAccess) ensureFinalizerResource(
+	ctx context.Context,
+	rs *reconcileScope,
+	eval *evaluator,
+	node *graphpkg.Node,
+	evalMap map[string]any,
+) (bool, string, error) {
+	logger := log.FromContext(ctx)
+
+	obj := &unstructured.Unstructured{Object: evalMap}
+	if obj.GetNamespace() == "" {
+		obj.SetNamespace(rs.namespace)
+	}
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(obj.GroupVersionKind())
+	err := c.reader.Get(ctx, client.ObjectKey{
+		Namespace: obj.GetNamespace(),
+		Name:      obj.GetName(),
+	}, existing)
+
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return false, "", fmt.Errorf("checking finalizer resource %s: %w", node.ID, err)
+		}
+		// Create finalizer resource.
+		logger.Info("creating finalizer resource", "finalizer", node.ID,
+			"name", obj.GetName())
+		applied, applyErr := c.applySSA(ctx, rs, evalMap, node.ID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, false)
+		if applyErr != nil {
+			return false, "", fmt.Errorf("creating finalizer resource %s: %w", node.ID, applyErr)
+		}
+		return false, resourceKey(applied), nil
+	}
+
+	// Exists — update scope to cluster state so readyWhen evaluates against
+	// real status fields, not the template output.
+	eval.scope[node.ID] = graphpkg.NormalizeTypes(existing.Object)
+
+	key := resourceKey(existing)
+	if len(node.ReadyWhen) > 0 {
+		if err := eval.evalReadinessConditions(node.ReadyWhen, node.ID); err != nil {
+			logger.V(1).Info("finalizer not ready", "finalizer", node.ID, "name", existing.GetName())
+			return false, key, nil
+		}
+	}
+	logger.V(1).Info("finalizer ready", "finalizer", node.ID, "name", existing.GetName())
+	return true, key, nil
+}
+
 // runFinalization executes the finalization sequence for a single target.
 // Returns (true, keys, nil) when all finalizer resources are ready.
 // Returns (false, keys, nil) when finalizers are in progress.
@@ -244,7 +303,6 @@ func (c *clusterAccess) runFinalization(
 	dag *dagpkg.DAG,
 	eval *evaluator,
 ) (bool, []string, error) {
-	logger := log.FromContext(ctx)
 	var keys []string
 
 	// Put the target in scope so finalizer templates can reference it.
@@ -282,45 +340,18 @@ func (c *clusterAccess) runFinalization(
 			return false, keys, fmt.Errorf("evaluating finalizer template %s: %w", finNodeID, err)
 		}
 
-		finObj := &unstructured.Unstructured{Object: evalMap}
-		if finObj.GetNamespace() == "" {
-			finObj.SetNamespace(rs.namespace)
+		// Seed scope with template output so downstream finalizer templates
+		// can reference this node. ensureFinalizerResource will overwrite
+		// scope with the actual cluster object when the resource exists.
+		eval.scope[finNodeID] = graphpkg.NormalizeTypes((&unstructured.Unstructured{Object: evalMap}).Object)
+		ready, key, ensureErr := c.ensureFinalizerResource(ctx, rs, eval, finNode, evalMap)
+		if ensureErr != nil {
+			return false, keys, ensureErr
 		}
-		existing := &unstructured.Unstructured{}
-		existing.SetGroupVersionKind(finObj.GroupVersionKind())
-		err = c.reader.Get(ctx, client.ObjectKey{
-			Namespace: finObj.GetNamespace(),
-			Name:      finObj.GetName(),
-		}, existing)
-
-		if err != nil {
-			if !apierrors.IsNotFound(err) {
-				return false, keys, fmt.Errorf("checking finalizer resource %s: %w", finNodeID, err)
-			}
-			// Create finalizer resource.
-			logger.Info("creating finalizer resource", "finalizer", finNodeID,
-				"target", target.GetName())
-			applied, applyErr := c.applySSA(ctx, rs, evalMap, finNodeID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, false, false)
-			if applyErr != nil {
-				return false, keys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
-			}
-			keys = append(keys, resourceKey(applied))
-			eval.scope[finNodeID] = applied.Object
+		keys = append(keys, key)
+		if !ready {
 			allReady = false
-			continue
 		}
-
-		// Exists — check readyWhen.
-		eval.scope[finNodeID] = graphpkg.NormalizeTypes(existing.Object)
-		keys = append(keys, resourceKey(existing))
-		if len(finNode.ReadyWhen) > 0 {
-			if err := eval.evalReadinessConditions(finNode.ReadyWhen, finNodeID); err != nil {
-				logger.V(1).Info("finalizer not ready", "finalizer", finNodeID)
-				allReady = false
-				continue
-			}
-		}
-		logger.V(1).Info("finalizer ready", "finalizer", finNodeID)
 	}
 
 	return allReady, keys, nil
@@ -369,40 +400,15 @@ func (c *clusterAccess) runForEachFinalization(
 		graphpkg.StampForEachChildLabels(childObj, finNode.ID, rs.name, rs.namespace, eval.effectiveGeneration, graphpkg.NodeTypeTemplate)
 		evalMap = childObj.Object
 
-		existing := &unstructured.Unstructured{}
-		existing.SetGroupVersionKind(childObj.GroupVersionKind())
-		getErr := c.reader.Get(ctx, client.ObjectKey{
-			Namespace: childObj.GetNamespace(),
-			Name:      childObj.GetName(),
-		}, existing)
-
-		if getErr != nil {
-			if !apierrors.IsNotFound(getErr) {
-				return false, createdKeys, fmt.Errorf("checking forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), getErr)
-			}
-			logger.Info("creating forEach finalizer child",
-				"finalizer", finNode.ID, "name", childObj.GetName())
-			applied, applyErr := c.applySSA(ctx, rs, evalMap, finNode.ID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, false, false)
-			if applyErr != nil {
-				return false, createdKeys, fmt.Errorf("creating forEach finalizer child %s/%s: %w", finNode.ID, childObj.GetName(), applyErr)
-			}
-			createdKeys = append(createdKeys, resourceKey(applied))
+		innerEval.scope[finNode.ID] = graphpkg.NormalizeTypes(childObj.Object)
+		ready, key, ensureErr := c.ensureFinalizerResource(ctx, rs, innerEval, finNode, evalMap)
+		if ensureErr != nil {
+			return false, createdKeys, ensureErr
+		}
+		createdKeys = append(createdKeys, key)
+		if !ready {
 			allReady = false
-			continue
 		}
-
-		createdKeys = append(createdKeys, resourceKey(existing))
-		if len(finNode.ReadyWhen) > 0 {
-			innerEval.scope[finNode.ID] = graphpkg.NormalizeTypes(existing.Object)
-			if err := innerEval.evalReadinessConditions(finNode.ReadyWhen, finNode.ID); err != nil {
-				logger.V(1).Info("forEach finalizer child not ready",
-					"finalizer", finNode.ID, "name", existing.GetName())
-				allReady = false
-				continue
-			}
-		}
-		logger.V(1).Info("forEach finalizer child ready",
-			"finalizer", finNode.ID, "name", existing.GetName())
 	}
 
 	return allReady, createdKeys, nil

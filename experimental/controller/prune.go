@@ -27,14 +27,16 @@ import (
 )
 
 // pruneOutcome describes what happened to a single prune candidate.
+// Only pruneDeferred and pruneBlocked are significant — they are consumed
+// by collectDeferredKeys to determine retry candidates. pruneDeleted is
+// recorded for logging but not consumed by any downstream logic.
 type pruneOutcome int
 
 const (
 	pruneDeleted  pruneOutcome = iota // template resource deleted
-	pruneReleased                     // patch fields released
+	pruneSkipped                      // no action needed (not found, not owned, parse failed)
 	pruneBlocked                      // third-party managers block deletion
 	pruneDeferred                     // finalization not ready
-	pruneSkipped                      // not owned or not found
 )
 
 // pruneResult carries the output of pruneResources to the caller.
@@ -143,7 +145,6 @@ func (c *clusterAccess) pruneResources(
 			// Patch keys use release apply (release fields), not delete.
 			gvk, nn := parseResourceKey(key)
 			if gvk.Kind == "" {
-				result.Outcomes[key] = pruneSkipped
 				continue
 			}
 			if _, err := releaseApply(ctx, c.client, gvk, nn.Namespace, nn.Name, fieldOwner, candidate.HasStatus); err != nil {
@@ -151,7 +152,6 @@ func (c *clusterAccess) pruneResources(
 			} else {
 				logger.Info("released contribution fields", "key", key)
 			}
-			result.Outcomes[key] = pruneReleased
 			continue
 
 		default:
@@ -162,7 +162,6 @@ func (c *clusterAccess) pruneResources(
 				result.Outcomes[key] = pruneSkipped
 				continue
 			case deleteNotFound:
-				result.Outcomes[key] = pruneSkipped
 				// Target absent — clean up finalization children if mid-finalization.
 				if childKeys, ok := finResult.ChildKeysToCleanup[key]; ok {
 					deferredDeletes = append(deferredDeletes, childKeys...)
@@ -180,6 +179,7 @@ func (c *clusterAccess) pruneResources(
 						}
 					}
 				}
+				result.Outcomes[key] = pruneSkipped
 				continue
 			case deleteNotOwned:
 				result.Outcomes[key] = pruneSkipped
@@ -253,18 +253,6 @@ func collectDeferredKeys(outcomes map[string]pruneOutcome, allPrevious map[strin
 		}
 	}
 	return deferred
-}
-
-// collectAllDAGs returns the active DAG plus all superseded DAGs.
-func collectAllDAGs(dag *dagpkg.DAG, supersededDAGs map[string]*dagpkg.DAG) []*dagpkg.DAG {
-	allDAGs := []*dagpkg.DAG{}
-	if dag != nil {
-		allDAGs = append(allDAGs, dag)
-	}
-	for _, d := range supersededDAGs {
-		allDAGs = append(allDAGs, d)
-	}
-	return allDAGs
 }
 
 // findManagedResourceKeys discovers dynamically-named resources (forEach, CEL
@@ -342,18 +330,14 @@ func (c *clusterAccess) findManagedResourceKeys(ctx context.Context, rs *reconci
 	return keys, nil
 }
 
-// pruneOrder sorts resource keys in reverse dependency order using all
-// available DAGs (active + superseded). Dependents are deleted before
-// their dependencies. Keys that don't match any DAG node are placed first
-// (highest position — deleted first).
-func pruneOrder(keys []string, dags []*dagpkg.DAG, defaultNS string, scope GVKScopeResolver) []string {
-	// Build a map from resource key → topological position across all DAGs.
-	// Use the highest position found across all DAGs for each key.
+// buildKeyPositionMap builds a map from resource key → topological position
+// across all DAGs. Uses the highest position found across all DAGs for each
+// key. Returns the position map and the maximum position observed.
+func buildKeyPositionMap(dags []*dagpkg.DAG, defaultNS string, scope *scopeResolver) (map[string]int, int) {
 	keyPosition := map[string]int{}
 	maxPosition := 0
 
 	for _, d := range dags {
-		// Build position map for this DAG.
 		topoPosition := make(map[int]int, len(d.TopologicalOrder))
 		for pos, nodeIdx := range d.TopologicalOrder {
 			topoPosition[nodeIdx] = pos
@@ -377,61 +361,15 @@ func pruneOrder(keys []string, dags []*dagpkg.DAG, defaultNS string, scope GVKSc
 		}
 	}
 
-	type scored struct {
-		key      string
-		position int
-	}
-	scoredKeys := make([]scored, 0, len(keys))
-	for _, key := range keys {
-		pos, ok := keyPosition[key]
-		if !ok {
-			pos = maxPosition + 1 // unmatched → deleted first
-		}
-		scoredKeys = append(scoredKeys, scored{key: key, position: pos})
-	}
-
-	// Reverse topological: highest position first.
-	sort.Slice(scoredKeys, func(i, j int) bool {
-		return scoredKeys[i].position > scoredKeys[j].position
-	})
-
-	result := make([]string, len(scoredKeys))
-	for i, s := range scoredKeys {
-		result[i] = s.key
-	}
-	return result
+	return keyPosition, maxPosition
 }
 
-// pruneOrderApplied sorts Applied entries in reverse dependency order.
-// Same algorithm as pruneOrder but operates on Applied entries.
-func pruneOrderApplied(candidates []Applied, dags []*dagpkg.DAG, defaultNS string, scope GVKScopeResolver) []Applied {
-	// Build a map from resource key → topological position across all DAGs.
-	keyPosition := map[string]int{}
-	maxPosition := 0
-
-	for _, d := range dags {
-		topoPosition := make(map[int]int, len(d.TopologicalOrder))
-		for pos, nodeIdx := range d.TopologicalOrder {
-			topoPosition[nodeIdx] = pos
-		}
-
-		for i, node := range d.Nodes {
-			if node.Identity() == nil {
-				continue
-			}
-			rk := staticResourceKey(node.Identity(), defaultNS, scope)
-			if rk == "" {
-				continue
-			}
-			pos := topoPosition[i]
-			if pos > maxPosition {
-				maxPosition = pos
-			}
-			if existing, ok := keyPosition[rk]; !ok || pos > existing {
-				keyPosition[rk] = pos
-			}
-		}
-	}
+// pruneOrderApplied sorts Applied entries in reverse dependency order using
+// all available DAGs (active + superseded). Dependents are deleted before
+// their dependencies. Keys that don't match any DAG node are placed first
+// (highest position — deleted first).
+func pruneOrderApplied(candidates []Applied, dags []*dagpkg.DAG, defaultNS string, scope *scopeResolver) []Applied {
+	keyPosition, maxPosition := buildKeyPositionMap(dags, defaultNS, scope)
 
 	type scored struct {
 		applied  Applied

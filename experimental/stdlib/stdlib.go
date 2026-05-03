@@ -86,19 +86,19 @@ func Apply(ctx context.Context, log logr.Logger, cfg *rest.Config) error {
 type resource struct {
 	name string
 	data []byte
-	gvr  unstructured.Unstructured
+	obj  unstructured.Unstructured
 }
 
 func apply(ctx context.Context, dc dynamic.Interface, r resource) error {
-	gvk := r.gvr.GroupVersionKind()
+	gvk := r.obj.GroupVersionKind()
 	gvr := gvk.GroupVersion().WithResource(plural(gvk.Kind))
-	ns := r.gvr.GetNamespace()
+	ns := r.obj.GetNamespace()
 
 	var rc dynamic.ResourceInterface = dc.Resource(gvr)
 	if ns != "" {
 		rc = dc.Resource(gvr).Namespace(ns)
 	}
-	_, err := rc.Patch(ctx, r.gvr.GetName(), types.ApplyPatchType, r.data,
+	_, err := rc.Patch(ctx, r.obj.GetName(), types.ApplyPatchType, r.data,
 		metav1.PatchOptions{FieldManager: "graph-controller", Force: ptr.To(true)})
 	return err
 }
@@ -134,7 +134,7 @@ func loadResources() ([]resource, error) {
 			out = append(out, resource{
 				name: fmt.Sprintf("%s/%s", obj.GetKind(), obj.GetName()),
 				data: doc,
-				gvr:  *obj,
+				obj:  *obj,
 			})
 		}
 	}

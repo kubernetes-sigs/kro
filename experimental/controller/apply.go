@@ -34,7 +34,7 @@ import (
 type clusterAccess struct {
 	client client.Client     // read-write client (SSA, Delete)
 	reader client.Reader     // direct API server reader (bypasses cache)
-	scope  GVKScopeResolver // namespace vs cluster-scope resolution
+	scope  *scopeResolver // namespace vs cluster-scope resolution
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ func (c *clusterAccess) deleteByKeys(ctx context.Context, keys []string) {
 // generation (the active revision's generation when the current generation
 // failed to compile). Explicit parameter rather than reading from graph so
 // the choice is visible at the call site.
-func (c *clusterAccess) applySSA(ctx context.Context, rs *reconcileScope, evalMap map[string]any, nodeID string, nodeType graphpkg.NodeType, generation int64, resyncCorrection bool, forceApply bool) (*unstructured.Unstructured, error) {
+func (c *clusterAccess) applySSA(ctx context.Context, rs *reconcileScope, evalMap map[string]any, nodeID string, nodeType graphpkg.NodeType, generation int64, forceApply bool) (*unstructured.Unstructured, error) {
 	obj, err := prepareObject(evalMap, rs, nodeID, nodeType, generation, c.scope)
 	if err != nil {
 		return nil, err
@@ -157,7 +157,7 @@ func (c *clusterAccess) applySSA(ctx context.Context, rs *reconcileScope, evalMa
 
 // prepareObject creates an Unstructured from the evaluated map, defaults
 // namespace for namespace-scoped resources, and stamps identity labels.
-func prepareObject(evalMap map[string]any, rs *reconcileScope, nodeID string, nodeType graphpkg.NodeType, generation int64, scope GVKScopeResolver) (*unstructured.Unstructured, error) {
+func prepareObject(evalMap map[string]any, rs *reconcileScope, nodeID string, nodeType graphpkg.NodeType, generation int64, scope *scopeResolver) (*unstructured.Unstructured, error) {
 	obj := &unstructured.Unstructured{Object: evalMap}
 
 	// Only default namespace for namespace-scoped resources.

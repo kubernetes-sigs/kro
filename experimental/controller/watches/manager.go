@@ -68,7 +68,7 @@ type watchEvent struct {
 	oldLabels map[string]string
 }
 
-func NewWatchManager(client metadata.Interface, resync time.Duration, onEvent func(watchEvent), log logr.Logger) *WatchManager {
+func NewWatchManager(client metadata.Interface, resync time.Duration, onNewType func(schema.GroupVersionResource), log logr.Logger) *WatchManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	wm := &WatchManager{
 		watches:      make(map[schema.GroupVersionResource]*gvrWatch),
@@ -76,21 +76,13 @@ func NewWatchManager(client metadata.Interface, resync time.Duration, onEvent fu
 		gvrKinds:     make(map[schema.GroupVersionResource]string),
 		client:       client,
 		resync:       resync,
-		onEvent:      onEvent,
+		onNewType:    onNewType,
 		log:          log.WithName("watch-manager"),
 		parentCtx:    ctx,
 		parentCancel: cancel,
 	}
 	wm.createInformer = wm.defaultCreateInformer
 	return wm
-}
-
-func (m *WatchManager) SetOnEvent(fn func(watchEvent)) {
-	m.onEvent = fn
-}
-
-func (m *WatchManager) SetOnNewType(fn func(schema.GroupVersionResource)) {
-	m.onNewType = fn
 }
 
 func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource, kind string, ownerID string) error {

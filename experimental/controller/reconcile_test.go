@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,7 +26,7 @@ import (
 //
 // These test mechanisms introduced in the design reconciliation:
 //   - dagpkg.NodeBlocked vs dagpkg.NodeExcluded propagation split
-//   - pruneOrder reverse dependency ordering
+//   - pruneOrderApplied reverse dependency ordering
 //   - classifyAPIError default flip
 //
 // Each test verifies the system DOES the right thing (correctness), not
@@ -55,7 +56,7 @@ func TestSetStateDoesNotPropagate(t *testing.T) {
 	for _, sourceState := range states {
 		t.Run(sourceState.String(), func(t *testing.T) {
 			plan := dagpkg.NewPlanState(dag)
-			plan.SetState(dag, "a", sourceState)
+			plan.SetState("a", sourceState)
 
 			assert.Equal(t, sourceState, plan.States["a"], "source should be set")
 			assert.Equal(t, dagpkg.NodeUnvisited, plan.States["b"], "direct dependent should remain unvisited")
@@ -77,10 +78,10 @@ func TestSummaryCountsBlockedState(t *testing.T) {
 	require.NoError(t, err)
 
 	plan := dagpkg.NewPlanState(dag)
-	plan.SetState(dag, "a", dagpkg.NodeError)
+	plan.SetState("a", dagpkg.NodeError)
 	// Simulate what checkDependencyGate does: when b's dependency a is in error,
 	// the walk marks b as Blocked.
-	plan.SetState(dag, "b", dagpkg.NodeBlocked)
+	plan.SetState("b", dagpkg.NodeBlocked)
 
 	summary := plan.Summary()
 	assert.True(t, summary.HasError, "should report error on the source node")
@@ -107,7 +108,7 @@ func gateToNodeState(g gateState) dagpkg.NodeState {
 	case gatePending:
 		return dagpkg.NodePending
 	default:
-		return dagpkg.NodeReady // gateDispatch — would proceed to evaluation
+		return dagpkg.NodeReady // zero value — would proceed to evaluation
 	}
 }
 
@@ -159,8 +160,8 @@ func TestCheckDependencyGatePrecedence_ExcludedOverBlockedOverPending(t *testing
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			plan := dagpkg.NewPlanState(dag)
-			plan.SetState(dag, "a", tc.stateA)
-			plan.SetState(dag, "b", tc.stateB)
+			plan.SetState("a", tc.stateA)
+			plan.SetState("b", tc.stateB)
 
 			cIdx := dag.Index["c"]
 			node := &dag.Nodes[cIdx]
@@ -173,7 +174,7 @@ func TestCheckDependencyGatePrecedence_ExcludedOverBlockedOverPending(t *testing
 	}
 }
 
-// TestPruneOrderReverseDependency proves that pruneOrder sorts prune
+// TestPruneOrderReverseDependency proves that pruneOrderApplied sorts prune
 // candidates so dependents are deleted before their dependencies. This
 // prevents dangling references during prune.
 func TestPruneOrderReverseDependency(t *testing.T) {
@@ -187,19 +188,19 @@ func TestPruneOrderReverseDependency(t *testing.T) {
 	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
-	keys := []string{
-		"/v1/ConfigMap/default/a",
-		"/v1/ConfigMap/default/b",
-		"/v1/ConfigMap/default/c",
+	candidates := []Applied{
+		{Key: "/v1/ConfigMap/default/a"},
+		{Key: "/v1/ConfigMap/default/b"},
+		{Key: "/v1/ConfigMap/default/c"},
 	}
 
-	ordered := pruneOrder(keys, []*dagpkg.DAG{dag}, "default", nil)
+	ordered := pruneOrderApplied(candidates, []*dagpkg.DAG{dag}, "default", nil)
 
 	require.Len(t, ordered, 3)
 	// C depends on B depends on A. Reverse: C first, then B, then A.
-	assert.Equal(t, "/v1/ConfigMap/default/c", ordered[0], "most-dependent should be first")
-	assert.Equal(t, "/v1/ConfigMap/default/b", ordered[1])
-	assert.Equal(t, "/v1/ConfigMap/default/a", ordered[2], "root should be last")
+	assert.Equal(t, "/v1/ConfigMap/default/c", ordered[0].Key, "most-dependent should be first")
+	assert.Equal(t, "/v1/ConfigMap/default/b", ordered[1].Key)
+	assert.Equal(t, "/v1/ConfigMap/default/a", ordered[2].Key, "root should be last")
 }
 
 // TestPruneOrderUnmatchedKeysFirst proves that keys not matching any DAG
@@ -212,16 +213,16 @@ func TestPruneOrderUnmatchedKeysFirst(t *testing.T) {
 	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
-	keys := []string{
-		"/v1/ConfigMap/default/a",
-		"/v1/ConfigMap/default/unknown-dynamic",
+	candidates := []Applied{
+		{Key: "/v1/ConfigMap/default/a"},
+		{Key: "/v1/ConfigMap/default/unknown-dynamic"},
 	}
 
-	ordered := pruneOrder(keys, []*dagpkg.DAG{dag}, "default", nil)
+	ordered := pruneOrderApplied(candidates, []*dagpkg.DAG{dag}, "default", nil)
 
 	require.Len(t, ordered, 2)
-	assert.Equal(t, "/v1/ConfigMap/default/unknown-dynamic", ordered[0], "unmatched key should be first")
-	assert.Equal(t, "/v1/ConfigMap/default/a", ordered[1])
+	assert.Equal(t, "/v1/ConfigMap/default/unknown-dynamic", ordered[0].Key, "unmatched key should be first")
+	assert.Equal(t, "/v1/ConfigMap/default/a", ordered[1].Key)
 }
 
 // TestPruneOrderContributeKeysResolved proves that contribute-prefixed keys
@@ -234,16 +235,16 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
-	keys := []string{
-		"/v1/ConfigMap/default/a",
-		"patch:/v1/ConfigMap/default/b",
+	candidates := []Applied{
+		{Key: "/v1/ConfigMap/default/a"},
+		{Key: "patch:/v1/ConfigMap/default/b"},
 	}
 
-	ordered := pruneOrder(keys, []*dagpkg.DAG{dag}, "default", nil)
+	ordered := pruneOrderApplied(candidates, []*dagpkg.DAG{dag}, "default", nil)
 
 	require.Len(t, ordered, 2)
-	assert.Equal(t, "patch:/v1/ConfigMap/default/b", ordered[0], "dependent patch key should be first")
-	assert.Equal(t, "/v1/ConfigMap/default/a", ordered[1])
+	assert.Equal(t, "patch:/v1/ConfigMap/default/b", ordered[0].Key, "dependent patch key should be first")
+	assert.Equal(t, "/v1/ConfigMap/default/a", ordered[1].Key)
 }
 
 // TestClassifyAPIErrorDefault proves that unrecognized errors (raw Go errors
@@ -680,21 +681,28 @@ func TestStaticResourceKey_ExplicitNamespace(t *testing.T) {
 	})
 }
 
-// fakeGVKScopeResolver is a stub GVKScopeResolver that answers from a table.
+// testScopeResolver returns a *scopeResolver with a pre-populated cache.
 // Used to verify that staticResourceKey produces empty-namespace keys for
 // cluster-scoped kinds, matching what resourceKey(liveObj) produces after
 // an API server response strips the namespace for cluster-scoped responses.
-type fakeGVKScopeResolver map[string]bool // "group/version/Kind" → isNamespaced
-
-func (f fakeGVKScopeResolver) IsNamespaced(gvk schema.GroupVersionKind) (bool, bool) {
-	key := gvk.Group + "/" + gvk.Version + "/" + gvk.Kind
-	v, ok := f[key]
-	return v, ok
+func testScopeResolver(entries map[string]bool) *scopeResolver {
+	r := &scopeResolver{
+		cache: map[schema.GroupVersionKind]bool{},
+	}
+	for k, v := range entries {
+		parts := strings.SplitN(k, "/", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		gvk := schema.GroupVersionKind{Group: parts[0], Version: parts[1], Kind: parts[2]}
+		r.cache[gvk] = v
+	}
+	return r
 }
 
 // TestStaticResourceKey_ClusterScopedNamespace_Regression proves that
 // staticResourceKey produces an empty-namespace key for cluster-scoped
-// kinds when a GVKScopeResolver is provided — matching what resourceKey(obj)
+// kinds when a scopeResolver is provided — matching what resourceKey(obj)
 // produces after the API server strips namespace from cluster-scoped
 // responses. Before this fix, staticResourceKey unconditionally
 // substituted the fallback (Graph's) namespace, so its keys never matched
@@ -704,10 +712,10 @@ func (f fakeGVKScopeResolver) IsNamespaced(gvk schema.GroupVersionKind) (bool, b
 // Per 003-ownership.md § Priority Resolution: "Cluster-scoped resources
 // use empty string for the namespace component."
 func TestStaticResourceKey_ClusterScopedNamespace_Regression(t *testing.T) {
-	scope := fakeGVKScopeResolver{
+	scope := testScopeResolver(map[string]bool{
 		"rbac.authorization.k8s.io/v1/ClusterRole": false, // cluster-scoped
 		"/v1/ConfigMap": true, // namespaced
-	}
+	})
 
 	t.Run("cluster-scoped kind yields empty namespace segment", func(t *testing.T) {
 		tmpl := map[string]any{
@@ -966,7 +974,7 @@ func TestCheckDependencyGate_RegressionExcludedPersistence(t *testing.T) {
 
 	plan := dagpkg.NewPlanState(dag)
 	// Mark root as Excluded in the plan (simulates root's includeWhen=false).
-	plan.SetState(dag, "root", dagpkg.NodeExcluded)
+	plan.SetState("root", dagpkg.NodeExcluded)
 
 	childIdx := dag.Index["child"]
 	node := &dag.Nodes[childIdx]
@@ -1457,12 +1465,6 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 
 	// Pre-populate forEach state so items are "known" and can be carried forward.
 	prevState := &forEachCarryForward{
-		items: map[string][]any{
-			"workers/item": {
-				map[string]any{"metadata": map[string]any{"name": "alpha"}},
-				map[string]any{"metadata": map[string]any{"name": "beta"}},
-			},
-		},
 		itemScope: map[string]map[string]any{
 			"workers": {"alpha": prevAlpha, "beta": prevBeta},
 		},
@@ -1479,7 +1481,7 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 
 	r := &GraphReconciler{}
 	rs := newReconcileScope(graph, nil)
-	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval, false, prevState)
+	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval, prevState)
 	// compiler.ErrWaitingForReadiness expected — propagateWhen halted expansion.
 	require.ErrorIs(t, err, compiler.ErrWaitingForReadiness)
 
@@ -1538,7 +1540,7 @@ func TestForEach_DefinitionItemsAlwaysReEvaluated(t *testing.T) {
 
 	r := &GraphReconciler{}
 	rs := newReconcileScope(graph, nil)
-	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval, false, nil)
+	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval, nil)
 	require.NoError(t, err)
 
 	items, ok := eval.scope["results"].([]any)
@@ -1590,7 +1592,7 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval.scope["config"] = map[string]any{"version": "v1"}
 	eval.scope["source"] = map[string]any{"names": names}
 
-	out, err := c.reconcileForEach(context.Background(), rs, resultsNode, eval, false, nil)
+	out, err := c.reconcileForEach(context.Background(), rs, resultsNode, eval, nil)
 	require.NoError(t, err)
 	items1, ok := eval.scope["results"].([]any)
 	require.True(t, ok)
@@ -1607,9 +1609,6 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	for k, v := range newState.itemKeys {
 		state.forEach.itemKeys[k] = v
 	}
-	for k, v := range newState.items {
-		state.forEach.items[k] = v
-	}
 
 	// Phase 2: config.version = "v2", collection unchanged.
 	// Items are always re-evaluated so they pick up the new config.
@@ -1619,12 +1618,11 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval2.scope["source"] = map[string]any{"names": names}
 
 	prevState2 := &forEachCarryForward{
-		items:     state.forEach.items,
 		itemScope: state.forEach.itemScope,
 		itemKeys:  state.forEach.itemKeys,
 	}
 
-	_, err = c.reconcileForEach(context.Background(), rs, resultsNode, eval2, false, prevState2)
+	_, err = c.reconcileForEach(context.Background(), rs, resultsNode, eval2, prevState2)
 	require.NoError(t, err)
 	items2, ok := eval2.scope["results"].([]any)
 	require.True(t, ok)
@@ -1822,14 +1820,14 @@ func TestLazyDepDoesNotGateDispatch(t *testing.T) {
 
 	// A is ready, B is pending — C should still dispatch because B is lazy.
 	plan := dagpkg.NewPlanState(dag)
-	plan.SetState(dag, "a", dagpkg.NodeReady)
-	plan.SetState(dag, "b", dagpkg.NodePending) // B is pending — lazy dep
+	plan.SetState("a", dagpkg.NodeReady)
+	plan.SetState("b", dagpkg.NodePending) // B is pending — lazy dep
 
 	node := &dag.Nodes[cIdx]
 	gate := checkDependencyGate(node, plan)
-	// C should dispatch (gateDispatch) — B is lazy, so its Pending state is invisible to gating.
+	// C should dispatch (zero value) — B is lazy, so its Pending state is invisible to gating.
 	// checkDependencyGate only checks hard deps; lazy dep B=Pending doesn't block.
-	assert.Equal(t, gateDispatch, gate,
+	assert.Equal(t, gateState(0), gate,
 		"lazy dep B=Pending should not block C from dispatching")
 }
 

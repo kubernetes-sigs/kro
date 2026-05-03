@@ -58,6 +58,15 @@ func rewriteDependencies(expr celast.Expr, scopeVars map[string]bool, factory ce
 // sub-expressions are assigned fresh IDs via nextID — reusing IDs across
 // different kinds confuses CEL's type checker ("incompatible type already
 // exists for expression").
+//
+// This uses its own inline walker rather than walkAST (fieldpath.go) because
+// the two have different concerns. walkAST is observation-oriented: it tracks
+// scope variables and comprehension variables for dependency analysis. This
+// walker is mutation-oriented: it needs to SetKindCase on matched nodes, doesn't
+// care about scope/comprehension variable tracking, and requires factory/nextID
+// context that walkAST doesn't carry. Forcing the rewrite through walkAST would
+// require passing dummy scope maps, three no-op callbacks, and reimplementing
+// comprehension recursion inside onComprehension — net negative clarity.
 func rewriteMemberCallToMapLookup(expr celast.Expr, funcName string, idSet map[string]bool, targetVar string, factory celast.ExprFactory, nextID func() int64) bool {
 	if expr == nil || len(idSet) == 0 {
 		return false

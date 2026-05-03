@@ -158,36 +158,6 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 	}
 }
 
-func buildRGDCRD() *apiextensionsv1.CustomResourceDefinition {
-	return &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "resourcegraphdefinitions.test.kro.run"},
-		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
-			Group: "test.kro.run",
-			Names: apiextensionsv1.CustomResourceDefinitionNames{
-				Plural:   "resourcegraphdefinitions",
-				Singular: "resourcegraphdefinition",
-				Kind:     "ResourceGraphDefinition",
-				ListKind: "ResourceGraphDefinitionList",
-			},
-			Scope: apiextensionsv1.NamespaceScoped,
-			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{
-				Name:    "v1alpha1",
-				Served:  true,
-				Storage: true,
-				Schema: &apiextensionsv1.CustomResourceValidation{
-					OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
-						Type:                   "object",
-						XPreserveUnknownFields: ptr.To(true),
-					},
-				},
-				Subresources: &apiextensionsv1.CustomResourceSubresources{
-					Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
-				},
-			}},
-		},
-	}
-}
-
 func waitForResource(ctx context.Context, c client.Client, key types.NamespacedName, obj *unstructured.Unstructured) error {
 	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		if err := c.Get(ctx, key, obj); err != nil {
@@ -318,52 +288,6 @@ func assertReferenceClassification(t *testing.T, obj *unstructured.Unstructured,
 		"%s identity label for Graph %s should be %q, got %q", obj.GetName(), graphName, want, val)
 }
 
-// waitForReferenceClassification polls until a resource's identity label for
-// the named Graph matches want, or the context expires. Used when a
-// classification flip is in flight — the reconciler updates the label
-// asynchronously after a re-resolution event (e.g., Patch→Template when the
-// target's original owner is torn down).
-//
-// This helper only confirms the final state, not that a transition occurred.
-// When verifying a transition, book-end the wait with a pre-state assertion
-// (e.g., assertReferenceClassification(..., "patch") before the
-// triggering action) so that an unexpectedly-already-terminal label fails the
-// test loudly rather than passing silently.
-//
-// Returns nil on success, or a descriptive error (wrapping
-// context.DeadlineExceeded when the classification never reaches want).
-func waitForReferenceClassification(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, key types.NamespacedName, graphName, want string, timeout ...time.Duration) error {
-	t := 30 * time.Second
-	if len(timeout) > 0 {
-		t = timeout[0]
-	}
-	var lastSeen string
-	err := wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, t, true,
-		func(ctx context.Context) (bool, error) {
-			obj := &unstructured.Unstructured{}
-			obj.SetGroupVersionKind(gvk)
-			if err := c.Get(ctx, key, obj); err != nil {
-				if apierrors.IsNotFound(err) {
-					lastSeen = "(absent)"
-					return false, nil
-				}
-				return false, err
-			}
-			val, ok := referenceLabelValue(obj, graphName)
-			if !ok {
-				lastSeen = "(no label)"
-				return false, nil
-			}
-			lastSeen = val
-			return val == want, nil
-		})
-	if err != nil {
-		return fmt.Errorf("waiting for %s/%s classification by %s to be %q (last seen %q): %w",
-			key.Namespace, key.Name, graphName, want, lastSeen, err)
-	}
-	return nil
-}
-
 // uniqueGroup returns a unique API group for test CRD isolation. CRDs are
 // cluster-scoped, so parallel tests that create CRDs with the same group
 // would collide. Each call generates a different group (e.g.,
@@ -423,146 +347,36 @@ func buildCustomCRD(name, group, kind, plural string) *apiextensionsv1.CustomRes
 		},
 	}
 }
-func buildSimpleAppCRD() *apiextensionsv1.CustomResourceDefinition {
-	return &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "simpleapps.test.kro.run"},
-		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
-			Group: "test.kro.run",
-			Names: apiextensionsv1.CustomResourceDefinitionNames{
-				Plural:   "simpleapps",
-				Singular: "simpleapp",
-				Kind:     "SimpleApp",
-				ListKind: "SimpleAppList",
-			},
-			Scope: apiextensionsv1.NamespaceScoped,
-			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{
-				Name:    "v1alpha1",
-				Served:  true,
-				Storage: true,
-				Schema: &apiextensionsv1.CustomResourceValidation{
-					OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
-						Type:                   "object",
-						XPreserveUnknownFields: ptr.To(true),
-					},
-				},
-				Subresources: &apiextensionsv1.CustomResourceSubresources{
-					Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
-				},
-			}},
-		},
+// conditionField extracts a field from a condition by type. Returns "" if
+// the condition or field is not found.
+func conditionField(g *unstructured.Unstructured, condType, field string) string {
+	status, _ := g.Object["status"].(map[string]any)
+	if status == nil {
+		return ""
 	}
-}
-
-// buildStrictStatusCRD returns a CRD with strict status validation.
-// Used by T1.4 to produce a status-only validation failure: the spec
-// accepts anything, but status.phase is constrained to an enum.
-func buildStrictStatusCRD() *apiextensionsv1.CustomResourceDefinition {
-	return &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "strictstatuses.test.kro.run"},
-		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
-			Group: "test.kro.run",
-			Names: apiextensionsv1.CustomResourceDefinitionNames{
-				Plural:   "strictstatuses",
-				Singular: "strictstatus",
-				Kind:     "StrictStatus",
-				ListKind: "StrictStatusList",
-			},
-			Scope: apiextensionsv1.NamespaceScoped,
-			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{
-				Name:    "v1alpha1",
-				Served:  true,
-				Storage: true,
-				Schema: &apiextensionsv1.CustomResourceValidation{
-					OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
-						Type: "object",
-						Properties: map[string]apiextensionsv1.JSONSchemaProps{
-							"spec": {
-								Type:                   "object",
-								XPreserveUnknownFields: ptr.To(true),
-							},
-							"status": {
-								Type: "object",
-								Properties: map[string]apiextensionsv1.JSONSchemaProps{
-									"phase": {
-										Type: "string",
-										Enum: []apiextensionsv1.JSON{
-											{Raw: []byte(`"Running"`)},
-											{Raw: []byte(`"Stopped"`)},
-											{Raw: []byte(`"Failed"`)},
-										},
-									},
-									"message": {Type: "string"},
-								},
-							},
-						},
-					},
-				},
-				Subresources: &apiextensionsv1.CustomResourceSubresources{
-					Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
-				},
-			}},
-		},
+	conditions, _ := status["conditions"].([]any)
+	cond, found := findCondition(conditions, condType)
+	if !found {
+		return ""
 	}
+	v, _ := cond[field].(string)
+	return v
 }
 
 // graphReady returns true if the Graph's Ready condition is True.
-func graphReady(g *unstructured.Unstructured) bool {
-	status, _ := g.Object["status"].(map[string]any)
-	if status == nil {
-		return false
-	}
-	conditions, _ := status["conditions"].([]any)
-	cond, found := findCondition(conditions, "Ready")
-	if !found {
-		return false
-	}
-	return cond["status"] == "True"
-}
+func graphReady(g *unstructured.Unstructured) bool { return conditionField(g, "Ready", "status") == "True" }
 
 // graphReadyMessage returns the Ready condition's message string, or "" if not found.
-func graphReadyMessage(g *unstructured.Unstructured) string {
-	status, _ := g.Object["status"].(map[string]any)
-	if status == nil {
-		return ""
-	}
-	conditions, _ := status["conditions"].([]any)
-	cond, found := findCondition(conditions, "Ready")
-	if !found {
-		return ""
-	}
-	msg, _ := cond["message"].(string)
-	return msg
-}
+func graphReadyMessage(g *unstructured.Unstructured) string { return conditionField(g, "Ready", "message") }
 
 // graphReadyReason returns the Ready condition's reason string, or "" if not found.
-func graphReadyReason(g *unstructured.Unstructured) string {
-	status, _ := g.Object["status"].(map[string]any)
-	if status == nil {
-		return ""
-	}
-	conditions, _ := status["conditions"].([]any)
-	cond, found := findCondition(conditions, "Ready")
-	if !found {
-		return ""
-	}
-	reason, _ := cond["reason"].(string)
-	return reason
-}
+func graphReadyReason(g *unstructured.Unstructured) string { return conditionField(g, "Ready", "reason") }
 
 // graphReadyStatus returns the Ready condition's status string, or "" if not found.
-func graphReadyStatus(g *unstructured.Unstructured) string {
-	status, _ := g.Object["status"].(map[string]any)
-	if status == nil {
-		return ""
-	}
-	conditions, _ := status["conditions"].([]any)
-	cond, found := findCondition(conditions, "Ready")
-	if !found {
-		return ""
-	}
-	s, _ := cond["status"].(string)
-	return s
-}
+func graphReadyStatus(g *unstructured.Unstructured) string { return conditionField(g, "Ready", "status") }
+
+// graphCompiledReason returns the reason from the Compiled condition.
+func graphCompiledReason(g *unstructured.Unstructured) string { return conditionField(g, "Compiled", "reason") }
 
 // waitForGraphReady polls until the Graph's Ready condition is True.
 func waitForGraphReady(ctx context.Context, c client.Client, key types.NamespacedName) error {
@@ -613,18 +427,6 @@ func findCondition(conditions []any, condType string) (map[string]any, bool) {
 		}
 	}
 	return nil, false
-}
-
-// graphCompiledReason returns the reason from the Compiled condition.
-func graphCompiledReason(g *unstructured.Unstructured) string {
-	status, _ := g.Object["status"].(map[string]any)
-	conditions, _ := status["conditions"].([]any)
-	cond, ok := findCondition(conditions, "Compiled")
-	if !ok {
-		return ""
-	}
-	reason, _ := cond["reason"].(string)
-	return reason
 }
 
 // waitForGraphCompiledStatus polls until the Graph's Compiled condition

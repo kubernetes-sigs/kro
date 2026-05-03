@@ -63,7 +63,7 @@ func TestInstanceStateIsolation(t *testing.T) {
 	// Mutate state1's mutable fields.
 	state1.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
 	state1.previousPlanStates = &dagpkg.PlanState{States: map[string]dagpkg.NodeState{"node0": dagpkg.NodeReady}}
-	state1.forEach.items["node0/item"] = []any{"a", "b"}
+	state1.forEach.itemScope["node0/item"] = map[string]any{"a": "b"}
 
 	// state2 should be unaffected.
 	if _, ok := state2.previousScope["node0"]; ok {
@@ -74,7 +74,7 @@ func TestInstanceStateIsolation(t *testing.T) {
 			t.Fatal("previousPlanStates leaked between instances")
 		}
 	}
-	if _, ok := state2.forEach.items["node0/item"]; ok {
+	if _, ok := state2.forEach.itemScope["node0/item"]; ok {
 		t.Fatal("forEachItems leaked between instances")
 	}
 
@@ -398,7 +398,7 @@ func BenchmarkPropagateState(b *testing.B) {
 				ps := dagpkg.NewPlanState(dag)
 				// Trigger propagation from the root — worst case: all V nodes
 				// end up Blocked via chain traversal.
-				ps.SetState(dag, "node0", dagpkg.NodeError)
+				ps.SetState("node0", dagpkg.NodeError)
 			}
 		})
 	}
@@ -553,148 +553,4 @@ func buildForEachItems(n int) []any {
 		}
 	}
 	return items
-}
-
-// BenchmarkSpecHash measures the cost of computing the full spec content hash.
-// Used for revision diffing (diffRevisionNodes). The compilation key
-// (CompilationKey) is the structural subset that gates compiled graph sharing.
-func BenchmarkSpecHash(b *testing.B) {
-	for _, nodeCount := range []int{1, 5, 10, 25, 50} {
-		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
-			spec := buildBenchSpec(nodeCount)
-			b.ResetTimer()
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				_ = spec.Hash()
-			}
-		})
-	}
-}
-
-// TestResolveCollectionSource verifies the compile-time gate for forEach
-// incremental diffing. CollectionSource is set only when ForEach.Expr
-// references exactly one scope variable that doesn't appear elsewhere
-// on the node. If removed or broken, Layer 2 silently degrades to O(N).
-func TestResolveCollectionSource(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		node     graph.Node
-		wantSrc  string
-		wantDesc string
-	}{
-		{
-			name: "single scope var, not in template",
-			node: graph.Node{
-				ID:      "deploys",
-				ForEach: &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
-				Template: map[string]any{
-					"apiVersion": "apps/v1",
-					"kind":       "Deployment",
-					"metadata":   map[string]any{"name": "${app.metadata.name}"},
-				},
-			},
-			wantSrc:  "wk",
-			wantDesc: "only scope var in ForEach.Expr, not in template body",
-		},
-		{
-			name: "scope var also in template body",
-			node: graph.Node{
-				ID:      "deploys",
-				ForEach: &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
-				Template: map[string]any{
-					"apiVersion": "apps/v1",
-					"kind":       "Deployment",
-					"metadata":   map[string]any{"name": "${app.metadata.name}"},
-					"spec":       map[string]any{"replicas": "${wk.size()}"},
-				},
-			},
-			wantSrc:  "",
-			wantDesc: "wk appears in template body — not safe for per-item diff",
-		},
-		{
-			name: "scope var in readyWhen",
-			node: graph.Node{
-				ID:        "deploys",
-				ForEach:   &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
-				Template:  map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
-				ReadyWhen: []string{"${wk.size() > 0}"},
-			},
-			wantSrc:  "",
-			wantDesc: "wk appears in readyWhen — not safe",
-		},
-		{
-			name: "scope var in propagateWhen",
-			node: graph.Node{
-				ID:            "deploys",
-				ForEach:       &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
-				Template:      map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
-				PropagateWhen: []string{"${wk != null}"},
-			},
-			wantSrc:  "",
-			wantDesc: "wk appears in propagateWhen — not safe",
-		},
-		{
-			name: "scope var in includeWhen",
-			node: graph.Node{
-				ID:          "deploys",
-				ForEach:     &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
-				Template:    map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
-				IncludeWhen: []string{"${wk.size() > 0}"},
-			},
-			wantSrc:  "",
-			wantDesc: "wk appears in includeWhen — not safe",
-		},
-		{
-			name: "collection expr with dot access, single scope var",
-			node: graph.Node{
-				ID:       "deploys",
-				ForEach:  &graph.ForEachBinding{VarName: "app", Expr: "${wk.items}"},
-				Template: map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"},
-			},
-			wantSrc:  "wk",
-			wantDesc: "dot access is in ForEach.Expr only — wk is the collection source",
-		},
-		{
-			name: "multiple deps, only collection source in forEach",
-			node: graph.Node{
-				ID:      "deploys",
-				ForEach: &graph.ForEachBinding{VarName: "app", Expr: "${wk}"},
-				Template: map[string]any{
-					"apiVersion": "apps/v1",
-					"kind":       "Deployment",
-					"metadata":   map[string]any{"name": "${app.metadata.name}"},
-					"spec":       map[string]any{"image": "${config.image}"},
-				},
-			},
-			wantSrc:  "wk",
-			wantDesc: "config in template is a different dep — wk only in forEach",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Compile to get exprPaths (AST-extracted field paths).
-			spec := &graph.GraphSpec{Nodes: []graph.Node{
-				{ID: "wk", Watch: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}},
-				{ID: "config", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}},
-				tt.node,
-			}}
-			compiled, err := compiler.CompileGraphSpec(spec, nil)
-			if err != nil {
-				t.Fatalf("compileGraphSpec: %v", err)
-			}
-			// Build a full DAG to access CollectionSource (set during dagpkg.BuildDAG).
-			dag, err := dagpkg.BuildDAG(spec.Nodes, compiled.ExprPaths, compiled.ExprAccessModes)
-			if err != nil {
-				t.Fatalf("dagpkg.BuildDAG: %v", err)
-			}
-			nodeIdx := dag.Index[tt.node.ID]
-			got := dag.Nodes[nodeIdx].ForEach.CollectionSource
-			if got != tt.wantSrc {
-				t.Errorf("CollectionSource = %q, want %q (%s)", got, tt.wantSrc, tt.wantDesc)
-			}
-		})
-	}
 }

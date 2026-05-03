@@ -220,8 +220,8 @@ func validateDeferredExprs(parentNodeID string, scope ChildScope, exprs []deferr
 // Compilation errors in the child are reported as parent compilation errors.
 //
 // Per 004-compilation.md § Pre-compilation: "The parent extracts the child spec
-// (with $${...} → ${...} stripping), runs CompileGraphSpec on it, and caches
-// the result."
+// (with $${...} → ${...} stripping), runs CompileGraphSpec on it for
+// validation only."
 func precompileChildGraph(parentNodeID string, body map[string]any) error {
 	specMap, ok := body["spec"].(map[string]any)
 	if !ok {

@@ -97,10 +97,8 @@ func (r NodeType) String() string {
 // discoverable by the applied-set scan on restart.
 func (r NodeType) LabelValue() (string, bool) {
 	switch r {
-	case NodeTypeTemplate:
-		return "template", true
-	case NodeTypePatch:
-		return "patch", true
+	case NodeTypeTemplate, NodeTypePatch:
+		return r.String(), true
 	default:
 		return "", false
 	}
@@ -127,21 +125,6 @@ func NodeTypeFromLabelValue(s string) (NodeType, bool) {
 type ForEachBinding struct {
 	VarName string // CEL scope variable name
 	Expr    string // CEL expression yielding the collection
-
-	// CollectionSource is the scope variable ID that the collection
-	// expression references. Set by BuildDAG when the expression
-	// references exactly one scope variable AND that variable is not
-	// referenced anywhere else on the node (template body, readyWhen,
-	// propagateWhen, includeWhen). Empty means the forEach is not
-	// eligible for incremental item diffing — the coordinator falls
-	// back to O(N) rehash.
-	//
-	// The invariant: when CollectionSource is set, changes exclusively
-	// to that node via CollectionChange are provably safe to handle
-	// per-item. Template expressions reference items only through the
-	// iteration variable (per-item scoped), never the collection source
-	// directly (collection-wide).
-	CollectionSource string
 }
 
 // Node is a parsed Graph node entry — a user's declaration of intent about
@@ -224,15 +207,6 @@ type Node struct {
 	// produce a result without the data. Populated by BuildDAG; nil
 	// before that.
 	Dependencies map[string]DepKind
-
-	// DepPaths maps each dependency to the field paths this node's CEL
-	// expressions reference. Populated by BuildDAG; nil before that.
-	DepPaths map[string][]FieldPath
-
-	// SelfPaths is the set of field paths into this node's own observed
-	// resource that readyWhen, propagateWhen, and downstream expressions
-	// reference. Populated by BuildDAG; nil before that.
-	SelfPaths []FieldPath
 }
 
 // NodeType returns the parse-time classification of this node.
@@ -347,7 +321,7 @@ func (n *Node) Body() map[string]any {
 }
 
 // Note: there is no IdentityKey method because computing the applied-set
-// key requires a GVKScopeResolver (to handle cluster-scoped resources
+// key requires a scopeResolver (to handle cluster-scoped resources
 // correctly per 003-ownership.md § Priority Resolution). The scope
 // resolver is a reconciler-level dependency that doesn't belong on the
 // Node abstraction. Callers use staticResourceKey(node.Identity(),
@@ -388,24 +362,12 @@ func (s *GraphSpec) AllExpressions() []string {
 	var exprs []string
 
 	add := func(strs []string) {
-		for _, s := range strs {
-			// Extract ${...} expressions from each string
-			pos := 0
-			for {
-				dollars, expr, start, _ := FindExpr(s, pos)
-				if start < 0 {
-					break
-				}
-				pos = start + len(dollars) + len(expr) + 2
-				if len(dollars) != 1 {
-					continue // $${...} is deferred, not evaluated at this level
-				}
-				if !seen[expr] {
-					seen[expr] = true
-					exprs = append(exprs, expr)
-				}
+		WalkExpressions(strs, func(expr string) {
+			if !seen[expr] {
+				seen[expr] = true
+				exprs = append(exprs, expr)
 			}
-		}
+		})
 	}
 
 	// Collect expressions from each node

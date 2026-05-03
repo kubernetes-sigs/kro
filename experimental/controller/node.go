@@ -46,9 +46,9 @@ type nodeOutput struct {
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (c *clusterAccess) reconcileNode(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, resyncCorrection bool, prevForEachState *forEachCarryForward) (*nodeOutput, error) {
+func (c *clusterAccess) reconcileNode(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, prevForEachState *forEachCarryForward) (*nodeOutput, error) {
 	if node.ForEach != nil {
-		return c.reconcileForEach(ctx, rs, node, eval, resyncCorrection, prevForEachState)
+		return c.reconcileForEach(ctx, rs, node, eval, prevForEachState)
 	}
 
 	nodeType := node.Type()
@@ -65,7 +65,7 @@ func (c *clusterAccess) reconcileNode(ctx context.Context, rs *reconcileScope, n
 			return nil, err
 		}
 	default: // NodeTypeTemplate, NodeTypePatch
-		appliedEntry, err := c.reconcileApply(ctx, rs, node, eval, resyncCorrection)
+		appliedEntry, err := c.reconcileApply(ctx, rs, node, eval)
 		if err != nil {
 			if appliedEntry.Key != "" {
 				return &nodeOutput{keys: []Applied{appliedEntry}}, err
@@ -272,7 +272,7 @@ func (c *clusterAccess) reconcileWatch(ctx context.Context, rs *reconcileScope, 
 // checks) and cleanup semantics: Template resources are deleted on prune,
 // Patch resources have their fields released via release apply.
 // See applySSA for the full type-dependent behavior.
-func (c *clusterAccess) reconcileApply(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, resyncCorrection bool) (Applied, error) {
+func (c *clusterAccess) reconcileApply(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator) (Applied, error) {
 	logger := log.FromContext(ctx)
 
 	nodeType := node.Type()
@@ -282,7 +282,7 @@ func (c *clusterAccess) reconcileApply(ctx context.Context, rs *reconcileScope, 
 		return Applied{}, fmt.Errorf("%s %s: %w", nodeType, node.ID, err)
 	}
 
-	applied, err := c.applySSA(ctx, rs, evalMap, node.ID, nodeType, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
+	applied, err := c.applySSA(ctx, rs, evalMap, node.ID, nodeType, eval.effectiveGeneration, node.Lifecycle.ForceApply())
 	if err != nil {
 		return Applied{}, err
 	}

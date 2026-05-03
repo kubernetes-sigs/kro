@@ -138,8 +138,6 @@ func TestDynamicGVK_ProgressionFromDynToTyped(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, state1.compiled)
 	bootstrapArtifact := state1.compiled
-	assert.Contains(t, bootstrapArtifact.DynamicGVKNodes, "schema",
-		"first compilation should detect dynamic GVK node")
 	assert.NotContains(t, bootstrapArtifact.ResourceSchemas, "schema",
 		"first compilation should NOT have schema for dynamic node (no hints)")
 

@@ -106,12 +106,11 @@ func CopyScope(scope map[string]any) map[string]any {
 
 // ExtractReferencedPathsFromNode scans a Node's template and gate expressions
 // for ${...} blocks, looks up pre-extracted field paths from exprPaths, and
-// returns per-node dependency paths, self paths, and dependency classifications.
+// returns per-node dependency classifications.
 //
 // When exprPaths is nil (e.g., BuildDAG called for deletion ordering without
 // going through compileGraphSpec), falls back to string-based dependency
-// detection. DepPaths/SelfPaths will be nil in this case — hashing won't be
-// available, but dependency detection for topological sort still works.
+// detection, but dependency detection for topological sort still works.
 //
 // exprAccessModes carries per-expression, per-scope-variable optional-access
 // classification computed from pre-rewrite CEL ASTs. When non-nil, it drives
@@ -120,7 +119,7 @@ func CopyScope(scope map[string]any) map[string]any {
 // all dependencies default to DepHard.
 //
 // The exprPaths map is computed from CEL ASTs during compilation in
-// compileGraphSpec. See 005-reconciliation.md § Hash Mechanics.
+// compileGraphSpec.
 func ExtractReferencedPathsFromNode(
 	node Node,
 	exprPaths map[string]map[string][]FieldPath,
@@ -244,23 +243,12 @@ func ExtractReferencedPathsFromNode(
 		templateStrs = append(templateStrs, node.ForEach.Expr)
 	}
 
-	for _, s := range templateStrs {
-		pos := 0
-		for {
-			dollars, expr, start, _ := FindExpr(s, pos)
-			if start < 0 {
-				break
-			}
-			pos = start + len(dollars) + len(expr) + 2
-			if len(dollars) != 1 {
-				continue
-			}
-			processExpr(expr, false)
-			checkDepsRef(expr)
-			if err != nil {
-				return
-			}
-		}
+	WalkExpressions(templateStrs, func(expr string) {
+		processExpr(expr, false)
+		checkDepsRef(expr)
+	})
+	if err != nil {
+		return
 	}
 
 	// Process readyWhen + propagateWhen → depPaths + selfPaths.
@@ -272,7 +260,22 @@ func ExtractReferencedPathsFromNode(
 		gateStrs = append(gateStrs, s)
 	}
 
-	for _, s := range gateStrs {
+	WalkExpressions(gateStrs, func(expr string) {
+		processExpr(expr, true)
+		checkDepsRef(expr)
+	})
+	if err != nil {
+		return
+	}
+
+	return dependencies, depPaths, selfPaths, nil
+}
+
+// WalkExpressions scans strs for ${...} expression blocks (skipping
+// deferred $${...} blocks) and calls fn for each expression found.
+// This is the single iteration helper for the FindExpr scan loop.
+func WalkExpressions(strs []string, fn func(expr string)) {
+	for _, s := range strs {
 		pos := 0
 		for {
 			dollars, expr, start, _ := FindExpr(s, pos)
@@ -281,17 +284,11 @@ func ExtractReferencedPathsFromNode(
 			}
 			pos = start + len(dollars) + len(expr) + 2
 			if len(dollars) != 1 {
-				continue
+				continue // $${...} is deferred, not evaluated at this level
 			}
-			processExpr(expr, true)
-			checkDepsRef(expr)
-			if err != nil {
-				return
-			}
+			fn(expr)
 		}
 	}
-
-	return dependencies, depPaths, selfPaths, nil
 }
 
 // CollectStrings recursively collects all string values from a value tree.

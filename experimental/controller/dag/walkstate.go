@@ -122,7 +122,7 @@ func FinalizeSkippedStates(plan *PlanState, outputsReady map[string]bool, previo
 // parent propagated before an Excluded parent, the child was marked
 // Blocked instead of Excluded — an incorrect classification that
 // prevented pruning resources that should have been pruned.
-func (ps *PlanState) SetState(dag *DAG, id string, state NodeState) {
+func (ps *PlanState) SetState(id string, state NodeState) {
 	ps.States[id] = state
 }
 

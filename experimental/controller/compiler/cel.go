@@ -9,7 +9,7 @@
 // Graph spec is first seen (or when it changes). The reconcile loop only evaluates
 // pre-compiled programs — no compilation happens during the resource walk.
 //
-// Per-instance mutable state (scope, input hashes, forEach state) is tracked
+// Per-instance mutable state (scope, forEach state) is tracked
 // separately in instanceState, keyed by namespace/revision-name.
 package compiler
 
@@ -125,20 +125,9 @@ func IsPending(err error) bool {
 type CompiledGraph struct {
 	env            *cel.Env                          // CEL environment (immutable after Extend)
 	Programs       map[string]cel.Program            // expression string → compiled program
-	ExprPaths      map[string]map[string][]graph.FieldPath // expression string → (scope var → field paths)
-	ExprAccessModes map[string]map[string]bool       // expression string → (scope var → optional-only access)
 	declaredVars   map[string]bool                   // variable names declared in the CEL env
 	Topology       *dagpkg.Topology                      // shared DAG structure (immutable after BuildDAG)
 	UnresolvedGVKs []schema.GroupVersionKind         // GVKs that fell back to dyn (triggers recompilation on CRD install)
-	// typeCacheGen records the type cache generation at compile time.
-	// Per 004-compilation.md § Type Cache: "Staleness is one integer comparison:
-	// current generation exceeds the artifact's recorded generation."
-	TypeCacheGen int64
-	// dynamicGVKNodes lists node IDs whose apiVersion or kind contains a CEL
-	// expression. Per 004-compilation.md § Deferred Types: "the resolved GVK is
-	// also recorded per-node in the artifact." These nodes are compiled
-	// permissively; the reconciler detects GVK changes at runtime.
-	DynamicGVKNodes []string
 	// collectionIDs captures the set of Watch node IDs in this spec.
 	// Used by the dynamic-compile fallback to apply the same
 	// `<wk_id>.ready()` AST rewrite that the eager-compile path does —
@@ -147,10 +136,6 @@ type CompiledGraph struct {
 	// must honor the same rewrite, otherwise empty-Watch `.ready()`
 	// reverts to vacuously-true on that path.
 	CollectionIDs map[string]bool
-
-	// ChildTopologies maps forEach node ID → pre-compiled child topological
-	// order. Nil when no expression-valued child Graphs exist.
-	ChildTopologies map[string][]string
 
 	// resourceSchemas maps node ID → resolved OpenAPI schema. Used at Eval
 	// time to wrap scope entries via UnstructuredToVal so schema-typed
@@ -393,19 +378,12 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 	declared[ReservedNodeReadyVar] = true
 	declared[ReservedDepsMapVar] = true
 
-	var dynamicGVKNodes []string
-	if typeInfo != nil {
-		dynamicGVKNodes = typeInfo.DynamicGVKNodes
-	}
 	return &CompiledGraph{
 		env:             env,
 		Programs:        programs,
-		ExprPaths:       exprPaths,
-		ExprAccessModes: exprAccessModes,
 		declaredVars:    declared,
 		Topology:        dag.Topology,
 		UnresolvedGVKs:  typeInfo.UnresolvedGVKs,
-		DynamicGVKNodes: dynamicGVKNodes,
 		CollectionIDs:   collectionIDs,
 		ResourceSchemas: typeInfo.ResourceSchemas,
 	}, nil

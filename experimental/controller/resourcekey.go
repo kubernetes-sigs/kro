@@ -20,41 +20,35 @@ import (
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
-// GVKScopeResolver reports whether a GVK is namespace-scoped.
-//
-// IsNamespaced returns (isNamespaced, known). When known is false the caller
-// must fall back to heuristics — the resolver has not observed this GVK or
-// lookup failed. A resolver with no backing mapper (e.g., tests) always
-// returns (false, false), preserving the pre-fix substitution heuristic.
-type GVKScopeResolver interface {
-	IsNamespaced(gvk schema.GroupVersionKind) (isNamespaced bool, known bool)
-}
-
-// restMapperGVKScopeResolver answers IsNamespaced queries using a RESTMapper.
+// scopeResolver reports whether a GVK is namespace-scoped, using a RESTMapper.
 // Results are cached: RESTMapping is stable for the lifetime of a GVK's
 // registration, so repeat lookups per reconcile are wasteful. A miss (e.g.,
 // CRD not yet installed) is NOT cached — the next reconcile may succeed.
-type restMapperGVKScopeResolver struct {
+//
+// A nil *scopeResolver is safe — IsNamespaced returns (false, false),
+// preserving the pre-fix substitution heuristic for callers that don't
+// have access to a RESTMapper.
+type scopeResolver struct {
 	mapper meta.RESTMapper
 	mu     sync.RWMutex
 	cache  map[schema.GroupVersionKind]bool // value = isNamespaced; absence = unknown
 }
 
-// newRESTMapperGVKScopeResolver wraps a RESTMapper. Returns nil if mapper is
-// nil — callers should treat nil as "no scope info available" and fall back
+// newScopeResolver wraps a RESTMapper. Returns nil if mapper is nil —
+// callers should treat nil as "no scope info available" and fall back
 // to the substitution heuristic.
-func newRESTMapperGVKScopeResolver(mapper meta.RESTMapper) *restMapperGVKScopeResolver {
+func newScopeResolver(mapper meta.RESTMapper) *scopeResolver {
 	if mapper == nil {
 		return nil
 	}
-	return &restMapperGVKScopeResolver{
+	return &scopeResolver{
 		mapper: mapper,
 		cache:  map[schema.GroupVersionKind]bool{},
 	}
 }
 
-func (r *restMapperGVKScopeResolver) IsNamespaced(gvk schema.GroupVersionKind) (bool, bool) {
-	if r == nil || r.mapper == nil {
+func (r *scopeResolver) IsNamespaced(gvk schema.GroupVersionKind) (bool, bool) {
+	if r == nil {
 		return false, false
 	}
 	r.mu.RLock()
@@ -62,6 +56,9 @@ func (r *restMapperGVKScopeResolver) IsNamespaced(gvk schema.GroupVersionKind) (
 	r.mu.RUnlock()
 	if ok {
 		return v, true
+	}
+	if r.mapper == nil {
+		return false, false
 	}
 	mapping, err := r.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
@@ -78,7 +75,7 @@ func (r *restMapperGVKScopeResolver) IsNamespaced(gvk schema.GroupVersionKind) (
 // kinds it returns "". For namespaced kinds with no namespace specified, it
 // returns fallbackNamespace. When scope is nil or the kind is unknown, the
 // fallback is used when ns is empty (preserving the pre-fix substitution heuristic).
-func defaultNamespace(gvk schema.GroupVersionKind, ns string, fallback string, scope GVKScopeResolver) string {
+func defaultNamespace(gvk schema.GroupVersionKind, ns string, fallback string, scope *scopeResolver) string {
 	if scope != nil {
 		if isNS, known := scope.IsNamespaced(gvk); known {
 			if !isNS {
@@ -132,7 +129,7 @@ func resourceKey(obj *unstructured.Unstructured) string {
 //
 // When scopeResolver is nil, the old heuristic is preserved for backward
 // compat with callers that don't have access to a RESTMapper.
-func staticResourceKey(tmpl map[string]any, fallbackNamespace string, scope GVKScopeResolver) string {
+func staticResourceKey(tmpl map[string]any, fallbackNamespace string, scope *scopeResolver) string {
 	gvk := graphpkg.GVKFromMap(tmpl)
 	md, _ := tmpl["metadata"].(map[string]any)
 	if md == nil {

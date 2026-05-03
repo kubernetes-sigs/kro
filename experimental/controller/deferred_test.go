@@ -505,8 +505,8 @@ func TestExtractChildScope(t *testing.T) {
 
 func TestAssembleDAG_IsolationBetweenInstances(t *testing.T) {
 	// Two DAGs assembled from the same topology must not interfere.
-	// Mutating per-node data (Dependencies, SelfPaths) on one instance
-	// must not affect the other or the shared topology.
+	// Mutating per-node data (Dependencies) on one instance must not
+	// affect the other or the shared topology.
 	spec := &graph.GraphSpec{Nodes: []graph.Node{
 		templateNode("a", map[string]any{
 			"apiVersion": "v1",
@@ -556,13 +556,10 @@ func TestAssembleDAG_IsolationBetweenInstances(t *testing.T) {
 
 	// Mutate instance 1's per-node data — must not affect instance 2.
 	dag1.Nodes[0].Dependencies["injected"] = graph.DepHard
-	dag1.Nodes[1].SelfPaths = append(dag1.Nodes[1].SelfPaths, graph.FieldPath{"injected"})
 
 	_, injectedExists := dag2.Nodes[0].Dependencies["injected"]
 	assert.False(t, injectedExists,
 		"mutation of dag1 Dependencies must not leak to dag2")
-	assert.NotContains(t, dag2.Nodes[1].SelfPaths, graph.FieldPath{"injected"},
-		"mutation of dag1 SelfPaths must not leak to dag2")
 
 	// Verify the shared topology is also unaffected.
 	_, topoInjected := compiled.Topology.NodeDeps(0)["injected"]

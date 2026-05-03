@@ -13,7 +13,6 @@ import (
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
 	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
-	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 // instanceState holds the mutable reconcile-time state for a single Graph
@@ -22,7 +21,6 @@ import (
 type instanceState struct {
 	// --- Compilation artifacts ---
 	compiled *compiler.CompiledGraph
-	spec     *graphpkg.GraphSpec
 	dag      *dagpkg.DAG
 
 	// --- Walk carry-forward (preserved across reconciles for propagateWhen,
@@ -43,7 +41,6 @@ type instanceState struct {
 
 // forEachCarryForward holds forEach collection state retained across reconciles.
 type forEachCarryForward struct {
-	items     map[string][]any                // nodeID/varName → collection items
 	itemScope map[string]map[string]any       // nodeID → itemID → scope data
 	itemKeys  map[string]map[string][]Applied // nodeID → itemID → applied keys
 }
@@ -55,7 +52,6 @@ func newInstanceState(compiled *compiler.CompiledGraph) *instanceState {
 		previousScope: make(map[string]any),
 		previousKeys:  make(map[string][]Applied),
 		forEach: &forEachCarryForward{
-			items:     make(map[string][]any),
 			itemScope: make(map[string]map[string]any),
 			itemKeys:  make(map[string]map[string][]Applied),
 		},
@@ -130,7 +126,7 @@ func (m *InstanceMap) CacheSizes() int {
 }
 
 // instanceKeys returns a snapshot of all instance cache keys.
-// Used by the SetOnNewType callback to requeue all cached graphs
+// Used by the onNewType callback to requeue all cached graphs
 // when a new type becomes watchable.
 func (m *InstanceMap) instanceKeys() []string {
 	m.mu.RLock()

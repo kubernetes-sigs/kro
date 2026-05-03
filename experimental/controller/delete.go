@@ -86,7 +86,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		normalizedToStatic[strings.ToLower(sk)] = sk
 	}
 	if r.Watcher != nil {
-		appliedSet := r.Watcher.Watches.DeriveAppliedSet(graph.GetName(), graph.GetNamespace())
+		appliedSet := r.Watcher.DeriveAppliedSet(graph.GetName(), graph.GetNamespace())
 		for key, entry := range appliedSet {
 			if corrected, ok := normalizedToStatic[strings.ToLower(key)]; ok {
 				key = corrected

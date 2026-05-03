@@ -21,7 +21,7 @@ import (
 //
 // forEach state is passed in via prevState and returned as new state.
 // The caller merges the output back into the shared cache.
-func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, resyncCorrection bool, prevState *forEachCarryForward) (*nodeOutput, error) {
+func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, prevState *forEachCarryForward) (*nodeOutput, error) {
 	logger := log.FromContext(ctx)
 	var keys []Applied
 	// Per-item propagateWhen gate. Per 001-graph.md § propagateWhen:
@@ -201,9 +201,9 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 
 		var applied *unstructured.Unstructured
 		if childNodeType == graphpkg.NodeTypePatch {
-			applied, err = c.applySSA(ctx, rs, evalMap, node.ID, graphpkg.NodeTypePatch, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
+			applied, err = c.applySSA(ctx, rs, evalMap, node.ID, graphpkg.NodeTypePatch, eval.effectiveGeneration, node.Lifecycle.ForceApply())
 		} else {
-			applied, err = c.applySSA(ctx, rs, evalMap, node.ID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, resyncCorrection, node.Lifecycle.ForceApply())
+			applied, err = c.applySSA(ctx, rs, evalMap, node.ID, graphpkg.NodeTypeTemplate, eval.effectiveGeneration, node.Lifecycle.ForceApply())
 		}
 		if err != nil {
 			// Per 005-reconciliation.md § Parent State: track per-child errors
@@ -239,9 +239,7 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 	}
 
 	// Build the new forEach state to return.
-	cacheKey := node.ID + "/" + varName
 	newState := &forEachCarryForward{
-		items:     map[string][]any{cacheKey: items},
 		itemScope: map[string]map[string]any{node.ID: newItemScope},
 		itemKeys:  map[string]map[string][]Applied{node.ID: newItemKeys},
 	}

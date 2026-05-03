@@ -9,7 +9,6 @@ import (
 	"strings"
 )
 
-// nodeIDRe matches valid node IDs: lower camelCase identifiers.
 // nodeIDRe matches valid Graph node identifiers: any valid CEL identifier.
 // Must start with a letter or underscore, followed by alphanumeric or underscore.
 // Stricter naming conventions (e.g., lower camelCase for RGD resources) are
@@ -251,8 +250,6 @@ func ParseNodeList(raw any) ([]Node, error) {
 		// Also accept forceApply: true for CEL-generated node maps where
 		// nested map types may not survive JSON round-trip via the API server.
 		if fa, ok := m["forceApply"].(bool); ok && fa {
-			node.Lifecycle.Apply = "Force"
-		} else if fas, ok := m["forceApply"].(string); ok && strings.EqualFold(fas, "true") {
 			node.Lifecycle.Apply = "Force"
 		}
 		nodes = append(nodes, node)

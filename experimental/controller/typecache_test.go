@@ -11,7 +11,6 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
-	"github.com/ellistarn/kro/experimental/controller/graph"
 )
 
 func TestSchemaGeneration_Advances(t *testing.T) {
@@ -23,38 +22,6 @@ func TestSchemaGeneration_Advances(t *testing.T) {
 	assert.Equal(t, int64(1), tc.Generation())
 	tc.AdvanceGeneration()
 	assert.Equal(t, int64(2), tc.Generation())
-}
-
-// TestCompileRevision_GenerationStaleness verifies that compileRevision
-// recompiles when the type cache generation advances past the artifact's
-// recorded generation. Per 004-compilation.md § Type Cache: "Staleness is
-// one integer comparison."
-func TestCompileRevision_GenerationStaleness(t *testing.T) {
-	t.Parallel()
-
-	spec := &graph.GraphSpec{Nodes: []graph.Node{
-		{ID: "cm", Template: map[string]any{
-			"apiVersion": "v1", "kind": "ConfigMap",
-			"metadata": map[string]any{"name": "test"},
-		}},
-	}}
-
-	// Compile at generation 0.
-	tc := compiler.NewSchemaGeneration()
-	compiled, err := compiler.CompileGraphSpec(spec, nil)
-	require.NoError(t, err)
-	compiled.TypeCacheGen = tc.Generation()
-
-	// Verify not stale at generation 0.
-	assert.False(t, compiled.TypeCacheGen < tc.Generation(),
-		"artifact should not be stale at same generation")
-
-	// Advance generation (simulates CRD install).
-	tc.AdvanceGeneration()
-
-	// Artifact is now stale.
-	assert.True(t, compiled.TypeCacheGen < tc.Generation(),
-		"artifact should be stale after generation advance")
 }
 
 // TestCompileRevision_RecompilesOnGenerationAdvance exercises the full
@@ -101,8 +68,6 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 	require.NotNil(t, spec1)
 	require.NotNil(t, state1)
 	require.NotNil(t, state1.compiled)
-	assert.Equal(t, int64(0), state1.compiled.TypeCacheGen,
-		"first compilation should record generation 0")
 
 	// Second call: recompiles (no compilation cache) but succeeds.
 	_, state2, err := r.compileRevision(context.Background(), "", revision)
@@ -116,10 +81,6 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 	_, state3, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
 	require.NotNil(t, state3.compiled)
-
-	// The new artifact records the current generation.
-	assert.Equal(t, tc.Generation(), state3.compiled.TypeCacheGen,
-		"recompiled artifact should record the current type cache generation")
 }
 
 // TestCompileRevision_SchemaUpdateViaGenerationAdvance proves that when a CRD

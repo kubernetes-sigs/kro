@@ -164,58 +164,17 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int)
 
 	watchChan := make(chan event.GenericEvent, 256)
 
-	watchMgr := watches.NewWatchManager(metadataClient, 12*time.Hour, nil, log.Log)
-	coordinator := watches.NewWatchCoordinator(watchMgr, func(graph watches.GraphKey) {
-		obj := &unstructured.Unstructured{}
-		obj.SetName(graph.Name)
-		obj.SetNamespace(graph.Namespace)
-		watchChan <- event.GenericEvent{Object: obj}
-	}, log.Log)
-	watchMgr.SetOnEvent(coordinator.RouteEvent)
-
-	// Create schema resolver for compile-time type checking.
-	// Core types resolve from compiled-in definitions, CRDs resolve via
-	// cached discovery client.
-	//
-	// The HTTP client must inherit TLS settings from rest.Config (CAData,
-	// ServerName, ClientCert). Passing nil causes the discovery client to
-	// build an internal HTTP client that doesn't pick up TLS config in all
-	// environments (notably envtest with self-signed certs). Mirrors
-	// upstream pkg/client/set.go which constructs rest.HTTPClientFor once.
-	httpClient, err := rest.HTTPClientFor(restConfig)
-	if err != nil {
-		log.Log.Error(err, "failed to build HTTP client for schema resolver; compile-time type checking disabled for resource nodes")
-		httpClient = nil
-	}
-	schemaResolver, err := schemaresolver.NewCombinedResolver(restConfig, httpClient)
-	if err != nil {
-		// Schema resolution is an operational dependency — log the failure.
-		// All resource nodes will fall back to dyn (no field-level type checking).
-		log.Log.Error(err, "failed to create schema resolver; compile-time type checking disabled for resource nodes")
-		schemaResolver = nil
-	}
-
-	reconciler := &GraphReconciler{
-		Client:         mgr.GetClient(),
-		APIReader:      mgr.GetAPIReader(),
-		SchemaResolver: schemaResolver,
-		SchemaGen:      compiler.NewSchemaGeneration(),
-		Watcher:        coordinator,
-		Caches:         newInstanceMap(),
-		// Scope is used by staticResourceKey to avoid namespacing
-		// cluster-scoped resource keys. Without this, prune/teardown
-		// silently miss cluster-scoped resources because their keys
-		// never match post-apply resourceKey(). Per 003-ownership.md
-		// § Priority Resolution.
-		Scope: newRESTMapperGVKScopeResolver(mgr.GetRESTMapper()),
-	}
+	// Declare reconciler early so the onNewType closure can capture it.
+	// It is assigned after coordinator construction below. By the time
+	// onNewType fires (during EnsureWatch at runtime), reconciler is set.
+	var reconciler *GraphReconciler
 
 	// When the watch infrastructure observes a new type (first informer for a
 	// GVR), advance the schema generation so compiled artifacts become stale,
 	// then requeue all cached graphs. The next reconcile for each graph will
-	// detect staleness via the TypeCacheGen check and recompile. This is a
+	// detect staleness via the SchemaGeneration check and recompile. This is a
 	// rare event (CRD installation) so iterating all cached instances is fine.
-	watchMgr.SetOnNewType(func(gvr schema.GroupVersionResource) {
+	onNewType := func(gvr schema.GroupVersionResource) {
 		if reconciler.SchemaGen != nil {
 			reconciler.SchemaGen.AdvanceGeneration()
 		}
@@ -246,7 +205,52 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int)
 			default:
 			}
 		}
-	})
+	}
+
+	watchMgr := watches.NewWatchManager(metadataClient, 12*time.Hour, onNewType, log.Log)
+	coordinator := watches.NewWatchCoordinator(watchMgr, func(graph watches.GraphKey) {
+		obj := &unstructured.Unstructured{}
+		obj.SetName(graph.Name)
+		obj.SetNamespace(graph.Namespace)
+		watchChan <- event.GenericEvent{Object: obj}
+	}, log.Log)
+
+	// Create schema resolver for compile-time type checking.
+	// Core types resolve from compiled-in definitions, CRDs resolve via
+	// cached discovery client.
+	//
+	// The HTTP client must inherit TLS settings from rest.Config (CAData,
+	// ServerName, ClientCert). Passing nil causes the discovery client to
+	// build an internal HTTP client that doesn't pick up TLS config in all
+	// environments (notably envtest with self-signed certs). Mirrors
+	// upstream pkg/client/set.go which constructs rest.HTTPClientFor once.
+	httpClient, err := rest.HTTPClientFor(restConfig)
+	if err != nil {
+		log.Log.Error(err, "failed to build HTTP client for schema resolver; compile-time type checking disabled for resource nodes")
+		httpClient = nil
+	}
+	schemaResolver, err := schemaresolver.NewCombinedResolver(restConfig, httpClient)
+	if err != nil {
+		// Schema resolution is an operational dependency — log the failure.
+		// All resource nodes will fall back to dyn (no field-level type checking).
+		log.Log.Error(err, "failed to create schema resolver; compile-time type checking disabled for resource nodes")
+		schemaResolver = nil
+	}
+
+	reconciler = &GraphReconciler{
+		Client:         mgr.GetClient(),
+		APIReader:      mgr.GetAPIReader(),
+		SchemaResolver: schemaResolver,
+		SchemaGen:      compiler.NewSchemaGeneration(),
+		Watcher:        coordinator,
+		Caches:         newInstanceMap(),
+		// Scope is used by staticResourceKey to avoid namespacing
+		// cluster-scoped resource keys. Without this, prune/teardown
+		// silently miss cluster-scoped resources because their keys
+		// never match post-apply resourceKey(). Per 003-ownership.md
+		// § Priority Resolution.
+		Scope: newScopeResolver(mgr.GetRESTMapper()),
+	}
 
 	// Watch CRDs for schema changes. Per 004-compilation.md § Compilation Cache:
 	// "Any schema change (CRD installed, updated, removed) advances [the
@@ -270,7 +274,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int)
 		},
 	})
 	go crdInformer.RunWithContext(crdCtx)
-	_ = crdCancel // stopped when the WatchManager shuts down (same process lifecycle)
+	_ = crdCancel // intentionally leaked — stopped when the process exits (same lifecycle as WatchManager)
 
 	// Pre-populate watch informers from existing GraphRevisions before the
 	// controller starts. This ensures deriveAppliedSet works for cross-GVR

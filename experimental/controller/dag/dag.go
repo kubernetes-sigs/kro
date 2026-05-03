@@ -78,8 +78,6 @@ type Topology struct {
 	// Nodes). These are derived from expression paths during compilation
 	// and are the same across all instances with the same compilation key.
 	nodeDeps          []map[string]graph.DepKind      // node index → dependency IDs + kind
-	nodeDepPaths      []map[string][]graph.FieldPath  // node index → dep ID → field paths
-	nodeSelfPaths     [][]graph.FieldPath             // node index → self field paths
 }
 
 // NodeDeps returns the dependency set for a node at the given index.
@@ -108,8 +106,6 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 		Dependents:        make(map[string][]int),
 		Finalizers:        make(map[string][]string),
 		nodeDeps:          make([]map[string]graph.DepKind, len(nodes)),
-		nodeDepPaths:      make([]map[string][]graph.FieldPath, len(nodes)),
-		nodeSelfPaths:     make([][]graph.FieldPath, len(nodes)),
 	}
 
 	dag := &DAG{
@@ -119,20 +115,15 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 
 	for i, node := range nodes {
 		var err error
-		node.Dependencies, node.DepPaths, node.SelfPaths, err = graph.ExtractReferencedPathsFromNode(node, exprPaths, exprAccessModes)
+		node.Dependencies, _, _, err = graph.ExtractReferencedPathsFromNode(node, exprPaths, exprAccessModes)
 		if err != nil {
 			return nil, err
-		}
-		if node.ForEach != nil && exprPaths != nil {
-			node.ForEach.CollectionSource = resolveCollectionSource(node, exprPaths)
 		}
 		dag.Nodes[i] = node
 		topo.Index[node.ID] = i
 		topo.NodeTypes[node.ID] = node.Type()
 		// Store per-node dependency metadata in topology for AssembleDAG.
 		topo.nodeDeps[i] = node.Dependencies
-		topo.nodeDepPaths[i] = node.DepPaths
-		topo.nodeSelfPaths[i] = node.SelfPaths
 	}
 
 	// Build finalizer map: target node ID → list of finalizer node IDs.
@@ -157,25 +148,6 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 			return nil, fmt.Errorf("node %q cannot finalize %q: Watch nodes are read-only", node.ID, node.Finalizes)
 			}
 			dag.Finalizers[node.Finalizes] = append(dag.Finalizers[node.Finalizes], node.ID)
-		}
-	}
-
-	// Push downstream dependency paths into upstream SelfPaths.
-	// If node B references deploy.status.availableReplicas, the deploy node
-	// needs ["status", "availableReplicas"] in its SelfPaths so self-state
-	// changes are detected and the updated scope propagates to B. Without
-	// this, a bare Template node with no readyWhen/propagateWhen would have empty
-	// SelfPaths — status changes would be invisible to downstream consumers.
-	for _, node := range dag.Nodes {
-		for depID, paths := range node.DepPaths {
-			depIdx, exists := dag.Index[depID]
-			if !exists {
-				continue
-			}
-			for _, p := range paths {
-				graph.AddFieldPath(&dag.Nodes[depIdx].SelfPaths, p)
-				graph.AddFieldPath(&topo.nodeSelfPaths[depIdx], p)
-			}
 		}
 	}
 
@@ -244,7 +216,6 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 	// dependencies are all satisfied, the one declared earliest in spec.nodes
 	// is emitted first. This makes TopologicalOrder stable with respect to
 	// input ordering — independent nodes appear in declaration order.
-	// inDegree counts how many in-graph dependencies each node has.
 	// inDegree counts how many hard in-graph dependencies each node has.
 	// Lazy deps do not contribute to topological ordering.
 	n := len(nodes)
@@ -329,95 +300,17 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 	return dag, nil
 }
 
-// resolveCollectionSource determines whether a forEach node's collection
-// expression references exactly one scope variable that is NOT referenced
-// anywhere else on the node (template body, readyWhen, propagateWhen,
-// includeWhen). When this holds, changes to the collection source via
-// CollectionChange are safe to handle per-item — the template only
-// references items through the iteration variable, never the source directly.
-//
-// Returns the scope variable ID, or empty string if not optimizable.
-func resolveCollectionSource(node graph.Node, exprPaths map[string]map[string][]graph.FieldPath) string {
-	// Step 1: Extract scope variables referenced in ForEach.Expr.
-	forEachVars := extractScopeVars(node.ForEach.Expr, node.ID, exprPaths)
-	if len(forEachVars) != 1 {
-		return "" // multiple or zero scope vars — not optimizable
-	}
-	var candidate string
-	for v := range forEachVars {
-		candidate = v
-	}
-
-	// Step 2: Check if the candidate appears in any other expression on
-	// the node — template body, includeWhen, readyWhen, propagateWhen,
-	// TemplateExpr. If it does, a collection change affects every item's
-	// rendered output, not just the changed item.
-	var otherStrs []string
-	for _, body := range []map[string]any{node.Template, node.Patch, node.Ref, node.Watch, node.Def} {
-		if body != nil {
-			graph.CollectStrings(body, &otherStrs)
-		}
-	}
-	if node.TemplateExpr != "" {
-		otherStrs = append(otherStrs, node.TemplateExpr)
-	}
-	otherStrs = append(otherStrs, node.IncludeWhen...)
-	otherStrs = append(otherStrs, node.ReadyWhen...)
-	otherStrs = append(otherStrs, node.PropagateWhen...)
-
-	for _, s := range otherStrs {
-		vars := extractScopeVars(s, node.ID, exprPaths)
-		if vars[candidate] {
-			return "" // collection source used in template — not safe
-		}
-	}
-
-	return candidate
-}
-
-// extractScopeVars returns the set of scope variable IDs referenced in a
-// string that may contain ${...} CEL expressions. Self-references (nodeID)
-// are excluded.
-func extractScopeVars(s string, nodeID string, exprPaths map[string]map[string][]graph.FieldPath) map[string]bool {
-	vars := map[string]bool{}
-	pos := 0
-	for {
-		dollars, expr, start, _ := graph.FindExpr(s, pos)
-		if start < 0 {
-			break
-		}
-		pos = start + len(dollars) + len(expr) + 2
-		if len(dollars) != 1 {
-			continue // $${...} deferred
-		}
-		if paths, ok := exprPaths[expr]; ok {
-			for scopeVar := range paths {
-				if scopeVar != nodeID {
-					vars[scopeVar] = true
-				}
-			}
-		} else {
-			// Fallback: string-based extraction
-			id := graph.ExtractFirstIdentifier(expr)
-			if id != "" && id != nodeID {
-				vars[id] = true
-			}
-		}
-	}
-	return vars
-}
-
 // AssembleDAG builds a per-instance DAG from an instance's nodes and a shared
 // Topology. The topology was computed during compilation and is shared
 // across all instances with the same compilation key. This function is
 // infallible by construction — all validation (cycles, self-references,
 // finalizer targets) was performed during BuildDAG.
 //
-// Per-node dependency metadata (Dependencies, DepPaths, SelfPaths)
-// is deep-copied from the topology to prevent mutation of
-// one instance's DAG from corrupting the shared topology. The topology
-// itself (Index, TopologicalOrder, Levels, Dependents, Finalizers,
-// NodeTypes) is shared by pointer — it is immutable after BuildDAG.
+// Per-node dependency metadata (Dependencies) is deep-copied from the
+// topology to prevent mutation of one instance's DAG from corrupting
+// the shared topology. The topology itself (Index, TopologicalOrder,
+// Levels, Dependents, Finalizers, NodeTypes) is shared by pointer — it
+// is immutable after BuildDAG.
 //
 // Per 004-compilation.md § Structural Compilation Caching: "Per-instance DAG
 // construction takes: shared sort order + shared edges + per-instance node
@@ -432,8 +325,6 @@ func AssembleDAG(nodes []graph.Node, topo *Topology) *DAG {
 		// The topology slices must not be mutated through the per-instance
 		// DAG — concurrent instances sharing the same topology would corrupt.
 		node.Dependencies = copyDepKindMap(topo.nodeDeps[i])
-		node.DepPaths = copyDepPaths(topo.nodeDepPaths[i])
-		node.SelfPaths = copySelfPaths(topo.nodeSelfPaths[i])
 		dag.Nodes[i] = node
 	}
 	return dag
@@ -447,28 +338,6 @@ func copyDepKindMap(m map[string]graph.DepKind) map[string]graph.DepKind {
 	for k, v := range m {
 		c[k] = v
 	}
-	return c
-}
-
-func copyDepPaths(m map[string][]graph.FieldPath) map[string][]graph.FieldPath {
-	if m == nil {
-		return nil
-	}
-	c := make(map[string][]graph.FieldPath, len(m))
-	for k, v := range m {
-		cp := make([]graph.FieldPath, len(v))
-		copy(cp, v)
-		c[k] = cp
-	}
-	return c
-}
-
-func copySelfPaths(s []graph.FieldPath) []graph.FieldPath {
-	if s == nil {
-		return nil
-	}
-	c := make([]graph.FieldPath, len(s))
-	copy(c, s)
 	return c
 }
 

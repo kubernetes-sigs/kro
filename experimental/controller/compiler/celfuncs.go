@@ -94,17 +94,6 @@ func celFlagFunction(funcName, flagField string) []cel.EnvOption {
 	}
 }
 
-// celReadyFunction returns CEL env options for the .ready() member function.
-//
-// .ready() returns whether the graph controller considers a node ready.
-// The readiness state is injected into the scope data as "__ready" after
-// each node is processed during the DAG walk. For Watch nodes, `.ready()`
-// is rewritten at compile time to a scope-variable lookup (see readyrewrite.go).
-// Per 001-graph.md § readyWhen.
-func celReadyFunction() []cel.EnvOption {
-	return celFlagFunction("ready", "__ready")
-}
-
 // celSimpleSchemaFunction returns CEL env options for simpleSchema.toOpenAPI().
 // Converts a SimpleSchema definition to an OpenAPI v3 schema for use in CRD specs.
 // The first argument is a schema map with spec/status/types fields.
@@ -155,7 +144,9 @@ func celSimpleSchemaFunction() []cel.EnvOption {
 				"status": map[string]any{
 					"type":                                 "object",
 					"x-kubernetes-preserve-unknown-fields": true,
-					"properties":                           conditionsSchemaProperties(),
+					"properties": map[string]any{
+						"conditions": conditionsSchema(),
+					},
 				},
 			},
 		}
@@ -202,27 +193,24 @@ func celSimpleSchemaFunction() []cel.EnvOption {
 	}
 }
 
-// conditionsSchemaProperties returns a properties map containing a typed
-// conditions array with x-kubernetes-list-type: map keyed by "type". This
-// enables SSA to handle individual conditions independently rather than
-// treating the entire array as atomic — allowing separate field owners to
+// conditionsSchema returns the conditions array schema with x-kubernetes-list-type:
+// map keyed by "type". This enables SSA to handle individual conditions independently
+// rather than treating the entire array as atomic — allowing separate field owners to
 // manage different condition types (e.g., Compiled vs Ready) without conflict.
-func conditionsSchemaProperties() map[string]any {
+func conditionsSchema() map[string]any {
 	return map[string]any{
-		"conditions": map[string]any{
-			"type":                        "array",
-			"x-kubernetes-list-type":      "map",
-			"x-kubernetes-list-map-keys":  []any{"type"},
+		"type":                        "array",
+		"x-kubernetes-list-type":      "map",
+		"x-kubernetes-list-map-keys":  []any{"type"},
+		"x-kubernetes-preserve-unknown-fields": true,
+		"items": map[string]any{
+			"type":                                 "object",
 			"x-kubernetes-preserve-unknown-fields": true,
-			"items": map[string]any{
-				"type":                                 "object",
-				"x-kubernetes-preserve-unknown-fields": true,
-				"properties": map[string]any{
-					"type":   map[string]any{"type": "string"},
-					"status": map[string]any{"type": "string"},
-				},
-				"required": []any{"type"},
+			"properties": map[string]any{
+				"type":   map[string]any{"type": "string"},
+				"status": map[string]any{"type": "string"},
 			},
+			"required": []any{"type"},
 		},
 	}
 }
@@ -237,7 +225,7 @@ func injectConditionsSchema(statusSchema map[string]any) {
 		statusSchema["properties"] = props
 	}
 	if _, exists := props["conditions"]; !exists {
-		props["conditions"] = conditionsSchemaProperties()["conditions"]
+		props["conditions"] = conditionsSchema()
 	} else {
 		// Conditions already declared — inject list annotations.
 		cond, ok := props["conditions"].(map[string]any)
@@ -246,15 +234,6 @@ func injectConditionsSchema(statusSchema map[string]any) {
 			cond["x-kubernetes-list-map-keys"] = []any{"type"}
 		}
 	}
-}
-
-// celUpdatedFunction returns CEL env options for the .updated() member function.
-//
-// .updated() returns whether a node's resource is on the latest graph
-// generation. Per 001-graph.md § CEL Functions. Per 005-reconciliation.md
-// § Propagation Control: used in propagateWhen for forEach rollout gating.
-func celUpdatedFunction() []cel.EnvOption {
-	return celFlagFunction("updated", "__updated")
 }
 
 // celDependenciesFunction returns CEL env options for the .dependencies()
@@ -282,9 +261,9 @@ func celDependenciesFunction() []cel.EnvOption {
 func customCELFunctions() []cel.EnvOption {
 	var opts []cel.EnvOption
 	opts = append(opts, celPluralFunction()...)
-	opts = append(opts, celReadyFunction()...)
+	opts = append(opts, celFlagFunction("ready", "__ready")...)
 	opts = append(opts, celSimpleSchemaFunction()...)
-	opts = append(opts, celUpdatedFunction()...)
+	opts = append(opts, celFlagFunction("updated", "__updated")...)
 	opts = append(opts, celDependenciesFunction()...)
 	return opts
 }

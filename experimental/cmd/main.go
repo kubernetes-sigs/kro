@@ -13,7 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	_ "net/http/pprof" // registers /debug/pprof/* on DefaultServeMux
+	_ "net/http/pprof" // Registers pprof handlers; server started conditionally via pprofBindAddress flag
 	"os"
 	"runtime/debug"
 
@@ -47,7 +47,7 @@ func main() {
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to. Use :0 for a random port.")
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", "0", "The address the metrics endpoint binds to. Use 0 to disable.")
 	flag.StringVar(&pprofBindAddress, "pprof-bind-address", "", "The address the pprof endpoint binds to. Empty to disable.")
-	flag.IntVar(&maxWorkers, "max-workers", 0, "Maximum concurrent reconcile workers. 0 uses the default.")
+	flag.IntVar(&maxWorkers, "max-workers", 0, "Maximum concurrent reconcile workers (default: 16).")
 	flag.Parse()
 
 	if pprofBindAddress != "" {

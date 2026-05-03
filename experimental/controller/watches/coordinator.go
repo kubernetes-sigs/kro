@@ -7,6 +7,8 @@ package watches
 import (
 	"sync"
 
+	"github.com/ellistarn/kro/experimental/controller/graph"
+
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -50,7 +52,7 @@ type graphState struct {
 type WatchCoordinator struct {
 	mu sync.RWMutex
 
-	Watches *WatchManager
+	watches *WatchManager
 	enqueue func(GraphKey) // enqueues a Graph for reconciliation
 	log     logr.Logger
 
@@ -60,14 +62,16 @@ type WatchCoordinator struct {
 }
 
 func NewWatchCoordinator(watches *WatchManager, enqueue func(GraphKey), log logr.Logger) *WatchCoordinator {
-	return &WatchCoordinator{
-		Watches:         watches,
+	c := &WatchCoordinator{
+		watches:         watches,
 		enqueue:         enqueue,
 		log:             log.WithName("watch-coordinator"),
 		graphs:          make(map[GraphKey]*graphState),
 		scalarIndex:     make(map[schema.GroupVersionResource]map[types.NamespacedName][]scalarEntry),
 		collectionIndex: make(map[schema.GroupVersionResource][]collectionEntry),
 	}
+	watches.onEvent = c.RouteEvent
+	return c
 }
 
 func (c *WatchCoordinator) doneGraph(graph GraphKey, pending []watchRequest) {
@@ -90,7 +94,7 @@ func (c *WatchCoordinator) doneGraph(graph GraphKey, pending []watchRequest) {
 	// swaps current→previous and reallocates current. This is correct but
 	// means the entire pending array stays live, not individual elements.
 	newGVRs := make(map[schema.GroupVersionResource]string)
-	var newNodeIDs []string
+	newWatchCount := 0
 	hasNewIndexEntries := false
 	for i := range pending {
 		req := &pending[i]
@@ -113,7 +117,7 @@ func (c *WatchCoordinator) doneGraph(graph GraphKey, pending []watchRequest) {
 			} else {
 				c.addScalarLocked(graph, *req)
 			}
-			newNodeIDs = append(newNodeIDs, req.nodeID)
+			newWatchCount++
 			hasNewIndexEntries = true
 		}
 		newGVRs[req.gvr] = req.kind
@@ -139,7 +143,7 @@ func (c *WatchCoordinator) doneGraph(graph GraphKey, pending []watchRequest) {
 	c.mu.Unlock()
 
 	c.log.V(1).Info("watch cycle flushed", "graph", graph,
-		"newWatches", len(newNodeIDs), "staleWatches", len(affectedGVRs),
+		"newWatches", newWatchCount, "staleWatches", len(affectedGVRs),
 		"toRelease", len(toRelease))
 
 	// Ensure informers running for watched GVRs (outside lock).
@@ -154,12 +158,12 @@ func (c *WatchCoordinator) doneGraph(graph GraphKey, pending []watchRequest) {
 	// reconciles the informer is already running from this call.
 	ownerID := GraphOwnerID(graph)
 	for gvr, kind := range newGVRs {
-		if err := c.Watches.EnsureWatch(gvr, kind, ownerID); err != nil {
+		if err := c.watches.EnsureWatch(gvr, kind, ownerID); err != nil {
 			c.log.Error(err, "failed to ensure watch", "gvr", gvr)
 		}
 	}
 	for _, gvr := range toRelease {
-		c.Watches.releaseWatch(gvr, ownerID)
+		c.watches.releaseWatch(gvr, ownerID)
 	}
 
 	if hasNewIndexEntries {
@@ -178,13 +182,10 @@ func (c *WatchCoordinator) RemoveGraph(graph GraphKey) {
 		return
 	}
 
-	// Collect all GVRs this graph watches (from both buffers) and
-	// remove all index entries.
+	// Collect all GVRs this graph watches and remove all index entries.
+	// After doneGraph's double-buffer swap, state.current is always empty —
+	// only state.previous holds the active watch set.
 	gvrSet := make(map[schema.GroupVersionResource]bool)
-	for _, req := range state.current {
-		c.removeFromIndexesLocked(graph, req)
-		gvrSet[req.gvr] = true
-	}
 	for _, req := range state.previous {
 		c.removeFromIndexesLocked(graph, req)
 		gvrSet[req.gvr] = true
@@ -195,8 +196,18 @@ func (c *WatchCoordinator) RemoveGraph(graph GraphKey) {
 
 	ownerID := GraphOwnerID(graph)
 	for gvr := range gvrSet {
-		c.Watches.releaseWatch(gvr, ownerID)
+		c.watches.releaseWatch(gvr, ownerID)
 	}
+}
+
+// DeriveAppliedSet delegates to the underlying WatchManager.
+func (c *WatchCoordinator) DeriveAppliedSet(graphName, namespace string) map[string]graph.AppliedEntry {
+	return c.watches.DeriveAppliedSet(graphName, namespace)
+}
+
+// GetLabels delegates to the underlying WatchManager.
+func (c *WatchCoordinator) GetLabels(gvr schema.GroupVersionResource, namespace, name string) (map[string]string, bool) {
+	return c.watches.GetLabels(gvr, namespace, name)
 }
 
 // RouteEvent routes an informer event to all matching Graphs and enqueues

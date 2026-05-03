@@ -75,7 +75,7 @@ type GraphReconciler struct {
 	SchemaGen      *compiler.SchemaGeneration      // nil = no generation tracking; never triggers recompilation
 	Watcher        *watches.WatchCoordinator       // nil = no dynamic watches (backward compat with existing tests)
 	Caches         *InstanceMap                    // per-revision compiled expression caches
-	Scope          GVKScopeResolver                // nil = unknown scope; staticResourceKey falls back to namespace-substitution heuristic
+	Scope          *scopeResolver                  // nil = unknown scope; staticResourceKey falls back to namespace-substitution heuristic
 }
 
 // reconcileScope bundles the per-reconcile identity context that threads
@@ -296,7 +296,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// spec's templateHasStatus for known nodes; defaults to false for
 		// dynamically-discovered resources.
 		if r.Watcher != nil {
-			appliedSet := r.Watcher.Watches.DeriveAppliedSet(rs.name, rs.namespace)
+			appliedSet := r.Watcher.DeriveAppliedSet(rs.name, rs.namespace)
 			for key, entry := range appliedSet {
 				allPreviousKeys[key] = Applied{
 					Key:      key,
@@ -352,7 +352,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				currentSet[a.Key] = a
 			}
 			candidates := collectPruneCandidates(allPreviousKeys, currentSet)
-			allDAGs := collectAllDAGs(dag, supersededDAGs)
+			allDAGs := []*dagpkg.DAG{}
+			if dag != nil {
+				allDAGs = append(allDAGs, dag)
+			}
+			for _, d := range supersededDAGs {
+				allDAGs = append(allDAGs, d)
+			}
 
 			pr := cluster.pruneResources(ctx, rs, candidates, currentSet, allDAGs, eval, state, true)
 
@@ -388,25 +394,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// -----------------------------------------------------------------------
 	// 9. Update status
 	// -----------------------------------------------------------------------
-	var topoOrder map[string]any
-	if compilationErr == nil && len(state.compiled.ChildTopologies) > 0 {
-		nodes := make([]string, len(dag.TopologicalOrder))
-		for i, idx := range dag.TopologicalOrder {
-			nodes[i] = dag.Nodes[idx].ID
-		}
-		topoOrder = map[string]any{"nodes": nodes}
-		for nodeID, childOrder := range state.compiled.ChildTopologies {
-			topoOrder[nodeID] = childOrder
-		}
-	}
-
 	rstate := &reconcileState{
 		compiled:         compilationErr == nil,
 		compiledErr:      compilationErr,
 		planSummary:      summary,
 		nodeErrors:       nodeErrors,
 		nodeNotes:        nodeNotes,
-		topologicalOrder: topoOrder,
 	}
 	if err := r.updateStatus(ctx, graph, rstate); err != nil {
 		logger.Error(err, "status update")

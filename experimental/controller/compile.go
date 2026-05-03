@@ -38,11 +38,6 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 		return nil, nil, err
 	}
 
-	var cacheGen int64
-	if r.SchemaGen != nil {
-		cacheGen = r.SchemaGen.Generation()
-	}
-
 	// Resolve types. Then pre-populate schemas for dynamic GVK nodes
 	// whose GVK was resolved on a previous reconcile. The compiler
 	// is unaware of dynamic GVKs — it just sees pre-populated types.
@@ -58,8 +53,6 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 	if err != nil {
 		return nil, nil, err
 	}
-	compiled.TypeCacheGen = cacheGen
-
 	// Assemble a per-instance DAG from the shared topology and this
 	// instance's node specs.
 	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
@@ -68,11 +61,9 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 	// fields like previousScope, previousKeys, etc.).
 	if existing != nil {
 		existing.compiled = compiled
-		existing.spec = spec
 		existing.dag = dag
 		// Reset runtime caches that should not survive recompilation.
 		existing.forEach = &forEachCarryForward{
-			items:     map[string][]any{},
 			itemScope: map[string]map[string]any{},
 			itemKeys:  map[string]map[string][]Applied{},
 		}
@@ -83,7 +74,6 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 
 	// New instance — create fresh mutable state.
 	state := newInstanceState(compiled)
-	state.spec = spec
 	state.dag = dag
 	r.Caches.set(instanceKey, state)
 	return spec, state, nil

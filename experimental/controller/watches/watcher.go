@@ -65,7 +65,7 @@ func (gw *GraphWatcher) WatchCollection(nodeID string, gvr schema.GroupVersionRe
 // GetLabels returns the labels from the metadata informer cache for a specific
 // object. Returns nil, false if not found or no watch exists.
 func (gw *GraphWatcher) GetLabels(gvr schema.GroupVersionResource, namespace, name string) (map[string]string, bool) {
-	return gw.coord.Watches.GetLabels(gvr, namespace, name)
+	return gw.coord.GetLabels(gvr, namespace, name)
 }
 
 // Done finalizes the watch set for this reconcile cycle.
@@ -80,9 +80,8 @@ func (gw *GraphWatcher) GetLabels(gvr schema.GroupVersionResource, namespace, na
 // continue routing events correctly. Failed reconciles don't start
 // new informers; the retry will call doneGraph on success.
 func (gw *GraphWatcher) Done(commit bool) {
-	// Lock is defense-in-depth: all DAG node goroutines have returned
-	// by the time Done is called (the coordinator drains the results
-	// channel before returning). No concurrent appends are possible.
+	// Lock protects against concurrent WatchScalar/WatchCollection calls from
+	// DAG node goroutines during the parallel walk. Required, not defense-in-depth.
 	gw.mu.Lock()
 	pending := gw.pending
 	gw.pending = nil

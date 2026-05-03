@@ -31,6 +31,18 @@ type watchRequest struct {
 
 func (r *watchRequest) isCollection() bool { return r.selector != nil }
 
+// bufferKey returns a unique key for this watch request within a graph's
+// watch buffer. For scalar watches, the key includes the target identity
+// (name+namespace) because a single forEach node can watch multiple
+// distinct resources. For collection watches, nodeID alone suffices
+// because each watch node has exactly one selector.
+func (r *watchRequest) bufferKey() string {
+	if r.isCollection() {
+		return r.nodeID
+	}
+	return r.nodeID + "\x00" + r.namespace + "\x00" + r.name
+}
+
 type scalarEntry struct {
 	nodeID string
 	graph  GraphKey
@@ -98,20 +110,24 @@ func (c *WatchCoordinator) doneGraph(graph GraphKey, pending []watchRequest) {
 	hasNewIndexEntries := false
 	for i := range pending {
 		req := &pending[i]
+		bk := req.bufferKey()
 
-		// Handle nodeID reuse with different target
-		if old, exists := state.current[req.nodeID]; exists {
+		// Handle buffer-key reuse with different target. For scalar
+		// watches the target identity is embedded in the key, so
+		// collisions only happen for collection watches where the
+		// selector changed.
+		if old, exists := state.current[bk]; exists {
 			if !sameTarget(old, req) {
-				if prev, shared := state.previous[req.nodeID]; !shared || !sameTarget(prev, old) {
+				if prev, shared := state.previous[bk]; !shared || !sameTarget(prev, old) {
 					c.removeFromIndexesLocked(graph, old)
 				}
 			}
 		}
 
-		state.current[req.nodeID] = req
+		state.current[bk] = req
 
 		// Only add to index if not already covered by previous cycle
-		if prev, shared := state.previous[req.nodeID]; !shared || !sameTarget(prev, req) {
+		if prev, shared := state.previous[bk]; !shared || !sameTarget(prev, req) {
 			if req.isCollection() {
 				c.addCollectionLocked(graph, *req)
 			} else {
@@ -125,8 +141,8 @@ func (c *WatchCoordinator) doneGraph(graph GraphKey, pending []watchRequest) {
 
 	// Clean stale entries from previous cycle.
 	var affectedGVRs []schema.GroupVersionResource
-	for nodeID, oldReq := range state.previous {
-		if newReq, active := state.current[nodeID]; active && sameTarget(newReq, oldReq) {
+	for bk, oldReq := range state.previous {
+		if newReq, active := state.current[bk]; active && sameTarget(newReq, oldReq) {
 			continue
 		}
 		c.removeFromIndexesLocked(graph, oldReq)

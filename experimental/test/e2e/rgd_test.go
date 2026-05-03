@@ -39,6 +39,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "test.kro.run/v1alpha1",
 							"kind":       "SimpleApp",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{},
 						},
 					},

@@ -76,9 +76,9 @@ func TestCore(t *testing.T) {
 		// Start envtest + subprocess.
 		testEnvironment = &testenv.Environment{
 			CRDDirectoryPaths: []string{
-				filepath.Join(moduleRoot, "test", "integration", "crds", "ack-ec2-controller"),
-				filepath.Join(moduleRoot, "test", "integration", "crds", "ack-iam-controller"),
-				filepath.Join(moduleRoot, "test", "integration", "crds", "ack-eks-controller"),
+			filepath.Join(moduleRoot, "..", "test", "integration", "crds", "ack-ec2-controller"),
+			filepath.Join(moduleRoot, "..", "test", "integration", "crds", "ack-iam-controller"),
+			filepath.Join(moduleRoot, "..", "test", "integration", "crds", "ack-eks-controller"),
 			},
 		}
 		cfg, err := testEnvironment.Start()

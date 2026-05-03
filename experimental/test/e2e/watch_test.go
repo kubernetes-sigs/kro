@@ -144,6 +144,7 @@ func TestDynamicWatchCollectionMembershipChange(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"collection": "watched"},
 						},
 					},
@@ -241,6 +242,7 @@ func TestCollectionMemberRelabeledOutOfSelector(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"tier": "frontend"},
 						},
 					},

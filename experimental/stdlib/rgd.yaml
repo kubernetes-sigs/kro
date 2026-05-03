@@ -255,6 +255,7 @@ spec:
                   name: $${schema.metadata.name}
                 status:
                   state: '$${validation.result.valid && crd.ready().orValue(false) ? "Active" : "Inactive"}'
+                  topologicalOrder: "$${checks.allIDs}"
                   conditions:
                     - type: Ready
                       status: '$${validation.result.valid && crd.ready().orValue(false) ? "True" : "False"}'
@@ -284,8 +285,8 @@ spec:
     # compilationStatus mirrors the sub-Graph's Compiled condition to the RGD.
     # When compilation fails, this node also claims Ready and state (with
     # Inactive / False) because the sub-Graph is inert and rgdStatus can't
-    # fire. When compilation succeeds, the patch includes only Compiled and
-    # topologicalOrder — SSA relinquishes Ready and state for rgdStatus to
+    # fire. When compilation succeeds, the patch includes only Compiled —
+    # SSA relinquishes Ready, state, and topologicalOrder for rgdStatus to
     # claim.
     - id: compilationStatus
       forEach:
@@ -322,7 +323,6 @@ spec:
               "kind": "ResourceGraphDefinition",
               "metadata": {"name": graph.metadata.labels["kro.run/instance-name"]},
               "status": {
-                "topologicalOrder": graph.?status.?topologicalOrder.orValue({}).?instances.orValue([]).filter(id, id != "schema" && id != "rgdInstancePatch"),
                 "conditions": [
                   {
                     "type": "Compiled",

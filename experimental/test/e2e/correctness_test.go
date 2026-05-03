@@ -1526,6 +1526,7 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata": map[string]any{"namespace": ns},
 							"selector": map[string]any{
 								"app": "empty-collection-no-match-xyz",
 							},
@@ -1607,6 +1608,7 @@ func TestWatchKind_RegressionEmptyReadyWhenPropagates(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata": map[string]any{"namespace": ns},
 							"selector": map[string]any{
 								"app": "empty-readywhen-none-match",
 							},
@@ -2738,6 +2740,7 @@ func TestDeclarationError_ForEachVariableCollision(t *testing.T) {
 						"id": "items",
 						"watch": map[string]any{
 							"apiVersion": "v1", "kind": "Namespace",
+							"metadata": map[string]any{"namespace": ns},
 						},
 					},
 					map[string]any{

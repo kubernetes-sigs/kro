@@ -96,6 +96,7 @@ func TestDynamicWatchCELIdentity(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "${gvrConfig.data.apiVersion}",
 							"kind":       "${gvrConfig.data.kind}",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"cel-watch-test": "yes"},
 						},
 					},
@@ -277,6 +278,7 @@ func TestHydrationSkipsDynamicIdentityNodes(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "${gvrConfig.data.apiVersion}",
 							"kind":       "${gvrConfig.data.kind}",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"hydration-test": "yes"},
 						},
 					},
@@ -423,6 +425,7 @@ func TestHydrationStartupWithDynamicRevision(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "${gvrConfig.data.apiVersion}",
 							"kind":       "${gvrConfig.data.kind}",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"startup-test": "yes"},
 						},
 					},

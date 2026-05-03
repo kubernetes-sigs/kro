@@ -562,6 +562,7 @@ func TestForEachCollectionScaleUpDown(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"group": "scale-test"},
 						},
 					},

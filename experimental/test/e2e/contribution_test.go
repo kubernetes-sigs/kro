@@ -997,16 +997,25 @@ func TestPatchMapFieldOwnership(t *testing.T) {
 		}))
 	t.Log("Removed patch node — prune triggered")
 
-	// Wait for the Graph to settle after prune.
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
-		types.NamespacedName{Name: graphName, Namespace: ns}))
-
-	// Re-read the target to check field ownership after release apply.
-	final := &unstructured.Unstructured{}
-	final.SetGroupVersionKind(cmGVK)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "map-target", Namespace: ns}, final),
-		"Patch target must survive prune")
+	// Poll the ConfigMap until the contributed key is gone. waitForSettle on
+	// the Graph is insufficient because the release-apply that patches the
+	// ConfigMap may happen in a subsequent reconcile after the Graph settles.
+	var final *unstructured.Unstructured
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			obj := &unstructured.Unstructured{}
+			obj.SetGroupVersionKind(cmGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "map-target", Namespace: ns}, obj); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(obj.Object, "data")
+			if _, exists := data["contributed-key"]; exists {
+				return false, nil
+			}
+			final = obj
+			return true, nil
+		}), "timed out waiting for contributed-key to be removed from ConfigMap")
 
 	// ASSERTION 1: External manager's keys must be intact.
 	finalData, _, _ := unstructured.NestedStringMap(final.Object, "data")

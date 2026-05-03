@@ -252,8 +252,7 @@ func precompileChildGraph(parentNodeID string, body map[string]any) error {
 	// parent compilation. This still catches: parse errors, undeclared
 	// references, forEach type errors, DAG cycles.
 	childSpec := &graph.GraphSpec{Nodes: childNodes}
-	_, err = CompileGraphSpec(childSpec, nil)
-	if err != nil {
+	if _, err := CompileGraphSpec(childSpec, nil); err != nil {
 		return fmt.Errorf("node %q: child graph: %w", parentNodeID, err)
 	}
 	return nil

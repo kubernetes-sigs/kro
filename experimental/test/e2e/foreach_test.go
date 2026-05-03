@@ -138,6 +138,7 @@ func TestForEachWithExternalRefSelector(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata": map[string]any{"namespace": ns},
 							"selector": map[string]any{
 								"app": "my-kind",
 							},
@@ -241,6 +242,7 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata": map[string]any{"namespace": ns},
 							"selector": map[string]any{
 								"kind": "WebApp",
 							},
@@ -645,6 +647,7 @@ func TestForEachChildIdentityStableUnderReordering(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata": map[string]any{"namespace": ns},
 							"selector": map[string]any{
 								"group": "foreach-workers",
 							},
@@ -804,6 +807,7 @@ func TestForEachPropagateWhenMultiChildAggregation(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"group": "pw-foreach"},
 						},
 					},
@@ -971,6 +975,7 @@ func TestForEachPartialFailureDoesNotPrune(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"group": "partial-sources"},
 						},
 					},
@@ -1130,6 +1135,7 @@ func TestForEach_RegressionDuplicateKeySilentOverwrite(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"group": "dup-sources"},
 						},
 					},
@@ -1747,6 +1753,7 @@ func TestForEach_PropagateWhenPerItemHaltsCreation(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"group": "ppi-foreach"},
 						},
 					},
@@ -1904,6 +1911,7 @@ func TestForEach_PropagateWhenPerItemHaltsAtFirstItem(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"group": "halt0-foreach"},
 						},
 					},
@@ -1981,6 +1989,7 @@ func TestForEach_PropagateWhenPerItemScaleDownWhileGated(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"group": "sd-foreach"},
 						},
 					},
@@ -2104,6 +2113,7 @@ func TestForEach_PropagateWhenPerItemOrderingStable(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"group": "ord-foreach"},
 						},
 					},
@@ -2245,6 +2255,7 @@ func TestForEach_PropagateWhenUpdatedGatesCreation(t *testing.T) {
 						"watch": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
 							"selector":   map[string]any{"group": "upd-foreach"},
 						},
 					},

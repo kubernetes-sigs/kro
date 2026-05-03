@@ -80,27 +80,21 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 		// exclusion — the expression has a branch that handles absent data.
 		gate := checkDependencyGate(node, plan)
 
-		if gate == gateExcluded {
+		if gate == depExcluded {
 			// Contagious exclusion: any hard dependency Excluded → Excluded.
 			// Per 005-reconciliation.md § Propagation step 1.
 			logger.V(1).Info("node excluded — dependency excluded", "node", node.ID)
 			plan.SetState(node.ID, dagpkg.NodeExcluded)
-			// Excluded nodes advertise ready=true so that non-excluded status
-			// rollup expressions don't block on absent nodes.
-			eval.scope[node.ID] = map[string]any{"__ready": true}
-			if eval.nodeReady != nil {
-				eval.nodeReady[node.ID] = true
-			}
-			state.walk.previousScope[node.ID] = eval.scope[node.ID]
+			markExcluded(eval, node.ID, state)
 			continue
 		}
-		if gate == gateBlocked {
+		if gate == depBlocked {
 			logger.V(1).Info("node blocked — dependency in error state", "node", node.ID)
 			plan.SetState(node.ID, dagpkg.NodeBlocked)
 			carryForwardKeys(nodeKeys, node.ID, state)
 			continue
 		}
-		if gate == gatePending {
+		if gate == depPending {
 			logger.V(1).Info("node pending — dependency pending", "node", node.ID)
 			plan.SetState(node.ID, dagpkg.NodePending)
 			carryForwardKeys(nodeKeys, node.ID, state)
@@ -152,99 +146,23 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 			if !included {
 				logger.V(1).Info("node excluded by includeWhen", "node", node.ID)
 				plan.SetState(node.ID, dagpkg.NodeExcluded)
-				eval.scope[node.ID] = map[string]any{"__ready": true}
-				if eval.nodeReady != nil {
-					eval.nodeReady[node.ID] = true
-				}
-				state.walk.previousScope[node.ID] = eval.scope[node.ID]
+				markExcluded(eval, node.ID, state)
 				continue
 			}
 		}
 
 		// --- Evaluate the node ---
-		nr := cluster.evaluateNode(ctx, rs, *node, eval, state)
+		nr := evaluateNode(ctx, cluster, rs, *node, eval, state)
 
-		// --- Process the result ---
-		if nr.state == dagpkg.NodeError {
-			info := classifyAPIError(nr.err)
-			plan.SetState(node.ID, info.state)
-			result.nodeErrors = append(result.nodeErrors, fmt.Sprintf("%s: %s", node.ID, info.reason))
-			logger.V(0).Info("error on node", "node", node.ID, "state", info.state, "reason", info.reason, "error", nr.err)
-			carryForwardKeys(nodeKeys, node.ID, state)
-			continue
+		// --- Integrate the result into walk state ---
+		nrOut := integrateNodeResult(ctx, nr, node, eval, state, plan, nodeKeys)
+		result.nodeErrors = append(result.nodeErrors, nrOut.errMsgs...)
+		if nrOut.needsRecompile {
+			result.needsRecompile = true
 		}
-		if nr.state == dagpkg.NodeConflict {
-			plan.SetState(node.ID, dagpkg.NodeConflict)
-			state.walk.previousScope[node.ID] = nr.scope
-			result.nodeErrors = append(result.nodeErrors, fmt.Sprintf("%s: field conflict", node.ID))
-			logger.V(0).Info("conflict on node", "node", node.ID, "error", nr.err)
-			carryForwardKeys(nodeKeys, node.ID, state)
-			continue
-		}
-		if nr.state == dagpkg.NodePending {
-			plan.SetState(node.ID, dagpkg.NodePending)
-			state.walk.previousScope[node.ID] = nr.scope
-			logger.V(1).Info("data pending for node", "node", node.ID, "error", nr.err)
-			carryForwardKeys(nodeKeys, node.ID, state)
-			continue
-		}
-
-		// Publish scope.
-		if nr.scope != nil {
-			eval.scope[node.ID] = nr.scope
-		}
-
-		// CRD creation detection: if a template node just created a CRD,
-		// advance the schema generation so the post-walk recompile check
-		// catches child graph type errors within the same cycle.
-		if r.SchemaGen != nil && node.Type() == graphpkg.NodeTypeTemplate {
-			if scopeMap, ok := nr.scope.(map[string]any); ok {
-				if scopeMap["apiVersion"] == "apiextensions.k8s.io/v1" && scopeMap["kind"] == "CustomResourceDefinition" {
-					r.SchemaGen.AdvanceGeneration()
-				}
-			}
-		}
-
-		// Merge node-readiness verdict.
-		if eval.nodeReady != nil {
-			eval.nodeReady[node.ID] = (nr.state == dagpkg.NodeReady)
-		}
-
-		// Merge forEach state updates.
-		if nr.forEach != nil {
-			for nodeID, itemScopes := range nr.forEach.itemScope {
-				state.walk.forEach.itemScope[nodeID] = itemScopes
-			}
-			for nodeID, itemKeys := range nr.forEach.itemKeys {
-				state.walk.forEach.itemKeys[nodeID] = itemKeys
-			}
-		}
-
-		// Update plan state.
-		plan.SetState(node.ID, nr.state)
-		if nr.state == dagpkg.NodeNotReady && nr.err != nil && errors.Is(nr.err, compiler.ErrReadyWhenFailed) {
-			result.nodeErrors = append(result.nodeErrors, fmt.Sprintf("%s: %s", node.ID, nr.err.Error()))
-			logger.V(0).Info("readyWhen expression error (not gating dependents)",
-				"node", node.ID, "error", nr.err)
-		}
-
-		// Record applied keys.
-		if nr.state == dagpkg.NodeReady || nr.state == dagpkg.NodeNotReady {
-			nodeKeys[node.ID] = nr.keys
-		} else {
-			carryForwardKeys(nodeKeys, node.ID, state)
-		}
-
-		// Save per-node scope for next reconcile.
-		state.walk.previousScope[node.ID] = eval.scope[node.ID]
-
-		// Record dynamic GVK resolutions.
-		if nr.resolvedGVK != nil {
-			if state.mergeDynamicGVK(node.ID, *nr.resolvedGVK) {
-				result.needsRecompile = true
-				logger.Info("dynamic GVK resolved; will recompile with schema on next reconcile",
-					"node", node.ID, "gvk", *nr.resolvedGVK)
-			}
+		if nrOut.crdCreated && r.SchemaGen != nil {
+			r.SchemaGen.AdvanceGeneration()
+			result.needsRecompile = true
 		}
 	}
 
@@ -262,6 +180,118 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 	return result
 }
 
+// nodeIntegrationResult carries the outputs of integrateNodeResult back
+// to the walk loop. Decouples the walk from node-result classification
+// internals (apiErrorInfo, forEachCarryForward structure).
+type nodeIntegrationResult struct {
+	errMsgs        []string // "nodeID: reason" error messages for status
+	needsRecompile bool     // dynamic GVK resolved or changed
+	crdCreated     bool     // template node created a CRD (caller advances SchemaGen)
+}
+
+// integrateNodeResult processes a single node's evaluation output and
+// updates the walk's shared state: plan states, scope, keys, forEach,
+// and dynamic GVK resolution. Handles error states (Error, Conflict,
+// Pending) and the success path (scope publish, readiness merge, key
+// recording). Returns status messages and signals for the caller.
+//
+// This is a pure integration function — it reads the nodeResult and
+// mutates eval, state, plan, and nodeKeys. The CRD detection signal
+// is returned rather than acted on, keeping SchemaGeneration coupling
+// out of this function.
+func integrateNodeResult(
+	ctx context.Context,
+	nr nodeResult,
+	node *graphpkg.Node,
+	eval *evaluator,
+	state *instanceState,
+	plan *dagpkg.PlanState,
+	nodeKeys map[string][]Applied,
+) nodeIntegrationResult {
+	logger := log.FromContext(ctx)
+	var out nodeIntegrationResult
+
+	// --- Error states: set plan state, record error, carry forward keys ---
+	if nr.state == dagpkg.NodeError {
+		info := classifyAPIError(nr.err)
+		plan.SetState(node.ID, info.state)
+		out.errMsgs = append(out.errMsgs, fmt.Sprintf("%s: %s", node.ID, info.reason))
+		logger.V(0).Info("error on node", "node", node.ID, "state", info.state, "reason", info.reason, "error", nr.err)
+		carryForwardKeys(nodeKeys, node.ID, state)
+		return out
+	}
+	if nr.state == dagpkg.NodeConflict {
+		plan.SetState(node.ID, dagpkg.NodeConflict)
+		state.walk.previousScope[node.ID] = nr.scope
+		out.errMsgs = append(out.errMsgs, fmt.Sprintf("%s: field conflict", node.ID))
+		logger.V(0).Info("conflict on node", "node", node.ID, "error", nr.err)
+		carryForwardKeys(nodeKeys, node.ID, state)
+		return out
+	}
+	if nr.state == dagpkg.NodePending {
+		plan.SetState(node.ID, dagpkg.NodePending)
+		state.walk.previousScope[node.ID] = nr.scope
+		logger.V(1).Info("data pending for node", "node", node.ID, "error", nr.err)
+		carryForwardKeys(nodeKeys, node.ID, state)
+		return out
+	}
+
+	// --- Success path ---
+
+	// Publish scope.
+	if nr.scope != nil {
+		eval.scope[node.ID] = nr.scope
+	}
+
+	// CRD creation detection: if a template node just created a CRD,
+	// signal the caller to advance the schema generation so the post-walk
+	// recompile check catches child graph type errors within the same cycle.
+	if node.Type() == graphpkg.NodeTypeTemplate {
+		if scopeMap, ok := nr.scope.(map[string]any); ok {
+			if scopeMap["apiVersion"] == "apiextensions.k8s.io/v1" && scopeMap["kind"] == "CustomResourceDefinition" {
+				out.crdCreated = true
+			}
+		}
+	}
+
+	// Merge node-readiness verdict.
+	if eval.nodeReady != nil {
+		eval.nodeReady[node.ID] = (nr.state == dagpkg.NodeReady)
+	}
+
+	// Merge forEach state updates.
+	state.walk.forEach.merge(nr.forEach)
+
+	// Update plan state.
+	plan.SetState(node.ID, nr.state)
+	if nr.state == dagpkg.NodeNotReady && nr.err != nil && errors.Is(nr.err, compiler.ErrReadyWhenFailed) {
+		out.errMsgs = append(out.errMsgs, fmt.Sprintf("%s: %s", node.ID, nr.err.Error()))
+		logger.V(0).Info("readyWhen expression error (not gating dependents)",
+			"node", node.ID, "error", nr.err)
+	}
+
+	// Record applied keys.
+	if nr.state == dagpkg.NodeReady || nr.state == dagpkg.NodeNotReady {
+		nodeKeys[node.ID] = nr.keys
+	} else {
+		carryForwardKeys(nodeKeys, node.ID, state)
+	}
+
+	// Save per-node scope for next reconcile.
+	state.walk.previousScope[node.ID] = eval.scope[node.ID]
+
+	// Record dynamic GVK resolutions.
+	if nr.resolvedGVK != nil {
+		if state.mergeDynamicGVK(node.ID, *nr.resolvedGVK) {
+			out.needsRecompile = true
+			logger.Info("dynamic GVK resolved; will recompile with schema on next reconcile",
+				"node", node.ID, "gvk", *nr.resolvedGVK)
+		}
+	}
+
+	return out
+}
+
 // evaluateNode runs reconcileNode for a single node and translates the
 // result into a nodeResult. This is the evaluation boundary — all node-type
 // dispatch (Definition, Template, Patch, Ref, Watch, ForEach) happens
@@ -269,7 +299,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 //
 // The evaluator is used directly (no snapshot) since the walk is sequential.
 // Lazy dependencies are populated as optional values before dispatch.
-func (c *clusterAccess) evaluateNode(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, state *instanceState) nodeResult {
+func evaluateNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, node graphpkg.Node, eval *evaluator, state *instanceState) nodeResult {
 	// Populate lazy dependencies as CEL optional values. Per 005-reconciliation.md:
 	// "Lazy dependencies are always in scope as optional values."
 	for depID, kind := range node.Dependencies {
@@ -293,7 +323,7 @@ func (c *clusterAccess) evaluateNode(ctx context.Context, rs *reconcileScope, no
 	if node.ForEach != nil {
 		prevForEachState = state.walk.forEach
 	}
-	out, err := c.reconcileNode(ctx, rs, node, eval, prevForEachState)
+	out, err := reconcileNode(ctx, c, rs, node, eval, prevForEachState)
 
 	nr := nodeResult{
 		state: dagpkg.NodeReady,
@@ -337,14 +367,14 @@ func (c *clusterAccess) evaluateNode(ctx context.Context, rs *reconcileScope, no
 	return nr
 }
 
-// gateState represents the dependency gating outcome for a node.
-type gateState int
+// depGateOutcome represents the dependency gating outcome for a node.
+type depGateOutcome int
 
 const (
-	_            gateState = iota // zero value unused
-	gateExcluded                  // at least one hard dep is Excluded
-	gateBlocked                   // at least one hard dep is in an error state
-	gatePending                   // at least one hard dep is Pending
+	_           depGateOutcome = iota // zero value unused
+	depExcluded                       // at least one hard dep is Excluded
+	depBlocked                        // at least one hard dep is in an error state
+	depPending                        // at least one hard dep is Pending
 )
 
 // checkDependencyGate inspects a node's hard dependencies and determines
@@ -353,7 +383,7 @@ const (
 //
 // Precedence: Excluded > Blocked > Pending, matching
 // 005-reconciliation.md § Propagation.
-func checkDependencyGate(node *graphpkg.Node, plan *dagpkg.PlanState) gateState {
+func checkDependencyGate(node *graphpkg.Node, plan *dagpkg.PlanState) depGateOutcome {
 	hasExcluded := false
 	hasBlocked := false
 	hasPending := false
@@ -379,11 +409,11 @@ func checkDependencyGate(node *graphpkg.Node, plan *dagpkg.PlanState) gateState 
 	}
 	switch {
 	case hasExcluded:
-		return gateExcluded
+		return depExcluded
 	case hasBlocked:
-		return gateBlocked
+		return depBlocked
 	case hasPending:
-		return gatePending
+		return depPending
 	default:
 		return 0 // all hard deps completed — proceed to evaluation
 	}
@@ -424,4 +454,15 @@ func celOptionalOf(v any) any {
 // celOptionalNone returns a CEL optional.none() for absent lazy dependencies.
 func celOptionalNone() any {
 	return types.OptionalNone
+}
+
+// markExcluded stamps a node as excluded in scope and carry-forward state.
+// Excluded nodes advertise ready=true so that non-excluded status rollup
+// expressions don't block on absent nodes.
+func markExcluded(eval *evaluator, nodeID string, state *instanceState) {
+	eval.scope[nodeID] = map[string]any{"__ready": true}
+	if eval.nodeReady != nil {
+		eval.nodeReady[nodeID] = true
+	}
+	state.walk.previousScope[nodeID] = eval.scope[nodeID]
 }

@@ -27,7 +27,6 @@ import (
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
 	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
-	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 	"github.com/ellistarn/kro/experimental/controller/watches"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -248,40 +247,23 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// -----------------------------------------------------------------------
 	// 7. Walk the DAG
 	// -----------------------------------------------------------------------
-	var preWalkGen int64
-	if r.SchemaGen != nil {
-		preWalkGen = r.SchemaGen.Generation()
-	}
-
 	rs := newReconcileScope(graph, watcher)
-	walkRes := r.walk(ctx, rs, state, eval, dag, plan)
+	wp := r.reconcileWalk(ctx, rs, state, eval, dag, plan)
 	walkAttempted = true
 
-	// Post-walk recompile check: if schema generation advanced during
-	// the walk (a CRD was created), re-validate compilation to catch
-	// child graph type errors within the same cycle.
-	if r.SchemaGen != nil && r.SchemaGen.Generation() > preWalkGen && compilationErr == nil {
+	// Post-walk recompile check: if the walk created a CRD, re-validate
+	// compilation to catch child graph type errors within the same cycle.
+	if wp.needsRecompile && compilationErr == nil {
 		if _, _, err := r.compileRevision(ctx, graph.GetNamespace(), activeRevision); err != nil {
 			compilationErr = err
 			logger.Error(err, "post-walk recompilation detected error")
 		}
 	}
 
-	appliedKeys := walkRes.keys
-	nodeErrors := walkRes.nodeErrors
-	var nodeNotes []string
-	summary := walkRes.summary
-
-	// Merge walkResult into instanceState for next reconcile.
-	state.walk.previousPlanStates = walkRes.plan
-	state.walk.previousKeys = walkRes.nodeKeys
-
 	// -----------------------------------------------------------------------
 	// 8. Prune removed resources
 	// -----------------------------------------------------------------------
-	pr := r.reconcilePrune(ctx, rs, state, eval, dag, appliedKeys, supersededRevisions, &summary)
-	nodeErrors = append(nodeErrors, pr.errors...)
-	nodeNotes = append(nodeNotes, pr.notes...)
+	pr := r.reconcilePrune(ctx, rs, state, eval, dag, wp.keys, supersededRevisions, &wp.summary)
 
 	// -----------------------------------------------------------------------
 	// 9. Update status
@@ -289,16 +271,15 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	rstate := &reconcileState{
 		compiled:    compilationErr == nil,
 		compiledErr: compilationErr,
-		planSummary: summary,
-		nodeErrors:  nodeErrors,
-		nodeNotes:   nodeNotes,
+		planSummary: wp.summary,
+		nodeErrors:  append(wp.nodeErrors, pr.errors...),
+		nodeNotes:   pr.notes,
 	}
 	if err := r.updateStatus(ctx, graph, rstate); err != nil {
 		logger.Error(err, "status update")
 	}
 
-	allReady := rstate.compiled && !rstate.planSummary.HasPending && !rstate.planSummary.HasNotReady &&
-		!rstate.planSummary.HasBlocked && !rstate.planSummary.HasConflict && !rstate.planSummary.HasError && !rstate.planSummary.HasSystemError
+	allReady := rstate.compiled && rstate.planSummary.IsClean()
 	r.gcSupersededRevisions(ctx, activeRevision, supersededRevisions, allReady, pr.ok && !pr.pending)
 
 	// -----------------------------------------------------------------------
@@ -306,7 +287,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// -----------------------------------------------------------------------
 
 	// Dynamic GVK change needs immediate recompile.
-	if walkRes.needsRecompile {
+	if wp.needsRecompile {
 		return ctrl.Result{Requeue: true}, nil
 	}
 
@@ -322,6 +303,26 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// reconcileWalk executes the DAG walk and transfers carry-forward state.
+// It evaluates every node in topological order, applying templates via SSA
+// and recording scope for downstream CEL expressions.
+func (r *GraphReconciler) reconcileWalk(
+	ctx context.Context,
+	rs *reconcileScope,
+	state *instanceState,
+	eval *evaluator,
+	dag *dagpkg.DAG,
+	plan *dagpkg.PlanState,
+) *walkResult {
+	walkRes := r.walk(ctx, rs, state, eval, dag, plan)
+
+	// Transfer carry-forward state for next reconcile.
+	state.walk.previousPlanStates = walkRes.plan
+	state.walk.previousKeys = walkRes.nodeKeys
+
+	return walkRes
 }
 
 // prunePhaseResult carries the outputs of reconcilePrune back to the caller.
@@ -356,7 +357,7 @@ func (r *GraphReconciler) reconcilePrune(
 	// Per 005-reconciliation.md § Prune: "Uncertain absence (Pending, Blocked,
 	// Error, SystemError) blocks pruning — the resource might reappear once the
 	// blocker resolves."
-	if summary.HasPending || summary.HasBlocked || summary.HasError || summary.HasSystemError {
+	if summary.HasUncertainty() {
 		return result
 	}
 
@@ -390,25 +391,10 @@ func (r *GraphReconciler) reconcilePrune(
 	// Extract static keys from superseded revisions for resources
 	// that may not yet be in the informer cache.
 	supersededDAGs := map[string]*dagpkg.DAG{}
+	for key, a := range extractStaticKeysFromRevisions(supersededRevisions, rs.namespace, cluster.scope) {
+		allPreviousKeys[key] = a
+	}
 	for _, rev := range supersededRevisions {
-		if revSpec, err := extractRevisionSpec(rev); err == nil {
-			for _, node := range revSpec.Nodes {
-				if node.Finalizes != "" {
-					continue
-				}
-				nodeType := node.Type()
-				if nodeType == graphpkg.NodeTypeRef || nodeType == graphpkg.NodeTypeWatch {
-					continue
-				}
-				if key := staticResourceKey(node.Identity(), rs.namespace, cluster.scope); key != "" {
-					allPreviousKeys[key] = Applied{
-						Key:       key,
-						NodeType:  nodeType,
-						HasStatus: templateHasStatus(node.Payload()),
-					}
-				}
-			}
-		}
 		// Compile superseded revisions to access their finalizer relationships.
 		if _, revState, compileErr := r.compileRevision(ctx, rs.namespace, rev); compileErr == nil {
 			supersededDAGs[rev.GetName()] = revState.compilation.dag

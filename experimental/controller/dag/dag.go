@@ -77,7 +77,7 @@ type Topology struct {
 	// Per-node dependency metadata. Indexed by declaration order (same as
 	// Nodes). These are derived from expression paths during compilation
 	// and are the same across all instances with the same compilation key.
-	nodeDeps          []map[string]graph.DepKind      // node index → dependency IDs + kind
+	nodeDeps []map[string]graph.DepKind // node index → dependency IDs + kind
 }
 
 // NodeDeps returns the dependency set for a node at the given index.
@@ -101,11 +101,11 @@ func (t *Topology) NodeDeps(idx int) map[string]graph.DepKind {
 // declaration index, so independent nodes preserve their spec.nodes ordering.
 func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldPath, exprAccessModes map[string]map[string]bool) (*DAG, error) {
 	topo := &Topology{
-		Index:             make(map[string]int, len(nodes)),
-		NodeTypes:         make(map[string]graph.NodeType),
-		Dependents:        make(map[string][]int),
-		Finalizers:        make(map[string][]string),
-		nodeDeps:          make([]map[string]graph.DepKind, len(nodes)),
+		Index:      make(map[string]int, len(nodes)),
+		NodeTypes:  make(map[string]graph.NodeType),
+		Dependents: make(map[string][]int),
+		Finalizers: make(map[string][]string),
+		nodeDeps:   make([]map[string]graph.DepKind, len(nodes)),
 	}
 
 	dag := &DAG{
@@ -139,13 +139,13 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 			// resources and never become prune candidates — finalizing them
 			// is nonsensical.
 			targetRef := dag.NodeTypes[dag.Nodes[targetIdx].ID]
-		switch targetRef {
-		case graph.NodeTypeDef:
-			return nil, fmt.Errorf("node %q cannot finalize %q: Definition nodes do not manage resources", node.ID, node.Finalizes)
-		case graph.NodeTypeRef:
-			return nil, fmt.Errorf("node %q cannot finalize %q: Ref nodes are read-only", node.ID, node.Finalizes)
-		case graph.NodeTypeWatch:
-			return nil, fmt.Errorf("node %q cannot finalize %q: Watch nodes are read-only", node.ID, node.Finalizes)
+			switch targetRef {
+			case graph.NodeTypeDef:
+				return nil, fmt.Errorf("node %q cannot finalize %q: Definition nodes do not manage resources", node.ID, node.Finalizes)
+			case graph.NodeTypeRef:
+				return nil, fmt.Errorf("node %q cannot finalize %q: Ref nodes are read-only", node.ID, node.Finalizes)
+			case graph.NodeTypeWatch:
+				return nil, fmt.Errorf("node %q cannot finalize %q: Watch nodes are read-only", node.ID, node.Finalizes)
 			}
 			dag.Finalizers[node.Finalizes] = append(dag.Finalizers[node.Finalizes], node.ID)
 		}

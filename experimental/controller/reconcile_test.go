@@ -97,15 +97,15 @@ func TestSummaryCountsBlockedState(t *testing.T) {
 // checkDependencyGate during the walk. These tests exercise it directly.
 // ---------------------------------------------------------------------------
 
-// gateToNodeState maps a gateState to the dagpkg.NodeState that the walk
+// gateToNodeState maps a depGateOutcome to the dagpkg.NodeState that the walk
 // would assign. Used by tests to verify precedence without needing a full walk.
-func gateToNodeState(g gateState) dagpkg.NodeState {
+func gateToNodeState(g depGateOutcome) dagpkg.NodeState {
 	switch g {
-	case gateExcluded:
+	case depExcluded:
 		return dagpkg.NodeExcluded
-	case gateBlocked:
+	case depBlocked:
 		return dagpkg.NodeBlocked
-	case gatePending:
+	case depPending:
 		return dagpkg.NodePending
 	default:
 		return dagpkg.NodeReady // zero value — would proceed to evaluation
@@ -856,7 +856,7 @@ func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
 		},
 	}
 	status, reason, _ := state.deriveReadyCondition()
-	assert.Equal(t, ConditionUnknown, status)
+	assert.Equal(t, conditionUnknown, status)
 	assert.Equal(t, "Blocked", reason,
 		"Blocked should take priority over Pending — upstream error is more actionable than waiting")
 }
@@ -980,8 +980,8 @@ func TestCheckDependencyGate_RegressionExcludedPersistence(t *testing.T) {
 	node := &dag.Nodes[childIdx]
 
 	gate := checkDependencyGate(node, plan)
-	assert.Equal(t, gateExcluded, gate,
-		"child should see gateExcluded when root is Excluded")
+	assert.Equal(t, depExcluded, gate,
+		"child should see depExcluded when root is Excluded")
 	assert.Equal(t, dagpkg.NodeExcluded, gateToNodeState(gate),
 		"child's gated state should be Excluded")
 }
@@ -1392,8 +1392,7 @@ func TestReconcileDefinition_StampsUpdated(t *testing.T) {
 	require.NoError(t, err)
 
 	eval := &evaluator{compiled: compiled, scope: map[string]any{}}
-	r := &GraphReconciler{}
-	err = r.cluster().reconcileDefinition(context.Background(), spec.Nodes[0], eval)
+	err = reconcileDefinition(context.Background(), spec.Nodes[0], eval)
 	require.NoError(t, err)
 
 	m, ok := eval.scope["config"].(map[string]any)
@@ -1833,7 +1832,7 @@ func TestLazyDepDoesNotGateDispatch(t *testing.T) {
 	gate := checkDependencyGate(node, plan)
 	// C should dispatch (zero value) — B is lazy, so its Pending state is invisible to gating.
 	// checkDependencyGate only checks hard deps; lazy dep B=Pending doesn't block.
-	assert.Equal(t, gateState(0), gate,
+	assert.Equal(t, depGateOutcome(0), gate,
 		"lazy dep B=Pending should not block C from dispatching")
 }
 

@@ -14,23 +14,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// ConditionType identifies a condition on a Graph or GraphRevision.
-type ConditionType string
+// conditionType identifies a condition on a Graph or GraphRevision.
+type conditionType string
 
 // Condition types
 const (
-	ConditionCompiled ConditionType = "Compiled"
-	ConditionReady    ConditionType = "Ready"
+	conditionCompiled conditionType = "Compiled"
+	conditionReady    conditionType = "Ready"
 )
 
-// ConditionStatus is the boolean-ish status of a condition (True/False/Unknown).
-type ConditionStatus string
+// conditionStatus is the boolean-ish status of a condition (True/False/Unknown).
+type conditionStatus string
 
 // Condition statuses
 const (
-	ConditionTrue    ConditionStatus = "True"
-	ConditionFalse   ConditionStatus = "False"
-	ConditionUnknown ConditionStatus = "Unknown"
+	conditionTrue    conditionStatus = "True"
+	conditionFalse   conditionStatus = "False"
+	conditionUnknown conditionStatus = "Unknown"
 )
 
 // reconcileState captures the outcome of a reconcile cycle for status derivation.
@@ -58,21 +58,21 @@ type reconcileState struct {
 // deriveCompiledCondition computes the Compiled condition.
 // Compiled is set once when the spec is parsed/compiled. It's permanent until
 // the spec changes. False means the Graph will never converge until the spec is fixed.
-func (s *reconcileState) deriveCompiledCondition() (status ConditionStatus, reason string, message string) {
+func (s *reconcileState) deriveCompiledCondition() (status conditionStatus, reason string, message string) {
 	if s.compiled {
-		return ConditionTrue, "Compiled", "Spec is valid"
+		return conditionTrue, "Compiled", "Spec is valid"
 	}
 	if s.compiledErr != nil {
 		// Classify the error
 		if errors.Is(s.compiledErr, compiler.ErrInvalidExpression) {
-			return ConditionFalse, "ExpressionError", s.compiledErr.Error()
+			return conditionFalse, "ExpressionError", s.compiledErr.Error()
 		}
 		if errors.Is(s.compiledErr, compiler.ErrDependencyError) {
-			return ConditionFalse, "DependencyError", s.compiledErr.Error()
+			return conditionFalse, "DependencyError", s.compiledErr.Error()
 		}
-		return ConditionFalse, "DeclarationError", s.compiledErr.Error()
+		return conditionFalse, "DeclarationError", s.compiledErr.Error()
 	}
-	return ConditionFalse, "DeclarationError", "Spec validation failed"
+	return conditionFalse, "DeclarationError", "Spec validation failed"
 }
 
 // deriveReadyCondition computes the Ready condition from the reconcile outcome.
@@ -94,17 +94,17 @@ func (s *reconcileState) deriveCompiledCondition() (status ConditionStatus, reas
 //	SystemError → False   — server or infrastructure failure (5xx)
 //	Error       → False   — client request failed (4xx)
 //	Conflict    → False   — SSA field ownership contested
-func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason string, message string) {
+func (s *reconcileState) deriveReadyCondition() (status conditionStatus, reason string, message string) {
 	if !s.compiled {
-		return ConditionFalse, "NotCompiled", "Spec is not valid; resources cannot be reconciled"
+		return conditionFalse, "NotCompiled", "Spec is not valid; resources cannot be reconciled"
 	}
 	if s.planSummary.HasSystemError {
-		return ConditionFalse, "SystemError",
+		return conditionFalse, "SystemError",
 			fmt.Sprintf("Resources with server/infrastructure errors: %s",
 				strings.Join(s.nodeErrors, "; "))
 	}
 	if s.planSummary.HasError {
-		return ConditionFalse, "Error",
+		return conditionFalse, "Error",
 			fmt.Sprintf("Resources with errors: %s",
 				strings.Join(s.nodeErrors, "; "))
 	}
@@ -113,7 +113,7 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 		if len(s.nodeErrors) > 0 {
 			msg += ": " + strings.Join(s.nodeErrors, "; ")
 		}
-		return ConditionFalse, "Conflict", msg
+		return conditionFalse, "Conflict", msg
 	}
 	if s.planSummary.HasBlocked {
 		msg := "One or more resources blocked by upstream errors"
@@ -125,14 +125,14 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 		if len(s.nodeErrors) > 0 {
 			msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
 		}
-		return ConditionUnknown, "Blocked", msg
+		return conditionUnknown, "Blocked", msg
 	}
 	if s.planSummary.HasPending {
 		msg := "One or more resources waiting for upstream data"
 		if len(s.nodeErrors) > 0 {
 			msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
 		}
-		return ConditionUnknown, "Pending", msg
+		return conditionUnknown, "Pending", msg
 	}
 	if s.planSummary.HasNotReady {
 		msg := "One or more resources have not satisfied their readyWhen conditions"
@@ -143,7 +143,7 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 		if len(s.nodeErrors) > 0 {
 			msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
 		}
-		return ConditionUnknown, "NotReady", msg
+		return conditionUnknown, "NotReady", msg
 	}
 	msg := fmt.Sprintf("All %d resources reconciled", s.planSummary.ReadyCount)
 	// Surface informational notes (e.g., FinalizerSkipped) that don't
@@ -158,7 +158,7 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	if len(s.nodeNotes) > 0 {
 		msg += " (" + strings.Join(s.nodeNotes, "; ") + ")"
 	}
-	return ConditionTrue, "Ready", msg
+	return conditionTrue, "Ready", msg
 }
 
 // updateStatus writes the Graph's status subresource. Reads the latest version
@@ -172,10 +172,10 @@ func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.
 
 	// Build both conditions
 	compiledStatus, compiledReason, compiledMessage := state.deriveCompiledCondition()
-	compiledCondition := buildCondition(string(ConditionCompiled), compiledStatus, compiledReason, compiledMessage)
+	compiledCondition := buildCondition(string(conditionCompiled), compiledStatus, compiledReason, compiledMessage)
 
 	readyStatus, readyReason, readyMessage := state.deriveReadyCondition()
-	readyCondition := buildCondition(string(ConditionReady), readyStatus, readyReason, readyMessage)
+	readyCondition := buildCondition(string(conditionReady), readyStatus, readyReason, readyMessage)
 
 	// Preserve lastTransitionTime for conditions whose status hasn't changed
 	existingConditions, _, _ := unstructured.NestedSlice(latest.Object, "status", "conditions")
@@ -221,7 +221,7 @@ func statusEqual(a, b map[string]any) bool {
 }
 
 // buildCondition creates a condition map with the current timestamp.
-func buildCondition(condType string, status ConditionStatus, reason, message string) map[string]any {
+func buildCondition(condType string, status conditionStatus, reason, message string) map[string]any {
 	return map[string]any{
 		"type":               condType,
 		"status":             string(status),
@@ -233,7 +233,7 @@ func buildCondition(condType string, status ConditionStatus, reason, message str
 
 // preserveTransitionTime scans existing conditions for a match on type+status
 // and preserves the lastTransitionTime if the status hasn't changed.
-func preserveTransitionTime(existing []any, cond map[string]any, status ConditionStatus) {
+func preserveTransitionTime(existing []any, cond map[string]any, status conditionStatus) {
 	for _, ec := range existing {
 		ecMap, ok := ec.(map[string]any)
 		if !ok {

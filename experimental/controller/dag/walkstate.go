@@ -36,10 +36,6 @@ const (
 	_nodeStateCount
 )
 
-// NodeStateCount returns the sentinel value for compile-time assertions.
-// It equals the total number of NodeState values (including NodeUnvisited).
-func NodeStateCount() NodeState { return _nodeStateCount }
-
 // String returns the human-readable name of the NodeState.
 func (s NodeState) String() string {
 	switch s {
@@ -135,6 +131,19 @@ type PlanSummary struct {
 	HasError       bool
 	HasSystemError bool
 	ReadyCount     int
+}
+
+// HasUncertainty reports whether any node state creates uncertainty about
+// which resources should exist. Per 005-reconciliation.md: "Uncertain absence
+// blocks pruning — the resource might reappear once the blocker resolves."
+func (s PlanSummary) HasUncertainty() bool {
+	return s.HasPending || s.HasBlocked || s.HasError || s.HasSystemError
+}
+
+// IsClean reports whether all nodes have converged with no errors or pending
+// states. Used to determine if superseded revisions can be garbage collected.
+func (s PlanSummary) IsClean() bool {
+	return !s.HasPending && !s.HasNotReady && !s.HasBlocked && !s.HasConflict && !s.HasError && !s.HasSystemError
 }
 
 // Summary returns aggregate state for status reporting.

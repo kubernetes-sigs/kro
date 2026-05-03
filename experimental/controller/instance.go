@@ -97,6 +97,20 @@ type forEachCarryForward struct {
 	itemKeys  map[string]map[string][]Applied // nodeID → itemID → applied keys
 }
 
+// merge incorporates another forEachCarryForward's entries (typically from a
+// single node's evaluation) into this one. Nil other is a no-op.
+func (f *forEachCarryForward) merge(other *forEachCarryForward) {
+	if other == nil {
+		return
+	}
+	for nodeID, itemScopes := range other.itemScope {
+		f.itemScope[nodeID] = itemScopes
+	}
+	for nodeID, itemKeys := range other.itemKeys {
+		f.itemKeys[nodeID] = itemKeys
+	}
+}
+
 // newInstanceState creates a fresh instanceState for a compiledGraph.
 func newInstanceState(compiled *compiler.CompiledGraph, dag *dagpkg.DAG) *instanceState {
 	return &instanceState{

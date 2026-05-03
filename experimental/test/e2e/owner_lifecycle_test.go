@@ -210,14 +210,20 @@ func TestOwnerRef_TeardownOnOwnerDeletion(t *testing.T) {
 	}), "owner should eventually be deleted after teardown")
 
 	// Verify: managed resource should also be gone.
-	err := k8sClient.Get(ctx, types.NamespacedName{Name: "managed-resource", Namespace: ns}, managed)
-	assert.True(t, apierrors.IsNotFound(err), "managed resource should be deleted, got: %v", err)
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: "managed-resource", Namespace: ns}, managed)
+			return apierrors.IsNotFound(err), nil
+		}), "managed resource should be cascade-deleted after owner deletion")
 
 	// Verify: Graph should also be gone.
-	g := &unstructured.Unstructured{}
-	g.SetGroupVersionKind(GraphGVK)
-	err = k8sClient.Get(ctx, types.NamespacedName{Name: "test-teardown", Namespace: ns}, g)
-	assert.True(t, apierrors.IsNotFound(err), "Graph should be deleted, got: %v", err)
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-teardown", Namespace: ns}, g)
+			return apierrors.IsNotFound(err), nil
+		}), "Graph should be cascade-deleted after owner deletion")
 }
 
 // TestOwnerRef_OwnerGoneBeforeGraph exercises the race window: if the

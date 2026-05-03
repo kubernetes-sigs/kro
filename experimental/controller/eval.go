@@ -269,7 +269,7 @@ func (e *evaluator) firstUnsatisfiedCondition(conditions []string) string {
 // failures are wrapped with compiler.ErrEvaluation so classifyAPIError can
 // distinguish them from network errors with similar message text.
 func (e *evaluator) toMap(tmpl map[string]any) (map[string]any, error) {
-	evaluated, err := e.template(tmpl)
+	evaluated, err := e.evaluateTree(tmpl)
 	if err != nil {
 		if compiler.IsPending(err) {
 			return nil, fmt.Errorf("%w: %v", compiler.ErrPending, err)
@@ -316,15 +316,15 @@ func (e *evaluator) toMapNode(node graph.Node) (map[string]any, error) {
 	return e.toMap(body)
 }
 
-// template walks a value tree and evaluates/strips ${...} expressions.
-func (e *evaluator) template(value any) (any, error) {
+// evaluateTree walks a value tree and evaluates/strips ${...} expressions.
+func (e *evaluator) evaluateTree(value any) (any, error) {
 	switch v := value.(type) {
 	case string:
 		return e.evalString(v)
 	case map[string]any:
 		result := make(map[string]any, len(v))
 		for k, val := range v {
-			evaluated, err := e.template(val)
+			evaluated, err := e.evaluateTree(val)
 			if err != nil {
 				return nil, fmt.Errorf("field %s: %w", k, err)
 			}
@@ -334,7 +334,7 @@ func (e *evaluator) template(value any) (any, error) {
 	case []any:
 		result := make([]any, len(v))
 		for i, val := range v {
-			evaluated, err := e.template(val)
+			evaluated, err := e.evaluateTree(val)
 			if err != nil {
 				return nil, fmt.Errorf("index %d: %w", i, err)
 			}

@@ -30,18 +30,18 @@ import (
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
-// FinalizationPhase represents the current state of a finalization sequence.
-type FinalizationPhase string
+// finalizationPhase represents the current state of a finalization sequence.
+type finalizationPhase string
 
 const (
-	FinalizationCreating     FinalizationPhase = "Creating"
-	FinalizationWaitingReady FinalizationPhase = "WaitingReady"
+	finalizationCreating     finalizationPhase = "Creating"
+	finalizationWaitingReady finalizationPhase = "WaitingReady"
 )
 
 // finalizationEntry tracks a single in-flight finalization sequence.
 // Persisted on instanceState.activeFinalization across reconciles.
 type finalizationEntry struct {
-	Phase     FinalizationPhase
+	Phase     finalizationPhase
 	ChildKeys []string // resource keys of created finalization children
 }
 
@@ -183,19 +183,19 @@ func (c *clusterAccess) advanceFinalization(
 			result.ProtectedKeys[ck] = true
 		}
 
-		prevPhase := FinalizationPhase("")
+		prevPhase := finalizationPhase("")
 		if entry, ok := state.prune.activeFinalization[key]; ok {
 			prevPhase = entry.Phase
 		}
 
 		if finErr != nil {
 			logger.Error(finErr, "finalization failed",
-				"key", key, "previousPhase", prevPhase, "newPhase", FinalizationCreating)
+				"key", key, "previousPhase", prevPhase, "newPhase", finalizationCreating)
 			result.BlockedReasons = append(result.BlockedReasons, fmt.Sprintf(
 				"TeardownBlocked: %s (finalizer creation failed: %s)", key, finErr))
 			result.DeferredTargets = append(result.DeferredTargets, key)
 			state.prune.activeFinalization[key] = &finalizationEntry{
-				Phase:     FinalizationCreating,
+				Phase:     finalizationCreating,
 				ChildKeys: childKeys,
 			}
 			continue
@@ -204,13 +204,13 @@ func (c *clusterAccess) advanceFinalization(
 		if !ready {
 			logger.Info("finalization in progress — deletion deferred",
 				"key", key, "finalizers", finalizerNodeIDs,
-				"previousPhase", prevPhase, "newPhase", FinalizationWaitingReady)
+				"previousPhase", prevPhase, "newPhase", finalizationWaitingReady)
 			result.BlockedReasons = append(result.BlockedReasons, fmt.Sprintf(
 				"TeardownBlocked: %s (finalizer not ready: %s)",
 				key, strings.Join(finalizerNodeIDs, ", ")))
 			result.DeferredTargets = append(result.DeferredTargets, key)
 			state.prune.activeFinalization[key] = &finalizationEntry{
-				Phase:     FinalizationWaitingReady,
+				Phase:     finalizationWaitingReady,
 				ChildKeys: childKeys,
 			}
 			continue

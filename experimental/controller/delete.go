@@ -40,128 +40,15 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		logger.Error(listErr, "listing revisions during teardown; proceeding with watch cache and live spec fallbacks")
 	}
 
-	// -----------------------------------------------------------------------
-	// Collect all managed resource keys from all revisions for this Graph.
-	// Keys come from three sources:
-	// 1. Revision specs — static extraction
-	// 2. Watch cache — informer stores scanned for identity labels
-	// 3. Label selector — dynamic resources (forEach, CEL names)
-	// -----------------------------------------------------------------------
-	allKeys := map[string]Applied{}
+	candidates := r.collectTeardownKeys(ctx, cluster, graph, revisions)
 
-	// Build static keys from revision specs.
-	staticKeys := map[string]bool{}
-	for _, rev := range revisions {
-		spec, err := extractRevisionSpec(rev)
-		if err != nil {
-			continue
-		}
-		for _, node := range spec.Nodes {
-			if node.Identity() == nil {
-				continue
-			}
-			if key := staticResourceKey(node.Identity(), graph.GetNamespace(), cluster.scope); key != "" {
-				staticKeys[key] = true
-			}
-			nodeType := node.Type()
-			if nodeType == graphpkg.NodeTypeRef || nodeType == graphpkg.NodeTypeWatch {
-				continue
-			}
-			if node.Finalizes != "" {
-				continue
-			}
-			if key := staticResourceKey(node.Identity(), graph.GetNamespace(), cluster.scope); key != "" {
-				allKeys[key] = Applied{
-					Key:       key,
-					NodeType:  nodeType,
-					HasStatus: templateHasStatus(node.Payload()),
-				}
-			}
-		}
-	}
-
-	// Derive applied set from watch cache (before releasing watch state).
-	normalizedToStatic := make(map[string]string, len(staticKeys))
-	for sk := range staticKeys {
-		normalizedToStatic[strings.ToLower(sk)] = sk
-	}
-	if r.Watcher != nil {
-		appliedSet := r.Watcher.DeriveAppliedSet(graph.GetName(), graph.GetNamespace())
-		for key, entry := range appliedSet {
-			if corrected, ok := normalizedToStatic[strings.ToLower(key)]; ok {
-				key = corrected
-			}
-			// Derive HasStatus from revision specs when available.
-			hasStatus := false
-			if existing, ok := allKeys[key]; ok {
-				hasStatus = existing.HasStatus
-			}
-			allKeys[key] = Applied{
-				Key:       key,
-				NodeType:  entry.NodeType,
-				HasStatus: hasStatus,
-			}
-		}
-	}
-
-	// Release watch state now that keys have been collected.
-	if r.Watcher != nil {
-		r.Watcher.RemoveGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
-	}
-
-	// Include dynamically-named resources found by label selector.
-	rs := newReconcileScope(graph, nil) // watcher is handled specially in teardown
-	dynamicKeys, findErr := cluster.findManagedResourceKeys(ctx, rs)
-	if findErr != nil {
-		logger.Error(findErr, "finding dynamically-named resources during teardown; forEach children may be orphaned if not in watch cache")
-	}
-	for _, a := range dynamicKeys {
-		if _, exists := allKeys[a.Key]; !exists {
-			allKeys[a.Key] = a
-		}
-	}
-
-	// Convert to candidate slice.
-	candidates := make([]Applied, 0, len(allKeys))
-	for _, a := range allKeys {
-		candidates = append(candidates, a)
-	}
-
-	// -----------------------------------------------------------------------
-	// Compile the active revision for ordering + finalization.
-	// -----------------------------------------------------------------------
-	var teardownDAGs []*dagpkg.DAG
-	var teardownEval *evaluator
-	var teardownCompileErr error
-	if len(revisions) > 0 {
-		active := revisions[len(revisions)-1]
-		if _, istate, compileErr := r.compileRevision(ctx, graph.GetNamespace(), active); compileErr == nil {
-			teardownDAGs = []*dagpkg.DAG{istate.compilation.dag}
-			teardownEval = newEvaluator(istate)
-			teardownEval.effectiveGeneration = revisionGeneration(active)
-		} else {
-			teardownCompileErr = compileErr
-			logger.Error(compileErr, "active revision failed to compile during teardown; falling back to live Graph spec",
-				"revision", active.GetName())
-		}
-	}
-
-	// Ensure ordering — never degrade to unordered deletion.
-	if len(teardownDAGs) == 0 {
-		graphSpec, err := graphpkg.ExtractGraphSpec(graph.Object)
-		if err != nil {
-			logger.Error(err, "cannot determine deletion order, requeueing")
-			return ctrl.Result{RequeueAfter: systemErrorRequeueInterval}, nil
-		}
-		dag, err := dagpkg.BuildDAG(graphSpec.Nodes, nil, nil)
-		if err != nil {
-			logger.Error(err, "cannot determine deletion order, requeueing")
-			return ctrl.Result{RequeueAfter: systemErrorRequeueInterval}, nil
-		}
-		teardownDAGs = []*dagpkg.DAG{dag}
+	teardownDAGs, teardownEval, teardownCompileErr, err := r.compileTeardownDAG(ctx, graph, revisions)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: systemErrorRequeueInterval}, nil
 	}
 
 	// Build a minimal instanceState for advanceFinalization.
+	rs := newReconcileScope(graph, nil)
 	teardownState := &instanceState{
 		prune: pruneCarryForward{
 			activeFinalization: map[string]*finalizationEntry{},
@@ -249,6 +136,130 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	}
 	logger.V(1).Info("teardown complete", "duration", time.Since(teardownStart))
 	return ctrl.Result{}, nil
+}
+
+// collectTeardownKeys gathers all managed resource keys for teardown from
+// three sources: revision specs (static extraction), watch cache (informer
+// stores), and label selector (dynamic resources). Returns a candidate
+// slice for pruneResources.
+func (r *GraphReconciler) collectTeardownKeys(ctx context.Context, cluster *clusterAccess, graph *unstructured.Unstructured, revisions []*unstructured.Unstructured) []Applied {
+	logger := log.FromContext(ctx)
+	allKeys := map[string]Applied{}
+
+	// Build allKeys from revision specs (excludes Ref/Watch — not prune candidates).
+	revisionKeys := extractStaticKeysFromRevisions(revisions, graph.GetNamespace(), cluster.scope)
+	for key, a := range revisionKeys {
+		allKeys[key] = a
+	}
+
+	// Build staticKeys from ALL node types (including Ref/Watch) for case
+	// normalization of watch cache entries. extractStaticKeysFromRevisions
+	// excludes Ref/Watch because they're not prune candidates, but their
+	// keys are needed here to correct case mismatches.
+	staticKeys := map[string]bool{}
+	for _, rev := range revisions {
+		spec, err := extractRevisionSpec(rev)
+		if err != nil {
+			continue
+		}
+		for _, node := range spec.Nodes {
+			if node.Identity() == nil {
+				continue
+			}
+			if key := staticResourceKey(node.Identity(), graph.GetNamespace(), cluster.scope); key != "" {
+				staticKeys[key] = true
+			}
+		}
+	}
+
+	// Derive applied set from watch cache (before releasing watch state).
+	normalizedToStatic := make(map[string]string, len(staticKeys))
+	for sk := range staticKeys {
+		normalizedToStatic[strings.ToLower(sk)] = sk
+	}
+	if r.Watcher != nil {
+		appliedSet := r.Watcher.DeriveAppliedSet(graph.GetName(), graph.GetNamespace())
+		for key, entry := range appliedSet {
+			if corrected, ok := normalizedToStatic[strings.ToLower(key)]; ok {
+				key = corrected
+			}
+			// Derive HasStatus from revision specs when available.
+			hasStatus := false
+			if existing, ok := allKeys[key]; ok {
+				hasStatus = existing.HasStatus
+			}
+			allKeys[key] = Applied{
+				Key:       key,
+				NodeType:  entry.NodeType,
+				HasStatus: hasStatus,
+			}
+		}
+	}
+
+	// Release watch state now that keys have been collected.
+	if r.Watcher != nil {
+		r.Watcher.RemoveGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
+	}
+
+	// Include dynamically-named resources found by label selector.
+	rs := newReconcileScope(graph, nil) // watcher is handled specially in teardown
+	dynamicKeys, findErr := cluster.findManagedResourceKeys(ctx, rs)
+	if findErr != nil {
+		logger.Error(findErr, "finding dynamically-named resources during teardown; forEach children may be orphaned if not in watch cache")
+	}
+	for _, a := range dynamicKeys {
+		if _, exists := allKeys[a.Key]; !exists {
+			allKeys[a.Key] = a
+		}
+	}
+
+	// Convert to candidate slice.
+	candidates := make([]Applied, 0, len(allKeys))
+	for _, a := range allKeys {
+		candidates = append(candidates, a)
+	}
+	return candidates
+}
+
+// compileTeardownDAG compiles the active revision for deletion ordering.
+// Falls back to the live Graph spec if no compiled revision is available.
+// Returns the DAGs, an optional evaluator, an optional compile error (for
+// status reporting), and a fatal error if ordering cannot be determined.
+func (r *GraphReconciler) compileTeardownDAG(ctx context.Context, graph *unstructured.Unstructured, revisions []*unstructured.Unstructured) ([]*dagpkg.DAG, *evaluator, error, error) {
+	logger := log.FromContext(ctx)
+
+	var teardownDAGs []*dagpkg.DAG
+	var teardownEval *evaluator
+	var teardownCompileErr error
+	if len(revisions) > 0 {
+		active := revisions[len(revisions)-1]
+		if _, istate, compileErr := r.compileRevision(ctx, graph.GetNamespace(), active); compileErr == nil {
+			teardownDAGs = []*dagpkg.DAG{istate.compilation.dag}
+			teardownEval = newEvaluator(istate)
+			teardownEval.effectiveGeneration = revisionGeneration(active)
+		} else {
+			teardownCompileErr = compileErr
+			logger.Error(compileErr, "active revision failed to compile during teardown; falling back to live Graph spec",
+				"revision", active.GetName())
+		}
+	}
+
+	// Ensure ordering — never degrade to unordered deletion.
+	if len(teardownDAGs) == 0 {
+		graphSpec, err := graphpkg.ExtractGraphSpec(graph.Object)
+		if err != nil {
+			logger.Error(err, "cannot determine deletion order, requeueing")
+			return nil, nil, nil, err
+		}
+		dag, err := dagpkg.BuildDAG(graphSpec.Nodes, nil, nil)
+		if err != nil {
+			logger.Error(err, "cannot determine deletion order, requeueing")
+			return nil, nil, nil, err
+		}
+		teardownDAGs = []*dagpkg.DAG{dag}
+	}
+
+	return teardownDAGs, teardownEval, teardownCompileErr, nil
 }
 
 // ---------------------------------------------------------------------------

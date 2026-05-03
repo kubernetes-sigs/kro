@@ -427,6 +427,17 @@ type deletePreflightResult struct {
 	Blockers []string                   // third-party field manager names (when blocked)
 }
 
+// hasIdentityLabel reports whether any label in labels matches the graph
+// identity label for the given graph name and namespace.
+func hasIdentityLabel(labels map[string]string, graphName, namespace string) bool {
+	for k := range labels {
+		if graphpkg.IsGraphIdentityLabel(k, graphName, namespace) {
+			return true
+		}
+	}
+	return false
+}
+
 // deletePreflight performs the shared ownership and safety checks for a
 // resource key:
 //
@@ -462,17 +473,7 @@ func (c *clusterAccess) deletePreflight(
 
 	// Ownership gate: identity labels.
 	if checkIdentityLabels {
-		objLabels := obj.GetLabels()
-		hasOurLabel := false
-		if objLabels != nil {
-			for k := range objLabels {
-				if graphpkg.IsGraphIdentityLabel(k, rs.name, rs.namespace) {
-					hasOurLabel = true
-					break
-				}
-			}
-		}
-		if !hasOurLabel {
+		if !hasIdentityLabel(obj.GetLabels(), rs.name, rs.namespace) {
 			return deletePreflightResult{Outcome: deleteNotOwned, Obj: obj}
 		}
 	}
@@ -490,17 +491,7 @@ func (c *clusterAccess) deletePreflight(
 		// If we're in teardown mode AND the resource has no identity labels,
 		// skip it — we never owned it, so we shouldn't block teardown on it.
 		if !checkIdentityLabels {
-			objLabels := obj.GetLabels()
-			hasOurLabel := false
-			if objLabels != nil {
-				for k := range objLabels {
-					if graphpkg.IsGraphIdentityLabel(k, rs.name, rs.namespace) {
-						hasOurLabel = true
-						break
-					}
-				}
-			}
-			if !hasOurLabel {
+			if !hasIdentityLabel(obj.GetLabels(), rs.name, rs.namespace) {
 				return deletePreflightResult{Outcome: deleteNotOwned, Obj: obj}
 			}
 		}

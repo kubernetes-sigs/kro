@@ -655,7 +655,7 @@ func TestDefinitionTypingRuntimeCompat(t *testing.T) {
 	// the compile-time types gate validation but runtime evaluation is
 	// structural (map key lookup).
 	r := &GraphReconciler{}
-	c := r.cluster()
+	_ = r // reconcileDefinition doesn't need clusterAccess
 	ctx := t.Context()
 
 	spec := &graph.GraphSpec{Nodes: []graph.Node{
@@ -674,7 +674,7 @@ func TestDefinitionTypingRuntimeCompat(t *testing.T) {
 	eval := &evaluator{compiled: compiled, scope: map[string]any{}}
 
 	// Reconcile first definition.
-	err = c.reconcileDefinition(ctx, spec.Nodes[0], eval)
+	err = reconcileDefinition(ctx, spec.Nodes[0], eval)
 	require.NoError(t, err)
 
 	cfgResult, ok := eval.scope["cfg"].(map[string]any)
@@ -683,7 +683,7 @@ func TestDefinitionTypingRuntimeCompat(t *testing.T) {
 	assert.Equal(t, int64(3), cfgResult["count"])
 
 	// Reconcile second definition that references the first.
-	err = c.reconcileDefinition(ctx, spec.Nodes[1], eval)
+	err = reconcileDefinition(ctx, spec.Nodes[1], eval)
 	require.NoError(t, err)
 
 	derivedResult, ok := eval.scope["derived"].(map[string]any)

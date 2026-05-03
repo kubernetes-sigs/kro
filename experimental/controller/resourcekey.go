@@ -172,6 +172,40 @@ func unstructuredFromKey(key string) (*unstructured.Unstructured, types.Namespac
 	return obj, nn, true
 }
 
+// extractStaticKeysFromRevisions collects static resource keys from revision specs.
+// Each revision's nodes are iterated, filtering out finalizer, Ref, and Watch nodes.
+// Used by both teardown (delete.go) and prune (controller.go) to discover
+// managed resources from revision specs.
+func extractStaticKeysFromRevisions(revisions []*unstructured.Unstructured, namespace string, scope *scopeResolver) map[string]Applied {
+	keys := map[string]Applied{}
+	for _, rev := range revisions {
+		spec, err := extractRevisionSpec(rev)
+		if err != nil {
+			continue
+		}
+		for _, node := range spec.Nodes {
+			if node.Finalizes != "" {
+				continue
+			}
+			nodeType := node.Type()
+			if nodeType == graphpkg.NodeTypeRef || nodeType == graphpkg.NodeTypeWatch {
+				continue
+			}
+			if node.Identity() == nil {
+				continue
+			}
+			if key := staticResourceKey(node.Identity(), namespace, scope); key != "" {
+				keys[key] = Applied{
+					Key:       key,
+					NodeType:  nodeType,
+					HasStatus: templateHasStatus(node.Payload()),
+				}
+			}
+		}
+	}
+	return keys
+}
+
 // templateHasStatus returns true if a template map contains a non-nil
 // status field. Used during teardown to determine whether release apply
 // must also release the status subresource.

@@ -46,7 +46,7 @@ type nodeOutput struct {
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (c *clusterAccess) reconcileNode(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, prevForEachState *forEachCarryForward) (*nodeOutput, error) {
+func reconcileNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, node graphpkg.Node, eval *evaluator, prevForEachState *forEachCarryForward) (*nodeOutput, error) {
 	if node.ForEach != nil {
 		return c.reconcileForEach(ctx, rs, node, eval, prevForEachState)
 	}
@@ -54,14 +54,14 @@ func (c *clusterAccess) reconcileNode(ctx context.Context, rs *reconcileScope, n
 	nodeType := node.Type()
 	switch nodeType {
 	case graphpkg.NodeTypeDef:
-		if err := c.reconcileDefinition(ctx, node, eval); err != nil {
+		if err := reconcileDefinition(ctx, node, eval); err != nil {
 			return nil, err
 		}
 	case graphpkg.NodeTypeWatch:
-		err := c.reconcileWatch(ctx, rs, node, eval)
+		err := reconcileWatch(ctx, c.reader, rs, node, eval)
 		return &nodeOutput{}, err // Watch handles its own readiness
 	case graphpkg.NodeTypeRef:
-		if err := c.reconcileRef(ctx, rs, node, eval); err != nil {
+		if err := reconcileRef(ctx, c.reader, c.scope, rs, node, eval); err != nil {
 			return nil, err
 		}
 	default: // NodeTypeTemplate, NodeTypePatch
@@ -82,7 +82,7 @@ func (c *clusterAccess) reconcileNode(ctx context.Context, rs *reconcileScope, n
 // reconcileDefinition evaluates a definition node — resolves values from the template
 // (literals and/or CEL expressions) and enters the result into scope as
 // map[string]any. No Kubernetes API calls are made.
-func (c *clusterAccess) reconcileDefinition(ctx context.Context, node graphpkg.Node, eval *evaluator) error {
+func reconcileDefinition(ctx context.Context, node graphpkg.Node, eval *evaluator) error {
 	result, err := eval.toMapNode(node)
 	if err != nil {
 		return fmt.Errorf("definition %s: %w", node.ID, err)
@@ -97,7 +97,7 @@ func (c *clusterAccess) reconcileDefinition(ctx context.Context, node graphpkg.N
 // reconcileRef reads a single existing object from the API server into
 // scope. Serves a ref: node — a named dereference into the shared
 // kind-scoped informer.
-func (c *clusterAccess) reconcileRef(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator) error {
+func reconcileRef(ctx context.Context, reader client.Reader, scope *scopeResolver, rs *reconcileScope, node graphpkg.Node, eval *evaluator) error {
 	logger := log.FromContext(ctx)
 
 	tmpl, err := eval.toMapNode(node)
@@ -115,7 +115,7 @@ func (c *clusterAccess) reconcileRef(ctx context.Context, rs *reconcileScope, no
 	// namespace empty — setting it breaks watch event routing because
 	// the metadata informer reports events with namespace="" while
 	// the scalar index would store namespace="<graph-ns>".
-	namespace = defaultNamespace(gvk, namespace, rs.namespace, c.scope)
+	namespace = defaultNamespace(gvk, namespace, rs.namespace, scope)
 
 	if rs.watcher != nil {
 		rs.watcher.WatchScalar(node.ID, gvkToGVR(gvk), gvk.Kind, name, namespace)
@@ -123,7 +123,7 @@ func (c *clusterAccess) reconcileRef(ctx context.Context, rs *reconcileScope, no
 
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
-	if err := c.reader.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
+	if err := reader.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("ref %s: resource %s %s/%s not found: %w", node.ID, gvk, namespace, name, compiler.ErrPending)
 		}
@@ -141,7 +141,12 @@ func (c *clusterAccess) reconcileRef(ctx context.Context, rs *reconcileScope, no
 
 // reconcileWatch reads a collection of resources matching a selector into scope.
 // A full List is performed every reconcile cycle — no incremental caching.
-func (c *clusterAccess) reconcileWatch(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator) error {
+//
+// Takes a client.Reader rather than *clusterAccess — Watch only reads from
+// the API server (List). It never writes (no SSA, no Delete) and never
+// consults scope resolution (Watch namespace comes from the template, not
+// defaultNamespace). The narrow parameter makes this dependency explicit.
+func reconcileWatch(ctx context.Context, reader client.Reader, rs *reconcileScope, node graphpkg.Node, eval *evaluator) error {
 	logger := log.FromContext(ctx)
 
 	tmpl, err := eval.toMapNode(node)
@@ -151,37 +156,7 @@ func (c *clusterAccess) reconcileWatch(ctx context.Context, rs *reconcileScope, 
 
 	gvk := graphpkg.GVKFromMap(tmpl)
 
-	var selectorRaw any
-	if sel, ok := tmpl["selector"]; ok {
-		selectorRaw = sel
-	} else if md, ok := tmpl["metadata"].(map[string]any); ok {
-		selectorRaw = md["selector"]
-	}
-
-	var labelSelector labels.Selector
-	switch sel := selectorRaw.(type) {
-	case map[string]any:
-		// Detect structured selector (matchLabels/matchExpressions) vs flat key=value map.
-		_, hasMatchLabels := sel["matchLabels"]
-		_, hasMatchExpressions := sel["matchExpressions"]
-		if hasMatchLabels || hasMatchExpressions {
-			labelSelector = parseLabelSelector(sel)
-		} else {
-			matchLabels := map[string]string{}
-			for k, v := range sel {
-				if vs, ok := v.(string); ok {
-					matchLabels[k] = vs
-				}
-			}
-			if len(matchLabels) > 0 {
-				labelSelector = labels.SelectorFromSet(matchLabels)
-			} else {
-				labelSelector = labels.Everything()
-			}
-		}
-	default:
-		labelSelector = labels.Everything()
-	}
+	labelSelector := parseSelectorFromTemplate(tmpl)
 
 	// Watch namespace follows k8s list/watch semantics: absent
 	// metadata.namespace means all namespaces, matching ListOptions,
@@ -208,7 +183,7 @@ func (c *clusterAccess) reconcileWatch(ctx context.Context, rs *reconcileScope, 
 
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(listGVK)
-	if err := c.reader.List(ctx, list, &client.ListOptions{
+	if err := reader.List(ctx, list, &client.ListOptions{
 		LabelSelector: labelSelector,
 		Namespace:     watchNamespace,
 	}); err != nil {
@@ -230,33 +205,19 @@ func (c *clusterAccess) reconcileWatch(ctx context.Context, rs *reconcileScope, 
 	// for empty collections, where per-item `__ready` stamping has
 	// nothing to attach to.
 	ready := true
+	var readyErr error
 	if len(node.ReadyWhen) > 0 {
 		if err := eval.evalReadinessConditions(node.ReadyWhen, node.ID); err != nil {
 			ready = false
-			// Set __ready on items (preserves scalar/forEach semantics
-			// for code paths that still consult per-item readiness),
-			// stamp the sidecar for the AST-rewritten path, then return
-			// the error. Items stay in scope so downstream nodes can
-			// still reference the data.
-			for _, item := range items {
-				if m, ok := item.(map[string]any); ok {
-					m["__ready"] = false
-					// Watch items are external observations — vacuously
-					// updated. They have no graph-managed desired state.
-					m["__updated"] = true
-				}
-			}
-			if eval.nodeReady != nil {
-				eval.nodeReady[node.ID] = false
-			}
-			return err
+			readyErr = err
 		}
 	}
+	// Stamp __ready and __updated on every item in a single pass.
+	// Watch items are external observations — vacuously updated.
+	// They have no graph-managed desired state to be "behind" on.
 	for _, item := range items {
 		if m, ok := item.(map[string]any); ok {
 			m["__ready"] = ready
-			// Watch items are external observations — vacuously updated.
-			// They have no graph-managed desired state to be "behind" on.
 			m["__updated"] = true
 		}
 	}
@@ -264,7 +225,7 @@ func (c *clusterAccess) reconcileWatch(ctx context.Context, rs *reconcileScope, 
 		eval.nodeReady[node.ID] = ready
 	}
 
-	return nil
+	return readyErr
 }
 
 // reconcileApply evaluates and applies a Template or Patch node.
@@ -305,6 +266,42 @@ func (c *clusterAccess) reconcileApply(ctx context.Context, rs *reconcileScope, 
 // ---------------------------------------------------------------------------
 // Label selector parsing
 // ---------------------------------------------------------------------------
+
+// parseSelectorFromTemplate extracts and parses a label selector from an
+// evaluated Watch template. It checks tmpl["selector"] then
+// tmpl["metadata"]["selector"], handling both structured selectors
+// (matchLabels/matchExpressions) and flat key=value maps.
+func parseSelectorFromTemplate(tmpl map[string]any) labels.Selector {
+	var selectorRaw any
+	if sel, ok := tmpl["selector"]; ok {
+		selectorRaw = sel
+	} else if md, ok := tmpl["metadata"].(map[string]any); ok {
+		selectorRaw = md["selector"]
+	}
+
+	sel, ok := selectorRaw.(map[string]any)
+	if !ok {
+		return labels.Everything()
+	}
+
+	// Detect structured selector (matchLabels/matchExpressions) vs flat key=value map.
+	_, hasMatchLabels := sel["matchLabels"]
+	_, hasMatchExpressions := sel["matchExpressions"]
+	if hasMatchLabels || hasMatchExpressions {
+		return parseLabelSelector(sel)
+	}
+
+	matchLabels := map[string]string{}
+	for k, v := range sel {
+		if vs, ok := v.(string); ok {
+			matchLabels[k] = vs
+		}
+	}
+	if len(matchLabels) > 0 {
+		return labels.SelectorFromSet(matchLabels)
+	}
+	return labels.Everything()
+}
 
 // parseLabelSelector converts a structured selector map (with matchLabels
 // and/or matchExpressions) into a labels.Selector. This supports the full

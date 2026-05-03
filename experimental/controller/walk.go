@@ -41,12 +41,12 @@ type nodeResult struct {
 
 // walkResult is the output of a complete DAG walk, consumed by the reconciler.
 type walkResult struct {
-	keys             []Applied             // flattened applied keys from all nodes
-	nodeKeys         map[string][]Applied   // per-node applied keys (for carry-forward on next reconcile)
-	plan             *dagpkg.PlanState     // per-node states
-	needsRecompile   bool                  // dynamic GVK resolved or changed
-	nodeErrors       []string              // "nodeID: reason" for status reporting
-	summary          dagpkg.PlanSummary
+	keys           []Applied            // flattened applied keys from all nodes
+	nodeKeys       map[string][]Applied // per-node applied keys (for carry-forward on next reconcile)
+	plan           *dagpkg.PlanState    // per-node states
+	needsRecompile bool                 // dynamic GVK resolved or changed
+	nodeErrors     []string             // "nodeID: reason" for status reporting
+	summary        dagpkg.PlanSummary
 }
 
 // walk executes a sequential DAG walk in topological order.
@@ -91,7 +91,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 			if eval.nodeReady != nil {
 				eval.nodeReady[node.ID] = true
 			}
-			state.previousScope[node.ID] = eval.scope[node.ID]
+			state.walk.previousScope[node.ID] = eval.scope[node.ID]
 			continue
 		}
 		if gate == gateBlocked {
@@ -120,12 +120,12 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 				unsatisfied := eval.firstUnsatisfiedCondition(node.PropagateWhen)
 				logger.V(1).Info("propagateWhen input gate — retaining previous state",
 					"node", node.ID, "unsatisfied", unsatisfied)
-				if prev, ok := state.previousScope[node.ID]; ok {
+				if prev, ok := state.walk.previousScope[node.ID]; ok {
 					eval.scope[node.ID] = prev
 				}
 				carryForwardKeys(nodeKeys, node.ID, state)
-				if state.previousPlanStates != nil {
-					if prevState, ok := state.previousPlanStates.States[node.ID]; ok {
+				if state.walk.previousPlanStates != nil {
+					if prevState, ok := state.walk.previousPlanStates.States[node.ID]; ok {
 						plan.States[node.ID] = prevState
 					} else {
 						plan.States[node.ID] = dagpkg.NodePending
@@ -156,7 +156,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 				if eval.nodeReady != nil {
 					eval.nodeReady[node.ID] = true
 				}
-				state.previousScope[node.ID] = eval.scope[node.ID]
+				state.walk.previousScope[node.ID] = eval.scope[node.ID]
 				continue
 			}
 		}
@@ -175,7 +175,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 		}
 		if nr.state == dagpkg.NodeConflict {
 			plan.SetState(node.ID, dagpkg.NodeConflict)
-			state.previousScope[node.ID] = nr.scope
+			state.walk.previousScope[node.ID] = nr.scope
 			result.nodeErrors = append(result.nodeErrors, fmt.Sprintf("%s: field conflict", node.ID))
 			logger.V(0).Info("conflict on node", "node", node.ID, "error", nr.err)
 			carryForwardKeys(nodeKeys, node.ID, state)
@@ -183,7 +183,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 		}
 		if nr.state == dagpkg.NodePending {
 			plan.SetState(node.ID, dagpkg.NodePending)
-			state.previousScope[node.ID] = nr.scope
+			state.walk.previousScope[node.ID] = nr.scope
 			logger.V(1).Info("data pending for node", "node", node.ID, "error", nr.err)
 			carryForwardKeys(nodeKeys, node.ID, state)
 			continue
@@ -213,10 +213,10 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 		// Merge forEach state updates.
 		if nr.forEach != nil {
 			for nodeID, itemScopes := range nr.forEach.itemScope {
-				state.forEach.itemScope[nodeID] = itemScopes
+				state.walk.forEach.itemScope[nodeID] = itemScopes
 			}
 			for nodeID, itemKeys := range nr.forEach.itemKeys {
-				state.forEach.itemKeys[nodeID] = itemKeys
+				state.walk.forEach.itemKeys[nodeID] = itemKeys
 			}
 		}
 
@@ -236,7 +236,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 		}
 
 		// Save per-node scope for next reconcile.
-		state.previousScope[node.ID] = eval.scope[node.ID]
+		state.walk.previousScope[node.ID] = eval.scope[node.ID]
 
 		// Record dynamic GVK resolutions.
 		if nr.resolvedGVK != nil {
@@ -281,7 +281,7 @@ func (c *clusterAccess) evaluateNode(ctx context.Context, rs *reconcileScope, no
 		}
 		// Lazy dep not yet in scope — set optional.none() so the
 		// expression's branch that handles absent data can fire.
-		if prev, ok := state.previousScope[depID]; ok {
+		if prev, ok := state.walk.previousScope[depID]; ok {
 			eval.scope[depID] = celOptionalOf(prev)
 		} else {
 			eval.scope[depID] = celOptionalNone()
@@ -291,7 +291,7 @@ func (c *clusterAccess) evaluateNode(ctx context.Context, rs *reconcileScope, no
 	// Pass carry-forward forEach state directly for forEach nodes.
 	var prevForEachState *forEachCarryForward
 	if node.ForEach != nil {
-		prevForEachState = state.forEach
+		prevForEachState = state.walk.forEach
 	}
 	out, err := c.reconcileNode(ctx, rs, node, eval, prevForEachState)
 
@@ -341,10 +341,10 @@ func (c *clusterAccess) evaluateNode(ctx context.Context, rs *reconcileScope, no
 type gateState int
 
 const (
-	_             gateState = iota // zero value unused
-	gateExcluded                   // at least one hard dep is Excluded
-	gateBlocked                    // at least one hard dep is in an error state
-	gatePending                    // at least one hard dep is Pending
+	_            gateState = iota // zero value unused
+	gateExcluded                  // at least one hard dep is Excluded
+	gateBlocked                   // at least one hard dep is in an error state
+	gatePending                   // at least one hard dep is Pending
 )
 
 // checkDependencyGate inspects a node's hard dependencies and determines
@@ -388,11 +388,12 @@ func checkDependencyGate(node *graphpkg.Node, plan *dagpkg.PlanState) gateState 
 		return 0 // all hard deps completed — proceed to evaluation
 	}
 }
+
 // per-node key map. Used when a node is blocked, pending, or in error — the
 // resource may still exist in the cluster, so its keys must remain in the
 // applied set to prevent spurious pruning.
 func carryForwardKeys(nodeKeys map[string][]Applied, nodeID string, state *instanceState) {
-	if prev, ok := state.previousKeys[nodeID]; ok {
+	if prev, ok := state.walk.previousKeys[nodeID]; ok {
 		nodeKeys[nodeID] = prev
 	}
 }

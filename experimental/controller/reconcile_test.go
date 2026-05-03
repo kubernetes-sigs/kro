@@ -1428,7 +1428,7 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
-	state := newInstanceState(compiled)
+	state := newInstanceState(compiled, nil)
 	eval := newEvaluator(state)
 	eval.effectiveGeneration = 5
 
@@ -1523,7 +1523,7 @@ func TestForEach_DefinitionItemsAlwaysReEvaluated(t *testing.T) {
 	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	require.NoError(t, err)
 
-	state := newInstanceState(compiled)
+	state := newInstanceState(compiled, nil)
 	eval := newEvaluator(state)
 	eval.effectiveGeneration = 7
 
@@ -1586,7 +1586,7 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	names := []any{"alpha", "beta"}
 
 	// Phase 1: config.version = "v1"
-	state := newInstanceState(compiled)
+	state := newInstanceState(compiled, nil)
 	eval := newEvaluator(state)
 	eval.effectiveGeneration = 1
 	eval.scope["config"] = map[string]any{"version": "v1"}
@@ -1604,10 +1604,10 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	// Merge newState into instanceState for phase 2.
 	newState := out.forEach
 	for k, v := range newState.itemScope {
-		state.forEach.itemScope[k] = v
+		state.walk.forEach.itemScope[k] = v
 	}
 	for k, v := range newState.itemKeys {
-		state.forEach.itemKeys[k] = v
+		state.walk.forEach.itemKeys[k] = v
 	}
 
 	// Phase 2: config.version = "v2", collection unchanged.
@@ -1618,8 +1618,8 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval2.scope["source"] = map[string]any{"names": names}
 
 	prevState2 := &forEachCarryForward{
-		itemScope: state.forEach.itemScope,
-		itemKeys:  state.forEach.itemKeys,
+		itemScope: state.walk.forEach.itemScope,
+		itemKeys:  state.walk.forEach.itemKeys,
 	}
 
 	_, err = c.reconcileForEach(context.Background(), rs, resultsNode, eval2, prevState2)
@@ -1896,7 +1896,7 @@ func TestLazyDepOptionalScope_AbsentReturnsDefault(t *testing.T) {
 	// Create evaluator with deploy ABSENT from scope (lazy dep not yet available).
 	// Manually populate lazy deps as optional.none() — matching what
 	// evaluateNode does in the simplified walk.
-	state := newInstanceState(compiled)
+	state := newInstanceState(compiled, nil)
 	eval := newEvaluator(state)
 	// Don't put "deploy" in scope — it's absent.
 	// Populate lazy dep as optional.none() (what the walk does for absent lazy deps).
@@ -1940,7 +1940,7 @@ func TestLazyDepOptionalScope_PresentReturnsRealData(t *testing.T) {
 	// Create evaluator with deploy PRESENT in scope with real data.
 	// Populate lazy dep as optional.of(value) — matching what the walk does
 	// for present lazy deps.
-	state := newInstanceState(compiled)
+	state := newInstanceState(compiled, nil)
 	eval := newEvaluator(state)
 	deployData := map[string]any{
 		"status": map[string]any{

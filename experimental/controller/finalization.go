@@ -90,12 +90,12 @@ func (c *clusterAccess) advanceFinalization(
 		ChildKeysToCleanup: map[string][]string{},
 	}
 
-	if state.activeFinalization == nil {
-		state.activeFinalization = map[string]*finalizationEntry{}
+	if state.prune.activeFinalization == nil {
+		state.prune.activeFinalization = map[string]*finalizationEntry{}
 	}
 
 	// Pre-seed protected keys from persisted active finalization state.
-	for _, entry := range state.activeFinalization {
+	for _, entry := range state.prune.activeFinalization {
 		for _, k := range entry.ChildKeys {
 			result.ProtectedKeys[k] = true
 		}
@@ -162,13 +162,13 @@ func (c *clusterAccess) advanceFinalization(
 				logger.Info("finalization skipped: target resource does not exist",
 					"key", key, "finalizers", finalizerNodeIDs)
 				result.Notes = append(result.Notes, fmt.Sprintf("FinalizerSkipped: %s (target absent)", key))
-				if entry, ok := state.activeFinalization[key]; ok {
+				if entry, ok := state.prune.activeFinalization[key]; ok {
 					result.ChildKeysToCleanup[key] = entry.ChildKeys
 					for _, ck := range entry.ChildKeys {
 						delete(result.ProtectedKeys, ck)
 					}
 				}
-				delete(state.activeFinalization, key)
+				delete(state.prune.activeFinalization, key)
 				result.CompletedTargets[key] = true
 				continue
 			}
@@ -184,7 +184,7 @@ func (c *clusterAccess) advanceFinalization(
 		}
 
 		prevPhase := FinalizationPhase("")
-		if entry, ok := state.activeFinalization[key]; ok {
+		if entry, ok := state.prune.activeFinalization[key]; ok {
 			prevPhase = entry.Phase
 		}
 
@@ -194,7 +194,7 @@ func (c *clusterAccess) advanceFinalization(
 			result.BlockedReasons = append(result.BlockedReasons, fmt.Sprintf(
 				"TeardownBlocked: %s (finalizer creation failed: %s)", key, finErr))
 			result.DeferredTargets = append(result.DeferredTargets, key)
-			state.activeFinalization[key] = &finalizationEntry{
+			state.prune.activeFinalization[key] = &finalizationEntry{
 				Phase:     FinalizationCreating,
 				ChildKeys: childKeys,
 			}
@@ -209,7 +209,7 @@ func (c *clusterAccess) advanceFinalization(
 				"TeardownBlocked: %s (finalizer not ready: %s)",
 				key, strings.Join(finalizerNodeIDs, ", ")))
 			result.DeferredTargets = append(result.DeferredTargets, key)
-			state.activeFinalization[key] = &finalizationEntry{
+			state.prune.activeFinalization[key] = &finalizationEntry{
 				Phase:     FinalizationWaitingReady,
 				ChildKeys: childKeys,
 			}
@@ -221,7 +221,7 @@ func (c *clusterAccess) advanceFinalization(
 			"previousPhase", prevPhase)
 		result.CompletedTargets[key] = true
 		result.ChildKeysToCleanup[key] = childKeys
-		delete(state.activeFinalization, key)
+		delete(state.prune.activeFinalization, key)
 	}
 
 	return result, nil

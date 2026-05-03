@@ -136,8 +136,8 @@ func TestDynamicGVK_ProgressionFromDynToTyped(t *testing.T) {
 	// Phase 1: first compileRevision — no hints, bootstrap artifact (dyn).
 	_, state1, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
-	require.NotNil(t, state1.compiled)
-	bootstrapArtifact := state1.compiled
+	require.NotNil(t, state1.compilation.compiled)
+	bootstrapArtifact := state1.compilation.compiled
 	assert.NotContains(t, bootstrapArtifact.ResourceSchemas, "schema",
 		"first compilation should NOT have schema for dynamic node (no hints)")
 
@@ -148,14 +148,14 @@ func TestDynamicGVK_ProgressionFromDynToTyped(t *testing.T) {
 	// Phase 3: second compileRevision — hints available, typed artifact.
 	_, state2, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
-	require.NotNil(t, state2.compiled)
-	assert.NotSame(t, bootstrapArtifact, state2.compiled,
+	require.NotNil(t, state2.compilation.compiled)
+	assert.NotSame(t, bootstrapArtifact, state2.compilation.compiled,
 		"second compilation should produce a NEW artifact (different key)")
-	assert.Contains(t, state2.compiled.ResourceSchemas, "schema",
+	assert.Contains(t, state2.compilation.compiled.ResourceSchemas, "schema",
 		"second compilation should have schema for dynamic node (hint used)")
 
 	// Verify the schema is Widget's schema.
-	schemaResolved := state2.compiled.ResourceSchemas["schema"]
+	schemaResolved := state2.compilation.compiled.ResourceSchemas["schema"]
 	require.NotNil(t, schemaResolved)
 	assert.Contains(t, schemaResolved.Properties["spec"].Properties, "name",
 		"resolved schema should be Widget's with spec.name field")
@@ -163,7 +163,7 @@ func TestDynamicGVK_ProgressionFromDynToTyped(t *testing.T) {
 	// Phase 4: steady-state — recompilation with same hints succeeds.
 	_, state3, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
-	require.NotNil(t, state3.compiled)
-	assert.Contains(t, state3.compiled.ResourceSchemas, "schema",
+	require.NotNil(t, state3.compilation.compiled)
+	assert.Contains(t, state3.compilation.compiled.ResourceSchemas, "schema",
 		"steady-state recompilation should still have schema for dynamic node")
 }

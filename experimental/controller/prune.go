@@ -91,8 +91,8 @@ func (c *clusterAccess) pruneResources(
 	// Phase 1: Advance finalization state machines for all candidates that
 	// have finalizer nodes. This produces completedTargets (safe to delete),
 	// protectedKeys (must not prune), and child cleanup info.
-	if state.activeFinalization == nil {
-		state.activeFinalization = map[string]*finalizationEntry{}
+	if state.prune.activeFinalization == nil {
+		state.prune.activeFinalization = map[string]*finalizationEntry{}
 	}
 
 	// Build candidate key slice for finalization (plain resource keys).

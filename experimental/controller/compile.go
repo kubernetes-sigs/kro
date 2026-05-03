@@ -57,24 +57,18 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 	// instance's node specs.
 	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
 
-	// If existing state exists, update it in-place (preserving correctness
-	// fields like previousScope, previousKeys, etc.).
+	// If existing state exists, atomically replace compilation artifacts
+	// and reset state that is structurally incompatible with the new
+	// compilation. Correctness fields (previousKeys, previousPlanStates,
+	// previousAppliedKeys, activeFinalization) are preserved.
 	if existing != nil {
-		existing.compiled = compiled
-		existing.dag = dag
-		// Reset runtime caches that should not survive recompilation.
-		existing.forEach = &forEachCarryForward{
-			itemScope: map[string]map[string]any{},
-			itemKeys:  map[string]map[string][]Applied{},
-		}
-		existing.deferredPruneKeys = nil
+		existing.recompile(compiled, dag)
 		r.Caches.set(instanceKey, existing)
 		return spec, existing, nil
 	}
 
 	// New instance — create fresh mutable state.
-	state := newInstanceState(compiled)
-	state.dag = dag
+	state := newInstanceState(compiled, dag)
 	r.Caches.set(instanceKey, state)
 	return spec, state, nil
 }

@@ -17,14 +17,14 @@ import (
 // set, get, remove, and size tracking.
 func TestInstanceCacheLifecycle(t *testing.T) {
 	spec := buildBenchSpec(5)
-				caches := newInstanceMap()
+	caches := newInstanceMap()
 
 	compiled, err := compiler.CompileGraphSpec(spec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	caches.set("ns/graph-a-g00001", newInstanceState(compiled))
-	caches.set("ns/graph-b-g00001", newInstanceState(compiled))
+	caches.set("ns/graph-a-g00001", newInstanceState(compiled, nil))
+	caches.set("ns/graph-b-g00001", newInstanceState(compiled, nil))
 
 	if caches.CacheSizes() != 2 {
 		t.Fatalf("expected 2 instances, got %d", caches.CacheSizes())
@@ -57,29 +57,29 @@ func TestInstanceStateIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state1 := newInstanceState(compiled)
-	state2 := newInstanceState(compiled)
+	state1 := newInstanceState(compiled, nil)
+	state2 := newInstanceState(compiled, nil)
 
 	// Mutate state1's mutable fields.
-	state1.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
-	state1.previousPlanStates = &dagpkg.PlanState{States: map[string]dagpkg.NodeState{"node0": dagpkg.NodeReady}}
-	state1.forEach.itemScope["node0/item"] = map[string]any{"a": "b"}
+	state1.walk.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
+	state1.walk.previousPlanStates = &dagpkg.PlanState{States: map[string]dagpkg.NodeState{"node0": dagpkg.NodeReady}}
+	state1.walk.forEach.itemScope["node0/item"] = map[string]any{"a": "b"}
 
 	// state2 should be unaffected.
-	if _, ok := state2.previousScope["node0"]; ok {
+	if _, ok := state2.walk.previousScope["node0"]; ok {
 		t.Fatal("previousScope leaked between instances")
 	}
-	if state2.previousPlanStates != nil {
-		if _, ok := state2.previousPlanStates.States["node0"]; ok {
+	if state2.walk.previousPlanStates != nil {
+		if _, ok := state2.walk.previousPlanStates.States["node0"]; ok {
 			t.Fatal("previousPlanStates leaked between instances")
 		}
 	}
-	if _, ok := state2.forEach.itemScope["node0/item"]; ok {
+	if _, ok := state2.walk.forEach.itemScope["node0/item"]; ok {
 		t.Fatal("forEachItems leaked between instances")
 	}
 
 	// Both should share the same (immutable) compiledGraph.
-	if state1.compiled != state2.compiled {
+	if state1.compilation.compiled != state2.compilation.compiled {
 		t.Fatal("instances should share the same compiledGraph pointer")
 	}
 }
@@ -143,7 +143,7 @@ func BenchmarkTemplateEvaluation(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			eval := newEvaluator(newInstanceState(compiled))
+			eval := newEvaluator(newInstanceState(compiled, nil))
 			// Populate scope with a source node matching the spec's source data.
 			sourceData := make(map[string]any, exprCount)
 			for i := 0; i < exprCount; i++ {
@@ -355,14 +355,14 @@ func BenchmarkCompileRevisionPerInstance(b *testing.B) {
 				b.ResetTimer()
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
-	caches := newInstanceMap()
+					caches := newInstanceMap()
 					for j := 0; j < instanceCount; j++ {
 						instanceKey := fmt.Sprintf("ns/graph-%d-g00001", j)
 						compiled, err := compiler.CompileGraphSpec(spec, nil)
 						if err != nil {
 							b.Fatal(err)
 						}
-						state := newInstanceState(compiled)
+						state := newInstanceState(compiled, nil)
 						caches.set(instanceKey, state)
 					}
 				}

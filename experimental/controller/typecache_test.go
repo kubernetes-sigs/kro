@@ -67,12 +67,12 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, spec1)
 	require.NotNil(t, state1)
-	require.NotNil(t, state1.compiled)
+	require.NotNil(t, state1.compilation.compiled)
 
 	// Second call: recompiles (no compilation cache) but succeeds.
 	_, state2, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
-	require.NotNil(t, state2.compiled)
+	require.NotNil(t, state2.compilation.compiled)
 
 	// Advance generation — simulates CRD install/update.
 	tc.AdvanceGeneration()
@@ -80,7 +80,7 @@ func TestCompileRevision_RecompilesOnGenerationAdvance(t *testing.T) {
 	// Third call: recompiles and records the new generation.
 	_, state3, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
-	require.NotNil(t, state3.compiled)
+	require.NotNil(t, state3.compilation.compiled)
 }
 
 // TestCompileRevision_SchemaUpdateViaGenerationAdvance proves that when a CRD
@@ -148,8 +148,8 @@ func TestCompileRevision_SchemaUpdateViaGenerationAdvance(t *testing.T) {
 	// Phase 1: compile with schema v1 — should resolve Widget's schema.
 	_, state1, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
-	require.NotNil(t, state1.compiled)
-	firstCompiled := state1.compiled
+	require.NotNil(t, state1.compilation.compiled)
+	firstCompiled := state1.compilation.compiled
 
 	// Verify Widget was resolved (not in unresolvedGVKs).
 	for _, gvk := range firstCompiled.UnresolvedGVKs {
@@ -181,12 +181,12 @@ func TestCompileRevision_SchemaUpdateViaGenerationAdvance(t *testing.T) {
 	// Phase 3: next compileRevision detects stale generation, recompiles.
 	_, state2, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
-	require.NotNil(t, state2.compiled)
-	assert.NotSame(t, firstCompiled, state2.compiled,
+	require.NotNil(t, state2.compilation.compiled)
+	assert.NotSame(t, firstCompiled, state2.compilation.compiled,
 		"after generation advance, compileRevision must recompile")
 
 	// The new compilation used schemaV2 — verify by checking resourceSchemas.
-	widgetSchema := state2.compiled.ResourceSchemas["widget"]
+	widgetSchema := state2.compilation.compiled.ResourceSchemas["widget"]
 	require.NotNil(t, widgetSchema, "widget should have resolved schema after recompilation")
 	specProps := widgetSchema.Properties["spec"]
 	assert.Contains(t, specProps.Properties, "maxReplicas",
@@ -273,10 +273,10 @@ func TestCRDUpdate_AdvanceGenerationInvalidatesArtifact(t *testing.T) {
 	// Phase 1: compile with schema v1.
 	_, state1, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
-	require.NotNil(t, state1.compiled)
-	firstCompiled := state1.compiled
+	require.NotNil(t, state1.compilation.compiled)
+	firstCompiled := state1.compilation.compiled
 
-	widgetSchema := state1.compiled.ResourceSchemas["widget"]
+	widgetSchema := state1.compilation.compiled.ResourceSchemas["widget"]
 	require.NotNil(t, widgetSchema)
 	assert.Contains(t, widgetSchema.Properties["spec"].Properties, "replicas")
 	assert.NotContains(t, widgetSchema.Properties["spec"].Properties, "maxReplicas",
@@ -307,11 +307,11 @@ func TestCRDUpdate_AdvanceGenerationInvalidatesArtifact(t *testing.T) {
 	// Phase 3: compileRevision detects staleness → recompiles with v2.
 	_, state2, err := r.compileRevision(context.Background(), "", revision)
 	require.NoError(t, err)
-	require.NotNil(t, state2.compiled)
-	assert.NotSame(t, firstCompiled, state2.compiled,
+	require.NotNil(t, state2.compilation.compiled)
+	assert.NotSame(t, firstCompiled, state2.compilation.compiled,
 		"after generation advance, compileRevision must recompile")
 
-	widgetSchemaV2 := state2.compiled.ResourceSchemas["widget"]
+	widgetSchemaV2 := state2.compilation.compiled.ResourceSchemas["widget"]
 	require.NotNil(t, widgetSchemaV2)
 	assert.Contains(t, widgetSchemaV2.Properties["spec"].Properties, "maxReplicas",
 		"recompiled artifact should reflect v2 schema with maxReplicas field")

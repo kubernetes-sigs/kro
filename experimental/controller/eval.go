@@ -59,7 +59,7 @@ func newEvaluator(state *instanceState) *evaluator {
 		compiler.ReservedNodeReadyVar: nodeReady,
 	}
 	return &evaluator{
-		compiled:  state.compiled,
+		compiled:  state.compilation.compiled,
 		scope:     scope,
 		nodeReady: nodeReady,
 	}

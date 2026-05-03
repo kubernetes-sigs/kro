@@ -136,7 +136,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	if len(revisions) > 0 {
 		active := revisions[len(revisions)-1]
 		if _, istate, compileErr := r.compileRevision(ctx, graph.GetNamespace(), active); compileErr == nil {
-			teardownDAGs = []*dagpkg.DAG{istate.dag}
+			teardownDAGs = []*dagpkg.DAG{istate.compilation.dag}
 			teardownEval = newEvaluator(istate)
 			teardownEval.effectiveGeneration = revisionGeneration(active)
 		} else {
@@ -163,7 +163,9 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 
 	// Build a minimal instanceState for advanceFinalization.
 	teardownState := &instanceState{
-		activeFinalization: map[string]*finalizationEntry{},
+		prune: pruneCarryForward{
+			activeFinalization: map[string]*finalizationEntry{},
+		},
 	}
 
 	// -----------------------------------------------------------------------

@@ -12,8 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	"github.com/ellistarn/kro/experimental/controller/compiler"
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 

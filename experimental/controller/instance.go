@@ -4,6 +4,10 @@
 // compiledGraph with other instances. This is correct because the mutable
 // state tracks per-instance Kubernetes resources with different observed
 // states.
+//
+// Fields are grouped by lifetime into sub-structs so that recompilation
+// replaces compilation artifacts atomically rather than resetting
+// individual fields.
 package graphcontroller
 
 import (
@@ -18,25 +22,73 @@ import (
 // instanceState holds the mutable reconcile-time state for a single Graph
 // instance. Each Graph CR gets its own instanceState even when sharing a
 // compiledGraph with other instances.
+//
+// Fields are separated by lifetime:
+//   - compilation: replaced atomically on every compile
+//   - walk: carry-forward state preserved across reconciles
+//   - prune: prune/finalization state preserved across reconciles
+//   - resolvedDynamicGVKs: cross-reconcile hints for deferred typing
 type instanceState struct {
-	// --- Compilation artifacts ---
+	compilation compiledArtifacts
+	walk        walkCarryForward
+	prune       pruneCarryForward
+
+	// resolvedDynamicGVKs persists across everything including recompile.
+	// Used as hints for schema resolution on subsequent compilations.
+	resolvedDynamicGVKs map[string]schema.GroupVersionKind
+}
+
+// compiledArtifacts holds the output of a single compilation. Replaced
+// atomically on every compileRevision call.
+type compiledArtifacts struct {
 	compiled *compiler.CompiledGraph
 	dag      *dagpkg.DAG
+}
 
-	// --- Walk carry-forward (preserved across reconciles for propagateWhen,
-	// dependency gating, and forEach state) ---
+// walkCarryForward holds state carried forward across reconcile cycles by
+// the DAG walk. Includes previous scope for propagateWhen and lazy deps,
+// previous keys for carry-forward on blocked/pending nodes, previous plan
+// states, and forEach collection state.
+type walkCarryForward struct {
 	previousScope      map[string]any
 	previousKeys       map[string][]Applied
 	previousPlanStates *dagpkg.PlanState
 	forEach            *forEachCarryForward // nil until first forEach evaluation
+}
 
-	// --- Prune and finalization ---
+// resetForRecompile clears walk state that is structurally incompatible
+// with a new compilation. previousScope IS cleared because after
+// recompilation node IDs may change — stale scope entries from the old
+// compilation would cause propagateWhen to evaluate against data from a
+// different node topology. The one-cycle transient Pending is correct —
+// it's the same as a fresh instance.
+//
+// previousKeys and previousPlanStates are preserved because they use
+// stable resource keys for carry-forward gating; stale entries for
+// removed nodes are harmless (never read).
+func (w *walkCarryForward) resetForRecompile() {
+	w.previousScope = make(map[string]any)
+	w.forEach = &forEachCarryForward{
+		itemScope: make(map[string]map[string]any),
+		itemKeys:  make(map[string]map[string][]Applied),
+	}
+}
+
+// pruneCarryForward holds state carried forward across reconcile cycles by
+// the prune and finalization phases.
+type pruneCarryForward struct {
 	previousAppliedKeys map[string]Applied
 	deferredPruneKeys   []Applied
 	activeFinalization  map[string]*finalizationEntry
+}
 
-	// --- Deferred typing (dynamic GVK resolution) ---
-	resolvedDynamicGVKs map[string]schema.GroupVersionKind
+// resetForRecompile clears prune state that should not survive recompilation.
+// activeFinalization and previousAppliedKeys are preserved: they track
+// resource keys and phases (stable across compilations), not node
+// definitions. Orphaned entries for removed nodes are harmless — they're
+// never matched as prune candidates.
+func (p *pruneCarryForward) resetForRecompile() {
+	p.deferredPruneKeys = nil
 }
 
 // forEachCarryForward holds forEach collection state retained across reconciles.
@@ -46,24 +98,37 @@ type forEachCarryForward struct {
 }
 
 // newInstanceState creates a fresh instanceState for a compiledGraph.
-func newInstanceState(compiled *compiler.CompiledGraph) *instanceState {
+func newInstanceState(compiled *compiler.CompiledGraph, dag *dagpkg.DAG) *instanceState {
 	return &instanceState{
-		compiled: compiled,
-		previousScope: make(map[string]any),
-		previousKeys:  make(map[string][]Applied),
-		forEach: &forEachCarryForward{
-			itemScope: make(map[string]map[string]any),
-			itemKeys:  make(map[string]map[string][]Applied),
+		compilation: compiledArtifacts{
+			compiled: compiled,
+			dag:      dag,
+		},
+		walk: walkCarryForward{
+			previousScope: make(map[string]any),
+			previousKeys:  make(map[string][]Applied),
+			forEach: &forEachCarryForward{
+				itemScope: make(map[string]map[string]any),
+				itemKeys:  make(map[string]map[string][]Applied),
+			},
 		},
 	}
 }
 
+// recompile replaces compilation artifacts and resets state that is
+// structurally incompatible with the new compilation.
+func (s *instanceState) recompile(compiled *compiler.CompiledGraph, dag *dagpkg.DAG) {
+	s.compilation = compiledArtifacts{compiled: compiled, dag: dag}
+	s.walk.resetForRecompile()
+	s.prune.resetForRecompile()
+}
+
 // updateAppliedKeys stores the current key set as the comparison baseline.
 // Call this after prune completes successfully.
-func (s *instanceState) updateAppliedKeys(keys []Applied) {
-	s.previousAppliedKeys = make(map[string]Applied, len(keys))
+func (p *pruneCarryForward) updateAppliedKeys(keys []Applied) {
+	p.previousAppliedKeys = make(map[string]Applied, len(keys))
 	for _, a := range keys {
-		s.previousAppliedKeys[a.Key] = a
+		p.previousAppliedKeys[a.Key] = a
 	}
 }
 

@@ -12,15 +12,15 @@ import (
 	"net"
 	"strings"
 
-	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	"github.com/ellistarn/kro/experimental/controller/compiler"
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // apiErrorInfo holds the plan state and reason for an API error.
 type apiErrorInfo struct {
 	state  dagpkg.NodeState // dagpkg.NodeError (4xx) or dagpkg.NodeSystemError (5xx)
-	reason string    // human-readable reason for status reporting
+	reason string           // human-readable reason for status reporting
 }
 
 // classifyAPIError maps an error to a plan state and reason.

@@ -32,8 +32,8 @@ import (
 // layer (controller.go, walk.go) and the execution layer (apply.go,
 // node.go, prune.go, finalization.go).
 type clusterAccess struct {
-	client client.Client     // read-write client (SSA, Delete)
-	reader client.Reader     // direct API server reader (bypasses cache)
+	client client.Client  // read-write client (SSA, Delete)
+	reader client.Reader  // direct API server reader (bypasses cache)
 	scope  *scopeResolver // namespace vs cluster-scope resolution
 }
 

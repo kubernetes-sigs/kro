@@ -70,12 +70,12 @@ const (
 // GraphReconciler reconciles Graph objects.
 type GraphReconciler struct {
 	Client         client.Client
-	APIReader      client.Reader                   // direct API server reader — bypasses cache for managed resources
-	SchemaResolver resolver.SchemaResolver         // nil = all resource nodes fall back to dyn
-	SchemaGen      *compiler.SchemaGeneration      // nil = no generation tracking; never triggers recompilation
-	Watcher        *watches.WatchCoordinator       // nil = no dynamic watches (backward compat with existing tests)
-	Caches         *InstanceMap                    // per-revision compiled expression caches
-	Scope          *scopeResolver                  // nil = unknown scope; staticResourceKey falls back to namespace-substitution heuristic
+	APIReader      client.Reader              // direct API server reader — bypasses cache for managed resources
+	SchemaResolver resolver.SchemaResolver    // nil = all resource nodes fall back to dyn
+	SchemaGen      *compiler.SchemaGeneration // nil = no generation tracking; never triggers recompilation
+	Watcher        *watches.WatchCoordinator  // nil = no dynamic watches (backward compat with existing tests)
+	Caches         *InstanceMap               // per-revision compiled expression caches
+	Scope          *scopeResolver             // nil = unknown scope; staticResourceKey falls back to namespace-substitution heuristic
 }
 
 // reconcileScope bundles the per-reconcile identity context that threads
@@ -225,21 +225,21 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	eval := newEvaluator(state)
 	eval.effectiveGeneration = effectiveGeneration
-	dag := state.dag
+	dag := state.compilation.dag
 	plan := dagpkg.NewPlanState(dag)
 
 	// On revision transition, transfer previousAppliedKeys from superseded
 	// revisions so the prune phase knows what the old revision applied.
 	isRevisionTransition := len(supersededRevisions) > 0
-	if isRevisionTransition && state.previousAppliedKeys == nil {
+	if isRevisionTransition && state.prune.previousAppliedKeys == nil {
 		for _, rev := range supersededRevisions {
 			oldKey := rev.GetNamespace() + "/" + rev.GetName()
 			if oldState := r.Caches.get(oldKey); oldState != nil {
-				for k, a := range oldState.previousAppliedKeys {
-					if state.previousAppliedKeys == nil {
-						state.previousAppliedKeys = make(map[string]Applied)
+				for k, a := range oldState.prune.previousAppliedKeys {
+					if state.prune.previousAppliedKeys == nil {
+						state.prune.previousAppliedKeys = make(map[string]Applied)
 					}
-					state.previousAppliedKeys[k] = a
+					state.prune.previousAppliedKeys[k] = a
 				}
 			}
 		}
@@ -273,133 +273,25 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	summary := walkRes.summary
 
 	// Merge walkResult into instanceState for next reconcile.
-	state.previousPlanStates = walkRes.plan
-	state.previousKeys = walkRes.nodeKeys
+	state.walk.previousPlanStates = walkRes.plan
+	state.walk.previousKeys = walkRes.nodeKeys
 
 	// -----------------------------------------------------------------------
 	// 8. Prune removed resources
 	// -----------------------------------------------------------------------
-	cluster := r.cluster()
-	pruneOK := true
-	prunePending := false
-	// Per 005-reconciliation.md § Prune: "Uncertain absence (Pending, Blocked,
-	// Error, SystemError) blocks pruning — the resource might reappear once the
-	// blocker resolves."
-	pruneSafe := !summary.HasPending && !summary.HasBlocked && !summary.HasError && !summary.HasSystemError
-	if pruneSafe {
-		allPreviousKeys := map[string]Applied{}
-		logger.V(1).Info("prune gate open", "previousAppliedKeys", len(state.previousAppliedKeys), "deferredPruneKeys", len(state.deferredPruneKeys), "superseded", len(supersededRevisions))
-
-		// Derive the applied set from the watch cache.
-		// DeriveAppliedSet returns plain resource keys — we pair them with
-		// NodeType from the entry. HasStatus is derived from the revision
-		// spec's templateHasStatus for known nodes; defaults to false for
-		// dynamically-discovered resources.
-		if r.Watcher != nil {
-			appliedSet := r.Watcher.DeriveAppliedSet(rs.name, rs.namespace)
-			for key, entry := range appliedSet {
-				allPreviousKeys[key] = Applied{
-					Key:      key,
-					NodeType: entry.NodeType,
-				}
-			}
-		}
-
-		// Include the previous reconcile's applied keys to cover the
-		// informer lag window.
-		for k, a := range state.previousAppliedKeys {
-			allPreviousKeys[k] = a
-		}
-		// Include keys whose deletion was deferred in the previous reconcile.
-		for _, a := range state.deferredPruneKeys {
-			allPreviousKeys[a.Key] = a
-		}
-		// Update the previous key set for the next reconcile.
-		state.updateAppliedKeys(appliedKeys)
-
-		// Extract static keys from superseded revisions for resources
-		// that may not yet be in the informer cache.
-		supersededDAGs := map[string]*dagpkg.DAG{}
-		for _, rev := range supersededRevisions {
-			if revSpec, err := extractRevisionSpec(rev); err == nil {
-				for _, node := range revSpec.Nodes {
-					if node.Finalizes != "" {
-						continue
-					}
-					nodeType := node.Type()
-					if nodeType == graphpkg.NodeTypeRef || nodeType == graphpkg.NodeTypeWatch {
-						continue
-					}
-					if key := staticResourceKey(node.Identity(), rs.namespace, cluster.scope); key != "" {
-						allPreviousKeys[key] = Applied{
-							Key:       key,
-							NodeType:  nodeType,
-							HasStatus: templateHasStatus(node.Payload()),
-						}
-					}
-				}
-			}
-			// Compile superseded revisions to access their finalizer relationships.
-			if _, revState, compileErr := r.compileRevision(ctx, graph.GetNamespace(), rev); compileErr == nil {
-				supersededDAGs[rev.GetName()] = revState.dag
-			}
-		}
-
-		if len(allPreviousKeys) > 0 {
-			// Build currentSet from walk applied keys.
-			currentSet := map[string]Applied{}
-			for _, a := range appliedKeys {
-				currentSet[a.Key] = a
-			}
-			candidates := collectPruneCandidates(allPreviousKeys, currentSet)
-			allDAGs := []*dagpkg.DAG{}
-			if dag != nil {
-				allDAGs = append(allDAGs, dag)
-			}
-			for _, d := range supersededDAGs {
-				allDAGs = append(allDAGs, d)
-			}
-
-			pr := cluster.pruneResources(ctx, rs, candidates, currentSet, allDAGs, eval, state, true)
-
-			nodeErrors = append(nodeErrors, pr.BlockedReasons...)
-			nodeNotes = append(nodeNotes, pr.Notes...)
-			if len(pr.BlockedReasons) > 0 {
-				summary.HasBlocked = true
-			}
-			deferredKeys := collectDeferredKeys(pr.Outcomes, allPreviousKeys)
-			if len(deferredKeys) > 0 {
-				prunePending = true
-				state.deferredPruneKeys = deferredKeys
-			} else {
-				state.deferredPruneKeys = nil
-			}
-			if pr.Err != nil {
-				logger.Error(pr.Err, "pruning removed resources")
-				pruneOK = false
-				info := classifyAPIError(pr.Err)
-				switch info.state {
-				case dagpkg.NodeSystemError:
-					summary.HasSystemError = true
-				case dagpkg.NodeConflict:
-					summary.HasConflict = true
-				default:
-					summary.HasError = true
-				}
-				nodeErrors = append(nodeErrors, fmt.Sprintf("prune: %s", info.reason))
-			}
-		}
-	}
+	pr := r.reconcilePrune(ctx, rs, state, eval, dag, appliedKeys, supersededRevisions, &summary)
+	nodeErrors = append(nodeErrors, pr.errors...)
+	nodeNotes = append(nodeNotes, pr.notes...)
 
 	// -----------------------------------------------------------------------
 	// 9. Update status
 	// -----------------------------------------------------------------------
 	rstate := &reconcileState{
-		compiled:         compilationErr == nil,
-		compiledErr:      compilationErr,
-		planSummary:      summary,
-		nodeErrors:       nodeErrors,
-		nodeNotes:        nodeNotes,
+		compiled:    compilationErr == nil,
+		compiledErr: compilationErr,
+		planSummary: summary,
+		nodeErrors:  nodeErrors,
+		nodeNotes:   nodeNotes,
 	}
 	if err := r.updateStatus(ctx, graph, rstate); err != nil {
 		logger.Error(err, "status update")
@@ -407,7 +299,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	allReady := rstate.compiled && !rstate.planSummary.HasPending && !rstate.planSummary.HasNotReady &&
 		!rstate.planSummary.HasBlocked && !rstate.planSummary.HasConflict && !rstate.planSummary.HasError && !rstate.planSummary.HasSystemError
-	r.gcSupersededRevisions(ctx, activeRevision, supersededRevisions, allReady, pruneOK && !prunePending)
+	r.gcSupersededRevisions(ctx, activeRevision, supersededRevisions, allReady, pr.ok && !pr.pending)
 
 	// -----------------------------------------------------------------------
 	// 10. Requeue if not fully ready
@@ -419,7 +311,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	// Finalization in progress — short requeue as a consistency floor.
-	if prunePending {
+	if pr.pending {
 		return ctrl.Result{RequeueAfter: finalizationRequeueInterval}, nil
 	}
 
@@ -430,4 +322,144 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// prunePhaseResult carries the outputs of reconcilePrune back to the caller.
+type prunePhaseResult struct {
+	ok      bool     // true unless a hard API error occurred
+	pending bool     // true if deferred keys remain (finalization in progress)
+	errors  []string // node-level error messages for status
+	notes   []string // informational messages for status
+}
+
+// reconcilePrune removes resources that are no longer in the applied set.
+// It gates on summary flags (uncertain absence blocks pruning), builds the
+// full previous-applied-key universe from three sources (watch cache,
+// carry-forward, superseded revisions), diffs against the current walk's
+// applied keys, and deletes the difference.
+//
+// Side effects: mutates summary (sets HasBlocked/HasError/HasSystemError/
+// HasConflict on prune failures) and state.prune (updates carry-forward keys).
+func (r *GraphReconciler) reconcilePrune(
+	ctx context.Context,
+	rs *reconcileScope,
+	state *instanceState,
+	eval *evaluator,
+	dag *dagpkg.DAG,
+	appliedKeys []Applied,
+	supersededRevisions []*unstructured.Unstructured,
+	summary *dagpkg.PlanSummary,
+) prunePhaseResult {
+	logger := log.FromContext(ctx)
+	result := prunePhaseResult{ok: true}
+
+	// Per 005-reconciliation.md § Prune: "Uncertain absence (Pending, Blocked,
+	// Error, SystemError) blocks pruning — the resource might reappear once the
+	// blocker resolves."
+	if summary.HasPending || summary.HasBlocked || summary.HasError || summary.HasSystemError {
+		return result
+	}
+
+	cluster := r.cluster()
+	allPreviousKeys := map[string]Applied{}
+	logger.V(1).Info("prune gate open", "previousAppliedKeys", len(state.prune.previousAppliedKeys), "deferredPruneKeys", len(state.prune.deferredPruneKeys), "superseded", len(supersededRevisions))
+
+	// Derive the applied set from the watch cache.
+	if r.Watcher != nil {
+		appliedSet := r.Watcher.DeriveAppliedSet(rs.name, rs.namespace)
+		for key, entry := range appliedSet {
+			allPreviousKeys[key] = Applied{
+				Key:      key,
+				NodeType: entry.NodeType,
+			}
+		}
+	}
+
+	// Include the previous reconcile's applied keys to cover the
+	// informer lag window.
+	for k, a := range state.prune.previousAppliedKeys {
+		allPreviousKeys[k] = a
+	}
+	// Include keys whose deletion was deferred in the previous reconcile.
+	for _, a := range state.prune.deferredPruneKeys {
+		allPreviousKeys[a.Key] = a
+	}
+	// Update the previous key set for the next reconcile.
+	state.prune.updateAppliedKeys(appliedKeys)
+
+	// Extract static keys from superseded revisions for resources
+	// that may not yet be in the informer cache.
+	supersededDAGs := map[string]*dagpkg.DAG{}
+	for _, rev := range supersededRevisions {
+		if revSpec, err := extractRevisionSpec(rev); err == nil {
+			for _, node := range revSpec.Nodes {
+				if node.Finalizes != "" {
+					continue
+				}
+				nodeType := node.Type()
+				if nodeType == graphpkg.NodeTypeRef || nodeType == graphpkg.NodeTypeWatch {
+					continue
+				}
+				if key := staticResourceKey(node.Identity(), rs.namespace, cluster.scope); key != "" {
+					allPreviousKeys[key] = Applied{
+						Key:       key,
+						NodeType:  nodeType,
+						HasStatus: templateHasStatus(node.Payload()),
+					}
+				}
+			}
+		}
+		// Compile superseded revisions to access their finalizer relationships.
+		if _, revState, compileErr := r.compileRevision(ctx, rs.namespace, rev); compileErr == nil {
+			supersededDAGs[rev.GetName()] = revState.compilation.dag
+		}
+	}
+
+	if len(allPreviousKeys) == 0 {
+		return result
+	}
+
+	// Build currentSet from walk applied keys.
+	currentSet := map[string]Applied{}
+	for _, a := range appliedKeys {
+		currentSet[a.Key] = a
+	}
+	candidates := collectPruneCandidates(allPreviousKeys, currentSet)
+	allDAGs := []*dagpkg.DAG{}
+	if dag != nil {
+		allDAGs = append(allDAGs, dag)
+	}
+	for _, d := range supersededDAGs {
+		allDAGs = append(allDAGs, d)
+	}
+
+	pr := cluster.pruneResources(ctx, rs, candidates, currentSet, allDAGs, eval, state, true)
+
+	result.errors = append(result.errors, pr.BlockedReasons...)
+	result.notes = append(result.notes, pr.Notes...)
+	if len(pr.BlockedReasons) > 0 {
+		summary.HasBlocked = true
+	}
+	deferredKeys := collectDeferredKeys(pr.Outcomes, allPreviousKeys)
+	if len(deferredKeys) > 0 {
+		result.pending = true
+		state.prune.deferredPruneKeys = deferredKeys
+	} else {
+		state.prune.deferredPruneKeys = nil
+	}
+	if pr.Err != nil {
+		logger.Error(pr.Err, "pruning removed resources")
+		result.ok = false
+		info := classifyAPIError(pr.Err)
+		switch info.state {
+		case dagpkg.NodeSystemError:
+			summary.HasSystemError = true
+		case dagpkg.NodeConflict:
+			summary.HasConflict = true
+		default:
+			summary.HasError = true
+		}
+		result.errors = append(result.errors, fmt.Sprintf("prune: %s", info.reason))
+	}
+	return result
 }

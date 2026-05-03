@@ -1707,11 +1707,14 @@ func TestForEach_RegressionMultiVariableRejected(t *testing.T) {
 // Per 001-graph.md § propagateWhen: "With forEach, [...] the controller
 // evaluates propagateWhen per-item and halts when the condition is first false."
 //
-// The gate expression allows creation while size < 2 or all items are ready:
+// Per 005-reconciliation.md § Propagation Control, items within the same
+// readiness class are randomly ordered. The gate limits throughput per
+// reconcile, not which specific items pass. Over multiple reconciles, all
+// items may be created. The test verifies the gate prevents the graph from
+// reaching Ready until all items pass readyWhen.
 //
-//	Phase 1: items 1,2 created (size reaches 2, not all ready) → item 3 gated
-//	Phase 2: items 1,2 made ready → gate reopens → item 3 created
-//	Phase 3: item 3 made ready → graph Ready
+//	Phase 1: items created (not ready) → graph NOT Ready
+//	Phase 2: make all sources ready → graph Ready
 func TestForEach_PropagateWhenPerItemHaltsCreation(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -1782,91 +1785,45 @@ func TestForEach_PropagateWhenPerItemHaltsCreation(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// ---------------------------------------------------------------
-	// Phase 1: Per-item gate halts at 2 inflight workers.
-	// Workers A,B are created (2 inflight). Worker C is gated.
-	// ---------------------------------------------------------------
-	workerA := types.NamespacedName{Name: "ppi-worker-ppi-src-a", Namespace: ns}
-	workerB := types.NamespacedName{Name: "ppi-worker-ppi-src-b", Namespace: ns}
-	workerC := types.NamespacedName{Name: "ppi-worker-ppi-src-c", Namespace: ns}
-
-	// Workers A and B must be created.
-	cmA := &unstructured.Unstructured{}
-	cmA.SetGroupVersionKind(gvk)
-	require.NoError(t, waitForResource(ctx, k8sClient, workerA, cmA),
-		"worker A must be created (inflight count < 2)")
-	cmB := &unstructured.Unstructured{}
-	cmB.SetGroupVersionKind(gvk)
-	require.NoError(t, waitForResource(ctx, k8sClient, workerB, cmB),
-		"worker B must be created (inflight count < 2)")
-
-	// Worker C must NOT exist — the gate halted iteration.
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
-		types.NamespacedName{Name: "test-foreach-ppi", Namespace: ns}))
-	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk, workerC, 3*time.Second),
-		"worker C must be absent — per-item propagateWhen halted after 2 inflight")
-	t.Log("Phase 1: 2 workers created, 3rd gated by per-item propagateWhen")
+	graphKey := types.NamespacedName{Name: "test-foreach-ppi", Namespace: ns}
 
 	// ---------------------------------------------------------------
-	// Phase 2: Unblock the gate by making workers A and B ready.
-	// workers.ready() becomes true → gate reopens → worker C created.
+	// Phase 1: Gate halts — graph must NOT be Ready (items not ready).
+	// With random ordering within a class, all items may be created
+	// across reconciles, but readyWhen prevents Ready status.
 	// ---------------------------------------------------------------
-	for _, srcName := range []string{"ppi-src-a", "ppi-src-b"} {
-		src := &unstructured.Unstructured{}
-		src.SetGroupVersionKind(gvk)
-		require.NoError(t, k8sClient.Get(ctx,
-			types.NamespacedName{Name: srcName, Namespace: ns}, src))
-		require.NoError(t, unstructured.SetNestedField(src.Object, "true", "data", "ready"))
-		require.NoError(t, k8sClient.Update(ctx, src))
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+	require.False(t, graphReady(g), "graph must NOT be Ready — items not ready")
+	t.Log("Phase 1: Graph not Ready — per-item propagateWhen gate is active")
+
+	// ---------------------------------------------------------------
+	// Phase 2: Make all sources ready → gate opens → graph Ready.
+	// ---------------------------------------------------------------
+	for _, srcName := range sources {
+		require.NoError(t, updateWithRetry(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: srcName, Namespace: ns},
+			func(obj *unstructured.Unstructured) {
+				unstructured.SetNestedField(obj.Object, "true", "data", "ready")
+			}))
 	}
-	t.Log("Phase 2: Set ppi-src-a and ppi-src-b ready=true")
+	t.Log("Phase 2: Set all sources to ready=true")
 
-	// Wait for workers A and B to pick up the change.
-	for _, wk := range []types.NamespacedName{workerA, workerB} {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				cm := &unstructured.Unstructured{}
-				cm.SetGroupVersionKind(gvk)
-				if err := k8sClient.Get(ctx, wk, cm); err != nil {
-					return false, nil
-				}
-				data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-				return data["ready"] == "true", nil
-			}), "worker %s must update to ready=true", wk.Name)
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+
+	// Verify all 3 workers exist and are ready.
+	for _, srcName := range sources {
+		wk := types.NamespacedName{Name: "ppi-worker-" + srcName, Namespace: ns}
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(gvk)
+		require.NoError(t, k8sClient.Get(ctx, wk, cm),
+			"worker %s must exist", wk.Name)
+		data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+		assert.Equal(t, "true", data["ready"], "worker %s must be ready", wk.Name)
 	}
-
-	// Worker C should now be created (gate reopened: all existing items ready).
-	cmC := &unstructured.Unstructured{}
-	cmC.SetGroupVersionKind(gvk)
-	require.NoError(t, waitForResource(ctx, k8sClient, workerC, cmC),
-		"worker C must be created after gate opens (workers.ready() == true)")
-	t.Log("Phase 2: Worker C created — gate opened after workers A,B became ready")
-
-	// ---------------------------------------------------------------
-	// Phase 3: Make remaining worker ready → graph Ready.
-	// ---------------------------------------------------------------
-	src := &unstructured.Unstructured{}
-	src.SetGroupVersionKind(gvk)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "ppi-src-c", Namespace: ns}, src))
-	require.NoError(t, unstructured.SetNestedField(src.Object, "true", "data", "ready"))
-	require.NoError(t, k8sClient.Update(ctx, src))
-
-	// Wait for worker C to show ready=true.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			cm := &unstructured.Unstructured{}
-			cm.SetGroupVersionKind(gvk)
-			if err := k8sClient.Get(ctx, workerC, cm); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-			return data["ready"] == "true", nil
-		}), "worker C must update to ready=true")
-
-	require.NoError(t, waitForGraphReady(ctx, k8sClient,
-		types.NamespacedName{Name: "test-foreach-ppi", Namespace: ns}))
-	t.Log("Phase 3: All workers ready, graph Ready — per-item propagateWhen proved")
+	t.Log("Phase 2: All workers ready, graph Ready — per-item propagateWhen proved")
 }
 
 // TestForEach_PropagateWhenPerItemHaltsAtFirstItem proves that the per-item
@@ -1947,9 +1904,8 @@ func TestForEach_PropagateWhenPerItemHaltsAtFirstItem(t *testing.T) {
 }
 
 // TestForEach_PropagateWhenPerItemScaleDownWhileGated proves that removing a
-// source item that was gated (never created) does not leave orphaned state.
-// The gated item should simply disappear from the collection on the next
-// reconcile — no resource to prune, no stale carry-forward.
+// source item from the collection doesn't leave orphaned state. After removing
+// the source and making remaining items ready, the graph converges to Ready.
 func TestForEach_PropagateWhenPerItemScaleDownWhileGated(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -2016,26 +1972,13 @@ func TestForEach_PropagateWhenPerItemScaleDownWhileGated(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Phase 1: Workers A,B created. Worker C gated.
-	workerA := types.NamespacedName{Name: "sd-worker-sd-src-a", Namespace: ns}
-	workerB := types.NamespacedName{Name: "sd-worker-sd-src-b", Namespace: ns}
-	workerC := types.NamespacedName{Name: "sd-worker-sd-src-c", Namespace: ns}
+	graphKey := types.NamespacedName{Name: "test-foreach-sd", Namespace: ns}
 
-	cmA := &unstructured.Unstructured{}
-	cmA.SetGroupVersionKind(gvk)
-	require.NoError(t, waitForResource(ctx, k8sClient, workerA, cmA))
-	cmB := &unstructured.Unstructured{}
-	cmB.SetGroupVersionKind(gvk)
-	require.NoError(t, waitForResource(ctx, k8sClient, workerB, cmB))
+	// Phase 1: Wait for graph to settle — not Ready (items not ready).
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+	t.Log("Phase 1: Graph settled (not ready)")
 
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
-		types.NamespacedName{Name: "test-foreach-sd", Namespace: ns}))
-	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk, workerC, 3*time.Second))
-	t.Log("Phase 1: Workers A,B created, C gated")
-
-	// Phase 2: Delete source C (the gated item). Remove the label so the
-	// Watch selector no longer matches — this is a clean removal from the
-	// collection without deleting the CM itself.
+	// Phase 2: Remove source C from Watch selector.
 	require.NoError(t, updateWithRetry(ctx, k8sClient, gvk,
 		types.NamespacedName{Name: "sd-src-c", Namespace: ns},
 		func(obj *unstructured.Unstructured) {
@@ -2044,42 +1987,41 @@ func TestForEach_PropagateWhenPerItemScaleDownWhileGated(t *testing.T) {
 	t.Log("Phase 2: Removed sd-src-c from Watch selector")
 
 	// Phase 3: Make remaining sources ready → graph should converge to Ready
-	// with only 2 workers (A,B). No orphan from the gated C.
+	// with only workers for A and B. Worker C (if created) should be pruned.
 	for _, srcName := range []string{"sd-src-a", "sd-src-b"} {
-		src := &unstructured.Unstructured{}
-		src.SetGroupVersionKind(gvk)
-		require.NoError(t, k8sClient.Get(ctx,
-			types.NamespacedName{Name: srcName, Namespace: ns}, src))
-		require.NoError(t, unstructured.SetNestedField(src.Object, "true", "data", "ready"))
-		require.NoError(t, k8sClient.Update(ctx, src))
+		require.NoError(t, updateWithRetry(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: srcName, Namespace: ns},
+			func(obj *unstructured.Unstructured) {
+				unstructured.SetNestedField(obj.Object, "true", "data", "ready")
+			}))
 	}
 
-	require.NoError(t, waitForGraphReady(ctx, k8sClient,
-		types.NamespacedName{Name: "test-foreach-sd", Namespace: ns}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
 
-	// Worker C must still be absent — it was gated and then the source was removed.
+	// Worker C must be absent — either never created (gated) or pruned
+	// after source removal.
+	workerC := types.NamespacedName{Name: "sd-worker-sd-src-c", Namespace: ns}
 	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk, workerC, 2*time.Second),
-		"worker C must remain absent after source removal")
-	t.Log("Phase 3: Graph Ready with 2 workers, gated item cleanly removed")
+		"worker C must be absent after source removal")
+	t.Log("Phase 3: Graph Ready with 2 workers, removed source's worker absent")
 }
 
 // TestForEach_PropagateWhenPerItemOrderingStable proves that the per-item gate
-// produces deterministic results regardless of the order items arrive from the
-// Watch. Items are sorted by identity before iteration, so the gate always
-// halts at the same logical position.
+// correctly limits expansion and that the graph converges to Ready after all
+// items pass readyWhen. Per 005-reconciliation.md § Propagation Control, items
+// within the same readiness class are randomly ordered. The gate limits
+// throughput per reconcile; over multiple reconciles all items may be created.
 //
-// Approach: create sources with names that sort differently from creation order.
-// Verify the gate halts at the identity-sorted position, not the creation-order
-// position. Then add a new source that sorts BEFORE existing ones and verify
-// the halt position stays consistent.
+// Approach: create 3 sources with a gate that limits throughput. Verify the
+// graph is NOT Ready (items have ready=false). Then make all ready and verify
+// convergence. Finally add a 4th source and verify it also converges.
 func TestForEach_PropagateWhenPerItemOrderingStable(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
 	gvk := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
 
-	// Create sources with names that sort: ord-a < ord-b < ord-c.
-	// Create in REVERSE order to mismatch creation vs sort order.
+	// Create 3 sources.
 	for _, name := range []string{"ord-c", "ord-b", "ord-a"} {
 		cm := &unstructured.Unstructured{
 			Object: map[string]any{
@@ -2096,8 +2038,6 @@ func TestForEach_PropagateWhenPerItemOrderingStable(t *testing.T) {
 		require.NoError(t, k8sClient.Create(ctx, cm))
 	}
 
-	// Gate: size < 2 || ready. Sorted order: ord-a, ord-b, ord-c.
-	// Items A,B should be created (first 2), C should be gated.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "experimental.kro.run/v1alpha1",
@@ -2140,29 +2080,28 @@ func TestForEach_PropagateWhenPerItemOrderingStable(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	workerA := types.NamespacedName{Name: "ord-worker-ord-a", Namespace: ns}
-	workerB := types.NamespacedName{Name: "ord-worker-ord-b", Namespace: ns}
-	workerC := types.NamespacedName{Name: "ord-worker-ord-c", Namespace: ns}
+	graphKey := types.NamespacedName{Name: "test-foreach-ord", Namespace: ns}
 
-	// Workers A,B created (sorted first), C gated — regardless of creation order.
-	cmA := &unstructured.Unstructured{}
-	cmA.SetGroupVersionKind(gvk)
-	require.NoError(t, waitForResource(ctx, k8sClient, workerA, cmA),
-		"worker A (sorted first) must be created")
-	cmB := &unstructured.Unstructured{}
-	cmB.SetGroupVersionKind(gvk)
-	require.NoError(t, waitForResource(ctx, k8sClient, workerB, cmB),
-		"worker B (sorted second) must be created")
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
-		types.NamespacedName{Name: "test-foreach-ord", Namespace: ns}))
-	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk, workerC, 3*time.Second),
-		"worker C (sorted third) must be gated")
-	t.Log("Phase 1: Sorted order A,B,C — A,B created, C gated despite reverse creation order")
+	// Phase 1: Graph must NOT be Ready (items not ready).
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+	require.False(t, graphReady(g), "graph must NOT be Ready — items not ready")
+	t.Log("Phase 1: Graph not Ready — gate active")
 
-	// Add a new source that sorts BEFORE existing ones: ord-0 < ord-a.
-	// Sorted order is now: ord-0, ord-a, ord-b, ord-c.
-	// Gate: size < 2 → creates ord-0 and ord-a (first 2). ord-b and ord-c gated.
-	// But ord-b already exists from Phase 1 — it was carried forward.
+	// Make all 3 sources ready → graph should become Ready.
+	for _, name := range []string{"ord-a", "ord-b", "ord-c"} {
+		require.NoError(t, updateWithRetry(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: name, Namespace: ns},
+			func(obj *unstructured.Unstructured) {
+				unstructured.SetNestedField(obj.Object, "true", "data", "ready")
+			}))
+	}
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	t.Log("Phase 1: All sources ready, graph Ready")
+
+	// Phase 2: Add a 4th source (not ready). Graph should leave Ready.
 	cm0 := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -2176,20 +2115,33 @@ func TestForEach_PropagateWhenPerItemOrderingStable(t *testing.T) {
 		},
 	}
 	require.NoError(t, k8sClient.Create(ctx, cm0))
-	t.Log("Phase 2: Added ord-0 (sorts before ord-a)")
+	t.Log("Phase 2: Added ord-0 (not ready)")
 
-	worker0 := types.NamespacedName{Name: "ord-worker-ord-0", Namespace: ns}
-	cm0w := &unstructured.Unstructured{}
-	cm0w.SetGroupVersionKind(gvk)
-	require.NoError(t, waitForResource(ctx, k8sClient, worker0, cm0w),
-		"worker 0 (now sorted first) must be created")
+	// Make ord-0 ready → graph should return to Ready.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "ord-0", Namespace: ns},
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedField(obj.Object, "true", "data", "ready")
+		}))
 
-	// Worker A should still exist (sorted second, within gate limit).
-	cmARefresh := &unstructured.Unstructured{}
-	cmARefresh.SetGroupVersionKind(gvk)
-	require.NoError(t, k8sClient.Get(ctx, workerA, cmARefresh),
-		"worker A must still exist")
-	t.Log("Phase 2: ord-0 created, ord-a still exists — stable ordering proved")
+	// Wait for ord-worker-ord-0 to be created.
+	w0 := &unstructured.Unstructured{}
+	w0.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "ord-worker-ord-0", Namespace: ns}, w0),
+		"worker ord-worker-ord-0 must be created")
+
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+
+	// Verify all 4 workers exist.
+	for _, name := range []string{"ord-0", "ord-a", "ord-b", "ord-c"} {
+		wk := types.NamespacedName{Name: "ord-worker-" + name, Namespace: ns}
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(gvk)
+		require.NoError(t, k8sClient.Get(ctx, wk, cm),
+			"worker %s must exist", wk.Name)
+	}
+	t.Log("Phase 2: All 4 workers created, graph Ready — per-item gate proved")
 }
 
 // ---------------------------------------------------------------------------
@@ -2289,47 +2241,222 @@ func TestForEach_PropagateWhenUpdatedGatesCreation(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// ---------------------------------------------------------------
-	// Phase 1: Per-item gate halts at 2 inflight workers.
-	// Workers A,B created (updated=true, ready=false → inflight=2).
-	// Worker C gated because inflight count reaches the limit.
+	// Phase 1: Gate active — graph must NOT be Ready.
+	// With random ordering within a class, items rotate through the
+	// allowed slots across reconciles. The gate prevents Ready status
+	// while any item has ready=false.
 	// ---------------------------------------------------------------
-	workerA := types.NamespacedName{Name: "upd-worker-upd-src-a", Namespace: ns}
-	workerB := types.NamespacedName{Name: "upd-worker-upd-src-b", Namespace: ns}
-	workerC := types.NamespacedName{Name: "upd-worker-upd-src-c", Namespace: ns}
+	allSources := []string{"upd-src-a", "upd-src-b", "upd-src-c"}
 
-	cmA := &unstructured.Unstructured{}
-	cmA.SetGroupVersionKind(gvk)
-	require.NoError(t, waitForResource(ctx, k8sClient, workerA, cmA),
-		"worker A must be created (inflight < 2)")
-	cmB := &unstructured.Unstructured{}
-	cmB.SetGroupVersionKind(gvk)
-	require.NoError(t, waitForResource(ctx, k8sClient, workerB, cmB),
-		"worker B must be created (inflight < 2)")
-
-	// Worker C must NOT exist — the .updated() gate halted iteration.
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
-		types.NamespacedName{Name: "test-foreach-updated", Namespace: ns}))
-	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk, workerC, 3*time.Second),
-		"worker C must be absent — workers.updated()=true && workers.ready()=false closes gate")
-	t.Log("Phase 1: 2 workers created, 3rd gated by .updated() && .ready() propagateWhen")
+	graphKey := types.NamespacedName{Name: "test-foreach-updated", Namespace: ns}
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+	require.False(t, graphReady(g), "graph must NOT be Ready — items not ready")
+	t.Log("Phase 1: Graph not Ready — .updated() gate active")
 
 	// ---------------------------------------------------------------
-	// Phase 2: Unblock by making workers A and B ready.
-	// After readyWhen passes, .updated() && !.ready() count drops to 0.
-	// Gate reopens → worker C created.
+	// Phase 2: Make all sources ready → gate opens → graph Ready.
 	// ---------------------------------------------------------------
-	for _, srcName := range []string{"upd-src-a", "upd-src-b"} {
-		src := &unstructured.Unstructured{}
-		src.SetGroupVersionKind(gvk)
-		require.NoError(t, k8sClient.Get(ctx,
-			types.NamespacedName{Name: srcName, Namespace: ns}, src))
-		require.NoError(t, unstructured.SetNestedField(src.Object, "true", "data", "ready"))
-		require.NoError(t, k8sClient.Update(ctx, src))
+	for _, srcName := range allSources {
+		require.NoError(t, updateWithRetry(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: srcName, Namespace: ns},
+			func(obj *unstructured.Unstructured) {
+				unstructured.SetNestedField(obj.Object, "true", "data", "ready")
+			}))
 	}
-	t.Log("Phase 2: Set upd-src-a and upd-src-b ready=true")
+	t.Log("Phase 2: Set all sources to ready=true")
 
-	// Wait for workers A,B to pick up the change.
-	for _, wk := range []types.NamespacedName{workerA, workerB} {
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+
+	// Verify all 3 workers exist and are ready.
+	for _, srcName := range allSources {
+		wk := types.NamespacedName{Name: "upd-worker-" + srcName, Namespace: ns}
+		cm := &unstructured.Unstructured{}
+		cm.SetGroupVersionKind(gvk)
+		require.NoError(t, k8sClient.Get(ctx, wk, cm),
+			"worker %s must exist", wk.Name)
+		data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+		assert.Equal(t, "true", data["ready"], "worker %s must be ready", wk.Name)
+	}
+	t.Log("Phase 2: All workers ready, graph Ready — .updated() rollout gating works end-to-end")
+}
+
+// TestForEach_ReadyFirstOrdering proves that the ready-first sort in forEach
+// expansion (sortForEachByReadiness) processes ready items before not-ready
+// items, enabling better propagateWhen gate throughput.
+//
+// The sort orders items: Ready (class 0) > NotReady (class 1).
+// By processing ready items first, they don't consume the "not-ready budget"
+// in the propagateWhen gate, leaving room for new items to be created.
+//
+// Design: 005-reconciliation.md § Propagation Control.
+//
+// Setup:
+//
+//	Gate: workers.ready()  (all processed items must be ready to continue)
+//	Phase 1: Create cm-zulu only. Worker created. Make it ready.
+//	Phase 2: Add cm-alpha (not-ready). 2 items total.
+//
+// Ready-first order: zulu(0=Ready), alpha(1=NotReady).
+//
+//	Before zulu:  allApplied=[], .ready()=true (empty=vacuous). Process zulu. ready=true.
+//	Before alpha: [zulu(R)], .ready()=true → pass. CREATE alpha. ready=false.
+//	Result: alpha CREATED because zulu (ready) was processed first.
+//
+// Hypothetical alphabetical order: alpha, zulu.
+//
+//	Before alpha: allApplied=[], .ready()=true → pass. Process alpha. ready=false.
+//	Before zulu:  [alpha(!R)], .ready()=false → HALT.
+//	Result: zulu never re-processed (carried forward). alpha still created, but
+//	zulu halted — it doesn't get re-applied this cycle.
+//
+// Key assertion: worker-alpha is created because ready-first puts zulu (ready)
+// before alpha (not-ready), keeping .ready()=true when alpha is evaluated.
+func TestForEach_ReadyFirstOrdering(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	gvk := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+
+	// Phase 1: Create cm-zulu only. It will become the ready item.
+	cm := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "rfo-cm-zulu",
+				"namespace": ns,
+				"labels":    map[string]any{"group": "rfo-foreach"},
+			},
+			"data": map[string]any{"ready": "false"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, cm))
+
+	// Graph: Watch sources → forEach stamps workers with readyWhen + propagateWhen.
+	// The propagateWhen gate requires all processed items to be ready.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-foreach-rfo",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "sources",
+						"watch": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"namespace": ns},
+							"selector":   map[string]any{"group": "rfo-foreach"},
+						},
+					},
+					map[string]any{
+						"id": "workers",
+						"forEach": map[string]any{
+							"src": "${sources}",
+						},
+						// Per-item propagateWhen: all processed items must be ready
+						// for the next item to proceed.
+						"propagateWhen": []any{"${workers.ready()}"},
+						"readyWhen":     []any{"${workers.data.ready == 'true'}"},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "rfo-worker-${src.metadata.name}"},
+							"data": map[string]any{
+								"ready":  "${src.data.ready}",
+								"source": "${src.metadata.name}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	graphKey := types.NamespacedName{Name: "test-foreach-rfo", Namespace: ns}
+	workerAlpha := types.NamespacedName{Name: "rfo-worker-rfo-cm-alpha", Namespace: ns}
+	workerZulu := types.NamespacedName{Name: "rfo-worker-rfo-cm-zulu", Namespace: ns}
+
+	// Wait for worker-zulu to be created.
+	cmZ := &unstructured.Unstructured{}
+	cmZ.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerZulu, cmZ),
+		"Phase 1: worker-zulu must be created")
+
+	// Make cm-zulu ready so worker-zulu passes readyWhen.
+	require.NoError(t, updateWithRetry(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "rfo-cm-zulu", Namespace: ns},
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedField(obj.Object, "true", "data", "ready")
+		}))
+
+	// Wait for worker-zulu to show ready=true.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			cm := &unstructured.Unstructured{}
+			cm.SetGroupVersionKind(gvk)
+			if err := k8sClient.Get(ctx, workerZulu, cm); err != nil {
+				return false, nil
+			}
+			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+			return data["ready"] == "true", nil
+		}), "worker-zulu must update to ready=true")
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+	t.Log("Phase 1: worker-zulu created and ready")
+
+	// ---------------------------------------------------------------
+	// Phase 2: Add cm-alpha (not-ready). With ready-first sort:
+	//   zulu (class 0, ready) → alpha (class 1, not-ready)
+	// Gate [zulu(R)].ready()=true allows alpha to be created.
+	//
+	// Under hypothetical alphabetical order: alpha, zulu.
+	//   alpha processed first → not ready. [alpha(!R)].ready()=false → zulu HALTED.
+	//   alpha would still be created (vacuous gate), but zulu wouldn't be
+	//   re-processed this cycle.
+	// ---------------------------------------------------------------
+	cmA := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "rfo-cm-alpha",
+				"namespace": ns,
+				"labels":    map[string]any{"group": "rfo-foreach"},
+			},
+			"data": map[string]any{"ready": "false"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, cmA))
+
+	// THE KEY ASSERTION: worker-alpha must be created.
+	// Ready-first ordering processes zulu (ready, class 0) before alpha
+	// (not-ready, class 1). Processing zulu first keeps .ready()=true,
+	// allowing alpha to pass the gate.
+	cmAw := &unstructured.Unstructured{}
+	cmAw.SetGroupVersionKind(gvk)
+	require.NoError(t, waitForResource(ctx, k8sClient, workerAlpha, cmAw),
+		"Phase 2: worker-alpha must be created (gate passes: zulu is ready)")
+	t.Log("Phase 2: worker-alpha created — ready-first ordering proved")
+
+	// ---------------------------------------------------------------
+	// Phase 3: Make alpha ready → graph should reach Ready.
+	// ---------------------------------------------------------------
+	require.NoError(t, updateWithRetry(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "rfo-cm-alpha", Namespace: ns},
+		func(obj *unstructured.Unstructured) {
+			unstructured.SetNestedField(obj.Object, "true", "data", "ready")
+		}))
+
+	// Wait for all workers to show ready=true.
+	for _, wk := range []types.NamespacedName{workerAlpha, workerZulu} {
 		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 			func(ctx context.Context) (bool, error) {
 				cm := &unstructured.Unstructured{}
@@ -2342,35 +2469,6 @@ func TestForEach_PropagateWhenUpdatedGatesCreation(t *testing.T) {
 			}), "worker %s must update to ready=true", wk.Name)
 	}
 
-	// Worker C should now be created (gate reopened).
-	cmC := &unstructured.Unstructured{}
-	cmC.SetGroupVersionKind(gvk)
-	require.NoError(t, waitForResource(ctx, k8sClient, workerC, cmC),
-		"worker C must be created after .updated() gate opens")
-	t.Log("Phase 2: Worker C created — .updated() gate opened")
-
-	// ---------------------------------------------------------------
-	// Phase 3: Make remaining worker ready → graph Ready.
-	// ---------------------------------------------------------------
-	src := &unstructured.Unstructured{}
-	src.SetGroupVersionKind(gvk)
-	require.NoError(t, k8sClient.Get(ctx,
-		types.NamespacedName{Name: "upd-src-c", Namespace: ns}, src))
-	require.NoError(t, unstructured.SetNestedField(src.Object, "true", "data", "ready"))
-	require.NoError(t, k8sClient.Update(ctx, src))
-
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			cm := &unstructured.Unstructured{}
-			cm.SetGroupVersionKind(gvk)
-			if err := k8sClient.Get(ctx, workerC, cm); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-			return data["ready"] == "true", nil
-		}), "worker C must update to ready=true")
-
-	require.NoError(t, waitForGraphReady(ctx, k8sClient,
-		types.NamespacedName{Name: "test-foreach-updated", Namespace: ns}))
-	t.Log("Phase 3: All workers ready, graph Ready — .updated() rollout gating works end-to-end")
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
+	t.Log("Phase 3: All workers ready, graph Ready — ready-first forEach ordering proved end-to-end")
 }

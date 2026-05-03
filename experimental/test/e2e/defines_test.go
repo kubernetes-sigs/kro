@@ -117,9 +117,7 @@ func TestDefinesForEach(t *testing.T) {
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "worker-summary"},
 							"data": map[string]any{
-								"count":       "${string(size(workers))}",
-								"firstWorker": "${workers[0].name}",
-								"firstTag":    "${workers[0].tag}",
+								"count": "${string(size(workers))}",
 							},
 						},
 					},
@@ -141,6 +139,4 @@ func TestDefinesForEach(t *testing.T) {
 
 	data, _, _ := unstructured.NestedStringMap(summary.Object, "data")
 	assert.Equal(t, "3", data["count"])
-	assert.Equal(t, "alpha", data["firstWorker"])
-	assert.Equal(t, "alpha-worker", data["firstTag"])
 }

@@ -1490,14 +1490,20 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 	require.True(t, ok, "scope should contain workers as []any")
 	require.Len(t, items, 2)
 
-	alpha, ok := items[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, true, alpha["__updated"],
-		"alpha (generation 5 == effectiveGeneration 5) should be updated")
+	// Items may be in any order due to random tiebreak within readiness class.
+	// Find alpha and beta by name.
+	updatedByName := map[string]any{}
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		require.True(t, ok)
+		md, _ := m["metadata"].(map[string]any)
+		name, _ := md["name"].(string)
+		updatedByName[name] = m["__updated"]
+	}
 
-	beta, ok := items[1].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, false, beta["__updated"],
+	assert.Equal(t, true, updatedByName["alpha"],
+		"alpha (generation 5 == effectiveGeneration 5) should be updated")
+	assert.Equal(t, false, updatedByName["beta"],
 		"beta (generation 4 != effectiveGeneration 5) should NOT be updated")
 }
 

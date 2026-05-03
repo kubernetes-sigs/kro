@@ -1,15 +1,17 @@
 // foreach.go implements forEach node expansion — stamping a template once per
-// item in a collection. Includes per-item state management and carry-forward
-// for gated items.
+// item in a collection.
 package graphcontroller
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"sort"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
@@ -68,11 +70,6 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 		currentItems[id] = item
 		currentOrder = append(currentOrder, id)
 	}
-	// Stable iteration order across reconciles. Without this,
-	// per-item propagateWhen halts at inconsistent positions when
-	// the source collection reorders (e.g., Watch list from an
-	// informer cache with non-deterministic iteration).
-	sort.Strings(currentOrder)
 
 	// Load per-item previous state from prevState parameter.
 	var prevItemScope map[string]any
@@ -87,6 +84,16 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 	if prevItemKeys == nil {
 		prevItemKeys = map[string][]Applied{}
 	}
+
+	// Pre-evaluate readiness by fetching each item's resource from the
+	// cache and evaluating readyWhen. This replaces carry-forward readiness
+	// with fresh per-cycle evaluation. Cache hits make this cheap.
+	readinessMap := c.preEvaluateReadiness(ctx, eval, node, currentItems, rs.namespace)
+
+	// Per 005-reconciliation.md § Propagation Control:
+	// "Ready before NotReady, before error states. Within a
+	// readiness class, random."
+	sortForEachByReadiness(currentOrder, readinessMap)
 
 	// Prepare output maps for this node.
 	newItemScope := make(map[string]any)
@@ -111,10 +118,6 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 		}
 		if halted {
 			// Carry forward: retain previous applied state for gated items.
-			// Note: carried-forward items retain __ready from their last
-			// processed reconcile. If readyWhen depends on cross-node state
-			// that changed, the stamp is stale until the gate opens far
-			// enough for this item to be re-processed.
 			if prevKeys, ok := prevItemKeys[id]; ok {
 				keys = append(keys, prevKeys...)
 			}
@@ -122,19 +125,10 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 				allApplied = append(allApplied, prevScope)
 				newItemScope[id] = prevScope
 				newItemKeys[id] = prevItemKeys[id]
-				// Re-stamp __updated: carried-forward items retain their
-				// generation label from when they were last applied. Compare
-				// against effectiveGeneration to determine if this item is
-				// on the latest generation. Per 005-reconciliation.md
-				// § Propagation Control: gated items on an old generation
-				// show updated()=false ("Pending" or "Stuck" state).
 				if m, ok := prevScope.(map[string]any); ok {
 					m["__updated"] = isForEachItemUpdated(m, node.ID, rs.name, rs.namespace, eval.effectiveGeneration)
 				}
 			}
-			// If no previous scope (new item, never created), it is
-			// absent from the collection — downstream sees a growing
-			// list as the gate opens over successive reconciles.
 			continue
 		}
 
@@ -394,6 +388,142 @@ func forEachItemIdentity(item any) string {
 	// and %v on numeric types stringifies float64(5) and int64(5) to the same
 	// "5", so CEL type drift does not cause phantom child churn.
 	return fmt.Sprintf("%v", item)
+}
+
+// sortForEachByReadiness orders items by readiness class per
+// 005-reconciliation.md § Propagation Control: Ready before NotReady,
+// before error states. Within each class, random.
+//
+// Approach: shuffle the entire slice randomly, then stable-sort by class.
+// This gives random order within each class and class ordering across classes.
+// readinessMap maps item identity → readiness class (0=Ready, 1=NotReady, 2=Error).
+func sortForEachByReadiness(items []string, readinessMap map[string]int) {
+	rand.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
+	sort.SliceStable(items, func(i, j int) bool {
+		return readinessMap[items[i]] < readinessMap[items[j]]
+	})
+}
+
+// preEvaluateReadiness does a lightweight pre-pass over forEach items to
+// determine each item's readiness class by fetching the resource from the
+// cache and evaluating readyWhen. Per 005-reconciliation.md § Propagation
+// Control.
+//
+// Returns a map of item identity → readiness class:
+//
+//	0 = Ready (resource exists AND readyWhen passes, or no readyWhen)
+//	1 = NotReady (resource doesn't exist OR exists but readyWhen fails)
+//	2 = Error (pre-evaluation itself failed: template eval error, non-404 GET error, etc.)
+//
+// Errors in the pre-pass do NOT block the main loop — they sort last (class 2).
+func (c *clusterAccess) preEvaluateReadiness(ctx context.Context, eval *evaluator, node graphpkg.Node, items map[string]any, defaultNS string) map[string]int {
+	logger := log.FromContext(ctx)
+	result := make(map[string]int, len(items))
+
+	// Definition nodes have no managed resource — always ready.
+	if node.Type() == graphpkg.NodeTypeDef {
+		for id := range items {
+			result[id] = 0
+		}
+		return result
+	}
+
+	// If the node has no body (can't evaluate template), treat all as not ready.
+	if !node.HasBody() {
+		for id := range items {
+			result[id] = 1
+		}
+		return result
+	}
+
+	varName := node.ForEach.VarName
+
+	for id, item := range items {
+		class := c.preEvaluateOneItem(ctx, eval, node, varName, item, defaultNS)
+		result[id] = class
+		if class != 0 {
+			logger.V(2).Info("pre-evaluated readiness", "node", node.ID, "item", id, "class", class)
+		}
+	}
+	return result
+}
+
+// preEvaluateOneItem evaluates readiness for a single forEach item.
+// Per 005-reconciliation.md § Propagation Control.
+//
+// Returns readiness class:
+//
+//	0 = Ready (resource exists AND readyWhen passes)
+//	1 = NotReady (resource doesn't exist OR readyWhen fails)
+//	2 = Error (template eval error, non-404 GET error, GVK resolution failure)
+func (c *clusterAccess) preEvaluateOneItem(ctx context.Context, eval *evaluator, node graphpkg.Node, varName string, item any, defaultNS string) int {
+	// Save and restore the iterator variable to avoid polluting eval.scope.
+	savedVar, hadVar := eval.scope[varName]
+	eval.scope[varName] = item
+	defer func() {
+		if hadVar {
+			eval.scope[varName] = savedVar
+		} else {
+			delete(eval.scope, varName)
+		}
+	}()
+
+	// Evaluate the template to get the desired resource state.
+	evalMap, err := eval.toMapNode(node)
+	if err != nil {
+		return 2 // template eval failed — error
+	}
+
+	obj := &unstructured.Unstructured{Object: evalMap}
+	if obj.GetNamespace() == "" {
+		obj.SetNamespace(defaultNS)
+	}
+	gvk := obj.GroupVersionKind()
+	if gvk.Kind == "" {
+		return 2 // can't resolve GVK — error
+	}
+
+	// GET the resource from the cache — existence check only.
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(gvk)
+	key := types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}
+	err = c.client.Get(ctx, key, existing)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return 1 // resource doesn't exist yet — not ready
+		}
+		return 2 // non-404 GET error — error
+	}
+
+	// Resource exists. If no readyWhen, it's ready by definition.
+	if len(node.ReadyWhen) == 0 {
+		return 0
+	}
+
+	// Evaluate readyWhen against the EXISTING resource (observed state),
+	// not the template. Status-based readyWhen expressions (e.g.,
+	// status.readyReplicas == spec.replicas) require the actual resource
+	// from cache — templates have no .status field.
+	savedNode, hadNode := eval.scope[node.ID]
+	savedSelf, hadSelf := eval.scope["self"]
+	eval.scope[node.ID] = existing.Object
+	eval.scope["self"] = existing.Object
+	err = eval.evalReadinessConditions(node.ReadyWhen, node.ID)
+	if hadNode {
+		eval.scope[node.ID] = savedNode
+	} else {
+		delete(eval.scope, node.ID)
+	}
+	if hadSelf {
+		eval.scope["self"] = savedSelf
+	} else {
+		delete(eval.scope, "self")
+	}
+
+	if err != nil {
+		return 1 // readyWhen failed — not ready
+	}
+	return 0 // ready
 }
 
 // highestPriorityChildError returns the highest-priority error from a list

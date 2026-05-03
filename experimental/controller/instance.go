@@ -57,15 +57,15 @@ type walkCarryForward struct {
 }
 
 // resetForRecompile clears walk state that is structurally incompatible
-// with a new compilation. previousScope IS cleared because after
-// recompilation node IDs may change — stale scope entries from the old
-// compilation would cause propagateWhen to evaluate against data from a
+// with a new compilation. After recompilation node IDs may change — stale
+// scope entries would cause propagateWhen to evaluate against data from a
 // different node topology. The one-cycle transient Pending is correct —
 // it's the same as a fresh instance.
 //
 // previousKeys and previousPlanStates are preserved because they use
-// stable resource keys for carry-forward gating; stale entries for
-// removed nodes are harmless (never read).
+// stable resource keys; stale entries for removed nodes are harmless
+// (never read). forEach is reset because node IDs may change and stale
+// carry-forward under old node IDs would never be cleaned up.
 func (w *walkCarryForward) resetForRecompile() {
 	w.previousScope = make(map[string]any)
 	w.forEach = &forEachCarryForward{

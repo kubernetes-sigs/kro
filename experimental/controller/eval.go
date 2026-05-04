@@ -154,24 +154,24 @@ func isForEachItemUpdated(item map[string]any, parentID, graphName, graphNS stri
 }
 
 // evalReadiness evaluates readyWhen conditions and stamps __ready in scope.
-// Returns compiler.ErrWaitingForReadiness if any condition is false or data-pending.
-// Returns compiler.ErrReadyWhenFailed wrapping the underlying error if the expression
+// Returns ErrWaitingForReadiness if any condition is false or data-pending.
+// Returns ErrReadyWhenFailed wrapping the underlying error if the expression
 // itself is broken (wrong return type, CEL error). Per 001-graph.md:
 // "readyWhen is a health signal — it does not gate downstream execution."
-// The compiler.ErrReadyWhenFailed sentinel lets the coordinator classify this as
+// The ErrReadyWhenFailed sentinel lets the coordinator classify this as
 // NodeNotReady (not NodeError), preserving the design invariant.
 func (e *evaluator) evalReadiness(nodeID string, readyWhen []string) error {
 	if len(readyWhen) > 0 {
 		if err := e.evalReadinessConditions(readyWhen, nodeID); err != nil {
 			e.markReady(nodeID, false)
-			// compiler.ErrWaitingForReadiness and compiler.ErrPending are transient — pass through.
+			// ErrWaitingForReadiness and ErrPending are transient — pass through.
 			// All other errors are permanent expression failures that must not
 			// produce NodeError (which would gate dependents). Wrap with
-			// compiler.ErrReadyWhenFailed so the coordinator classifies as NodeNotReady.
-			if errors.Is(err, compiler.ErrWaitingForReadiness) || errors.Is(err, compiler.ErrPending) {
+			// ErrReadyWhenFailed so the coordinator classifies as NodeNotReady.
+			if errors.Is(err, ErrWaitingForReadiness) || errors.Is(err, ErrPending) {
 				return err
 			}
-			return fmt.Errorf("%w: %w", compiler.ErrReadyWhenFailed, err)
+			return fmt.Errorf("%w: %w", ErrReadyWhenFailed, err)
 		}
 	}
 	e.markReady(nodeID, true)
@@ -186,11 +186,11 @@ func (e *evaluator) evalConditions(conditions []string, nodeID string, wrapPendi
 	for _, cond := range conditions {
 		ok, err := e.evalBoolCondition(cond)
 		if err != nil {
-			if wrapPending && compiler.IsPending(err) {
-				return gateError, fmt.Errorf("data pending: %w", compiler.ErrPending)
+			if wrapPending && isPending(err) {
+				return gateError, fmt.Errorf("data pending: %w", ErrPending)
 			}
-			if !wrapPending && compiler.IsPending(err) {
-				return gateError, fmt.Errorf("node %q: readyWhen %q: data not yet available: %w", nodeID, cond, compiler.ErrWaitingForReadiness)
+			if !wrapPending && isPending(err) {
+				return gateError, fmt.Errorf("node %q: readyWhen %q: data not yet available: %w", nodeID, cond, ErrWaitingForReadiness)
 			}
 			return gateError, fmt.Errorf("node %q: condition %q: %w", nodeID, cond, err)
 		}
@@ -202,7 +202,7 @@ func (e *evaluator) evalConditions(conditions []string, nodeID string, wrapPendi
 }
 
 // evalReadinessConditions evaluates readyWhen boolean conditions against the
-// full scope. Returns nil if all conditions pass, compiler.ErrWaitingForReadiness if
+// full scope. Returns nil if all conditions pass, ErrWaitingForReadiness if
 // any are false or data-pending.
 //
 // This is the evaluation primitive — it does NOT stamp __ready. Callers that
@@ -218,7 +218,7 @@ func (e *evaluator) evalReadinessConditions(conditions []string, nodeID string) 
 		return err
 	}
 	if gate == gateBlock {
-		return fmt.Errorf("node %q: readyWhen evaluated to false: %w", nodeID, compiler.ErrWaitingForReadiness)
+		return fmt.Errorf("node %q: readyWhen evaluated to false: %w", nodeID, ErrWaitingForReadiness)
 	}
 	return nil
 }
@@ -265,20 +265,20 @@ func (e *evaluator) firstUnsatisfiedCondition(conditions []string) string {
 }
 
 // toMap evaluates a template and asserts the result is a map.
-// Normalizes data-pending errors to compiler.ErrPending. Non-pending evaluation
-// failures are wrapped with compiler.ErrEvaluation so classifyAPIError can
+// Normalizes data-pending errors to ErrPending. Non-pending evaluation
+// failures are wrapped with ErrEvaluation so classifyAPIError can
 // distinguish them from network errors with similar message text.
 func (e *evaluator) toMap(tmpl map[string]any) (map[string]any, error) {
 	evaluated, err := e.evaluateTree(tmpl)
 	if err != nil {
-		if compiler.IsPending(err) {
-			return nil, fmt.Errorf("%w: %v", compiler.ErrPending, err)
+		if isPending(err) {
+			return nil, fmt.Errorf("%w: %v", ErrPending, err)
 		}
-		return nil, fmt.Errorf("%w: %w", compiler.ErrEvaluation, err)
+		return nil, fmt.Errorf("%w: %w", ErrEvaluation, err)
 	}
 	result, ok := evaluated.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("%w: evaluated to %T, want map", compiler.ErrEvaluation, evaluated)
+		return nil, fmt.Errorf("%w: evaluated to %T, want map", ErrEvaluation, evaluated)
 	}
 	return result, nil
 }
@@ -295,14 +295,14 @@ func (e *evaluator) toMapNode(node graph.Node) (map[string]any, error) {
 		// which handles ${...} extraction and type coercion.
 		raw, err := e.evalString(node.TemplateExpr)
 		if err != nil {
-			if compiler.IsPending(err) {
-				return nil, compiler.ErrPending
+			if isPending(err) {
+				return nil, ErrPending
 			}
-			return nil, fmt.Errorf("%w: %s expression %q: %w", compiler.ErrEvaluation, node.ExprKeyword, node.TemplateExpr, err)
+			return nil, fmt.Errorf("%w: %s expression %q: %w", ErrEvaluation, node.ExprKeyword, node.TemplateExpr, err)
 		}
 		result, ok := raw.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("%w: %s expression evaluated to %T, want map", compiler.ErrEvaluation, node.ExprKeyword, raw)
+			return nil, fmt.Errorf("%w: %s expression evaluated to %T, want map", ErrEvaluation, node.ExprKeyword, raw)
 		}
 		return result, nil
 	}
@@ -353,6 +353,9 @@ func (e *evaluator) evalString(s string) (any, error) {
 	if start == 0 && end == len(s) && len(dollars) == 1 {
 		result, err := e.compiled.Eval(expr, e.scope)
 		if err != nil {
+			if isCELPending(err) {
+				return nil, fmt.Errorf("%w: evaluating %q: %w", ErrPending, expr, err)
+			}
 			return nil, fmt.Errorf("evaluating %q: %w", expr, err)
 		}
 		return result, nil
@@ -372,6 +375,9 @@ func (e *evaluator) evalString(s string) (any, error) {
 		if len(dollars) == 1 {
 			val, err := e.compiled.Eval(expr, e.scope)
 			if err != nil {
+				if isCELPending(err) {
+					return nil, fmt.Errorf("%w: evaluating %q: %w", ErrPending, expr, err)
+				}
 				return nil, fmt.Errorf("evaluating %q: %w", expr, err)
 			}
 			result.WriteString(fmt.Sprintf("%v", val))

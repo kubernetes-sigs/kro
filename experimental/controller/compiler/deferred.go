@@ -169,8 +169,6 @@ func extractForEachVarNames(forEach any) []string {
 	return names
 }
 
-
-
 // validateDeferredExprs builds a child CEL environment from the child scope
 // and parses + type-checks each deferred expression against it.
 func validateDeferredExprs(parentNodeID string, scope ChildScope, exprs []deferredExpr) error {

@@ -16,7 +16,6 @@ package compiler
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/google/cel-go/cel"
 	celast "github.com/google/cel-go/common/ast"
@@ -32,86 +31,13 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
-// ErrPending indicates that CEL evaluation failed because required data
-// is not yet available (e.g., a resource's status field hasn't been populated).
-// This is a retryable condition — the controller should requeue and try again.
-var ErrPending = errors.New("data pending")
-
-// ErrEvaluation indicates that the error originates from a non-API operation:
-// CEL evaluation, template rendering, JSON marshaling, or other deterministic
-// local computation. Errors wrapped with this sentinel are classified as
-// NodeError by classifyAPIError, even if their message text happens to contain
-// network-like patterns (e.g., "unexpected EOF" from malformed JSON). Without
-// this, the string-based network error pattern matcher would misclassify them
-// as NodeSystemError, triggering 5-second retry for errors that can only
-// resolve via propagation or spec change.
-var ErrEvaluation = errors.New("evaluation error")
-
-// ErrWaitingForReadiness indicates that a resource exists but hasn't satisfied
-// its readyWhen conditions yet. Downstream resources should wait.
-var ErrWaitingForReadiness = errors.New("waiting for readiness")
-
 // ErrInvalidExpression indicates that one or more CEL expressions in the Graph
 // spec failed to compile. This is a permanent error until the spec is fixed.
 var ErrInvalidExpression = errors.New("invalid expression")
 
-// ErrFieldConflict indicates that an SSA apply received a 409 Conflict because
-// another actor has taken ownership of fields the controller manages. This is
-// a permanent error for the resource until the external actor releases the
-// field or the Graph spec changes to no longer write that field.
-var ErrFieldConflict = errors.New("field conflict")
-
-// ErrReadyWhenFailed indicates that a readyWhen expression failed to evaluate
-// due to a permanent expression error (not data pending, not a transient
-// condition). Per 001-graph.md: "readyWhen is a health signal — it does not
-// gate downstream execution." The coordinator classifies this as NodeNotReady
-// (not NodeError) so dependents proceed. The underlying error is preserved in
-// the chain for logging and status reporting.
-var ErrReadyWhenFailed = errors.New("readyWhen evaluation failed")
-
 // ErrDependencyError is an alias for dag.ErrCircularDependency.
 // Kept for backward compatibility with status.go's error classification.
 var ErrDependencyError = dagpkg.ErrCircularDependency
-
-// celPendingPatterns are CEL error patterns that indicate data is not yet
-// available (retryable). Other CEL errors are considered expression bugs.
-//
-// Data pending (retryable):
-//   - "no such key"        : map key doesn't exist (e.g., status.field not populated)
-//   - "no such field"      : struct field doesn't exist yet
-//   - "no such attribute"  : dependency resource not yet in context
-//   - "index out of bounds": list doesn't have enough items yet
-//
-// NOT data pending (expression bugs):
-//   - "type conversion error" : wrong types in expression
-//   - "no such overload"      : invalid operation for types
-//   - "division by zero"      : math error
-var celPendingPatterns = []string{
-	"no such key",
-	"no such field",
-	"no such attribute",
-	"index out of bounds",
-}
-
-// isCELPending checks if a CEL error indicates data is pending.
-func isCELPending(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	for _, pattern := range celPendingPatterns {
-		if strings.Contains(msg, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
-// IsPending checks if an error indicates data is pending — either a CEL
-// runtime error (string pattern match) or a wrapped ErrPending sentinel.
-func IsPending(err error) bool {
-	return isCELPending(err) || errors.Is(err, ErrPending)
-}
 
 // ---------------------------------------------------------------------------
 // Compiled graph (immutable)
@@ -123,11 +49,11 @@ func IsPending(err error) bool {
 // thread-safe by the CEL spec, and BuildDAG produces a read-only topology.
 // Per-instance concrete node bodies are assembled separately via assembleDAG.
 type CompiledGraph struct {
-	env            *cel.Env                          // CEL environment (immutable after Extend)
-	Programs       map[string]cel.Program            // expression string → compiled program
-	declaredVars   map[string]bool                   // variable names declared in the CEL env
-	Topology       *dagpkg.Topology                      // shared DAG structure (immutable after BuildDAG)
-	UnresolvedGVKs []schema.GroupVersionKind         // GVKs that fell back to dyn (triggers recompilation on CRD install)
+	env            *cel.Env                  // CEL environment (immutable after Extend)
+	Programs       map[string]cel.Program    // expression string → compiled program
+	declaredVars   map[string]bool           // variable names declared in the CEL env
+	Topology       *dagpkg.Topology          // shared DAG structure (immutable after BuildDAG)
+	UnresolvedGVKs []schema.GroupVersionKind // GVKs that fell back to dyn (triggers recompilation on CRD install)
 	// collectionIDs captures the set of Watch node IDs in this spec.
 	// Used by the dynamic-compile fallback to apply the same
 	// `<wk_id>.ready()` AST rewrite that the eager-compile path does —
@@ -150,79 +76,15 @@ func (c *CompiledGraph) Env() *cel.Env {
 	return c.env
 }
 
-// eval evaluates a CEL expression against the given scope.
-// First checks the pre-compiled program cache; if the expression is not found
-// (e.g., a readyWhen expression from a superseded revision evaluated using the
-// current revision's evaluator), it compiles the expression on-the-fly using
-// the current CEL environment. This handles cross-revision finalization where
-// the snapshot's readyWhen may reference nodes declared in the current spec but
-// whose expression was only pre-compiled in the old spec.
+// Eval evaluates a CEL expression against the given scope.
 func (c *CompiledGraph) Eval(expr string, scope map[string]any) (any, error) {
-	prg, ok := c.Programs[expr]
-	if !ok {
-		// Expected cache miss during cross-revision finalization or forEach
-		// finalization. The expression may reference variables (node IDs,
-		// forEach iterator variables) that aren't declared in the current
-		// revision's CEL env. Extend the env with scope keys not already
-		// declared so the compiler can resolve them.
-		var varDecls []cel.EnvOption
-		for k := range scope {
-			if !c.declaredVars[k] {
-				varDecls = append(varDecls, cel.Variable(k, cel.DynType))
-			}
-		}
-		compileEnv := c.env
-		if len(varDecls) > 0 {
-			dynEnv, extErr := c.env.Extend(varDecls...)
-			if extErr != nil {
-				return nil, fmt.Errorf("expression %q: extending CEL env for dynamic compile: %w", expr, extErr)
-			}
-			compileEnv = dynEnv
-		}
-		// Parse + AST-rewrite `<wk_id>.ready()` before type-check so the
-		// dynamic path matches the eager-compile path. Without this,
-		// expressions compiled here (cross-revision finalization,
-		// forEach-finalizer synthesized expressions, and test-harness
-		// eval calls that reference unregistered expressions) would
-		// keep the original `.ready()` behavior — vacuously-true on
-		// empty Watch collections.
-		parsed, issues := compileEnv.Parse(expr)
-		if issues != nil && issues.Err() != nil {
-			return nil, fmt.Errorf("expression %q not in cache, dynamic parse failed: %w", expr, issues.Err())
-		}
-		if len(c.CollectionIDs) > 0 {
-			nativeAst := parsed.NativeRep()
-			nextIDVal := celast.MaxID(nativeAst)
-			nextID := func() int64 {
-				id := nextIDVal
-				nextIDVal++
-				return id
-			}
-			factory := celast.NewExprFactory()
-			rewriteCollectionReady(nativeAst.Expr(), c.CollectionIDs, factory, nextID)
-			// Build scope vars for .dependencies() rewrite in dynamic path.
-			dynScopeVars := make(map[string]bool, len(c.declaredVars))
-			for k := range c.declaredVars {
-				dynScopeVars[k] = true
-			}
-			rewriteDependencies(nativeAst.Expr(), dynScopeVars, factory, nextID)
-		}
-		ast, issues := compileEnv.Check(parsed)
-		if issues != nil && issues.Err() != nil {
-			return nil, fmt.Errorf("expression %q not in cache, dynamic compile failed: %w", expr, issues.Err())
-		}
-		var err error
-		prg, err = compileEnv.Program(ast)
-		if err != nil {
-			return nil, fmt.Errorf("expression %q not in cache, dynamic program failed: %w", expr, err)
-		}
+	prg, err := c.getOrCompile(expr, scope)
+	if err != nil {
+		return nil, err
 	}
 
 	out, _, err := prg.Eval(c.WrapScope(scope))
 	if err != nil {
-		if isCELPending(err) {
-			return nil, fmt.Errorf("evaluating %q: %w: %w", expr, ErrPending, err)
-		}
 		return nil, fmt.Errorf("evaluating %q: %w", expr, err)
 	}
 
@@ -232,6 +94,73 @@ func (c *CompiledGraph) Eval(expr string, scope map[string]any) (any, error) {
 	}
 
 	return native, nil
+}
+
+// getOrCompile returns the pre-compiled program for expr, or dynamically
+// compiles it when the expression is not in the program cache (e.g.,
+// cross-revision finalization, forEach-finalizer synthesized expressions).
+func (c *CompiledGraph) getOrCompile(expr string, scope map[string]any) (cel.Program, error) {
+	if prg, ok := c.Programs[expr]; ok {
+		return prg, nil
+	}
+
+	// Expected cache miss during cross-revision finalization or forEach
+	// finalization. The expression may reference variables (node IDs,
+	// forEach iterator variables) that aren't declared in the current
+	// revision's CEL env. Extend the env with scope keys not already
+	// declared so the compiler can resolve them.
+	var varDecls []cel.EnvOption
+	for k := range scope {
+		if !c.declaredVars[k] {
+			varDecls = append(varDecls, cel.Variable(k, cel.DynType))
+		}
+	}
+	compileEnv := c.env
+	if len(varDecls) > 0 {
+		dynEnv, extErr := c.env.Extend(varDecls...)
+		if extErr != nil {
+			return nil, fmt.Errorf("expression %q: extending CEL env for dynamic compile: %w", expr, extErr)
+		}
+		compileEnv = dynEnv
+	}
+
+	// Parse + AST-rewrite `<wk_id>.ready()` before type-check so the
+	// dynamic path matches the eager-compile path. Without this,
+	// expressions compiled here (cross-revision finalization,
+	// forEach-finalizer synthesized expressions, and test-harness
+	// eval calls that reference unregistered expressions) would
+	// keep the original `.ready()` behavior — vacuously-true on
+	// empty Watch collections.
+	parsed, issues := compileEnv.Parse(expr)
+	if issues != nil && issues.Err() != nil {
+		return nil, fmt.Errorf("expression %q not in cache, dynamic parse failed: %w", expr, issues.Err())
+	}
+	if len(c.CollectionIDs) > 0 {
+		nativeAst := parsed.NativeRep()
+		nextIDVal := celast.MaxID(nativeAst)
+		nextID := func() int64 {
+			id := nextIDVal
+			nextIDVal++
+			return id
+		}
+		factory := celast.NewExprFactory()
+		rewriteCollectionReady(nativeAst.Expr(), c.CollectionIDs, factory, nextID)
+		// Build scope vars for .dependencies() rewrite in dynamic path.
+		dynScopeVars := make(map[string]bool, len(c.declaredVars))
+		for k := range c.declaredVars {
+			dynScopeVars[k] = true
+		}
+		rewriteDependencies(nativeAst.Expr(), dynScopeVars, factory, nextID)
+	}
+	ast, issues := compileEnv.Check(parsed)
+	if issues != nil && issues.Err() != nil {
+		return nil, fmt.Errorf("expression %q not in cache, dynamic compile failed: %w", expr, issues.Err())
+	}
+	prg, err := compileEnv.Program(ast)
+	if err != nil {
+		return nil, fmt.Errorf("expression %q not in cache, dynamic program failed: %w", expr, err)
+	}
+	return prg, nil
 }
 
 // wrapScope returns an activation map where scope entries for nodes with
@@ -331,19 +260,19 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 
 	// Phase 4: compile expressions.
 	expressions := spec.AllExpressions()
-	programs, exprPaths, exprAccessModes, exprTypes, err := compileExpressions(env, expressions, scopeVars, collectionIDs)
+	exprResult, err := compileExpressions(env, expressions, scopeVars, collectionIDs)
 	if err != nil {
 		return nil, err
 	}
 
 	// Phase 4a: type refinement — narrow dyn fields, re-check expressions.
-	env, err = refineAndRecheck(env, spec.Nodes, typeInfo, expressions, exprTypes, scopeVars, collectionIDs)
+	env, err = refineAndRecheck(env, spec.Nodes, typeInfo, expressions, exprResult.exprTypes, scopeVars, collectionIDs)
 	if err != nil {
 		return nil, err
 	}
 
 	// Phase 4a-2: validate expression-to-field compatibility.
-	if err := validateExprFieldCompat(spec.Nodes, typeInfo, exprTypes); err != nil {
+	if err := validateExprFieldCompat(spec.Nodes, typeInfo, exprResult.exprTypes); err != nil {
 		return nil, err
 	}
 
@@ -353,7 +282,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 	}
 
 	// Phase 4b: validate forEach collection expressions return a list.
-	if err := validateForEachCollections(spec.Nodes, exprTypes); err != nil {
+	if err := validateForEachCollections(spec.Nodes, exprResult.exprTypes); err != nil {
 		return nil, err
 	}
 
@@ -363,7 +292,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 	}
 
 	// Build the dependency graph using pre-extracted field paths.
-	dag, err := dagpkg.BuildDAG(spec.Nodes, exprPaths, exprAccessModes)
+	dag, err := dagpkg.BuildDAG(spec.Nodes, exprResult.fieldPaths, exprResult.accessModes)
 	if err != nil {
 		return nil, err
 	}
@@ -380,13 +309,23 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 
 	return &CompiledGraph{
 		env:             env,
-		Programs:        programs,
+		Programs:        exprResult.programs,
 		declaredVars:    declared,
 		Topology:        dag.Topology,
 		UnresolvedGVKs:  typeInfo.UnresolvedGVKs,
 		CollectionIDs:   collectionIDs,
 		ResourceSchemas: typeInfo.ResourceSchemas,
 	}, nil
+}
+
+// expressionResult holds the outputs of a single expression compilation pass.
+// Produced by compileExpressions, consumed by CompileGraphSpec and
+// refineAndRecheck.
+type expressionResult struct {
+	programs    map[string]cel.Program
+	fieldPaths  map[string]map[string][]graph.FieldPath
+	accessModes map[string]map[string]bool
+	exprTypes   map[string]*cel.Type
 }
 
 // ---------------------------------------------------------------------------
@@ -423,13 +362,7 @@ func compileExpressions(
 	expressions []string,
 	scopeVars map[string]bool,
 	collectionIDs map[string]bool,
-) (
-	map[string]cel.Program,
-	map[string]map[string][]graph.FieldPath,
-	map[string]map[string]bool,
-	map[string]*cel.Type,
-	error,
-) {
+) (*expressionResult, error) {
 	rewriteFactory := celast.NewExprFactory()
 
 	programs := make(map[string]cel.Program, len(expressions))
@@ -444,7 +377,7 @@ func compileExpressions(
 		// post-rewrite form is what actually compiles.
 		parsed, issues := env.Parse(expr)
 		if issues != nil && issues.Err() != nil {
-			return nil, nil, nil, nil, fmt.Errorf("parsing expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
+			return nil, fmt.Errorf("parsing expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
 		}
 
 		// Classify access modes on the pre-rewrite AST. The rewrite
@@ -457,7 +390,7 @@ func compileExpressions(
 		rewriteAST(parsed, collectionIDs, scopeVars, rewriteFactory)
 		ast, issues := env.Check(parsed)
 		if issues != nil && issues.Err() != nil {
-			return nil, nil, nil, nil, fmt.Errorf("checking expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
+			return nil, fmt.Errorf("checking expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
 		}
 		exprTypes[expr] = ast.OutputType()
 
@@ -467,11 +400,16 @@ func compileExpressions(
 		exprPaths[expr] = extractFieldPathsFromAST(ast.NativeRep().Expr(), scopeVars, nil)
 		prg, err := env.Program(ast)
 		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("programming expression %q: %w: %w", expr, ErrInvalidExpression, err)
+			return nil, fmt.Errorf("programming expression %q: %w: %w", expr, ErrInvalidExpression, err)
 		}
 		programs[expr] = prg
 	}
-	return programs, exprPaths, exprAccessModes, exprTypes, nil
+	return &expressionResult{
+		programs:    programs,
+		fieldPaths:  exprPaths,
+		accessModes: exprAccessModes,
+		exprTypes:   exprTypes,
+	}, nil
 }
 
 // rewriteAST applies AST rewrites (collection ready, dependency references)
@@ -656,5 +594,3 @@ func validateForEachCollections(nodes []graph.Node, exprTypes map[string]*cel.Ty
 	}
 	return nil
 }
-
-

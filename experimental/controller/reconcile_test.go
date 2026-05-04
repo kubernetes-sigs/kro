@@ -505,11 +505,11 @@ func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 
 // TestEvalReadiness_ExpressionErrorWrapsReadyWhenFailed proves that when
 // readyWhen evaluation fails with a permanent expression error (not data
-// pending), evalReadiness wraps it with compiler.ErrReadyWhenFailed so the
+// pending), evalReadiness wraps it with ErrReadyWhenFailed so the
 // coordinator classifies it as dagpkg.NodeNotReady instead of dagpkg.NodeError.
 // // TestEvalReadiness_NormalNotReadyIsUnchanged proves that normal readyWhen
 // failures (condition evaluates to false, data pending) still produce
-// compiler.ErrWaitingForReadiness — the fix only affects expression errors.
+// ErrWaitingForReadiness — the fix only affects expression errors.
 func TestEvalReadiness_NormalNotReadyIsUnchanged(t *testing.T) {
 	spec := &graphpkg.GraphSpec{
 		Nodes: []graphpkg.Node{
@@ -533,11 +533,11 @@ func TestEvalReadiness_NormalNotReadyIsUnchanged(t *testing.T) {
 	err = eval.evalReadiness("deploy", []string{"${deploy.status.availableReplicas > 0}"})
 	require.Error(t, err)
 
-	// Normal readyWhen failure (condition false) — should still be compiler.ErrWaitingForReadiness.
-	assert.True(t, errors.Is(err, compiler.ErrWaitingForReadiness),
-		"normal readyWhen=false should produce compiler.ErrWaitingForReadiness, got: %v", err)
-	assert.False(t, errors.Is(err, compiler.ErrReadyWhenFailed),
-		"normal readyWhen=false should NOT produce compiler.ErrReadyWhenFailed")
+	// Normal readyWhen failure (condition false) — should still be ErrWaitingForReadiness.
+	assert.True(t, errors.Is(err, ErrWaitingForReadiness),
+		"normal readyWhen=false should produce ErrWaitingForReadiness, got: %v", err)
+	assert.False(t, errors.Is(err, ErrReadyWhenFailed),
+		"normal readyWhen=false should NOT produce ErrReadyWhenFailed")
 }
 
 // ---------------------------------------------------------------------------
@@ -551,7 +551,7 @@ func TestEvalReadiness_NormalNotReadyIsUnchanged(t *testing.T) {
 // TestHighestPriorityChildError proves that when multiple forEach children
 // fail, the highest-priority error is returned — not the first one.
 func TestHighestPriorityChildError(t *testing.T) {
-	errConflict := fmt.Errorf("SSA conflict on apps/v1/Deployment my-app: %w: field taken", compiler.ErrFieldConflict)
+	errConflict := fmt.Errorf("SSA conflict on apps/v1/Deployment my-app: %w: field taken", ErrFieldConflict)
 	errForbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "deployments"}, "my-app", fmt.Errorf("RBAC"))
 	errNetwork := &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("connection refused")}
 	errCEL := fmt.Errorf("evaluating template: expression returned string, want int")
@@ -589,7 +589,7 @@ func TestHighestPriorityChildError(t *testing.T) {
 			require.NotNil(t, result)
 
 			// Classify the result to check priority.
-			if errors.Is(result, compiler.ErrFieldConflict) {
+			if errors.Is(result, ErrFieldConflict) {
 				assert.Equal(t, dagpkg.NodeConflict, tc.wantType)
 			} else {
 				info := classifyAPIError(result)
@@ -810,7 +810,7 @@ func TestPatchStatusDetection(t *testing.T) {
 // false-positive as a network error → dagpkg.NodeSystemError → 5s retry loop.
 //
 // The fix: errors originating from non-API operations are wrapped with
-// compiler.ErrEvaluation at the source (toMap, evalString). classifyAPIError checks
+// ErrEvaluation at the source (toMap, evalString). classifyAPIError checks
 // for this sentinel before falling through to network pattern matching.
 //
 // This tests a classification boundary on a pure function — manufacturing
@@ -821,7 +821,7 @@ func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 	// An evaluation error whose message contains a network error pattern.
 	// Without the sentinel, this would be classified as dagpkg.NodeSystemError.
 	evalErr := fmt.Errorf("evaluating template: %w: unexpected EOF in field value",
-		compiler.ErrEvaluation)
+		ErrEvaluation)
 	info := classifyAPIError(evalErr)
 	assert.Equal(t, dagpkg.NodeError, info.state,
 		"evaluation errors must be dagpkg.NodeError even when message contains network patterns")
@@ -830,7 +830,7 @@ func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 	netErr := fmt.Errorf("unexpected EOF during API call")
 	info = classifyAPIError(netErr)
 	assert.Equal(t, dagpkg.NodeSystemError, info.state,
-		"real network errors without compiler.ErrEvaluation sentinel should remain dagpkg.NodeSystemError")
+		"real network errors without ErrEvaluation sentinel should remain dagpkg.NodeSystemError")
 }
 
 // ---------------------------------------------------------------------------
@@ -855,9 +855,9 @@ func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
 			HasBlocked: true,
 		},
 	}
-	status, reason, _ := state.deriveReadyCondition()
-	assert.Equal(t, conditionUnknown, status)
-	assert.Equal(t, "Blocked", reason,
+	outcome := state.deriveReadyCondition()
+	assert.Equal(t, conditionUnknown, outcome.status)
+	assert.Equal(t, "Blocked", outcome.reason,
 		"Blocked should take priority over Pending — upstream error is more actionable than waiting")
 }
 
@@ -870,8 +870,8 @@ func TestDeriveReadyCondition_PendingSurfacesReasons(t *testing.T) {
 		planSummary: dagpkg.PlanSummary{HasPending: true},
 		nodeErrors:  []string{"deploy: waiting for input from cfg"},
 	}
-	_, _, message := s.deriveReadyCondition()
-	assert.Contains(t, message, "waiting for input from cfg")
+	outcome := s.deriveReadyCondition()
+	assert.Contains(t, outcome.message, "waiting for input from cfg")
 }
 
 // ---------------------------------------------------------------------------
@@ -1481,8 +1481,8 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 	r := &GraphReconciler{}
 	rs := newReconcileScope(graph, nil)
 	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval, prevState)
-	// compiler.ErrWaitingForReadiness expected — propagateWhen halted expansion.
-	require.ErrorIs(t, err, compiler.ErrWaitingForReadiness)
+	// ErrWaitingForReadiness expected — propagateWhen halted expansion.
+	require.ErrorIs(t, err, ErrWaitingForReadiness)
 
 	// Verify carried-forward items in scope have correct __updated stamps.
 	items, ok := eval.scope["workers"].([]any)

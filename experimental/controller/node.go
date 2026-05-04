@@ -15,7 +15,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/ellistarn/kro/experimental/controller/compiler"
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
@@ -125,7 +124,7 @@ func reconcileRef(ctx context.Context, reader client.Reader, scope *scopeResolve
 	obj.SetGroupVersionKind(gvk)
 	if err := reader.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("ref %s: resource %s %s/%s not found: %w", node.ID, gvk, namespace, name, compiler.ErrPending)
+			return fmt.Errorf("ref %s: resource %s %s/%s not found: %w", node.ID, gvk, namespace, name, ErrPending)
 		}
 		return fmt.Errorf("reading %s %s/%s: %w", gvk, namespace, name, err)
 	}

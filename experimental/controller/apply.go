@@ -23,7 +23,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/ellistarn/kro/experimental/controller/compiler"
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
@@ -227,7 +226,7 @@ func checkOwnership(ctx context.Context, c *clusterAccess, obj *unstructured.Uns
 			if otherGraph, conflict := graphpkg.HasOtherGraphIdentityLabel(existingLabels, rs.name, rs.namespace); conflict {
 				if !forceApply {
 					return fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use lifecycle.apply: Force to take ownership): %w",
-						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, rs.name, compiler.ErrFieldConflict)
+						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, rs.name, ErrFieldConflict)
 				}
 			}
 		}
@@ -239,7 +238,7 @@ func checkOwnership(ctx context.Context, c *clusterAccess, obj *unstructured.Uns
 	targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
 	if err := c.reader.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("patch target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), compiler.ErrPending)
+			return fmt.Errorf("patch target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), ErrPending)
 		}
 		return fmt.Errorf("checking patch target %s: %w", obj.GetName(), err)
 	}
@@ -284,7 +283,7 @@ func ssaWrite(ctx context.Context, c client.Client, obj *unstructured.Unstructur
 			return nil, err
 		}
 		if apierrors.IsConflict(err) {
-			return nil, fmt.Errorf("SSA conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), compiler.ErrFieldConflict, err)
+			return nil, fmt.Errorf("SSA conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
 		}
 		return nil, fmt.Errorf("applying %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
 	}
@@ -322,7 +321,7 @@ func ssaWrite(ctx context.Context, c client.Client, obj *unstructured.Unstructur
 				return nil, err
 			}
 			if apierrors.IsConflict(err) {
-				return nil, fmt.Errorf("SSA status conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), compiler.ErrFieldConflict, err)
+				return nil, fmt.Errorf("SSA status conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
 			}
 			return nil, fmt.Errorf("applying status %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
 		}

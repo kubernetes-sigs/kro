@@ -136,7 +136,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 			included, err := eval.includeWhen(node.IncludeWhen)
 			if err != nil {
 				carryForwardKeys(nodeKeys, node.ID, state)
-				if errors.Is(err, compiler.ErrPending) {
+				if errors.Is(err, ErrPending) {
 					plan.SetState(node.ID, dagpkg.NodePending)
 				} else {
 					plan.SetState(node.ID, dagpkg.NodeError)
@@ -264,7 +264,7 @@ func integrateNodeResult(
 
 	// Update plan state.
 	plan.SetState(node.ID, nr.state)
-	if nr.state == dagpkg.NodeNotReady && nr.err != nil && errors.Is(nr.err, compiler.ErrReadyWhenFailed) {
+	if nr.state == dagpkg.NodeNotReady && nr.err != nil && errors.Is(nr.err, ErrReadyWhenFailed) {
 		out.errMsgs = append(out.errMsgs, fmt.Sprintf("%s: %s", node.ID, nr.err.Error()))
 		logger.V(0).Info("readyWhen expression error (not gating dependents)",
 			"node", node.ID, "error", nr.err)
@@ -339,14 +339,14 @@ func evaluateNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, nod
 	if err != nil {
 		nr.err = err
 		switch {
-		case errors.Is(err, compiler.ErrPending):
+		case errors.Is(err, ErrPending):
 			nr.state = dagpkg.NodePending
-		case errors.Is(err, compiler.ErrWaitingForReadiness):
+		case errors.Is(err, ErrWaitingForReadiness):
 			nr.state = dagpkg.NodeNotReady
-		case errors.Is(err, compiler.ErrReadyWhenFailed):
+		case errors.Is(err, ErrReadyWhenFailed):
 			// readyWhen is a health signal — does not gate dependents.
 			nr.state = dagpkg.NodeNotReady
-		case errors.Is(err, compiler.ErrFieldConflict):
+		case errors.Is(err, ErrFieldConflict):
 			nr.state = dagpkg.NodeConflict
 		default:
 			nr.state = dagpkg.NodeError

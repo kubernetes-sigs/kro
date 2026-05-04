@@ -14,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/ellistarn/kro/experimental/controller/compiler"
 	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
@@ -43,8 +42,8 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 
 	collection, err := eval.evalString(collectionExpr)
 	if err != nil {
-		if compiler.IsPending(err) {
-			return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, compiler.ErrPending)
+		if isPending(err) {
+			return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, ErrPending)
 		}
 		return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, err)
 	}
@@ -257,7 +256,7 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 	// Per-item propagateWhen halted expansion — the collection is
 	// incomplete. Signal NotReady so the controller requeues.
 	if halted {
-		return &nodeOutput{keys: keys, forEach: newState}, compiler.ErrWaitingForReadiness
+		return &nodeOutput{keys: keys, forEach: newState}, ErrWaitingForReadiness
 	}
 
 	// Check readyWhen per-item and stamp __ready on each item.
@@ -277,7 +276,7 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 
 // forEachStampReadyWhen evaluates readyWhen per-item and stamps __ready on
 // each item in scope[nodeID]. When readyWhen is empty, all items are stamped
-// __ready=true (applied = ready). Returns compiler.ErrWaitingForReadiness if any item
+// __ready=true (applied = ready). Returns ErrWaitingForReadiness if any item
 // fails its readyWhen check.
 //
 // eval may be nil when readyWhen is empty (no expressions to evaluate).
@@ -313,7 +312,7 @@ func forEachStampReadyWhen(scope map[string]any, nodeID string, readyWhen []stri
 			}
 		}
 		if anyNotReady {
-			return compiler.ErrWaitingForReadiness
+			return ErrWaitingForReadiness
 		}
 	} else {
 		// No readyWhen — all items are ready on apply.
@@ -552,10 +551,10 @@ func highestPriorityChildError(errs []error) error {
 // childErrorPriority returns a numeric priority for a forEach child error.
 // Higher values mean higher priority (deterministic errors > transient).
 func childErrorPriority(err error) int {
-	if errors.Is(err, compiler.ErrPending) {
+	if errors.Is(err, ErrPending) {
 		return 0
 	}
-	if errors.Is(err, compiler.ErrFieldConflict) {
+	if errors.Is(err, ErrFieldConflict) {
 		return 2 // Conflict — transient, but a specific positive signal
 	}
 	info := classifyAPIError(err)

@@ -33,6 +33,15 @@ const (
 	conditionUnknown conditionStatus = "Unknown"
 )
 
+// conditionOutcome bundles the three values that describe one Kubernetes
+// condition — status, reason, and message — so they travel as a named
+// group rather than positional returns.
+type conditionOutcome struct {
+	status  conditionStatus
+	reason  string
+	message string
+}
+
 // reconcileState captures the outcome of a reconcile cycle for status derivation.
 type reconcileState struct {
 	// compiled tracks spec validity. Set once when the spec is parsed/compiled.
@@ -58,21 +67,21 @@ type reconcileState struct {
 // deriveCompiledCondition computes the Compiled condition.
 // Compiled is set once when the spec is parsed/compiled. It's permanent until
 // the spec changes. False means the Graph will never converge until the spec is fixed.
-func (s *reconcileState) deriveCompiledCondition() (status conditionStatus, reason string, message string) {
+func (s *reconcileState) deriveCompiledCondition() conditionOutcome {
 	if s.compiled {
-		return conditionTrue, "Compiled", "Spec is valid"
+		return conditionOutcome{conditionTrue, "Compiled", "Spec is valid"}
 	}
 	if s.compiledErr != nil {
 		// Classify the error
 		if errors.Is(s.compiledErr, compiler.ErrInvalidExpression) {
-			return conditionFalse, "ExpressionError", s.compiledErr.Error()
+			return conditionOutcome{conditionFalse, "ExpressionError", s.compiledErr.Error()}
 		}
 		if errors.Is(s.compiledErr, compiler.ErrDependencyError) {
-			return conditionFalse, "DependencyError", s.compiledErr.Error()
+			return conditionOutcome{conditionFalse, "DependencyError", s.compiledErr.Error()}
 		}
-		return conditionFalse, "DeclarationError", s.compiledErr.Error()
+		return conditionOutcome{conditionFalse, "DeclarationError", s.compiledErr.Error()}
 	}
-	return conditionFalse, "DeclarationError", "Spec validation failed"
+	return conditionOutcome{conditionFalse, "DeclarationError", "Spec validation failed"}
 }
 
 // deriveReadyCondition computes the Ready condition from the reconcile outcome.
@@ -94,26 +103,26 @@ func (s *reconcileState) deriveCompiledCondition() (status conditionStatus, reas
 //	SystemError → False   — server or infrastructure failure (5xx)
 //	Error       → False   — client request failed (4xx)
 //	Conflict    → False   — SSA field ownership contested
-func (s *reconcileState) deriveReadyCondition() (status conditionStatus, reason string, message string) {
+func (s *reconcileState) deriveReadyCondition() conditionOutcome {
 	if !s.compiled {
-		return conditionFalse, "NotCompiled", "Spec is not valid; resources cannot be reconciled"
+		return conditionOutcome{conditionFalse, "NotCompiled", "Spec is not valid; resources cannot be reconciled"}
 	}
 	if s.planSummary.HasSystemError {
-		return conditionFalse, "SystemError",
+		return conditionOutcome{conditionFalse, "SystemError",
 			fmt.Sprintf("Resources with server/infrastructure errors: %s",
-				strings.Join(s.nodeErrors, "; "))
+				strings.Join(s.nodeErrors, "; "))}
 	}
 	if s.planSummary.HasError {
-		return conditionFalse, "Error",
+		return conditionOutcome{conditionFalse, "Error",
 			fmt.Sprintf("Resources with errors: %s",
-				strings.Join(s.nodeErrors, "; "))
+				strings.Join(s.nodeErrors, "; "))}
 	}
 	if s.planSummary.HasConflict {
 		msg := "One or more resources have SSA field ownership conflicts"
 		if len(s.nodeErrors) > 0 {
 			msg += ": " + strings.Join(s.nodeErrors, "; ")
 		}
-		return conditionFalse, "Conflict", msg
+		return conditionOutcome{conditionFalse, "Conflict", msg}
 	}
 	if s.planSummary.HasBlocked {
 		msg := "One or more resources blocked by upstream errors"
@@ -125,14 +134,14 @@ func (s *reconcileState) deriveReadyCondition() (status conditionStatus, reason 
 		if len(s.nodeErrors) > 0 {
 			msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
 		}
-		return conditionUnknown, "Blocked", msg
+		return conditionOutcome{conditionUnknown, "Blocked", msg}
 	}
 	if s.planSummary.HasPending {
 		msg := "One or more resources waiting for upstream data"
 		if len(s.nodeErrors) > 0 {
 			msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
 		}
-		return conditionUnknown, "Pending", msg
+		return conditionOutcome{conditionUnknown, "Pending", msg}
 	}
 	if s.planSummary.HasNotReady {
 		msg := "One or more resources have not satisfied their readyWhen conditions"
@@ -143,7 +152,7 @@ func (s *reconcileState) deriveReadyCondition() (status conditionStatus, reason 
 		if len(s.nodeErrors) > 0 {
 			msg += " (" + strings.Join(s.nodeErrors, "; ") + ")"
 		}
-		return conditionUnknown, "NotReady", msg
+		return conditionOutcome{conditionUnknown, "NotReady", msg}
 	}
 	msg := fmt.Sprintf("All %d resources reconciled", s.planSummary.ReadyCount)
 	// Surface informational notes (e.g., FinalizerSkipped) that don't
@@ -158,7 +167,7 @@ func (s *reconcileState) deriveReadyCondition() (status conditionStatus, reason 
 	if len(s.nodeNotes) > 0 {
 		msg += " (" + strings.Join(s.nodeNotes, "; ") + ")"
 	}
-	return conditionTrue, "Ready", msg
+	return conditionOutcome{conditionTrue, "Ready", msg}
 }
 
 // updateStatus writes the Graph's status subresource. Reads the latest version
@@ -173,16 +182,16 @@ func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.
 	// Build both conditions
 	generation := graph.GetGeneration()
 
-	compiledStatus, compiledReason, compiledMessage := state.deriveCompiledCondition()
-	compiledCondition := buildCondition(string(conditionCompiled), compiledStatus, compiledReason, compiledMessage, generation)
+	compiled := state.deriveCompiledCondition()
+	compiledCondition := buildCondition(string(conditionCompiled), compiled, generation)
 
-	readyStatus, readyReason, readyMessage := state.deriveReadyCondition()
-	readyCondition := buildCondition(string(conditionReady), readyStatus, readyReason, readyMessage, generation)
+	ready := state.deriveReadyCondition()
+	readyCondition := buildCondition(string(conditionReady), ready, generation)
 
 	// Preserve lastTransitionTime for conditions whose status hasn't changed
 	existingConditions, _, _ := unstructured.NestedSlice(latest.Object, "status", "conditions")
-	preserveTransitionTime(existingConditions, compiledCondition, compiledStatus)
-	preserveTransitionTime(existingConditions, readyCondition, readyStatus)
+	preserveTransitionTime(existingConditions, compiledCondition, compiled.status)
+	preserveTransitionTime(existingConditions, readyCondition, ready.status)
 
 	status := map[string]any{
 		"conditions": []any{
@@ -223,12 +232,12 @@ func statusEqual(a, b map[string]any) bool {
 }
 
 // buildCondition creates a condition map with the current timestamp.
-func buildCondition(condType string, status conditionStatus, reason, message string, observedGeneration int64) map[string]any {
+func buildCondition(condType string, outcome conditionOutcome, observedGeneration int64) map[string]any {
 	return map[string]any{
 		"type":               condType,
-		"status":             string(status),
-		"reason":             reason,
-		"message":            message,
+		"status":             string(outcome.status),
+		"reason":             outcome.reason,
+		"message":            outcome.message,
 		"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
 		"observedGeneration": observedGeneration,
 	}

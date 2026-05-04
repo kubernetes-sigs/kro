@@ -12,10 +12,71 @@ import (
 	"net"
 	"strings"
 
-	"github.com/ellistarn/kro/experimental/controller/compiler"
 	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
+
+// ErrPending indicates that CEL evaluation failed because required data
+// is not yet available (e.g., a resource's status field hasn't been populated).
+// This is a retryable condition — the controller should requeue and try again.
+var ErrPending = errors.New("data pending")
+
+// ErrEvaluation indicates that the error originates from a non-API operation:
+// CEL evaluation, template rendering, JSON marshaling, or other deterministic
+// local computation. Errors wrapped with this sentinel are classified as
+// NodeError by classifyAPIError, even if their message text happens to contain
+// network-like patterns (e.g., "unexpected EOF" from malformed JSON). Without
+// this, the string-based network error pattern matcher would misclassify them
+// as NodeSystemError, triggering 5-second retry for errors that can only
+// resolve via propagation or spec change.
+var ErrEvaluation = errors.New("evaluation error")
+
+// ErrWaitingForReadiness indicates that a resource exists but hasn't satisfied
+// its readyWhen conditions yet. Downstream resources should wait.
+var ErrWaitingForReadiness = errors.New("waiting for readiness")
+
+// ErrReadyWhenFailed indicates that a readyWhen expression failed to evaluate
+// due to a permanent expression error (not data pending, not a transient
+// condition). Per 001-graph.md: "readyWhen is a health signal — it does not
+// gate downstream execution." The coordinator classifies this as NodeNotReady
+// (not NodeError) so dependents proceed. The underlying error is preserved in
+// the chain for logging and status reporting.
+var ErrReadyWhenFailed = errors.New("readyWhen evaluation failed")
+
+// ErrFieldConflict indicates that an SSA apply received a 409 Conflict because
+// another actor has taken ownership of fields the controller manages. This is
+// a permanent error for the resource until the external actor releases the
+// field or the Graph spec changes to no longer write that field.
+var ErrFieldConflict = errors.New("field conflict")
+
+// celPendingPatterns are CEL error patterns that indicate data is not yet
+// available (retryable). Other CEL errors are considered expression bugs.
+var celPendingPatterns = []string{
+	"no such key",
+	"no such field",
+	"no such attribute",
+	"index out of bounds",
+}
+
+// isCELPending checks if a CEL error indicates data is pending.
+func isCELPending(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, pattern := range celPendingPatterns {
+		if strings.Contains(msg, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPending checks if an error indicates data is pending — either a CEL
+// runtime error (string pattern match) or a wrapped ErrPending sentinel.
+func isPending(err error) bool {
+	return isCELPending(err) || errors.Is(err, ErrPending)
+}
 
 // apiErrorInfo holds the plan state and reason for an API error.
 type apiErrorInfo struct {
@@ -73,7 +134,7 @@ func classifyAPIError(err error) apiErrorInfo {
 	// the network." Without this check, the network pattern matcher below
 	// would misclassify evaluation errors whose messages happen to contain
 	// network-like substrings.
-	if errors.Is(err, compiler.ErrEvaluation) {
+	if errors.Is(err, ErrEvaluation) {
 		return apiErrorInfo{state: dagpkg.NodeError, reason: err.Error()}
 	}
 	// Network/infrastructure errors → dagpkg.NodeSystemError.

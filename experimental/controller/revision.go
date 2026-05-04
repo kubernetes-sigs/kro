@@ -413,7 +413,7 @@ func (r *GraphReconciler) findSupersededRevisions(ctx context.Context, graphName
 }
 
 // ---------------------------------------------------------------------------
-// Revision status
+// Revision GC
 // ---------------------------------------------------------------------------
 
 // gcSupersededRevisions garbage-collects superseded revisions once all

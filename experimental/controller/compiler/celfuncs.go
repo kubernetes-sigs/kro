@@ -199,9 +199,9 @@ func celSimpleSchemaFunction() []cel.EnvOption {
 // manage different condition types (e.g., Compiled vs Ready) without conflict.
 func conditionsSchema() map[string]any {
 	return map[string]any{
-		"type":                        "array",
-		"x-kubernetes-list-type":      "map",
-		"x-kubernetes-list-map-keys":  []any{"type"},
+		"type":                                 "array",
+		"x-kubernetes-list-type":               "map",
+		"x-kubernetes-list-map-keys":           []any{"type"},
 		"x-kubernetes-preserve-unknown-fields": true,
 		"items": map[string]any{
 			"type":                                 "object",

@@ -14,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
@@ -559,7 +558,7 @@ func childErrorPriority(err error) int {
 	}
 	info := classifyAPIError(err)
 	switch info.state {
-	case dagpkg.NodeSystemError:
+	case NodeSystemError:
 		return 1 // SystemError — transient
 	default:
 		return 3 // NodeError — deterministic

@@ -7,9 +7,13 @@
 // for cross-cycle comparison.
 //
 // Per 005-reconciliation.md § Node States.
-package dag
+package graphcontroller
 
-import "fmt"
+import (
+	"fmt"
+
+	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
+)
 
 // NodeState tracks the reconcile-time state of a single node.
 type NodeState int
@@ -68,7 +72,7 @@ type PlanState struct {
 }
 
 // NewPlanState creates a fresh plan state with all nodes unvisited.
-func NewPlanState(dag *DAG) *PlanState {
+func NewPlanState(dag *dagpkg.DAG) *PlanState {
 	ps := &PlanState{
 		States: make(map[string]NodeState, len(dag.Nodes)),
 	}

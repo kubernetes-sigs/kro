@@ -25,7 +25,7 @@ import (
 // Unit tests — design reconciliation regression suite
 //
 // These test mechanisms introduced in the design reconciliation:
-//   - dagpkg.NodeBlocked vs dagpkg.NodeExcluded propagation split
+//   - NodeBlocked vs NodeExcluded propagation split
 //   - pruneOrderApplied reverse dependency ordering
 //   - classifyAPIError default flip
 //
@@ -52,21 +52,21 @@ func TestSetStateDoesNotPropagate(t *testing.T) {
 	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
-	states := []dagpkg.NodeState{dagpkg.NodeExcluded, dagpkg.NodeError, dagpkg.NodePending, dagpkg.NodeConflict, dagpkg.NodeSystemError, dagpkg.NodeReady, dagpkg.NodeNotReady}
+	states := []NodeState{NodeExcluded, NodeError, NodePending, NodeConflict, NodeSystemError, NodeReady, NodeNotReady}
 	for _, sourceState := range states {
 		t.Run(sourceState.String(), func(t *testing.T) {
-			plan := dagpkg.NewPlanState(dag)
+			plan := NewPlanState(dag)
 			plan.SetState("a", sourceState)
 
 			assert.Equal(t, sourceState, plan.States["a"], "source should be set")
-			assert.Equal(t, dagpkg.NodeUnvisited, plan.States["b"], "direct dependent should remain unvisited")
-			assert.Equal(t, dagpkg.NodeUnvisited, plan.States["c"], "transitive dependent should remain unvisited")
+			assert.Equal(t, NodeUnvisited, plan.States["b"], "direct dependent should remain unvisited")
+			assert.Equal(t, NodeUnvisited, plan.States["c"], "transitive dependent should remain unvisited")
 		})
 	}
 }
 
-// TestSummaryCountsBlockedState proves that dagpkg.PlanSummary correctly reports
-// HasBlocked when a node is explicitly set to dagpkg.NodeBlocked. Since SetState
+// TestSummaryCountsBlockedState proves that PlanSummary correctly reports
+// HasBlocked when a node is explicitly set to NodeBlocked. Since SetState
 // no longer propagates, the test sets dependent state explicitly (matching
 // what checkDependencyGate would do during a real walk).
 func TestSummaryCountsBlockedState(t *testing.T) {
@@ -77,11 +77,11 @@ func TestSummaryCountsBlockedState(t *testing.T) {
 	dag, err := dagpkg.BuildDAG(nodes, nil, nil)
 	require.NoError(t, err)
 
-	plan := dagpkg.NewPlanState(dag)
-	plan.SetState("a", dagpkg.NodeError)
+	plan := NewPlanState(dag)
+	plan.SetState("a", NodeError)
 	// Simulate what checkDependencyGate does: when b's dependency a is in error,
 	// the walk marks b as Blocked.
-	plan.SetState("b", dagpkg.NodeBlocked)
+	plan.SetState("b", NodeBlocked)
 
 	summary := plan.Summary()
 	assert.True(t, summary.HasError, "should report error on the source node")
@@ -97,18 +97,18 @@ func TestSummaryCountsBlockedState(t *testing.T) {
 // checkDependencyGate during the walk. These tests exercise it directly.
 // ---------------------------------------------------------------------------
 
-// gateToNodeState maps a depGateOutcome to the dagpkg.NodeState that the walk
+// gateToNodeState maps a depGateOutcome to the NodeState that the walk
 // would assign. Used by tests to verify precedence without needing a full walk.
-func gateToNodeState(g depGateOutcome) dagpkg.NodeState {
+func gateToNodeState(g depGateOutcome) NodeState {
 	switch g {
 	case depExcluded:
-		return dagpkg.NodeExcluded
+		return NodeExcluded
 	case depBlocked:
-		return dagpkg.NodeBlocked
+		return NodeBlocked
 	case depPending:
-		return dagpkg.NodePending
+		return NodePending
 	default:
-		return dagpkg.NodeReady // zero value — would proceed to evaluation
+		return NodeReady // zero value — would proceed to evaluation
 	}
 }
 
@@ -134,32 +134,32 @@ func TestCheckDependencyGatePrecedence_ExcludedOverBlockedOverPending(t *testing
 
 	tests := []struct {
 		name       string
-		stateA     dagpkg.NodeState
-		stateB     dagpkg.NodeState
-		wantChildC dagpkg.NodeState
+		stateA     NodeState
+		stateB     NodeState
+		wantChildC NodeState
 	}{
 		// Excluded > Blocked: Excluded parent takes precedence over Error parent.
-		{"Excluded+Error→Excluded", dagpkg.NodeExcluded, dagpkg.NodeError, dagpkg.NodeExcluded},
-		{"Error+Excluded→Excluded", dagpkg.NodeError, dagpkg.NodeExcluded, dagpkg.NodeExcluded},
+		{"Excluded+Error→Excluded", NodeExcluded, NodeError, NodeExcluded},
+		{"Error+Excluded→Excluded", NodeError, NodeExcluded, NodeExcluded},
 		// Excluded > Pending: Excluded parent takes precedence over Pending parent.
-		{"Excluded+Pending→Excluded", dagpkg.NodeExcluded, dagpkg.NodePending, dagpkg.NodeExcluded},
-		{"Pending+Excluded→Excluded", dagpkg.NodePending, dagpkg.NodeExcluded, dagpkg.NodeExcluded},
+		{"Excluded+Pending→Excluded", NodeExcluded, NodePending, NodeExcluded},
+		{"Pending+Excluded→Excluded", NodePending, NodeExcluded, NodeExcluded},
 		// Blocked > Pending: Error parent takes precedence over Pending parent.
-		{"Error+Pending→Blocked", dagpkg.NodeError, dagpkg.NodePending, dagpkg.NodeBlocked},
-		{"Pending+Error→Blocked", dagpkg.NodePending, dagpkg.NodeError, dagpkg.NodeBlocked},
+		{"Error+Pending→Blocked", NodeError, NodePending, NodeBlocked},
+		{"Pending+Error→Blocked", NodePending, NodeError, NodeBlocked},
 		// Same states: straightforward inheritance.
-		{"Excluded+Excluded→Excluded", dagpkg.NodeExcluded, dagpkg.NodeExcluded, dagpkg.NodeExcluded},
-		{"Error+Error→Blocked", dagpkg.NodeError, dagpkg.NodeError, dagpkg.NodeBlocked},
-		{"Pending+Pending→Pending", dagpkg.NodePending, dagpkg.NodePending, dagpkg.NodePending},
+		{"Excluded+Excluded→Excluded", NodeExcluded, NodeExcluded, NodeExcluded},
+		{"Error+Error→Blocked", NodeError, NodeError, NodeBlocked},
+		{"Pending+Pending→Pending", NodePending, NodePending, NodePending},
 		// All error variants map to Blocked.
-		{"Conflict+Pending→Blocked", dagpkg.NodeConflict, dagpkg.NodePending, dagpkg.NodeBlocked},
-		{"SystemError+Pending→Blocked", dagpkg.NodeSystemError, dagpkg.NodePending, dagpkg.NodeBlocked},
-		{"Blocked+Pending→Blocked", dagpkg.NodeBlocked, dagpkg.NodePending, dagpkg.NodeBlocked},
+		{"Conflict+Pending→Blocked", NodeConflict, NodePending, NodeBlocked},
+		{"SystemError+Pending→Blocked", NodeSystemError, NodePending, NodeBlocked},
+		{"Blocked+Pending→Blocked", NodeBlocked, NodePending, NodeBlocked},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			plan := dagpkg.NewPlanState(dag)
+			plan := NewPlanState(dag)
 			plan.SetState("a", tc.stateA)
 			plan.SetState("b", tc.stateB)
 
@@ -248,8 +248,8 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 }
 
 // TestClassifyAPIErrorDefault proves that unrecognized errors (raw Go errors
-// not wrapped as *StatusError) become dagpkg.NodeSystemError — the safe direction.
-// Misclassifying transient network failures as deterministic (dagpkg.NodeError) means
+// not wrapped as *StatusError) become NodeSystemError — the safe direction.
+// Misclassifying transient network failures as deterministic (NodeError) means
 // the system stops retrying when it should be retrying hardest (30-minute resync
 // timer vs 5s SystemError retry). Misclassifying a deterministic error as
 // transient means wasted retries — annoying but not an outage.
@@ -257,70 +257,70 @@ func TestPruneOrderContributeKeysResolved(t *testing.T) {
 // Client errors (4xx) are positively identified; everything else is
 // infrastructure until proven otherwise.
 func TestClassifyAPIErrorDefault(t *testing.T) {
-	t.Run("raw network error is dagpkg.NodeSystemError", func(t *testing.T) {
+	t.Run("raw network error is NodeSystemError", func(t *testing.T) {
 		err := &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("connection refused")}
 		info := classifyAPIError(err)
-		assert.Equal(t, dagpkg.NodeSystemError, info.state,
-			"network errors should be dagpkg.NodeSystemError — transient, needs retry")
+		assert.Equal(t, NodeSystemError, info.state,
+			"network errors should be NodeSystemError — transient, needs retry")
 	})
 
-	t.Run("generic wrapped error is dagpkg.NodeSystemError", func(t *testing.T) {
+	t.Run("generic wrapped error is NodeSystemError", func(t *testing.T) {
 		err := fmt.Errorf("unexpected EOF during API call")
 		info := classifyAPIError(err)
-		assert.Equal(t, dagpkg.NodeSystemError, info.state,
-			"unrecognized errors default to dagpkg.NodeSystemError — safe direction")
+		assert.Equal(t, NodeSystemError, info.state,
+			"unrecognized errors default to NodeSystemError — safe direction")
 	})
 
-	t.Run("forbidden is dagpkg.NodeError", func(t *testing.T) {
+	t.Run("forbidden is NodeError", func(t *testing.T) {
 		err := apierrors.NewForbidden(schema.GroupResource{Group: "", Resource: "configmaps"}, "test", fmt.Errorf("forbidden"))
 		info := classifyAPIError(err)
-		assert.Equal(t, dagpkg.NodeError, info.state)
+		assert.Equal(t, NodeError, info.state)
 		assert.Equal(t, "Forbidden", info.reason)
 	})
 
-	t.Run("unauthorized is dagpkg.NodeError", func(t *testing.T) {
+	t.Run("unauthorized is NodeError", func(t *testing.T) {
 		err := apierrors.NewUnauthorized("bad token")
 		info := classifyAPIError(err)
-		assert.Equal(t, dagpkg.NodeError, info.state)
+		assert.Equal(t, NodeError, info.state)
 		assert.Equal(t, "Unauthorized", info.reason)
 	})
 
-	t.Run("invalid is dagpkg.NodeError", func(t *testing.T) {
+	t.Run("invalid is NodeError", func(t *testing.T) {
 		err := apierrors.NewInvalid(schema.GroupKind{Group: "", Kind: "ConfigMap"}, "test", nil)
 		info := classifyAPIError(err)
-		assert.Equal(t, dagpkg.NodeError, info.state)
+		assert.Equal(t, NodeError, info.state)
 		assert.Equal(t, "ValidationFailed", info.reason)
 	})
 
-	t.Run("bad request is dagpkg.NodeError", func(t *testing.T) {
+	t.Run("bad request is NodeError", func(t *testing.T) {
 		err := apierrors.NewBadRequest("malformed")
 		info := classifyAPIError(err)
-		assert.Equal(t, dagpkg.NodeError, info.state)
+		assert.Equal(t, NodeError, info.state)
 		assert.Equal(t, "BadRequest", info.reason)
 	})
 
-	t.Run("internal server error is dagpkg.NodeSystemError", func(t *testing.T) {
+	t.Run("internal server error is NodeSystemError", func(t *testing.T) {
 		err := apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
 		info := classifyAPIError(err)
-		assert.Equal(t, dagpkg.NodeSystemError, info.state, "5xx should be dagpkg.NodeSystemError")
+		assert.Equal(t, NodeSystemError, info.state, "5xx should be NodeSystemError")
 		assert.Equal(t, "ServerError", info.reason)
 	})
 
-	t.Run("service unavailable is dagpkg.NodeSystemError", func(t *testing.T) {
+	t.Run("service unavailable is NodeSystemError", func(t *testing.T) {
 		err := apierrors.NewServiceUnavailable("maintenance")
 		info := classifyAPIError(err)
-		assert.Equal(t, dagpkg.NodeSystemError, info.state)
+		assert.Equal(t, NodeSystemError, info.state)
 	})
 
-	t.Run("too many requests is dagpkg.NodeSystemError", func(t *testing.T) {
+	t.Run("too many requests is NodeSystemError", func(t *testing.T) {
 		err := apierrors.NewTooManyRequests("rate limited", 5)
 		info := classifyAPIError(err)
-		assert.Equal(t, dagpkg.NodeSystemError, info.state)
+		assert.Equal(t, NodeSystemError, info.state)
 	})
 
 	t.Run("nil error returns zero value", func(t *testing.T) {
 		info := classifyAPIError(nil)
-		assert.Equal(t, dagpkg.NodeState(0), info.state)
+		assert.Equal(t, NodeState(0), info.state)
 	})
 }
 
@@ -368,22 +368,22 @@ func TestParseNodeListEnforcesValidNodeIDs(t *testing.T) {
 			}
 		})
 	}
-} // TestNodeStateString verifies that dagpkg.NodeState.String() returns the design's
+} // TestNodeStateString verifies that NodeState.String() returns the design's
 // canonical names. Each concept has exactly one name.
 func TestNodeStateString(t *testing.T) {
 	tests := []struct {
-		state dagpkg.NodeState
+		state NodeState
 		want  string
 	}{
-		{dagpkg.NodeUnvisited, "Unvisited"},
-		{dagpkg.NodePending, "Pending"},
-		{dagpkg.NodeReady, "Ready"},
-		{dagpkg.NodeNotReady, "NotReady"},
-		{dagpkg.NodeExcluded, "Excluded"},
-		{dagpkg.NodeBlocked, "Blocked"},
-		{dagpkg.NodeError, "Error"},
-		{dagpkg.NodeConflict, "Conflict"},
-		{dagpkg.NodeSystemError, "SystemError"},
+		{NodeUnvisited, "Unvisited"},
+		{NodePending, "Pending"},
+		{NodeReady, "Ready"},
+		{NodeNotReady, "NotReady"},
+		{NodeExcluded, "Excluded"},
+		{NodeBlocked, "Blocked"},
+		{NodeError, "Error"},
+		{NodeConflict, "Conflict"},
+		{NodeSystemError, "SystemError"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.want, func(t *testing.T) {
@@ -470,8 +470,8 @@ func TestGVRKindFromInformerPrimaryPath(t *testing.T) {
 }
 
 // TestClassifyAPIErrorNetworkErrors_RegressionRetry proves that raw network
-// errors (not wrapped as *StatusError) get classified as dagpkg.NodeSystemError for
-// the 5s retry instead of dagpkg.NodeError's 30-minute resync timer.
+// errors (not wrapped as *StatusError) get classified as NodeSystemError for
+// the 5s retry instead of NodeError's 30-minute resync timer.
 func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 	tests := []struct {
 		name string
@@ -485,8 +485,8 @@ func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			info := classifyAPIError(tc.err)
-			assert.Equal(t, dagpkg.NodeSystemError, info.state,
-				"network/transient error %q should be dagpkg.NodeSystemError for fast retry", tc.err)
+			assert.Equal(t, NodeSystemError, info.state,
+				"network/transient error %q should be NodeSystemError for fast retry", tc.err)
 		})
 	}
 }
@@ -499,14 +499,14 @@ func TestClassifyAPIErrorNetworkErrors_RegressionRetry(t *testing.T) {
 // and its data is in scope, regardless of readyWhen."
 //
 // A readyWhen expression that returns a non-bool type or hits a CEL error
-// is a permanent spec error — but it must NOT produce dagpkg.NodeError (which
-// blocks dependents). It must produce dagpkg.NodeNotReady.
+// is a permanent spec error — but it must NOT produce NodeError (which
+// blocks dependents). It must produce NodeNotReady.
 // ---------------------------------------------------------------------------
 
 // TestEvalReadiness_ExpressionErrorWrapsReadyWhenFailed proves that when
 // readyWhen evaluation fails with a permanent expression error (not data
 // pending), evalReadiness wraps it with ErrReadyWhenFailed so the
-// coordinator classifies it as dagpkg.NodeNotReady instead of dagpkg.NodeError.
+// coordinator classifies it as NodeNotReady instead of NodeError.
 // // TestEvalReadiness_NormalNotReadyIsUnchanged proves that normal readyWhen
 // failures (condition evaluates to false, data pending) still produce
 // ErrWaitingForReadiness — the fix only affects expression errors.
@@ -559,27 +559,27 @@ func TestHighestPriorityChildError(t *testing.T) {
 	tests := []struct {
 		name     string
 		errs     []error
-		wantType dagpkg.NodeState // the expected classification of the returned error
+		wantType NodeState // the expected classification of the returned error
 	}{
 		{
 			name:     "deterministic (Forbidden) over transient (network)",
 			errs:     []error{errNetwork, errForbidden},
-			wantType: dagpkg.NodeError,
+			wantType: NodeError,
 		},
 		{
 			name:     "deterministic (CEL) over conflict",
 			errs:     []error{errConflict, errCEL},
-			wantType: dagpkg.NodeError,
+			wantType: NodeError,
 		},
 		{
 			name:     "conflict over network (system error)",
 			errs:     []error{errNetwork, errConflict},
-			wantType: dagpkg.NodeConflict,
+			wantType: NodeConflict,
 		},
 		{
 			name:     "single error returns itself",
 			errs:     []error{errNetwork},
-			wantType: dagpkg.NodeSystemError,
+			wantType: NodeSystemError,
 		},
 	}
 
@@ -590,7 +590,7 @@ func TestHighestPriorityChildError(t *testing.T) {
 
 			// Classify the result to check priority.
 			if errors.Is(result, ErrFieldConflict) {
-				assert.Equal(t, dagpkg.NodeConflict, tc.wantType)
+				assert.Equal(t, NodeConflict, tc.wantType)
 			} else {
 				info := classifyAPIError(result)
 				assert.Equal(t, tc.wantType, info.state,
@@ -804,10 +804,10 @@ func TestPatchStatusDetection(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestClassifyAPIError_EvalErrorWithNetworkPattern proves that non-API errors
-// (CEL evaluation, template rendering) are classified as dagpkg.NodeError even when
+// (CEL evaluation, template rendering) are classified as NodeError even when
 // their message contains network-like patterns. Before the fix, an error
 // message containing "unexpected EOF" from a JSON marshal failure would
-// false-positive as a network error → dagpkg.NodeSystemError → 5s retry loop.
+// false-positive as a network error → NodeSystemError → 5s retry loop.
 //
 // The fix: errors originating from non-API operations are wrapped with
 // ErrEvaluation at the source (toMap, evalString). classifyAPIError checks
@@ -819,18 +819,18 @@ func TestPatchStatusDetection(t *testing.T) {
 // property directly.
 func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 	// An evaluation error whose message contains a network error pattern.
-	// Without the sentinel, this would be classified as dagpkg.NodeSystemError.
+	// Without the sentinel, this would be classified as NodeSystemError.
 	evalErr := fmt.Errorf("evaluating template: %w: unexpected EOF in field value",
 		ErrEvaluation)
 	info := classifyAPIError(evalErr)
-	assert.Equal(t, dagpkg.NodeError, info.state,
-		"evaluation errors must be dagpkg.NodeError even when message contains network patterns")
+	assert.Equal(t, NodeError, info.state,
+		"evaluation errors must be NodeError even when message contains network patterns")
 
-	// A real network error should still be dagpkg.NodeSystemError.
+	// A real network error should still be NodeSystemError.
 	netErr := fmt.Errorf("unexpected EOF during API call")
 	info = classifyAPIError(netErr)
-	assert.Equal(t, dagpkg.NodeSystemError, info.state,
-		"real network errors without ErrEvaluation sentinel should remain dagpkg.NodeSystemError")
+	assert.Equal(t, NodeSystemError, info.state,
+		"real network errors without ErrEvaluation sentinel should remain NodeSystemError")
 }
 
 // ---------------------------------------------------------------------------
@@ -850,7 +850,7 @@ func TestClassifyAPIError_EvalErrorWithNetworkPattern(t *testing.T) {
 func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
 	state := &reconcileState{
 		compiled: true,
-		planSummary: dagpkg.PlanSummary{
+		planSummary: PlanSummary{
 			HasPending: true,
 			HasBlocked: true,
 		},
@@ -867,7 +867,7 @@ func TestDeriveReadyCondition_BlockedBeforePending(t *testing.T) {
 func TestDeriveReadyCondition_PendingSurfacesReasons(t *testing.T) {
 	s := &reconcileState{
 		compiled:    true,
-		planSummary: dagpkg.PlanSummary{HasPending: true},
+		planSummary: PlanSummary{HasPending: true},
 		nodeErrors:  []string{"deploy: waiting for input from cfg"},
 	}
 	outcome := s.deriveReadyCondition()
@@ -875,71 +875,71 @@ func TestDeriveReadyCondition_PendingSurfacesReasons(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// dagpkg.FinalizeSkippedStates — silent Ready fallthrough (#14) regression
+// FinalizeSkippedStates — silent Ready fallthrough (#14) regression
 // ---------------------------------------------------------------------------
 
 // TestFinalizeSkippedStates_RestoresPreviousState exercises the happy path —
 // a node in the outputsReady set with a previousPlanStates entry has its
-// state restored so dagpkg.PlanSummary counts it.
+// state restored so PlanSummary counts it.
 func TestFinalizeSkippedStates_RestoresPreviousState(t *testing.T) {
-	plan := &dagpkg.PlanState{
-		States: map[string]dagpkg.NodeState{
-			"n1": dagpkg.NodeUnvisited,
+	plan := &PlanState{
+		States: map[string]NodeState{
+			"n1": NodeUnvisited,
 		},
 	}
 	outputsReady := map[string]bool{"n1": true}
-	prev := map[string]dagpkg.NodeState{"n1": dagpkg.NodeReady}
+	prev := map[string]NodeState{"n1": NodeReady}
 
-	dagpkg.FinalizeSkippedStates(plan, outputsReady, prev, nil)
+	FinalizeSkippedStates(plan, outputsReady, prev, nil)
 
-	assert.Equal(t, dagpkg.NodeReady, plan.States["n1"],
+	assert.Equal(t, NodeReady, plan.States["n1"],
 		"skipped node with prior state should restore to prior state")
 }
 
 // TestFinalizeSkippedStates_RegressionSilentReady guards against the
 // silent-Ready fallthrough documented in #14: a node in outputsReady with no
-// previousPlanStates entry previously stayed dagpkg.NodeUnvisited, which dagpkg.PlanSummary
+// previousPlanStates entry previously stayed NodeUnvisited, which PlanSummary
 // silently counts as zero — the graph appeared Ready with one fewer node
-// than it actually had. The fix explicitly marks such nodes dagpkg.NodePending.
+// than it actually had. The fix explicitly marks such nodes NodePending.
 func TestFinalizeSkippedStates_RegressionSilentReady(t *testing.T) {
-	plan := &dagpkg.PlanState{
-		States: map[string]dagpkg.NodeState{
-			"n1": dagpkg.NodeUnvisited,
+	plan := &PlanState{
+		States: map[string]NodeState{
+			"n1": NodeUnvisited,
 		},
 	}
 	outputsReady := map[string]bool{"n1": true}
 	// Empty previousPlanStates — the structurally-impossible case.
-	prev := map[string]dagpkg.NodeState{}
+	prev := map[string]NodeState{}
 
 	var diagnosedNode string
-	dagpkg.FinalizeSkippedStates(plan, outputsReady, prev, func(id string) {
+	FinalizeSkippedStates(plan, outputsReady, prev, func(id string) {
 		diagnosedNode = id
 	})
 
-	assert.Equal(t, dagpkg.NodePending, plan.States["n1"],
+	assert.Equal(t, NodePending, plan.States["n1"],
 		"skipped node with no prior state must be marked Pending, not left Unvisited")
 	assert.Equal(t, "n1", diagnosedNode,
 		"the callback should surface the diagnostic so logs record the invariant break")
 }
 
 // TestFinalizeSkippedStates_IgnoresNonSkipped confirms the helper only
-// touches nodes in outputsReady AND in dagpkg.NodeUnvisited — nodes that were
+// touches nodes in outputsReady AND in NodeUnvisited — nodes that were
 // actually walked keep whatever the walker set.
 func TestFinalizeSkippedStates_IgnoresNonSkipped(t *testing.T) {
-	plan := &dagpkg.PlanState{
-		States: map[string]dagpkg.NodeState{
-			"walked": dagpkg.NodeError,
-			"skip":   dagpkg.NodeUnvisited,
+	plan := &PlanState{
+		States: map[string]NodeState{
+			"walked": NodeError,
+			"skip":   NodeUnvisited,
 		},
 	}
 	outputsReady := map[string]bool{"skip": true} // "walked" is NOT in outputsReady
-	prev := map[string]dagpkg.NodeState{"skip": dagpkg.NodeReady, "walked": dagpkg.NodeReady}
+	prev := map[string]NodeState{"skip": NodeReady, "walked": NodeReady}
 
-	dagpkg.FinalizeSkippedStates(plan, outputsReady, prev, nil)
+	FinalizeSkippedStates(plan, outputsReady, prev, nil)
 
-	assert.Equal(t, dagpkg.NodeError, plan.States["walked"],
+	assert.Equal(t, NodeError, plan.States["walked"],
 		"node not in outputsReady must not be overwritten")
-	assert.Equal(t, dagpkg.NodeReady, plan.States["skip"],
+	assert.Equal(t, NodeReady, plan.States["skip"],
 		"node in outputsReady with prior state gets restored")
 }
 
@@ -972,9 +972,9 @@ func TestCheckDependencyGate_RegressionExcludedPersistence(t *testing.T) {
 	require.NoError(t, err)
 	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
 
-	plan := dagpkg.NewPlanState(dag)
+	plan := NewPlanState(dag)
 	// Mark root as Excluded in the plan (simulates root's includeWhen=false).
-	plan.SetState("root", dagpkg.NodeExcluded)
+	plan.SetState("root", NodeExcluded)
 
 	childIdx := dag.Index["child"]
 	node := &dag.Nodes[childIdx]
@@ -982,7 +982,7 @@ func TestCheckDependencyGate_RegressionExcludedPersistence(t *testing.T) {
 	gate := checkDependencyGate(node, plan)
 	assert.Equal(t, depExcluded, gate,
 		"child should see depExcluded when root is Excluded")
-	assert.Equal(t, dagpkg.NodeExcluded, gateToNodeState(gate),
+	assert.Equal(t, NodeExcluded, gateToNodeState(gate),
 		"child's gated state should be Excluded")
 }
 
@@ -1705,7 +1705,7 @@ func TestPath2_SelfRefresh_StampsReady(t *testing.T) {
 			"crd.ready() should be false because __ready is missing")
 
 	// FIX: Path 2 must call markReady after readiness evaluation.
-	// For nodes with no readyWhen, nodeState is dagpkg.NodeReady, so markReady(true).
+	// For nodes with no readyWhen, nodeState is NodeReady, so markReady(true).
 	eval1.markReady("crd", true)
 	result3, err := compiled.Eval("crd.ready()", eval1.scope)
 	require.NoError(t, err)
@@ -1824,9 +1824,9 @@ func TestLazyDepDoesNotGateDispatch(t *testing.T) {
 	assert.Equal(t, graphpkg.DepLazy, dag.Nodes[cIdx].Dependencies["b"], "b should be lazy dep")
 
 	// A is ready, B is pending — C should still dispatch because B is lazy.
-	plan := dagpkg.NewPlanState(dag)
-	plan.SetState("a", dagpkg.NodeReady)
-	plan.SetState("b", dagpkg.NodePending) // B is pending — lazy dep
+	plan := NewPlanState(dag)
+	plan.SetState("a", NodeReady)
+	plan.SetState("b", NodePending) // B is pending — lazy dep
 
 	node := &dag.Nodes[cIdx]
 	gate := checkDependencyGate(node, plan)

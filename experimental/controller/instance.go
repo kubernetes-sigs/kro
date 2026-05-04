@@ -52,7 +52,7 @@ type compiledArtifacts struct {
 type walkCarryForward struct {
 	previousScope      map[string]any
 	previousKeys       map[string][]Applied
-	previousPlanStates *dagpkg.PlanState
+	previousPlanStates *PlanState
 	forEach            *forEachCarryForward // nil until first forEach evaluation
 }
 

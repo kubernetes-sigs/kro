@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
-	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -49,7 +48,7 @@ type reconcileState struct {
 	compiled    bool
 	compiledErr error // non-nil when compiled=false
 
-	planSummary dagpkg.PlanSummary
+	planSummary PlanSummary
 	// nodeErrors carries error messages ("nodeID: reason") surfaced when any
 	// of the HasX flags fire. These are the reason text for NotReady/Error/
 	// Blocked conditions.

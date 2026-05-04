@@ -25,7 +25,7 @@ import (
 // nodeResult carries a node's evaluation output back to the walk loop.
 type nodeResult struct {
 	keys  []Applied
-	state dagpkg.NodeState
+	state NodeState
 	err   error
 
 	// scope is the published value for this node (full K8s object, collection, or definition map).
@@ -43,10 +43,10 @@ type nodeResult struct {
 type walkResult struct {
 	keys           []Applied            // flattened applied keys from all nodes
 	nodeKeys       map[string][]Applied // per-node applied keys (for carry-forward on next reconcile)
-	plan           *dagpkg.PlanState    // per-node states
-	needsRecompile bool                 // dynamic GVK resolved or changed
-	nodeErrors     []string             // "nodeID: reason" for status reporting
-	summary        dagpkg.PlanSummary
+	plan           *PlanState    // per-node states
+	needsRecompile bool          // dynamic GVK resolved or changed
+	nodeErrors     []string      // "nodeID: reason" for status reporting
+	summary        PlanSummary
 }
 
 // walk executes a sequential DAG walk in topological order.
@@ -54,7 +54,7 @@ type walkResult struct {
 // Each node is evaluated after all hard dependencies have completed. Lazy
 // dependencies are available as optionals in scope but do not gate evaluation.
 // The walk is sequential — no goroutines, no channels.
-func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *instanceState, eval *evaluator, dag *dagpkg.DAG, plan *dagpkg.PlanState) *walkResult {
+func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *instanceState, eval *evaluator, dag *dagpkg.DAG, plan *PlanState) *walkResult {
 	logger := log.FromContext(ctx)
 	cluster := r.cluster()
 
@@ -71,7 +71,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 		// Finalizer nodes are dormant during normal operation — they only
 		// materialize during prune/teardown. Skip them in the forward walk.
 		if node.Finalizes != "" {
-			plan.SetState(node.ID, dagpkg.NodeReady)
+			plan.SetState(node.ID, NodeReady)
 			continue
 		}
 
@@ -84,19 +84,19 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 			// Contagious exclusion: any hard dependency Excluded → Excluded.
 			// Per 005-reconciliation.md § Propagation step 1.
 			logger.V(1).Info("node excluded — dependency excluded", "node", node.ID)
-			plan.SetState(node.ID, dagpkg.NodeExcluded)
+			plan.SetState(node.ID, NodeExcluded)
 			markExcluded(eval, node.ID, state)
 			continue
 		}
 		if gate == depBlocked {
 			logger.V(1).Info("node blocked — dependency in error state", "node", node.ID)
-			plan.SetState(node.ID, dagpkg.NodeBlocked)
+			plan.SetState(node.ID, NodeBlocked)
 			carryForwardKeys(nodeKeys, node.ID, state)
 			continue
 		}
 		if gate == depPending {
 			logger.V(1).Info("node pending — dependency pending", "node", node.ID)
-			plan.SetState(node.ID, dagpkg.NodePending)
+			plan.SetState(node.ID, NodePending)
 			carryForwardKeys(nodeKeys, node.ID, state)
 			continue
 		}
@@ -122,10 +122,10 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 					if prevState, ok := state.walk.previousPlanStates.States[node.ID]; ok {
 						plan.States[node.ID] = prevState
 					} else {
-						plan.States[node.ID] = dagpkg.NodePending
+						plan.States[node.ID] = NodePending
 					}
 				} else {
-					plan.States[node.ID] = dagpkg.NodePending
+					plan.States[node.ID] = NodePending
 				}
 				continue
 			}
@@ -137,15 +137,15 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 			if err != nil {
 				carryForwardKeys(nodeKeys, node.ID, state)
 				if errors.Is(err, ErrPending) {
-					plan.SetState(node.ID, dagpkg.NodePending)
+					plan.SetState(node.ID, NodePending)
 				} else {
-					plan.SetState(node.ID, dagpkg.NodeError)
+					plan.SetState(node.ID, NodeError)
 				}
 				continue
 			}
 			if !included {
 				logger.V(1).Info("node excluded by includeWhen", "node", node.ID)
-				plan.SetState(node.ID, dagpkg.NodeExcluded)
+				plan.SetState(node.ID, NodeExcluded)
 				markExcluded(eval, node.ID, state)
 				continue
 			}
@@ -205,14 +205,14 @@ func integrateNodeResult(
 	node *graphpkg.Node,
 	eval *evaluator,
 	state *instanceState,
-	plan *dagpkg.PlanState,
+	plan *PlanState,
 	nodeKeys map[string][]Applied,
 ) nodeIntegrationResult {
 	logger := log.FromContext(ctx)
 	var out nodeIntegrationResult
 
 	// --- Error states: set plan state, record error, carry forward keys ---
-	if nr.state == dagpkg.NodeError {
+	if nr.state == NodeError {
 		info := classifyAPIError(nr.err)
 		plan.SetState(node.ID, info.state)
 		out.errMsgs = append(out.errMsgs, fmt.Sprintf("%s: %s", node.ID, info.reason))
@@ -220,16 +220,16 @@ func integrateNodeResult(
 		carryForwardKeys(nodeKeys, node.ID, state)
 		return out
 	}
-	if nr.state == dagpkg.NodeConflict {
-		plan.SetState(node.ID, dagpkg.NodeConflict)
+	if nr.state == NodeConflict {
+		plan.SetState(node.ID, NodeConflict)
 		state.walk.previousScope[node.ID] = nr.scope
 		out.errMsgs = append(out.errMsgs, fmt.Sprintf("%s: field conflict", node.ID))
 		logger.V(0).Info("conflict on node", "node", node.ID, "error", nr.err)
 		carryForwardKeys(nodeKeys, node.ID, state)
 		return out
 	}
-	if nr.state == dagpkg.NodePending {
-		plan.SetState(node.ID, dagpkg.NodePending)
+	if nr.state == NodePending {
+		plan.SetState(node.ID, NodePending)
 		state.walk.previousScope[node.ID] = nr.scope
 		logger.V(1).Info("data pending for node", "node", node.ID, "error", nr.err)
 		carryForwardKeys(nodeKeys, node.ID, state)
@@ -256,7 +256,7 @@ func integrateNodeResult(
 
 	// Merge node-readiness verdict.
 	if eval.nodeReady != nil {
-		eval.nodeReady[node.ID] = (nr.state == dagpkg.NodeReady)
+		eval.nodeReady[node.ID] = (nr.state == NodeReady)
 	}
 
 	// Merge forEach state updates.
@@ -264,14 +264,14 @@ func integrateNodeResult(
 
 	// Update plan state.
 	plan.SetState(node.ID, nr.state)
-	if nr.state == dagpkg.NodeNotReady && nr.err != nil && errors.Is(nr.err, ErrReadyWhenFailed) {
+	if nr.state == NodeNotReady && nr.err != nil && errors.Is(nr.err, ErrReadyWhenFailed) {
 		out.errMsgs = append(out.errMsgs, fmt.Sprintf("%s: %s", node.ID, nr.err.Error()))
 		logger.V(0).Info("readyWhen expression error (not gating dependents)",
 			"node", node.ID, "error", nr.err)
 	}
 
 	// Record applied keys.
-	if nr.state == dagpkg.NodeReady || nr.state == dagpkg.NodeNotReady {
+	if nr.state == NodeReady || nr.state == NodeNotReady {
 		nodeKeys[node.ID] = nr.keys
 	} else {
 		carryForwardKeys(nodeKeys, node.ID, state)
@@ -326,7 +326,7 @@ func evaluateNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, nod
 	out, err := reconcileNode(ctx, c, rs, node, eval, prevForEachState)
 
 	nr := nodeResult{
-		state: dagpkg.NodeReady,
+		state: NodeReady,
 		scope: eval.scope[node.ID],
 	}
 
@@ -340,16 +340,16 @@ func evaluateNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, nod
 		nr.err = err
 		switch {
 		case errors.Is(err, ErrPending):
-			nr.state = dagpkg.NodePending
+			nr.state = NodePending
 		case errors.Is(err, ErrWaitingForReadiness):
-			nr.state = dagpkg.NodeNotReady
+			nr.state = NodeNotReady
 		case errors.Is(err, ErrReadyWhenFailed):
 			// readyWhen is a health signal — does not gate dependents.
-			nr.state = dagpkg.NodeNotReady
+			nr.state = NodeNotReady
 		case errors.Is(err, ErrFieldConflict):
-			nr.state = dagpkg.NodeConflict
+			nr.state = NodeConflict
 		default:
-			nr.state = dagpkg.NodeError
+			nr.state = NodeError
 		}
 	}
 
@@ -383,7 +383,7 @@ const (
 //
 // Precedence: Excluded > Blocked > Pending, matching
 // 005-reconciliation.md § Propagation.
-func checkDependencyGate(node *graphpkg.Node, plan *dagpkg.PlanState) depGateOutcome {
+func checkDependencyGate(node *graphpkg.Node, plan *PlanState) depGateOutcome {
 	hasExcluded := false
 	hasBlocked := false
 	hasPending := false
@@ -396,11 +396,11 @@ func checkDependencyGate(node *graphpkg.Node, plan *dagpkg.PlanState) depGateOut
 			continue
 		}
 		switch depState {
-		case dagpkg.NodeReady, dagpkg.NodeNotReady:
+		case NodeReady, NodeNotReady:
 			// Dependency completed — proceed.
-		case dagpkg.NodeExcluded:
+		case NodeExcluded:
 			hasExcluded = true
-		case dagpkg.NodePending:
+		case NodePending:
 			hasPending = true
 		default:
 			// Error, SystemError, Conflict, Blocked → blocked.

@@ -62,7 +62,7 @@ func TestInstanceStateIsolation(t *testing.T) {
 
 	// Mutate state1's mutable fields.
 	state1.walk.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
-	state1.walk.previousPlanStates = &dagpkg.PlanState{States: map[string]dagpkg.NodeState{"node0": dagpkg.NodeReady}}
+	state1.walk.previousPlanStates = &PlanState{States: map[string]NodeState{"node0": NodeReady}}
 	state1.walk.forEach.itemScope["node0/item"] = map[string]any{"a": "b"}
 
 	// state2 should be unaffected.
@@ -395,10 +395,10 @@ func BenchmarkPropagateState(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				ps := dagpkg.NewPlanState(dag)
+				ps := NewPlanState(dag)
 				// Trigger propagation from the root — worst case: all V nodes
 				// end up Blocked via chain traversal.
-				ps.SetState("node0", dagpkg.NodeError)
+				ps.SetState("node0", NodeError)
 			}
 		})
 	}
@@ -406,9 +406,9 @@ func BenchmarkPropagateState(b *testing.B) {
 
 // propagateStateLinearScan is the pre-fix O(V²) implementation, inlined here
 // so BenchmarkPropagateStateLinearScan can measure the before-state directly.
-func propagateStateLinearScan(ps *dagpkg.PlanState, dag *dagpkg.DAG, sourceID string, targetState dagpkg.NodeState) {
+func propagateStateLinearScan(ps *PlanState, dag *dagpkg.DAG, sourceID string, targetState NodeState) {
 	for _, node := range dag.Nodes {
-		if ps.States[node.ID] != dagpkg.NodeUnvisited {
+		if ps.States[node.ID] != NodeUnvisited {
 			continue
 		}
 		if _, ok := node.Dependencies[sourceID]; ok {
@@ -434,9 +434,9 @@ func BenchmarkPropagateStateLinearScan(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				ps := dagpkg.NewPlanState(dag)
-				ps.States["node0"] = dagpkg.NodeError
-				propagateStateLinearScan(ps, dag, "node0", dagpkg.NodeBlocked)
+				ps := NewPlanState(dag)
+				ps.States["node0"] = NodeError
+				propagateStateLinearScan(ps, dag, "node0", NodeBlocked)
 			}
 		})
 	}
@@ -478,7 +478,7 @@ func BenchmarkWalkSkip(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				// Allocate only the per-walk state (plan + scope map).
-				plan := dagpkg.NewPlanState(dag)
+				plan := NewPlanState(dag)
 				scope := make(map[string]any, len(dag.Nodes))
 
 				// Walk all nodes — every node hits the skip path.
@@ -490,10 +490,10 @@ func BenchmarkWalkSkip(b *testing.B) {
 
 // walkSkipBench simulates the skip path of tryDispatch for all nodes.
 // Extracted so the benchmark measures only the walk, not setup.
-func walkSkipBench(dag *dagpkg.DAG, plan *dagpkg.PlanState, scope, prevScope map[string]any, triggered, propagationTriggered map[string]bool) {
+func walkSkipBench(dag *dagpkg.DAG, plan *PlanState, scope, prevScope map[string]any, triggered, propagationTriggered map[string]bool) {
 	for _, idx := range dag.TopologicalOrder {
 		node := &dag.Nodes[idx]
-		if plan.States[node.ID] != dagpkg.NodeUnvisited {
+		if plan.States[node.ID] != NodeUnvisited {
 			continue
 		}
 		// This is the skip check from tryDispatch step 1:

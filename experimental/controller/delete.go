@@ -97,7 +97,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{
 			compiled:    true,
-			planSummary: dagpkg.PlanSummary{HasBlocked: true},
+			planSummary: PlanSummary{HasBlocked: true},
 			nodeErrors:  nodeErrors,
 			nodeNotes:   pr.Notes,
 		}); statusErr != nil {

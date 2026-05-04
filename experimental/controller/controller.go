@@ -225,7 +225,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	eval := newEvaluator(state)
 	eval.effectiveGeneration = effectiveGeneration
 	dag := state.compilation.dag
-	plan := dagpkg.NewPlanState(dag)
+	plan := NewPlanState(dag)
 
 	// On revision transition, transfer previousAppliedKeys from superseded
 	// revisions so the prune phase knows what the old revision applied.
@@ -314,7 +314,7 @@ func (r *GraphReconciler) reconcileWalk(
 	state *instanceState,
 	eval *evaluator,
 	dag *dagpkg.DAG,
-	plan *dagpkg.PlanState,
+	plan *PlanState,
 ) *walkResult {
 	walkRes := r.walk(ctx, rs, state, eval, dag, plan)
 
@@ -349,7 +349,7 @@ func (r *GraphReconciler) reconcilePrune(
 	dag *dagpkg.DAG,
 	appliedKeys []Applied,
 	supersededRevisions []*unstructured.Unstructured,
-	summary *dagpkg.PlanSummary,
+	summary *PlanSummary,
 ) prunePhaseResult {
 	logger := log.FromContext(ctx)
 	result := prunePhaseResult{ok: true}
@@ -438,9 +438,9 @@ func (r *GraphReconciler) reconcilePrune(
 		result.ok = false
 		info := classifyAPIError(pr.Err)
 		switch info.state {
-		case dagpkg.NodeSystemError:
+		case NodeSystemError:
 			summary.HasSystemError = true
-		case dagpkg.NodeConflict:
+		case NodeConflict:
 			summary.HasConflict = true
 		default:
 			summary.HasError = true

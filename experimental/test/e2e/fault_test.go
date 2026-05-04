@@ -107,17 +107,8 @@ func TestWatchedResourceDeletedMidReconcile(t *testing.T) {
 	t.Log("Externally deleted watched resource")
 
 	// The Graph should enter a non-Ready state (Pending or similar).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "test-fault-watch-delete", Namespace: ns}, g); err != nil {
-				return false, nil
-			}
-			// Should no longer be Ready=True
-			return !graphReady(g), nil
-		}))
+	require.NoError(t, waitForGraphReadyStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "test-fault-watch-delete", Namespace: ns}, "Unknown"))
 	t.Log("Graph entered non-Ready state after watched resource was deleted")
 
 	// Recreate the watched resource — Graph should recover.
@@ -142,17 +133,9 @@ func TestWatchedResourceDeletedMidReconcile(t *testing.T) {
 		types.NamespacedName{Name: "test-fault-watch-delete", Namespace: ns}))
 
 	// Verify dependent was updated with new value.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			d := &unstructured.Unstructured{}
-			d.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "fault-dependent", Namespace: ns}, d); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(d.Object, "data")
-			return data["from"] == "recovered", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "fault-dependent", Namespace: ns},
+		[]string{"data", "from"}, "recovered"))
 	t.Log("Graph recovered — dependent updated with value=recovered")
 }
 
@@ -271,25 +254,8 @@ func TestInvalidCELExpressionSurfacesError(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for Compiled=False.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "test-fault-invalid-cel", Namespace: ns}, g); err != nil {
-				return false, nil
-			}
-			status, _ := g.Object["status"].(map[string]any)
-			if status == nil {
-				return false, nil
-			}
-			conditions, _ := status["conditions"].([]any)
-			compiled, found := findCondition(conditions, "Compiled")
-			if !found {
-				return false, nil
-			}
-			return compiled["status"] == "False", nil
-		}))
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "test-fault-invalid-cel", Namespace: ns}, "False"))
 	t.Log("Graph rejected — Compiled=False")
 
 	// No managed resource should exist.
@@ -555,17 +521,9 @@ func TestStatusSubresourceSplitApplyRevertOnFailure(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for the status to be applied.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(strictGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "split-apply-target", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			statusMap, _, _ := unstructured.NestedMap(check.Object, "status")
-			return statusMap["phase"] == "Running", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, strictGVK,
+		types.NamespacedName{Name: "split-apply-target", Namespace: ns},
+		[]string{"status", "phase"}, "Running"))
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-split-apply", Namespace: ns}))
 	t.Log("Phase 1: Valid status applied (phase=Running), Graph Ready")
@@ -597,16 +555,8 @@ func TestStatusSubresourceSplitApplyRevertOnFailure(t *testing.T) {
 	t.Log("Phase 2: Updated Graph with invalid status.phase=InvalidPhase")
 
 	// Wait for the Graph to show an error state (status apply failed).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "test-split-apply", Namespace: ns}, g); err != nil {
-				return false, nil
-			}
-			return !graphReady(g), nil
-		}))
+	require.NoError(t, waitForGraphReadyStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "test-split-apply", Namespace: ns}, "False"))
 	t.Log("Graph entered non-Ready state (status apply failed)")
 
 	// THE KEY ASSERTION: status.phase must still be "Running" (the invalid
@@ -648,17 +598,9 @@ func TestStatusSubresourceSplitApplyRevertOnFailure(t *testing.T) {
 	t.Log("Phase 3: Fixed Graph with valid status.phase=Stopped")
 
 	// Status should now update to Stopped.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(strictGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "split-apply-target", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			s, _, _ := unstructured.NestedMap(check.Object, "status")
-			return s["phase"] == "Stopped", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, strictGVK,
+		types.NamespacedName{Name: "split-apply-target", Namespace: ns},
+		[]string{"status", "phase"}, "Stopped"))
 	t.Log("Status.phase updated to Stopped — split-apply revert and recovery proved")
 
 	// Graph should recover to Ready.
@@ -1065,17 +1007,9 @@ func TestCRDDeletion_RegressionGracefulDegradation(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Verify convergence.
-	output := &unstructured.Unstructured{}
-	output.SetGroupVersionKind(cmGVK)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 60*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "crd-delete-output", Namespace: ns}, output); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(output.Object, "data")
-			return data["color"] == "red", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "crd-delete-output", Namespace: ns},
+		[]string{"data", "color"}, "red", 60*time.Second))
 	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
 	t.Log("Phase 1: Graph converged — output has color=red")
 
@@ -1086,15 +1020,8 @@ func TestCRDDeletion_RegressionGracefulDegradation(t *testing.T) {
 
 	// The Graph should degrade — it can't resolve the ref anymore.
 	// It should reach a non-Ready state (Error, SystemError, or Pending).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			if err := k8sClient.Get(ctx, graphKey, g); err != nil {
-				return false, nil
-			}
-			return !graphReady(g), nil
-		}), "Graph should degrade after CRD deletion")
+	require.NoError(t, waitForGraphReadyStatus(ctx, k8sClient, graphKey, "Unknown"),
+		"Graph should degrade after CRD deletion")
 	t.Log("Phase 2: Graph is no longer Ready (expected)")
 
 	// The ConfigMap (output) should still exist — the controller must not
@@ -1129,17 +1056,10 @@ func TestCRDDeletion_RegressionGracefulDegradation(t *testing.T) {
 	t.Log("Phase 3: CRD reinstalled, Gadget recreated with color=blue")
 
 	// Graph should recover and update the output.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 60*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			cm := &unstructured.Unstructured{}
-			cm.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "crd-delete-output", Namespace: ns}, cm); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-			return data["color"] == "blue", nil
-		}), "output should update to blue after CRD reinstall")
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "crd-delete-output", Namespace: ns},
+		[]string{"data", "color"}, "blue", 60*time.Second),
+		"output should update to blue after CRD reinstall")
 	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
 	t.Log("Phase 3: Recovered — output updated to color=blue, Graph Ready")
 

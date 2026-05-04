@@ -164,15 +164,9 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 
 	// --- Contribution: status written back to the SimpleApp instance via status subresource ---
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		updated := &unstructured.Unstructured{}
-		updated.SetGroupVersionKind(simpleAppGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "my-app", Namespace: ns}, updated); err != nil {
-			return false, nil
-		}
-		configName, _, _ := unstructured.NestedString(updated.Object, "status", "configName")
-		return configName == "my-app-config", nil
-	}))
+	require.NoError(t, waitForField(ctx, k8sClient, simpleAppGVK,
+		types.NamespacedName{Name: "my-app", Namespace: ns},
+		[]string{"status", "configName"}, "my-app-config"))
 
 	// Verify both status fields
 	updatedApp := &unstructured.Unstructured{}
@@ -198,28 +192,25 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 		}))
 	t.Log("Updated SimpleApp: image=redis:7")
 
+	// Wait for L2 child Graph to observe the propagated change.
+	{
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "my-app-simpleapp", Namespace: ns}, g))
+		require.NoError(t, waitForObservedGeneration(ctx, k8sClient, types.NamespacedName{Name: "my-app-simpleapp", Namespace: ns}, g.GetGeneration()))
+	}
+
 	// ConfigMap should update to reflect the new image
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		cm := &unstructured.Unstructured{}
-		cm.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "my-app-config", Namespace: ns}, cm); err != nil {
-			return false, nil
-		}
-		data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-		return data["image"] == "redis:7", nil
-	}))
+	require.NoError(t, waitForField(ctx, k8sClient,
+		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+		types.NamespacedName{Name: "my-app-config", Namespace: ns},
+		[]string{"data", "image"}, "redis:7"))
 	t.Log("L2: ConfigMap updated to image=redis:7 — reactive propagation proved")
 
 	// Verify status contribution also updated reactively
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		updated := &unstructured.Unstructured{}
-		updated.SetGroupVersionKind(simpleAppGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "my-app", Namespace: ns}, updated); err != nil {
-			return false, nil
-		}
-		img, _, _ := unstructured.NestedString(updated.Object, "status", "image")
-		return img == "redis:7", nil
-	}))
+	require.NoError(t, waitForField(ctx, k8sClient, simpleAppGVK,
+		types.NamespacedName{Name: "my-app", Namespace: ns},
+		[]string{"status", "image"}, "redis:7"))
 	t.Log("L2: Status contribution updated to image=redis:7 — reactive status writeback proved")
 
 	// --- Scale: add a second instance, verify second child Graph appears ---
@@ -482,12 +473,8 @@ func TestFullRGDSystemL0L1L2(t *testing.T) {
 	t.Log("Deleting L0 Graph: rgd-controller")
 
 	// L0 should be gone (its finalizer deletes L1 Graphs and waits for them to unwind)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 15*time.Second, true, func(ctx context.Context) (bool, error) {
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(GraphGVK)
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: "rgd-controller", Namespace: ns}, check)
-		return err != nil, nil
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "rgd-controller", Namespace: ns}))
 	t.Log("L0 Graph deleted")
 
 	// L1 should be gone (deleted by L0's finalizer, L1's finalizer cleaned up L2 and CRD)
@@ -659,6 +646,15 @@ func TestRGDLifecyclePort(t *testing.T) {
 		}))
 	t.Log("Instance updated: replicas=3, image=nginx:1.20, port=443")
 
+	// Wait for L2 child Graph to observe the propagated change.
+	{
+		l2Name := "test-instance-for-updates-testinstanceupdate"
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: l2Name, Namespace: ns}, g))
+		require.NoError(t, waitForObservedGeneration(ctx, k8sClient, types.NamespacedName{Name: l2Name, Namespace: ns}, g.GetGeneration()))
+	}
+
 	// Verify Deployment converges to new values.
 	// Multi-level convergence (instance → L1 Graph → L2 Graph → Deployment)
 	// can be slow under parallel test load.
@@ -709,14 +705,8 @@ func TestRGDLifecyclePort(t *testing.T) {
 
 	// Verify Deployment is cleaned up (L2 finalizer deletes it).
 	// Multi-level cascade cleanup can take longer under parallel test load.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		d := &unstructured.Unstructured{}
-		d.SetGroupVersionKind(deployGVK)
-		err := k8sClient.Get(ctx, types.NamespacedName{
-			Name: "deployment-test-instance-for-updates", Namespace: ns,
-		}, d)
-		return err != nil, nil
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, deployGVK,
+		types.NamespacedName{Name: "deployment-test-instance-for-updates", Namespace: ns}))
 	t.Log("Deployment deleted after instance deletion — cascade cleanup proved")
 
 	t.Log("RGD LIFECYCLE PORT PASSED: create → verify → update → converge → delete → cleanup")

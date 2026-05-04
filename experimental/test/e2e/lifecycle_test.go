@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -124,14 +125,8 @@ func TestFullLifecycle(t *testing.T) {
 	assertManagedBy(t, svc, "test-lifecycle")
 
 	// Wait for status to show Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReady(g), nil
-	}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-lifecycle", Namespace: ns}))
 
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
@@ -169,12 +164,8 @@ func TestFullLifecycle(t *testing.T) {
 	t.Log("Graph deleted")
 
 	// Wait for Graph to be gone (finalizer removed)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(GraphGVK)
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, check)
-		return err != nil, nil
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-lifecycle", Namespace: ns}))
 	t.Log("Graph gone — finalizer removed, GC cascade will handle owned resources")
 
 	t.Log("Full lifecycle proved: create → verify → update → verify → delete → cleanup")
@@ -252,12 +243,8 @@ func TestCascadeDeletion(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, g))
 
 	// Wait for Graph to be gone (finalizer runs active cleanup)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(GraphGVK)
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-cascade-delete", Namespace: ns}, check)
-		return err != nil, nil
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-cascade-delete", Namespace: ns}))
 	t.Log("Graph deleted, finalizer removed")
 
 	// Verify managed resources were actively deleted by the finalizer
@@ -428,14 +415,8 @@ func TestContagiousExclusion(t *testing.T) {
 	t.Log("Feature + dependent correctly excluded (contagious)")
 
 	// Status should be Active (excluded resources don't block readiness)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-contagious", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReady(g), nil
-	}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-contagious", Namespace: ns}))
 	t.Log("Graph is Active despite excluded resources")
 	t.Log("Contagious exclusion proved: feature excluded → dependent contagiously excluded → independent unaffected")
 }
@@ -494,12 +475,20 @@ func TestPendingChain(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
+	// Wait for the controller to process the Graph before asserting absence.
+	graphKey := types.NamespacedName{Name: "test-chain", Namespace: ns}
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
+
 	// Middle and tail should NOT exist (data pending)
 	cmGVK3 := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
-	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK3, types.NamespacedName{Name: "chain-middle", Namespace: ns}, 1*time.Second))
-	// Absence is inherently probabilistic — 2s is a confidence dial, not a
-	// correctness guarantee.
-	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK3, types.NamespacedName{Name: "chain-tail", Namespace: ns}, 2*time.Second))
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(cmGVK3)
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: "chain-middle", Namespace: ns}, obj)
+	require.True(t, apierrors.IsNotFound(err), "chain-middle should not exist — data pending")
+	obj2 := &unstructured.Unstructured{}
+	obj2.SetGroupVersionKind(cmGVK3)
+	err = k8sClient.Get(ctx, types.NamespacedName{Name: "chain-tail", Namespace: ns}, obj2)
+	require.True(t, apierrors.IsNotFound(err), "chain-tail should not exist — data pending")
 	t.Log("Chain correctly blocked: middle + tail pending")
 
 	// Add the missing field
@@ -511,15 +500,10 @@ func TestPendingChain(t *testing.T) {
 	t.Log("Added chainField to source")
 
 	// Both middle and tail should resolve
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		result := &unstructured.Unstructured{}
-		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "chain-tail", Namespace: ns}, result); err != nil {
-			return false, nil
-		}
-		data, _, _ := unstructured.NestedStringMap(result.Object, "data")
-		return data["fromMiddle"] == "chain-value", nil
-	}))
+	cmGVK4 := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK4,
+		types.NamespacedName{Name: "chain-tail", Namespace: ns},
+		[]string{"data", "fromMiddle"}, "chain-value"))
 	t.Log("Full chain resolved: source → middle → tail")
 }
 
@@ -622,12 +606,8 @@ func TestForEachCollectionScaleUpDown(t *testing.T) {
 	t.Log("Deleted source scale-a")
 
 	// scale-a-copy should be pruned
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(cmGVK)
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: "scale-a-copy", Namespace: ns}, check)
-		return err != nil, nil // gone = success
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "scale-a-copy", Namespace: ns}))
 	t.Log("Scale down: scale-a-copy pruned")
 
 	// scale-b-copy and scale-c-copy should still exist
@@ -695,10 +675,16 @@ func TestIncludeWhenToggle(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
+	// Wait for the controller to process the Graph before asserting absence.
+	graphKey := types.NamespacedName{Name: "test-toggle", Namespace: ns}
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
+
 	// Phase 1: enabled=false → gated resource should NOT exist
 	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
-	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
-		types.NamespacedName{Name: "gated-resource", Namespace: ns}, 1*time.Second))
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(cmGVK)
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: "gated-resource", Namespace: ns}, obj)
+	require.True(t, apierrors.IsNotFound(err), "gated-resource should not exist — enabled=false")
 	t.Log("Phase 1: gated-resource absent (enabled=false)")
 
 	// Phase 2: flip to true → resource should be created
@@ -720,12 +706,8 @@ func TestIncludeWhenToggle(t *testing.T) {
 	unstructured.SetNestedField(latestCtl.Object, "false", "data", "enabled")
 	require.NoError(t, k8sClient.Update(ctx, latestCtl))
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(cmGVK)
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: "gated-resource", Namespace: ns}, check)
-		return err != nil, nil // gone = success
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "gated-resource", Namespace: ns}))
 	t.Log("Phase 3: gated-resource pruned (enabled=false)")
 	t.Log("includeWhen toggle proved: false→true creates, true→false prunes")
 }
@@ -837,14 +819,8 @@ func TestTeardownWithDeletedRevision(t *testing.T) {
 	t.Log("Graph deleted — revision already gone, controller must regenerate DAG")
 
 	// Graph should be fully deleted (finalizer removed) — proves no panic.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(GraphGVK)
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "test-teardown-deleted-rev", Namespace: ns}, check)
-			return err != nil, nil
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-teardown-deleted-rev", Namespace: ns}))
 	t.Log("Graph fully deleted — finalizer removed despite missing revision")
 
 	// All managed ConfigMaps should be gone.

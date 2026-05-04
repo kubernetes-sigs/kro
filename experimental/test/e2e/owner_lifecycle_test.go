@@ -1,16 +1,14 @@
 package graphcontroller_test
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -96,14 +94,9 @@ func TestOwnerRef_PatchPlacesFinalizer(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for the Graph to become ready.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-owner-patch", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReady(g), nil
-	}), "Graph should become ready")
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-owner-patch", Namespace: ns}),
+		"Graph should become ready")
 
 	// Verify: the owner ConfigMap should have the finalizer from the patch node.
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "owner-cm", Namespace: ns}, owner))
@@ -187,14 +180,9 @@ func TestOwnerRef_TeardownOnOwnerDeletion(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for Graph to become ready and managed resource to exist.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-teardown", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReady(g), nil
-	}), "Graph should become ready")
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-teardown", Namespace: ns}),
+		"Graph should become ready")
 
 	// Verify managed resource exists.
 	managed := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}}
@@ -204,26 +192,20 @@ func TestOwnerRef_TeardownOnOwnerDeletion(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, owner))
 
 	// Wait for the owner to disappear (finalizer released after teardown).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: "teardown-owner", Namespace: ns}, owner)
-		return apierrors.IsNotFound(err), nil
-	}), "owner should eventually be deleted after teardown")
+	cmGVK := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "teardown-owner", Namespace: ns}),
+		"owner should eventually be deleted after teardown")
 
 	// Verify: managed resource should also be gone.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: "managed-resource", Namespace: ns}, managed)
-			return apierrors.IsNotFound(err), nil
-		}), "managed resource should be cascade-deleted after owner deletion")
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "managed-resource", Namespace: ns}),
+		"managed resource should be cascade-deleted after owner deletion")
 
 	// Verify: Graph should also be gone.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-teardown", Namespace: ns}, g)
-			return apierrors.IsNotFound(err), nil
-		}), "Graph should be cascade-deleted after owner deletion")
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-teardown", Namespace: ns}),
+		"Graph should be cascade-deleted after owner deletion")
 }
 
 // TestOwnerRef_OwnerGoneBeforeGraph exercises the race window: if the
@@ -254,10 +236,9 @@ func TestOwnerRef_OwnerGoneBeforeGraph(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, owner, &client.DeleteOptions{
 		GracePeriodSeconds: ptr.To(int64(0)),
 	}))
-	require.Eventually(t, func() bool {
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: "race-owner", Namespace: ns}, owner)
-		return apierrors.IsNotFound(err)
-	}, 5*time.Second, 100*time.Millisecond)
+	require.NoError(t, waitForDeletion(ctx, k8sClient,
+		schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"},
+		types.NamespacedName{Name: "race-owner", Namespace: ns}))
 
 	// Create Graph pointing to the now-gone owner. The lifecycle patch
 	// can't find its target so stays Pending. ownerDeleting() can't GET
@@ -313,11 +294,11 @@ func TestOwnerRef_OwnerGoneBeforeGraph(t *testing.T) {
 
 	// The managed resource (child) should still be created even though
 	// the lifecycle patch is Pending (owner is gone).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		cm := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}}
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: "race-child", Namespace: ns}, cm)
-		return err == nil, nil
-	}), "managed resource should be created despite lifecycle patch being Pending")
+	childCM := &unstructured.Unstructured{}
+	childCM.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "race-child", Namespace: ns}, childCM),
+		"managed resource should be created despite lifecycle patch being Pending")
 
 	// Cleanup.
 	require.NoError(t, k8sClient.Delete(ctx, graph))
@@ -403,32 +384,16 @@ func TestOwnerRef_ManagedResourcesGoneBeforeOwnerReleased(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for ready.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-order", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReady(g), nil
-	}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-order", Namespace: ns}))
 
 	// Delete owner.
 	require.NoError(t, k8sClient.Delete(ctx, owner))
 
 	// Wait for the owner to disappear (teardown complete, finalizer released).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: "order-owner", Namespace: ns}, owner)
-		if apierrors.IsNotFound(err) {
-			return true, nil
-		}
-		if err != nil {
-			return false, nil
-		}
-		// Owner is Terminating — verify it's being held.
-		assert.False(t, owner.GetDeletionTimestamp().IsZero(),
-			"owner should be Terminating while teardown runs")
-		return false, nil
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient,
+		schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"},
+		types.NamespacedName{Name: "order-owner", Namespace: ns}))
 
 	// After the owner is gone, managed resources must also be gone.
 	cm1 := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}}

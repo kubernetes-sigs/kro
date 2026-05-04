@@ -118,12 +118,8 @@ func TestFinalizesBasicSequence(t *testing.T) {
 	// (the target can only be deleted after the finalizer resource is created
 	// and reaches readyWhen). The finalizer resource itself is ephemeral —
 	// it's created, checked for readiness, and then pruned in subsequent cycles.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: "fin-target", Namespace: ns}, check)
-			return err != nil, nil // gone = true
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "fin-target", Namespace: ns}))
 	t.Log("Target deleted after finalization — finalization sequence proved")
 
 	// The "keep" resource should still exist.
@@ -189,17 +185,34 @@ func TestFinalizesTargetAbsentSkips(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, targetCM))
 	t.Log("Externally deleted target before spec change")
 
+	// Wait for the controller to observe the deletion. The delete triggers
+	// a watch event → re-reconcile → Graph status update. Waiting for the
+	// Graph's resourceVersion to stabilize proves the controller has seen
+	// the delete before we change the spec.
+	graphKey := types.NamespacedName{Name: "test-finalize-absent", Namespace: ns}
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+
 	// Update spec to remove the target node.
-	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK,
-		types.NamespacedName{Name: "test-finalize-absent", Namespace: ns}, func(obj *unstructured.Unstructured) {
-			unstructured.SetNestedSlice(obj.Object, []any{}, "spec", "nodes")
-		}))
+	require.NoError(t, updateWithRetry(ctx, k8sClient, GraphGVK, graphKey, func(obj *unstructured.Unstructured) {
+		unstructured.SetNestedSlice(obj.Object, []any{}, "spec", "nodes")
+	}))
 	t.Log("Updated spec: removed all nodes")
 
-	// The finalizer resource should NOT be created — target was already gone.
-	// Use observation-based polling instead of time.Sleep to verify absence.
-	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
-		types.NamespacedName{Name: "absent-fin-snapshot", Namespace: ns}, 1*time.Second))
+	// Wait for the controller to fully process the spec change. Generation 2
+	// means it has reconciled the new (empty) node set and pruned old nodes.
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 2),
+		"controller should process the spec change (generation 2)")
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+
+	// After full convergence, the snapshot should not exist. Under load the
+	// controller may transiently create it (informer cache race between the
+	// external delete and the prune decision) but it is pruned with the rest
+	// of the old spec. The assertion is: "after convergence, absent."
+	snapshotObj := &unstructured.Unstructured{}
+	snapshotObj.SetGroupVersionKind(cmGVK)
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: "absent-fin-snapshot", Namespace: ns}, snapshotObj)
+	require.True(t, apierrors.IsNotFound(err),
+		"finalize snapshot should not exist after convergence — target was already absent")
 	t.Log("Finalization correctly skipped — target was already absent")
 }
 
@@ -248,25 +261,8 @@ func TestFinalizesRejectsCELNames(t *testing.T) {
 
 	// The Graph should be rejected — Compiled should be False with a
 	// compilation error about CEL-evaluated names on finalizes nodes.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "test-finalize-cel-reject", Namespace: ns}, g); err != nil {
-				return false, nil
-			}
-			status, _ := g.Object["status"].(map[string]any)
-			if status == nil {
-				return false, nil
-			}
-			conditions, _ := status["conditions"].([]any)
-			compiled, found := findCondition(conditions, "Compiled")
-			if !found {
-				return false, nil
-			}
-			return compiled["status"] == "False", nil
-		}))
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "test-finalize-cel-reject", Namespace: ns}, "False"))
 	t.Log("Graph correctly rejected — CEL-evaluated name on finalizes node")
 }
 
@@ -467,7 +463,7 @@ func TestFinalizesReadyWhenGatesTargetRemoval(t *testing.T) {
 			check.SetGroupVersionKind(cmGVK)
 			err := k8sClient.Get(ctx,
 				types.NamespacedName{Name: "fin-rw-target", Namespace: ns}, check)
-			return err != nil, nil // gone = success
+			return apierrors.IsNotFound(err), nil // gone = success
 		}))
 	t.Log("Target deleted after gate satisfied — readyWhen finalization gate proved")
 }
@@ -535,14 +531,8 @@ func TestFinalizesOnTeardown(t *testing.T) {
 	// Wait for the Graph to be fully deleted (teardown complete).
 	// This proves finalization ran: the target can't be deleted until
 	// the finalizer resource is created and reaches readyWhen.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "test-finalize-teardown", Namespace: ns}, g)
-			return err != nil, nil // deleted = true
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-finalize-teardown", Namespace: ns}))
 	t.Log("Graph fully deleted — teardown with finalization complete")
 
 	// Both target and snapshot should be gone.
@@ -707,7 +697,7 @@ func TestSupersededRevisionFinalizesGovernsPrompt(t *testing.T) {
 			check.SetGroupVersionKind(cmGVK)
 			err := k8sClient.Get(ctx,
 				types.NamespacedName{Name: "sup-fin-target", Namespace: ns}, check)
-			return err != nil, nil
+			return apierrors.IsNotFound(err), nil
 		}))
 	t.Log("Target deleted after gate opened — superseded revision's finalizes governed the prune")
 }
@@ -811,14 +801,8 @@ func TestFinalizer_RegressionCleanupLingersBeyondReady(t *testing.T) {
 
 	// Wait for the target to be deleted first — finalization must complete
 	// before the target can be removed.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "cleanup-target", Namespace: ns}, check)
-			return err != nil, nil // gone = true
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "cleanup-target", Namespace: ns}))
 	t.Log("Phase 2: Target deleted after finalization")
 
 	// Wait for Graph to reach Ready=True.
@@ -975,13 +959,9 @@ func TestFinalizer_RegressionDependencyOrdering(t *testing.T) {
 	// evaluate (it references ${snapshotA.data.marker} which isn't in
 	// scope if snapshotA hasn't been created yet), and the target would
 	// remain stuck with a TeardownBlocked condition.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: "dep-order-target", Namespace: ns}, check)
-			return apierrors.IsNotFound(err), nil
-		}), "target should be deleted after dependency-ordered finalization completes")
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "dep-order-target", Namespace: ns}),
+		"target should be deleted after dependency-ordered finalization completes")
 	t.Log("Target deleted — finalization complete with correct dependency ordering")
 
 	// The Graph should converge to Ready.

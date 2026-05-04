@@ -171,11 +171,13 @@ func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.
 	}
 
 	// Build both conditions
+	generation := graph.GetGeneration()
+
 	compiledStatus, compiledReason, compiledMessage := state.deriveCompiledCondition()
-	compiledCondition := buildCondition(string(conditionCompiled), compiledStatus, compiledReason, compiledMessage)
+	compiledCondition := buildCondition(string(conditionCompiled), compiledStatus, compiledReason, compiledMessage, generation)
 
 	readyStatus, readyReason, readyMessage := state.deriveReadyCondition()
-	readyCondition := buildCondition(string(conditionReady), readyStatus, readyReason, readyMessage)
+	readyCondition := buildCondition(string(conditionReady), readyStatus, readyReason, readyMessage, generation)
 
 	// Preserve lastTransitionTime for conditions whose status hasn't changed
 	existingConditions, _, _ := unstructured.NestedSlice(latest.Object, "status", "conditions")
@@ -221,13 +223,14 @@ func statusEqual(a, b map[string]any) bool {
 }
 
 // buildCondition creates a condition map with the current timestamp.
-func buildCondition(condType string, status conditionStatus, reason, message string) map[string]any {
+func buildCondition(condType string, status conditionStatus, reason, message string, observedGeneration int64) map[string]any {
 	return map[string]any{
 		"type":               condType,
 		"status":             string(status),
 		"reason":             reason,
 		"message":            message,
 		"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
+		"observedGeneration": observedGeneration,
 	}
 }
 

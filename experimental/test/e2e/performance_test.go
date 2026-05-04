@@ -1,7 +1,6 @@
 package graphcontroller_test
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -118,24 +116,7 @@ func TestFieldConflictBlocksDependents(t *testing.T) {
 	t.Log("independent ConfigMap created — independent branch continued")
 
 	// 4. Verify the Graph reports FieldConflict.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-conflict", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
-		for _, c := range conditions {
-			cm, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			if cm["type"] == "Ready" && cm["reason"] == "Conflict" {
-				return true, nil
-			}
-		}
-		return false, nil
-	}))
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient, types.NamespacedName{Name: "test-conflict", Namespace: ns}, "Conflict"))
 	t.Log("Graph status shows Conflict")
 
 	// 5. Verify the contested ConfigMap retains the external value (no force takeover).
@@ -190,24 +171,7 @@ func TestFieldConflictResolvesOnOwnershipRelease(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// 3. Wait for FieldConflict.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-conflict-resolve", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
-		for _, c := range conditions {
-			cm, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			if cm["type"] == "Ready" && cm["reason"] == "Conflict" {
-				return true, nil
-			}
-		}
-		return false, nil
-	}))
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient, types.NamespacedName{Name: "test-conflict-resolve", Namespace: ns}, "Conflict"))
 	t.Log("Graph shows Conflict — now releasing external ownership")
 
 	// 4. Release the external manager's ownership by deleting the ConfigMap.
@@ -219,14 +183,7 @@ func TestFieldConflictResolvesOnOwnershipRelease(t *testing.T) {
 	// deletion via dynamic watch, then reconcile and recreate the resource.
 	// The controller may be in exponential backoff from the repeated 409s
 	// (default backoff caps at 16s), so use a generous timeout.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 60*time.Second, true, func(ctx2 context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-conflict-resolve", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReady(g), nil
-	}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, types.NamespacedName{Name: "test-conflict-resolve", Namespace: ns}, 60*time.Second))
 	t.Log("Graph became Active after conflict resolution")
 
 	// 6. Verify the ConfigMap now has the Graph's desired value.
@@ -300,24 +257,7 @@ func TestDeletionSkipsConflictedResources(t *testing.T) {
 	t.Log("graph-owned-cm created")
 
 	// 4. Wait for FieldConflict status.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-delete-conflict", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
-		for _, c := range conditions {
-			cm, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			if cm["type"] == "Ready" && cm["reason"] == "Conflict" {
-				return true, nil
-			}
-		}
-		return false, nil
-	}))
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient, types.NamespacedName{Name: "test-delete-conflict", Namespace: ns}, "Conflict"))
 	t.Log("Graph shows Conflict")
 
 	// 5. Delete the Graph.
@@ -328,12 +268,7 @@ func TestDeletionSkipsConflictedResources(t *testing.T) {
 	t.Log("Graph deleted")
 
 	// 6. Wait for Graph to be fully deleted.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-delete-conflict", Namespace: ns}, g)
-		return err != nil, nil // gone = success
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-delete-conflict", Namespace: ns}))
 	t.Log("Graph fully deleted")
 
 	// 7. The external ConfigMap should still exist (never successfully applied).

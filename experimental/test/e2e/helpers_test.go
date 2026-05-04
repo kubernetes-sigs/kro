@@ -158,8 +158,12 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 	}
 }
 
-func waitForResource(ctx context.Context, c client.Client, key types.NamespacedName, obj *unstructured.Unstructured) error {
-	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+func waitForResource(ctx context.Context, c client.Client, key types.NamespacedName, obj *unstructured.Unstructured, timeout ...time.Duration) error {
+	t := 30 * time.Second
+	if len(timeout) > 0 {
+		t = timeout[0]
+	}
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, t, true, func(ctx context.Context) (bool, error) {
 		if err := c.Get(ctx, key, obj); err != nil {
 			return false, nil
 		}
@@ -227,6 +231,50 @@ func waitForAbsence(ctx context.Context, c client.Client, gvk schema.GroupVersio
 	}
 }
 
+// requireAbsent asserts that a resource does not exist at this instant.
+// Use after a convergence gate (waitForObservedGeneration, waitForGraphReady)
+// to prove the controller decided not to create a resource.
+func requireAbsent(t *testing.T, c client.Client, gvk schema.GroupVersionKind, key types.NamespacedName, msgAndArgs ...any) {
+	t.Helper()
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvk)
+	err := c.Get(ctx, key, obj)
+	require.True(t, apierrors.IsNotFound(err), msgAndArgs...)
+}
+
+// waitForObservedGeneration polls until the Compiled condition's
+// observedGeneration is >= the requested generation. The Compiled condition
+// is written after the controller parses and compiles the spec — at that
+// point the controller knows which nodes to apply, exclude, and prune.
+// This is the right convergence gate for absence assertions: the controller
+// has made its decisions, even if the walk hasn't started yet.
+func waitForObservedGeneration(ctx context.Context, c client.Client, key types.NamespacedName, minGeneration int64) error {
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := c.Get(ctx, key, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		conditions, _ := status["conditions"].([]any)
+		cond, found := findCondition(conditions, "Compiled")
+		if !found {
+			return false, nil
+		}
+		// observedGeneration may be int64 or float64 depending on JSON round-trip.
+		switch v := cond["observedGeneration"].(type) {
+		case int64:
+			return v >= minGeneration, nil
+		case float64:
+			return int64(v) >= minGeneration, nil
+		}
+		return false, nil
+	})
+}
+
 // waitForDeletion polls until a resource returns NotFound. Use this when a
 // resource has been deleted and you need to wait for teardown to complete.
 // Unlike waitForAbsence (which proves something never appears), this observes
@@ -240,6 +288,28 @@ func waitForDeletion(ctx context.Context, c client.Client, gvk schema.GroupVersi
 			return true, nil
 		}
 		return false, nil
+	})
+}
+
+// waitForField polls until a nested string field on a resource matches the
+// expected value. This replaces the most common inline PollUntilContextTimeout
+// pattern: get resource, extract field, compare.
+func waitForField(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, key types.NamespacedName, path []string, want string, timeout ...time.Duration) error {
+	t := 30 * time.Second
+	if len(timeout) > 0 {
+		t = timeout[0]
+	}
+	return wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, t, true, func(ctx context.Context) (bool, error) {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(gvk)
+		if err := c.Get(ctx, key, obj); err != nil {
+			return false, nil
+		}
+		val, found, _ := unstructured.NestedString(obj.Object, path...)
+		if !found {
+			return false, nil
+		}
+		return val == want, nil
 	})
 }
 
@@ -379,8 +449,12 @@ func graphReadyStatus(g *unstructured.Unstructured) string { return conditionFie
 func graphCompiledReason(g *unstructured.Unstructured) string { return conditionField(g, "Compiled", "reason") }
 
 // waitForGraphReady polls until the Graph's Ready condition is True.
-func waitForGraphReady(ctx context.Context, c client.Client, key types.NamespacedName) error {
-	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+func waitForGraphReady(ctx context.Context, c client.Client, key types.NamespacedName, timeout ...time.Duration) error {
+	t := 30 * time.Second
+	if len(timeout) > 0 {
+		t = timeout[0]
+	}
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, t, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := c.Get(ctx, key, g); err != nil {
@@ -391,8 +465,12 @@ func waitForGraphReady(ctx context.Context, c client.Client, key types.Namespace
 }
 
 // waitForGraphReadyReason polls until the Graph's Ready condition has the expected reason.
-func waitForGraphReadyReason(ctx context.Context, c client.Client, key types.NamespacedName, reason string) error {
-	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+func waitForGraphReadyReason(ctx context.Context, c client.Client, key types.NamespacedName, reason string, timeout ...time.Duration) error {
+	t := 30 * time.Second
+	if len(timeout) > 0 {
+		t = timeout[0]
+	}
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, t, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := c.Get(ctx, key, g); err != nil {
@@ -403,8 +481,12 @@ func waitForGraphReadyReason(ctx context.Context, c client.Client, key types.Nam
 }
 
 // waitForGraphReadyStatus polls until the Graph's Ready condition has the expected status (True/False/Unknown).
-func waitForGraphReadyStatus(ctx context.Context, c client.Client, key types.NamespacedName, status string) error {
-	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+func waitForGraphReadyStatus(ctx context.Context, c client.Client, key types.NamespacedName, status string, timeout ...time.Duration) error {
+	t := 30 * time.Second
+	if len(timeout) > 0 {
+		t = timeout[0]
+	}
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, t, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := c.Get(ctx, key, g); err != nil {

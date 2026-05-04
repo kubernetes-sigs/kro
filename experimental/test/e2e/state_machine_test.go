@@ -1,17 +1,16 @@
 package graphcontroller_test
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // ---------------------------------------------------------------------------
@@ -119,13 +118,11 @@ func TestMixedNodeStatesInWideDag(t *testing.T) {
 	t.Log("Graph Ready=Conflict — reflects worst state across all branches")
 
 	// Excluded resource should NOT exist.
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
-		types.NamespacedName{Name: "test-mixed-states", Namespace: ns}))
-	checkExcluded := &unstructured.Unstructured{}
-	checkExcluded.SetGroupVersionKind(gvk)
-	err := k8sClient.Get(ctx,
-		types.NamespacedName{Name: "mixed-excluded-cm", Namespace: ns}, checkExcluded)
-	assert.Error(t, err, "excluded resource should not exist")
+	graphKey := types.NamespacedName{Name: "test-mixed-states", Namespace: ns}
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
+	requireAbsent(t, k8sClient, gvk,
+		types.NamespacedName{Name: "mixed-excluded-cm", Namespace: ns},
+		"excluded resource should not exist")
 	t.Log("Mixed states: Conflict + Excluded + Ready all coexist — status reflects worst")
 }
 
@@ -365,14 +362,8 @@ func TestConflictDoesNotBlockIndependentPrune(t *testing.T) {
 	t.Log("Removed removable node from spec")
 
 	// Removable should be pruned (independent of Conflict).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(gvk)
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "conflict-indep-removable", Namespace: ns}, check)
-			return err != nil, nil
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "conflict-indep-removable", Namespace: ns}))
 	t.Log("Removable pruned despite ongoing Conflict — independent prune proved")
 }
 
@@ -519,14 +510,8 @@ func TestRapidSpecChanges(t *testing.T) {
 
 	// All previous versions should be pruned.
 	for _, version := range []string{"v1", "v2", "v3"} {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				check := &unstructured.Unstructured{}
-				check.SetGroupVersionKind(gvk)
-				err := k8sClient.Get(ctx,
-					types.NamespacedName{Name: "rapid-" + version, Namespace: ns}, check)
-				return err != nil, nil
-			}),
+		require.NoError(t, waitForDeletion(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: "rapid-" + version, Namespace: ns}),
 			"rapid-%s must be pruned after rapid spec changes", version)
 	}
 
@@ -730,16 +715,9 @@ func TestGraphWithZeroTemplateNodes(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for patch to be applied.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(gvk)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "zero-templates-patch", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			return check.GetAnnotations()["kro.run/managed"] == "true", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "zero-templates-patch", Namespace: ns},
+		[]string{"metadata", "annotations", "kro.run/managed"}, "true"))
 
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-zero-templates", Namespace: ns}))
@@ -843,17 +821,26 @@ func TestDiamondStatePrecedence_RegressionExcludedOverBlocked(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
+	// Wait for the controller to process the Graph before asserting absence.
+	graphKey := types.NamespacedName{Name: "diamond-precedence", Namespace: ns}
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
+
 	// Parent A is Excluded (includeWhen false).
 	// Parent B is Pending (Watch target absent).
 	// Child depends on both → should be Excluded (Excluded > Pending).
 	// The child resource MUST NOT be created.
-	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
-		types.NamespacedName{Name: "diamond-child", Namespace: ns}, 3*time.Second),
+	childObj := &unstructured.Unstructured{}
+	childObj.SetGroupVersionKind(cmGVK)
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: "diamond-child", Namespace: ns}, childObj)
+	require.True(t, apierrors.IsNotFound(err),
 		"child should not be created — Excluded parent takes precedence")
 
 	// Parent A's resource should also not exist (it's excluded)
-	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
-		types.NamespacedName{Name: "diamond-parent-a", Namespace: ns}, 1*time.Second))
+	parentObj := &unstructured.Unstructured{}
+	parentObj.SetGroupVersionKind(cmGVK)
+	err = k8sClient.Get(ctx, types.NamespacedName{Name: "diamond-parent-a", Namespace: ns}, parentObj)
+	require.True(t, apierrors.IsNotFound(err),
+		"parent-a should not exist — excluded by includeWhen")
 
 	// Now flip the toggle: enable parent A. updateWithRetry is safe here
 	// because root is a Watch (the Graph doesn't SSA-apply root).

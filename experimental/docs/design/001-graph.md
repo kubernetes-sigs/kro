@@ -393,8 +393,10 @@ or server failures). The condition structure reflects this split.
 ### Conditions
 
 `status.conditions` follows the standard Kubernetes condition convention — each condition has
-`type`, `status`, `reason`, `message`, and `lastTransitionTime`. `lastTransitionTime` is preserved
-when the status value does not change between reconciles.
+`type`, `status`, `reason`, `message`, `lastTransitionTime`, and `observedGeneration`.
+`lastTransitionTime` is preserved when the status value does not change between reconciles.
+`observedGeneration` is the `metadata.generation` the condition was last evaluated against — each
+condition advances independently.
 
 The Graph defines two conditions on orthogonal axes:
 
@@ -435,11 +437,13 @@ status:
     - type: Compiled
       status: "True"
       reason: Compiled
+      observedGeneration: 1
       lastTransitionTime: "2025-01-15T10:29:00Z"
     - type: Ready
       status: "True"
       reason: Ready
       message: "All 3 resources reconciled"
+      observedGeneration: 1
       lastTransitionTime: "2025-01-15T10:30:00Z"
   topologicalOrder:
     nodes: ["schema", "deployment", "service", "statusPatch"]

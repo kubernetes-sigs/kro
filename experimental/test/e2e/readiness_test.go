@@ -1,16 +1,14 @@
 package graphcontroller_test
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // TestReadyWhenDoesNotGateDownstream proves that readyWhen is a health signal,
@@ -110,15 +108,9 @@ func TestReadyWhenDoesNotGateDownstream(t *testing.T) {
 	t.Log("Updated source to ready state with value=hello-from-ready")
 
 	// Now the output SHOULD be created/updated with the correct value
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		result := &unstructured.Unstructured{}
-		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "ready-output", Namespace: ns}, result); err != nil {
-			return false, nil
-		}
-		data, _, _ := unstructured.NestedStringMap(result.Object, "data")
-		return data["fromSource"] == "hello-from-ready", nil
-	}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "ready-output", Namespace: ns},
+		[]string{"data", "fromSource"}, "hello-from-ready"))
 
 	// Verify final state
 	finalOutput := &unstructured.Unstructured{}
@@ -296,9 +288,16 @@ func TestPendingRequeues(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
+	// Wait for the controller to process the Graph before asserting absence.
+	graphKey := types.NamespacedName{Name: "test-pending", Namespace: ns}
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
+
 	// Output should NOT be created yet — the field doesn't exist
-	require.NoError(t, waitForAbsence(ctx, k8sClient, schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-		types.NamespacedName{Name: "data-output", Namespace: ns}, 1*time.Second))
+	pendingObj := &unstructured.Unstructured{}
+	pendingObj.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: "data-output", Namespace: ns}, pendingObj)
+	require.True(t, apierrors.IsNotFound(err),
+		"output should not exist — data is pending")
 	t.Log("Output correctly not created while data is pending")
 
 	// Verify the Graph still exists and hasn't been deleted (controller didn't crash)
@@ -316,15 +315,10 @@ func TestPendingRequeues(t *testing.T) {
 	t.Log("Added pending_field=resolved-value to source")
 
 	// Now the output should be created with the resolved value
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		result := &unstructured.Unstructured{}
-		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "data-output", Namespace: ns}, result); err != nil {
-			return false, nil
-		}
-		data, _, _ := unstructured.NestedStringMap(result.Object, "data")
-		return data["result"] == "resolved-value", nil
-	}))
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "data-output", Namespace: ns},
+		[]string{"data", "result"}, "resolved-value"))
 
 	finalOutput := &unstructured.Unstructured{}
 	finalOutput.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
@@ -424,15 +418,10 @@ func TestReadyWhenNotReadyThenReady(t *testing.T) {
 	t.Log("Infra transitioned to Running")
 
 	// App config should now be created
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		result := &unstructured.Unstructured{}
-		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "app-config", Namespace: ns}, result); err != nil {
-			return false, nil
-		}
-		data, _, _ := unstructured.NestedStringMap(result.Object, "data")
-		return data["infraPhase"] == "Running", nil
-	}))
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "app-config", Namespace: ns},
+		[]string{"data", "infraPhase"}, "Running"))
 
 	finalApp := &unstructured.Unstructured{}
 	finalApp.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})

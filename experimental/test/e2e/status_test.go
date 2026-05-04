@@ -1,16 +1,13 @@
 package graphcontroller_test
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // TestStatusActiveOnSuccess proves that a successfully reconciled Graph
@@ -55,14 +52,7 @@ func TestStatusActiveOnSuccess(t *testing.T) {
 	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: "status-test", Namespace: ns}, cm))
 
 	// Wait for status to be set to Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-status-active", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReady(g), nil
-	}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, types.NamespacedName{Name: "test-status-active", Namespace: ns}))
 
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
@@ -138,14 +128,7 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for status to be InProgress (not-ready)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-status-inprogress", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReadyStatus(g) == "Unknown", nil
-	}))
+	require.NoError(t, waitForGraphReadyStatus(ctx, k8sClient, types.NamespacedName{Name: "test-status-inprogress", Namespace: ns}, "Unknown"))
 
 	// Verify InProgress status
 	g := &unstructured.Unstructured{}
@@ -175,14 +158,7 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, latestSource))
 
 	// Wait for status to transition to Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-status-inprogress", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReady(g), nil
-	}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, types.NamespacedName{Name: "test-status-inprogress", Namespace: ns}))
 
 	// Verify Active status
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-status-inprogress", Namespace: ns}, g))

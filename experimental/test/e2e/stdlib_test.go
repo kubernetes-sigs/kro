@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -119,13 +119,8 @@ func TestStdlibKind(t *testing.T) {
 	cm.SetKind("ConfigMap")
 	cmKey := types.NamespacedName{Name: "my-widget-config", Namespace: "kro-system"}
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 2*time.Second, stdlibReconcileTimeout, true,
-		func(ctx context.Context) (bool, error) {
-			if err := k8sClient.Get(ctx, cmKey, cm); err != nil {
-				return false, nil
-			}
-			return true, nil
-		}), "ConfigMap my-widget-config not created within timeout")
+	require.NoError(t, waitForResource(ctx, k8sClient, cmKey, cm, stdlibReconcileTimeout),
+		"ConfigMap my-widget-config not created within timeout")
 
 	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
 	assert.Equal(t, "hello from kind test", data["message"],
@@ -221,13 +216,8 @@ func TestStdlibDecorator(t *testing.T) {
 	companion.SetKind("ConfigMap")
 	companionKey := types.NamespacedName{Name: "my-config-decorated", Namespace: "kro-system"}
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 2*time.Second, stdlibReconcileTimeout, true,
-		func(ctx context.Context) (bool, error) {
-			if err := k8sClient.Get(ctx, companionKey, companion); err != nil {
-				return false, nil
-			}
-			return true, nil
-		}), "companion ConfigMap my-config-decorated not created within timeout")
+	require.NoError(t, waitForResource(ctx, k8sClient, companionKey, companion, stdlibReconcileTimeout),
+		"companion ConfigMap my-config-decorated not created within timeout")
 
 	data, _, _ := unstructured.NestedStringMap(companion.Object, "data")
 	assert.Equal(t, "my-config", data["source"],
@@ -308,14 +298,10 @@ func TestStdlibSingleton(t *testing.T) {
 	cm.SetKind("ConfigMap")
 	cmKey := types.NamespacedName{Name: "contested", Namespace: ns}
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 2*time.Second, stdlibReconcileTimeout, true,
-		func(ctx context.Context) (bool, error) {
-			if err := k8sClient.Get(ctx, cmKey, cm); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-			return data["owner"] == "team-b", nil
-		}), "ConfigMap not created with team-b content within timeout")
+	require.NoError(t, waitForField(ctx, k8sClient,
+		schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"},
+		cmKey, []string{"data", "owner"}, "team-b", stdlibReconcileTimeout),
+		"ConfigMap not created with team-b content within timeout")
 	t.Log("team-b (priority 100) wins over team-a (priority 10)")
 
 	// TODO: Failover test (delete team-b, verify team-a takes over).

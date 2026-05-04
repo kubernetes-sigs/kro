@@ -1,17 +1,14 @@
 package graphcontroller_test
 
 import (
-	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // TestGraphCreatesDeploymentAndService proves the core reconciliation feedback loop:
@@ -218,9 +215,12 @@ func TestGraphIncludeWhen(t *testing.T) {
 	assert.Equal(t, "my-config", data["source"])
 
 	// ConfigMap "excluded-config" should NOT be created
-	require.NoError(t, waitForAbsence(ctx, k8sClient,
+	graphKey := types.NamespacedName{Name: "test-conditional", Namespace: ns}
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
+	requireAbsent(t, k8sClient,
 		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-		types.NamespacedName{Name: "excluded-config", Namespace: ns}, 1*time.Second))
+		types.NamespacedName{Name: "excluded-config", Namespace: ns},
+		"excluded resource should not be created")
 }
 
 // TestGraphReconcilesOnUpdate proves that updating a Graph re-evaluates and updates resources.
@@ -288,15 +288,10 @@ func TestGraphReconcilesOnUpdate(t *testing.T) {
 		}))
 
 	// Wait for the ConfigMap to be updated
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		cm2 := &unstructured.Unstructured{}
-		cm2.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "update-test", Namespace: ns}, cm2); err != nil {
-			return false, nil
-		}
-		data, _, _ := unstructured.NestedStringMap(cm2.Object, "data")
-		return data["version"] == "v2", nil
-	}))
+	require.NoError(t, waitForField(ctx, k8sClient,
+		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+		types.NamespacedName{Name: "update-test", Namespace: ns},
+		[]string{"data", "version"}, "v2"))
 
 	t.Log("ConfigMap updated from v1 to v2")
 }

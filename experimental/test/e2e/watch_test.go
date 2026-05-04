@@ -2,6 +2,7 @@ package graphcontroller_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -92,15 +93,10 @@ func TestDynamicWatchExternalRefChange(t *testing.T) {
 
 	// THE PROOF: the output should update to v2, triggered by the dynamic watch
 	// on the watch target — not by a Graph spec change.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		updated := &unstructured.Unstructured{}
-		updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "output", Namespace: ns}, updated); err != nil {
-			return false, nil
-		}
-		d, _, _ := unstructured.NestedStringMap(updated.Object, "data")
-		return d["version"] == "v2", nil
-	}))
+	cmGVK := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "output", Namespace: ns},
+		[]string{"data", "version"}, "v2"))
 
 	t.Log("Output updated to version=v2 — dynamic watch triggered reconciliation")
 }
@@ -389,15 +385,10 @@ func TestMultiGraphWatchRouting(t *testing.T) {
 	// THE PROOF: both outputs should update to "updated", triggered by the
 	// single watch event being routed to both Graphs.
 	for _, name := range []string{"output-a", "output-b"} {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-			obj := &unstructured.Unstructured{}
-			obj.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, obj); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(obj.Object, "data")
-			return data["copied"] == "updated", nil
-		}), "output %s should update after shared-config change", name)
+		require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+			types.NamespacedName{Name: name, Namespace: ns},
+			[]string{"data", "copied"}, "updated"),
+			"output %s should update after shared-config change", name)
 	}
 	t.Log("Both outputs updated — multi-graph watch routing works end-to-end")
 }
@@ -498,15 +489,9 @@ func TestStaleWatchCleanupOnSpecChange(t *testing.T) {
 	t.Log("Updated Graph to ref config-new instead of config-old")
 
 	// Wait for output to switch to config-new.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		obj := &unstructured.Unstructured{}
-		obj.SetGroupVersionKind(cmGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "output", Namespace: ns}, obj); err != nil {
-			return false, nil
-		}
-		d, _, _ := unstructured.NestedStringMap(obj.Object, "data")
-		return d["source"] == "config-new", nil
-	}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "output", Namespace: ns},
+		[]string{"data", "source"}, "config-new"))
 	t.Log("V2: output now reads from config-new")
 
 	// THE PROOF: use a causal fence. Update config-old (stale target), then
@@ -536,7 +521,7 @@ func TestStaleWatchCleanupOnSpecChange(t *testing.T) {
 		}
 		d, _, _ := unstructured.NestedStringMap(obj.Object, "data")
 		if d["source"] == "should-not-appear" {
-			t.Fatal("output read from config-old after spec change — stale watch index not cleaned")
+			return false, fmt.Errorf("output read from config-old after spec change — stale watch index not cleaned")
 		}
 		return d["source"] == "config-new-v2", nil
 	}))
@@ -646,21 +631,8 @@ func TestWatchStatePreservedAcrossReconcileError(t *testing.T) {
 	t.Log("V2: injected broken CEL expression")
 
 	// Wait for the Compiled=False condition.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(graphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-abort-recovery", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
-		for _, c := range conditions {
-			cm := c.(map[string]any)
-			if cm["type"] == "Compiled" && cm["status"] == "False" {
-				return true, nil
-			}
-		}
-		return false, nil
-	}))
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "test-abort-recovery", Namespace: ns}, "False"))
 	t.Log("V2 shows Compiled=False — compilation error surfaced")
 
 	// While broken: update the watched config. If abort preserved the
@@ -698,15 +670,9 @@ func TestWatchStatePreservedAcrossReconcileError(t *testing.T) {
 	// THE PROOF: output should update to v2 — the watch routing survived
 	// the broken-spec cycle because the abort discarded the failed cycle's
 	// watch buffer without corrupting the previous cycle's indexes.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		obj := &unstructured.Unstructured{}
-		obj.SetGroupVersionKind(cmGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "output", Namespace: ns}, obj); err != nil {
-			return false, nil
-		}
-		d, _, _ := unstructured.NestedStringMap(obj.Object, "data")
-		return d["copied"] == "v2", nil
-	}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "output", Namespace: ns},
+		[]string{"data", "copied"}, "v2"))
 	t.Log("Output updated to v2 — watch state preserved across reconcile error")
 }
 
@@ -754,24 +720,23 @@ func TestUnwatchableRefSurfacesError(t *testing.T) {
 	// The Graph should surface an error in status — either Compiled=False
 	// (unresolvable GVK) or Ready with a pending/error node. The key
 	// assertion is that the controller doesn't crash and surfaces the issue.
-	graphGVK := schema.GroupVersionKind{Group: "experimental.kro.run", Version: "v1alpha1", Kind: "Graph"}
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(graphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-bad-ref", Namespace: ns}, g); err != nil {
-			return false, nil
+	graphKey := types.NamespacedName{Name: "test-bad-ref", Namespace: ns}
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
+
+	// Point-in-time assertion: at least one condition should be False.
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+	conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
+	hasFalse := false
+	for _, c := range conditions {
+		cm := c.(map[string]any)
+		if cm["status"] == "False" {
+			hasFalse = true
+			break
 		}
-		conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
-		for _, c := range conditions {
-			cm := c.(map[string]any)
-			// Accept either Compiled=False (can't resolve GVK) or
-			// Ready=False (node pending/error).
-			if cm["status"] == "False" {
-				return true, nil
-			}
-		}
-		return false, nil
-	}))
+	}
+	require.True(t, hasFalse, "at least one condition should be False for bad ref")
 	t.Log("Bad ref surfaced as status condition — controller healthy")
 
 	// Verify the controller is still functional by creating a second,

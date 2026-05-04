@@ -3,13 +3,11 @@ package graphcontroller_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -95,28 +93,18 @@ func TestStdlibKindNodeReadyWhenNotSatisfied(t *testing.T) {
 	cm := &unstructured.Unstructured{}
 	cm.SetAPIVersion("v1")
 	cm.SetKind("ConfigMap")
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 2*time.Second, stdlibReconcileTimeout, true,
-		func(ctx context.Context) (bool, error) {
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "nrw-inst-config", Namespace: "kro-system"}, cm); err != nil {
-				return false, nil
-			}
-			return true, nil
-		}), "ConfigMap not created")
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "nrw-inst-config", Namespace: "kro-system"}, cm, stdlibReconcileTimeout),
+		"ConfigMap not created")
 
 	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
 	assert.Equal(t, "pending", data["status"])
 
 	// Per-instance Graph should be NotReady (node readyWhen unsatisfied).
 	graphName := "kro-system-nrw-inst-nodereadywhen"
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 2*time.Second, stdlibReconcileTimeout, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: graphName, Namespace: "kro-system"}, g); err != nil {
-				return false, nil
-			}
-			return graphReadyStatus(g) == "Unknown", nil
-		}), "per-instance Graph should be NotReady")
+	require.NoError(t, waitForGraphReadyStatus(ctx, k8sClient,
+		types.NamespacedName{Name: graphName, Namespace: "kro-system"}, "Unknown", stdlibReconcileTimeout),
+		"per-instance Graph should be NotReady")
 	t.Log("Per-instance Graph NotReady — node-level readyWhen unsatisfied (status=pending)")
 }
 
@@ -186,15 +174,9 @@ func TestStdlibKindNodeReadyWhenSatisfied(t *testing.T) {
 
 	// Per-instance Graph should be Ready.
 	graphName := "kro-system-nrwok-inst-nodereadywhenok"
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 2*time.Second, stdlibReconcileTimeout, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: graphName, Namespace: "kro-system"}, g); err != nil {
-				return false, nil
-			}
-			return graphReady(g), nil
-		}), "per-instance Graph should be Ready")
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: graphName, Namespace: "kro-system"}, stdlibReconcileTimeout),
+		"per-instance Graph should be Ready")
 	t.Log("Per-instance Graph Ready — node-level readyWhen satisfied")
 }
 
@@ -261,27 +243,17 @@ func TestStdlibKindDefaultBehavior(t *testing.T) {
 	cm := &unstructured.Unstructured{}
 	cm.SetAPIVersion("v1")
 	cm.SetKind("ConfigMap")
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 2*time.Second, stdlibReconcileTimeout, true,
-		func(ctx context.Context) (bool, error) {
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "db-inst-config", Namespace: "kro-system"}, cm); err != nil {
-				return false, nil
-			}
-			return true, nil
-		}), "ConfigMap not created")
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "db-inst-config", Namespace: "kro-system"}, cm, stdlibReconcileTimeout),
+		"ConfigMap not created")
 
 	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
 	assert.Equal(t, "default-test", data["value"])
 
 	graphName := "kro-system-db-inst-defaultbehaviorthing"
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 2*time.Second, stdlibReconcileTimeout, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: graphName, Namespace: "kro-system"}, g); err != nil {
-				return false, nil
-			}
-			return graphReady(g), nil
-		}), "per-instance Graph should be Ready")
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: graphName, Namespace: "kro-system"}, stdlibReconcileTimeout),
+		"per-instance Graph should be Ready")
 	t.Log("Default behavior preserved — no propagateWhen, no readyWhen, Graph Ready on apply")
 }
 
@@ -352,13 +324,9 @@ func TestStdlibKindWithPropagateWhen(t *testing.T) {
 	cm := &unstructured.Unstructured{}
 	cm.SetAPIVersion("v1")
 	cm.SetKind("ConfigMap")
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 2*time.Second, stdlibReconcileTimeout, true,
-		func(ctx context.Context) (bool, error) {
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "pw-inst-config", Namespace: "kro-system"}, cm); err != nil {
-				return false, nil
-			}
-			return true, nil
-		}), "ConfigMap not created")
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "pw-inst-config", Namespace: "kro-system"}, cm, stdlibReconcileTimeout),
+		"ConfigMap not created")
 
 	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
 	assert.Equal(t, "test", data["label"])

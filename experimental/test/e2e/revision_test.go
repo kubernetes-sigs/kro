@@ -76,14 +76,8 @@ func TestRevisionRecoveryAfterManualDeletion(t *testing.T) {
 	t.Log("Revision deleted")
 
 	// Wait for the revision to disappear.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(GraphRevisionGVK)
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: revName, Namespace: ns}, check)
-			return err != nil, nil
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphRevisionGVK,
+		types.NamespacedName{Name: revName, Namespace: ns}))
 	t.Log("Revision confirmed deleted")
 
 	// Trigger a reconcile by touching the Graph's labels. The controller does
@@ -341,16 +335,19 @@ func TestRevisionCreatedOnSpecChange(t *testing.T) {
 		}))
 	t.Log("Updated Graph spec: version v1 → v2")
 
+	// Wait for controller to observe the new generation.
+	{
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "rev-update-test", Namespace: ns}, g))
+		require.NoError(t, waitForObservedGeneration(ctx, k8sClient, types.NamespacedName{Name: "rev-update-test", Namespace: ns}, g.GetGeneration()))
+	}
+
 	// Wait for the ConfigMap to be updated
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		cm2 := &unstructured.Unstructured{}
-		cm2.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "rev-update-cm", Namespace: ns}, cm2); err != nil {
-			return false, nil
-		}
-		data, _, _ := unstructured.NestedStringMap(cm2.Object, "data")
-		return data["version"] == "v2", nil
-	}))
+	require.NoError(t, waitForField(ctx, k8sClient,
+		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+		types.NamespacedName{Name: "rev-update-cm", Namespace: ns},
+		[]string{"data", "version"}, "v2"))
 
 	// Get the new generation
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "rev-update-test", Namespace: ns}, latestGraph))
@@ -416,19 +413,8 @@ func TestRevisionNotCreatedOnCompilationFailure(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for Graph to show Compiled=False
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "rev-fail-test", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
-		cond, found := findCondition(conditions, "Compiled")
-		if !found {
-			return false, nil
-		}
-		return cond["status"] == "False", nil
-	}))
+	require.NoError(t, waitForGraphCompiledStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "rev-fail-test", Namespace: ns}, "False"))
 	t.Log("Graph has Compiled=False")
 
 	// No revision should exist
@@ -494,12 +480,8 @@ func TestRevisionCleanupOnDelete(t *testing.T) {
 	t.Log("Graph deleted")
 
 	// Wait for Graph to be gone (finalizer removed)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(GraphGVK)
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: "rev-delete-test", Namespace: ns}, check)
-		return err != nil, nil
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "rev-delete-test", Namespace: ns}))
 	t.Log("Graph gone")
 
 	// GraphRevision should also be gone
@@ -643,29 +625,26 @@ func TestRevisionTransitionAbandonsStaleEvaluation(t *testing.T) {
 		}))
 	t.Log("Rev N+1 submitted: version=v2, color=blue, tail renamed to v2")
 
+	// Wait for controller to observe the new generation.
+	{
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-rev-transition", Namespace: ns}, g))
+		require.NoError(t, waitForObservedGeneration(ctx, k8sClient, types.NamespacedName{Name: "test-rev-transition", Namespace: ns}, g.GetGeneration()))
+	}
+
 	// Wait for the new tail to exist with correct v2 data.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			cm := &unstructured.Unstructured{}
-			cm.SetGroupVersionKind(gvk)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "rev-trans-tail-v2", Namespace: ns}, cm); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-			return data["version"] == "v2" && data["color"] == "blue", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "rev-trans-tail-v2", Namespace: ns},
+		[]string{"data", "version"}, "v2"))
+	require.NoError(t, waitForField(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "rev-trans-tail-v2", Namespace: ns},
+		[]string{"data", "color"}, "blue"))
 	t.Log("tail-v2 exists with version=v2, color=blue")
 
 	// Old tail must be pruned.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(gvk)
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "rev-trans-tail-v1", Namespace: ns}, check)
-			return err != nil, nil
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "rev-trans-tail-v1", Namespace: ns}))
 	t.Log("tail-v1 pruned")
 
 	// Middle should have v2 data (no v1 residue).
@@ -794,14 +773,7 @@ func TestCompilationFailureFallsBackToPreviousRevision(t *testing.T) {
 	// The ConfigMap should be recreated by the previous revision.
 	recreatedCM := &unstructured.Unstructured{}
 	recreatedCM.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
-	err = wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			if err := k8sClient.Get(ctx, cmKey, recreatedCM); err != nil {
-				return false, nil
-			}
-			return true, nil
-		})
-	require.NoError(t, err,
+	require.NoError(t, waitForResource(ctx, k8sClient, cmKey, recreatedCM),
 		"ConfigMap should be recreated — previous revision must still manage resources "+
 			"even after compilation failure")
 	t.Log("ConfigMap recreated — previous revision is still active")
@@ -888,17 +860,18 @@ func TestRevisionTransitionPreservesUnchangedNodes(t *testing.T) {
 		}))
 	t.Log("Updated cm-b from v1 to v2, cm-a unchanged")
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			cmB := &unstructured.Unstructured{}
-			cmB.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "rev-selective-cm-b", Namespace: ns}, cmB); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(cmB.Object, "data")
-			return data["version"] == "v2", nil
-		}))
+	// Wait for controller to observe the new generation.
+	{
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+		require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, g.GetGeneration()))
+	}
+
+	require.NoError(t, waitForField(ctx, k8sClient,
+		schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"},
+		types.NamespacedName{Name: "rev-selective-cm-b", Namespace: ns},
+		[]string{"data", "version"}, "v2"))
 	t.Log("cm-b updated to v2")
 
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
@@ -980,6 +953,14 @@ func TestRevisionTransition_RegressionNodeIDReuseWithDifferentGVK(t *testing.T) 
 		}))
 	t.Log("Phase 2: Spec changed — node 'data' is now a Secret")
 
+	// Wait for controller to observe the new generation.
+	{
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+		require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, g.GetGeneration()))
+	}
+
 	// The Secret should be created.
 	secret := &unstructured.Unstructured{}
 	secret.SetGroupVersionKind(secretGVK)
@@ -988,16 +969,9 @@ func TestRevisionTransition_RegressionNodeIDReuseWithDifferentGVK(t *testing.T) 
 	t.Log("Secret created")
 
 	// The old ConfigMap should be pruned.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: "reuse-data", Namespace: ns}, check)
-			if err != nil {
-				return true, nil // NotFound — pruned
-			}
-			return false, nil
-		}), "old ConfigMap should be pruned after node ID reuse with different GVK")
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "reuse-data", Namespace: ns}),
+		"old ConfigMap should be pruned after node ID reuse with different GVK")
 	t.Log("Old ConfigMap pruned — revision transition with GVK change verified")
 
 	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
@@ -1080,19 +1054,19 @@ func TestRevisionTransition_RegressionPruneOrderCrossTopology(t *testing.T) {
 		}))
 	t.Log("Phase 2: Spec changed — alpha and beta replaced by gamma")
 
+	// Wait for controller to observe the new generation.
+	{
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+		require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, g.GetGeneration()))
+	}
+
 	// Both old resources should be pruned.
 	for _, name := range []string{"topo-alpha", "topo-beta"} {
-		name := name
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				check := &unstructured.Unstructured{}
-				check.SetGroupVersionKind(cmGVK)
-				err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, check)
-				if err != nil {
-					return true, nil // pruned
-				}
-				return false, nil
-			}), fmt.Sprintf("%s should be pruned after revision transition", name))
+		require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+			types.NamespacedName{Name: name, Namespace: ns}),
+			fmt.Sprintf("%s should be pruned after revision transition", name))
 	}
 	t.Log("Both old ConfigMaps pruned")
 
@@ -1208,17 +1182,16 @@ func TestRevisionTransition_RegressionThreeWayDivergence(t *testing.T) {
 		}))
 	t.Log("Rev 2: spec updated — alpha dropped, beta → b2")
 
+	// Wait for controller to observe the new generation.
+	{
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		require.NoError(t, k8sClient.Get(ctx, graphKey, g))
+		require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, g.GetGeneration()))
+	}
+
 	// Wait for beta to update to b2.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx, cmKey, check); err != nil {
-				return false, nil
-			}
-			d, _, _ := unstructured.NestedStringMap(check.Object, "data")
-			return d["beta"] == "b2", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK, cmKey, []string{"data", "beta"}, "b2"))
 	require.NoError(t, waitForSettle(ctx, k8sClient, cmGVK, cmKey))
 
 	// Read final state.

@@ -121,17 +121,12 @@ func TestMultiGraphFieldCoexistence(t *testing.T) {
 	t.Log("Both Graphs Active — no conflict detected")
 
 	// THE KEY ASSERTION: shared resource has fields from BOTH graphs.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "shared-coexist-cm", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			ann := check.GetAnnotations()
-			return ann["kro.run/managed-by-a"] == "graph-a" && ann["kro.run/managed-by-b"] == "graph-b", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "shared-coexist-cm", Namespace: ns},
+		[]string{"metadata", "annotations", "kro.run/managed-by-a"}, "graph-a"))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "shared-coexist-cm", Namespace: ns},
+		[]string{"metadata", "annotations", "kro.run/managed-by-b"}, "graph-b"))
 
 	result := &unstructured.Unstructured{}
 	result.SetGroupVersionKind(cmGVK)
@@ -172,16 +167,9 @@ func TestMultiGraphFieldCoexistence(t *testing.T) {
 	t.Log("Updated Graph A: new annotation value")
 
 	// Wait for Graph A's update to propagate.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "shared-coexist-cm", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			return check.GetAnnotations()["kro.run/managed-by-a"] == "graph-a-updated", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "shared-coexist-cm", Namespace: ns},
+		[]string{"metadata", "annotations", "kro.run/managed-by-a"}, "graph-a-updated"))
 
 	// CRITICAL: Graph B's field must be UNCHANGED.
 	final := &unstructured.Unstructured{}
@@ -295,15 +283,9 @@ func TestContribution(t *testing.T) {
 	t.Logf("Owned resource created: %s (managed by Graph)", deplCM.GetName())
 
 	// Wait for the contribution to be applied to the external object
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		updated := &unstructured.Unstructured{}
-		updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "webapp-instance", Namespace: ns}, updated); err != nil {
-			return false, nil
-		}
-		ann := updated.GetAnnotations()
-		return ann["kro.run/deployment-name"] == "webapp-instance-deployment", nil
-	}))
+	require.NoError(t, waitForField(ctx, k8sClient, schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+		types.NamespacedName{Name: "webapp-instance", Namespace: ns},
+		[]string{"metadata", "annotations", "kro.run/deployment-name"}, "webapp-instance-deployment"))
 
 	// Re-read the external object to verify
 	updatedExternal := &unstructured.Unstructured{}
@@ -401,15 +383,9 @@ func TestResourcePruning(t *testing.T) {
 	}))
 
 	// Wait for the removed ConfigMap to be deleted
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: "remove-me", Namespace: ns}, check)
-		if err != nil {
-			return true, nil // deleted
-		}
-		return false, nil
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient,
+		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
+		types.NamespacedName{Name: "remove-me", Namespace: ns}))
 	t.Log("Removed ConfigMap was pruned")
 
 	// The kept ConfigMap should still exist
@@ -504,17 +480,9 @@ func TestPatchReferenceDetectedByExistence(t *testing.T) {
 		types.NamespacedName{Name: "test-contribute-shape", Namespace: ns}))
 
 	// Verify the contribution was applied.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "contribute-target", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			ann := check.GetAnnotations()
-			return ann["kro.run/managed"] == "true", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "contribute-target", Namespace: ns},
+		[]string{"metadata", "annotations", "kro.run/managed"}, "true"))
 	t.Log("Contribution applied — annotation set on external resource")
 
 	// Remove both nodes from the spec (prune).
@@ -525,14 +493,8 @@ func TestPatchReferenceDetectedByExistence(t *testing.T) {
 	t.Log("Removed both nodes from spec — prune triggered")
 
 	// Wait for the owned resource to be deleted (template: → delete on prune).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "contribute-owned", Namespace: ns}, check)
-			return err != nil, nil // gone = true
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "contribute-owned", Namespace: ns}))
 	t.Log("Owned resource deleted on prune — template: confirmed")
 
 	// THE KEY ASSERTION: the patched resource should still exist
@@ -627,13 +589,8 @@ func TestPatch_RegressionStatusSubresourceTeardown(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, graph))
 
 	// Wait for Graph to be deleted
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-status-teardown", Namespace: ns}, g)
-			return err != nil, nil
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "contrib-status-teardown", Namespace: ns}))
 
 	// The target MUST still exist (it's a patch:, not template:)
 	finalTarget := &unstructured.Unstructured{}
@@ -798,13 +755,8 @@ func TestPatchMetadataAndStatus(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, graph))
 
 	// Wait for Graph to be fully deleted.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: graphName, Namespace: ns}, g)
-			return err != nil, nil
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: graphName, Namespace: ns}))
 	t.Log("Graph deleted — release apply should have run on both subresources")
 
 	// The target MUST still exist (Patch, not Template).
@@ -948,17 +900,9 @@ func TestPatchMapFieldOwnership(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for the contribution to land.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "map-target", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(check.Object, "data")
-			return data["contributed-key"] == "graph-value" && data["another-key"] == "more-data", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "map-target", Namespace: ns},
+		[]string{"data", "contributed-key"}, "graph-value"))
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: graphName, Namespace: ns}))
 

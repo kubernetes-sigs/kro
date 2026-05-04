@@ -164,6 +164,14 @@ spec:
                       lastTransitionTime:
                         type: string
                         format: date-time
+                      observedGeneration:
+                        description: >-
+                          The metadata.generation that this condition was
+                          last evaluated against. Compiled.observedGeneration
+                          indicates when the spec was parsed; Ready.observedGeneration
+                          indicates when the full reconcile (walk + prune) completed.
+                        type: integer
+                        format: int64
                 topologicalOrder:
                   description: >-
                     DAG evaluation order. The "nodes" key holds the Graph's

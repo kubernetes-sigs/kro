@@ -1,17 +1,14 @@
 package graphcontroller_test
 
 import (
-	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // ---------------------------------------------------------------------------
@@ -272,6 +269,11 @@ func TestRecoveryForEachScaleDownFullLifecycle(t *testing.T) {
 		}))
 	t.Log("Phase 2: Scaled down to 3 items")
 
+	// Wait for the controller to process the scale-down spec before
+	// checking Ready (which may still be cached True from before).
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient,
+		types.NamespacedName{Name: graphName, Namespace: ns}, 2))
+
 	// 3 children should survive.
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: graphName, Namespace: ns}))
@@ -284,14 +286,8 @@ func TestRecoveryForEachScaleDownFullLifecycle(t *testing.T) {
 
 	// 2 excess children should be pruned.
 	for _, v := range []string{"d", "e"} {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				check := &unstructured.Unstructured{}
-				check.SetGroupVersionKind(gvk)
-				err := k8sClient.Get(ctx,
-					types.NamespacedName{Name: "scale-" + v, Namespace: ns}, check)
-				return err != nil, nil
-			}),
+		require.NoError(t, waitForDeletion(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: "scale-" + v, Namespace: ns}),
 			"scale-%s must be pruned after scale-down", v)
 	}
 	t.Log("3 survived, 2 pruned — forEach scale-down recovery proved")
@@ -454,14 +450,8 @@ func TestRecoveryPartialTeardown(t *testing.T) {
 	t.Log("Graph deletion requested")
 
 	// Wait for Graph to be fully deleted.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(GraphGVK)
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: graphName, Namespace: ns}, check)
-			return err != nil, nil
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: graphName, Namespace: ns}))
 
 	// All resources should be deleted.
 	for _, name := range []string{"teardown-a", "teardown-b", "teardown-c"} {
@@ -596,12 +586,8 @@ func TestRecoveryPartialRevisionTransition(t *testing.T) {
 
 	// cm-old should be pruned — it's in the applied set (identity label) but
 	// not in the current output set.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(gvk)
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: "cm-old", Namespace: ns}, check)
-			return err != nil, nil
-		}), "cm-old should be pruned — not in current output set")
+	require.NoError(t, waitForDeletion(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "cm-old", Namespace: ns}),
+		"cm-old should be pruned — not in current output set")
 	t.Log("Partial revision transition recovered: cm-old pruned, cm-partial adopted, cm-missing created")
 }

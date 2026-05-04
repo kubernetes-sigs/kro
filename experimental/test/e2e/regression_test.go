@@ -83,12 +83,8 @@ func TestDeletion_RegressionTopologicalOrder(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, graph))
 
 	// Wait for the Graph to be fully removed (finalizer processed).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(GraphGVK)
-		err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-topo-delete", Namespace: ns}, check)
-		return err != nil, nil
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-topo-delete", Namespace: ns}))
 	t.Log("Graph deleted — teardown completed")
 
 	// Both resources should be gone. The test passes if teardown completed
@@ -170,12 +166,8 @@ func TestRevisionPrune_RegressionMultiHopOrphan(t *testing.T) {
 	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: "hop-beta", Namespace: ns}, cm2))
 
 	// Wait for hop-alpha to be pruned (rev1→rev2 prune)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(regressionCMGVK)
-		err := k8sClient.Get(ctx2, types.NamespacedName{Name: "hop-alpha", Namespace: ns}, check)
-		return err != nil, nil
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, regressionCMGVK,
+		types.NamespacedName{Name: "hop-alpha", Namespace: ns}))
 	t.Log("Rev 2: hop-beta created, hop-alpha pruned")
 
 	// Rev 3: replaces "hop-beta" with "hop-gamma"
@@ -200,12 +192,8 @@ func TestRevisionPrune_RegressionMultiHopOrphan(t *testing.T) {
 	// Wait for hop-beta to be pruned (rev2→rev3 prune).
 	// The real test: hop-alpha must ALSO be gone. If the prune formula only
 	// looked at rev2, hop-alpha would be orphaned.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(regressionCMGVK)
-		err := k8sClient.Get(ctx2, types.NamespacedName{Name: "hop-beta", Namespace: ns}, check)
-		return err != nil, nil
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, regressionCMGVK,
+		types.NamespacedName{Name: "hop-beta", Namespace: ns}))
 	t.Log("Rev 3: hop-gamma created, hop-beta pruned")
 
 	// Verify hop-alpha is still gone (not re-created, not orphaned).
@@ -296,7 +284,7 @@ func TestPatch_RegressionCleanupOnPrune(t *testing.T) {
 		ann := obj.GetAnnotations()
 		return ann != nil && ann["graph-contributed"] != "", nil
 	}))
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-contrib-prune", Namespace: ns}))
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, types.NamespacedName{Name: "test-contrib-prune", Namespace: ns}, 1))
 	t.Log("Contribution applied — target has graph-contributed annotation")
 
 	// Update the Graph to remove the patch node (keep only the Watch).
@@ -314,7 +302,7 @@ func TestPatch_RegressionCleanupOnPrune(t *testing.T) {
 		}))
 
 	// Wait for the new revision to be reconciled.
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-contrib-prune", Namespace: ns}))
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, types.NamespacedName{Name: "test-contrib-prune", Namespace: ns}, 2))
 	t.Log("Graph updated — patch node removed")
 
 	// The target resource must still exist (patch: never deletes).
@@ -399,28 +387,18 @@ func TestPatch_RegressionCleanupOnTeardown(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for contribution.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
-		obj := &unstructured.Unstructured{}
-		obj.SetGroupVersionKind(regressionCMGVK)
-		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "teardown-target", Namespace: ns}, obj); err != nil {
-			return false, nil
-		}
-		ann := obj.GetAnnotations()
-		return ann != nil && ann["teardown-test"] == "contributed", nil
-	}))
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-contrib-teardown", Namespace: ns}))
+	require.NoError(t, waitForField(ctx, k8sClient, regressionCMGVK,
+		types.NamespacedName{Name: "teardown-target", Namespace: ns},
+		[]string{"metadata", "annotations", "teardown-test"}, "contributed"))
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, types.NamespacedName{Name: "test-contrib-teardown", Namespace: ns}, 1))
 	t.Log("Contribution applied")
 
 	// Delete the Graph.
 	require.NoError(t, k8sClient.Delete(ctx, graph))
 
 	// Wait for the Graph to be fully removed.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
-		check := &unstructured.Unstructured{}
-		check.SetGroupVersionKind(GraphGVK)
-		err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-contrib-teardown", Namespace: ns}, check)
-		return err != nil, nil
-	}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-contrib-teardown", Namespace: ns}))
 	t.Log("Graph deleted")
 
 	// The target resource must still exist — patch: never deletes.
@@ -536,15 +514,10 @@ func TestPatch_RegressionDependencyChangeUpdate(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for initial contribution: target should have version=v1
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		updated := &unstructured.Unstructured{}
-		updated.SetGroupVersionKind(regressionCMGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-target", Namespace: ns}, updated); err != nil {
-			return false, nil
-		}
-		ann := updated.GetAnnotations()
-		return ann["contributed-version"] == "v1", nil
-	}), "initial contribution should write version=v1 to target")
+	require.NoError(t, waitForField(ctx, k8sClient, regressionCMGVK,
+		types.NamespacedName{Name: "contrib-target", Namespace: ns},
+		[]string{"metadata", "annotations", "contributed-version"}, "v1"),
+		"initial contribution should write version=v1 to target")
 	t.Log("Initial contribution: version=v1")
 
 	// Now update the source — this triggers re-evaluation of the owned
@@ -558,15 +531,10 @@ func TestPatch_RegressionDependencyChangeUpdate(t *testing.T) {
 	t.Log("Updated source to version=v2")
 
 	// THE PROOF: the contribution should update to version=v2.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		updated := &unstructured.Unstructured{}
-		updated.SetGroupVersionKind(regressionCMGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-target", Namespace: ns}, updated); err != nil {
-			return false, nil
-		}
-		ann := updated.GetAnnotations()
-		return ann["contributed-version"] == "v2", nil
-	}), "contribution should update to version=v2 when upstream source changes")
+	require.NoError(t, waitForField(ctx, k8sClient, regressionCMGVK,
+		types.NamespacedName{Name: "contrib-target", Namespace: ns},
+		[]string{"metadata", "annotations", "contributed-version"}, "v2"),
+		"contribution should update to version=v2 when upstream source changes")
 	t.Log("Contribution updated to version=v2 — downstream status propagation works")
 }
 
@@ -752,15 +720,8 @@ func TestBlockedDependency_RegressionRecoveryReconverges(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, watched))
 
 	// Wait for Graph to leave Ready state.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-blocked-recovery", Namespace: ns}, g); err != nil {
-				return false, nil
-			}
-			return !graphReady(g), nil
-		}))
+	require.NoError(t, waitForGraphReadyReason(ctx, k8sClient,
+		types.NamespacedName{Name: "test-blocked-recovery", Namespace: ns}, "Pending"))
 	t.Log("Phase 2: Graph not ready (source deleted → Pending)")
 
 	// THE KEY ASSERTION: dependent resource still exists while source is absent.
@@ -870,21 +831,13 @@ func TestPatch_RegressionReadyWhenGatesGraph(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for the contribution to be applied (annotation appears).
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			obj := &unstructured.Unstructured{}
-			obj.SetGroupVersionKind(regressionCMGVK)
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-ready-target", Namespace: ns}, obj); err != nil {
-				return false, nil
-			}
-			ann := obj.GetAnnotations()
-			return ann != nil && ann["contributed"] == "true", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, regressionCMGVK,
+		types.NamespacedName{Name: "contrib-ready-target", Namespace: ns},
+		[]string{"metadata", "annotations", "contributed"}, "true"))
 	t.Log("Contribution applied")
 
 	// Graph should NOT be Ready yet — readyWhen checks data.ready == 'true' but it's 'false'.
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
-		types.NamespacedName{Name: "test-contrib-readywhen", Namespace: ns}))
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, types.NamespacedName{Name: "test-contrib-readywhen", Namespace: ns}, 1))
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx,
@@ -978,15 +931,9 @@ func TestPatch_RegressionIdentityLabels(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for the contribution to be applied.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
-		obj := &unstructured.Unstructured{}
-		obj.SetGroupVersionKind(cmGVK)
-		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "contrib-label-target", Namespace: ns}, obj); err != nil {
-			return false, nil
-		}
-		ann := obj.GetAnnotations()
-		return ann != nil && ann["contributed-by"] == "graph", nil
-	}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "contrib-label-target", Namespace: ns},
+		[]string{"metadata", "annotations", "contributed-by"}, "graph"))
 
 	// Re-read the target to check identity labels.
 	result := &unstructured.Unstructured{}
@@ -1132,15 +1079,10 @@ func TestPropagateWhen_RegressionCrossNodeRef(t *testing.T) {
 	// Downstream must be created once upstream.ready() becomes true.
 	// With the scope bug, checkPropagateWhen returns false for cross-node refs,
 	// so downstream would never be created — this assertion would time out.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		cm := &unstructured.Unstructured{}
-		cm.SetGroupVersionKind(regressionCMGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "propagate-downstream", Namespace: ns}, cm); err != nil {
-			return false, nil
-		}
-		data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-		return data["relayStatus"] == "active", nil
-	}), "downstream should be created with relayStatus='active' once upstream.ready() becomes true")
+	require.NoError(t, waitForField(ctx, k8sClient, regressionCMGVK,
+		types.NamespacedName{Name: "propagate-downstream", Namespace: ns},
+		[]string{"data", "relayStatus"}, "active"),
+		"downstream should be created with relayStatus='active' once upstream.ready() becomes true")
 
 	finalDS := &unstructured.Unstructured{}
 	finalDS.SetGroupVersionKind(regressionCMGVK)

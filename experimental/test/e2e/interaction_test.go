@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -120,14 +121,8 @@ func TestForEachIncludeWhenToggle(t *testing.T) {
 
 	// All children should be pruned.
 	for _, name := range childNames {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				check := &unstructured.Unstructured{}
-				check.SetGroupVersionKind(gvk)
-				err := k8sClient.Get(ctx,
-					types.NamespacedName{Name: name, Namespace: ns}, check)
-				return err != nil, nil
-			}),
+		require.NoError(t, waitForDeletion(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: name, Namespace: ns}),
 			"forEach child %s must be pruned when includeWhen=false", name)
 	}
 	t.Log("All 3 forEach children pruned after includeWhen toggled to false — forEach + includeWhen prune proved")
@@ -220,16 +215,8 @@ func TestForEachIncludeWhenDataPendingPreservesChildren(t *testing.T) {
 	t.Log("Removed toggle field entirely → data-pending")
 
 	// Wait for Graph to enter non-Ready.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "test-foreach-dp", Namespace: ns}, g); err != nil {
-				return false, nil
-			}
-			return !graphReady(g), nil
-		}))
+	require.NoError(t, waitForGraphReadyStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "test-foreach-dp", Namespace: ns}, "Unknown"))
 
 	// Children must survive — uncertain absence blocks prune.
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
@@ -347,14 +334,8 @@ func TestIncludeWhenPropagateWhenPrecedence(t *testing.T) {
 
 	// Both upstream and downstream should be pruned.
 	for _, name := range []string{"inc-prop-upstream", "inc-prop-downstream"} {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				check := &unstructured.Unstructured{}
-				check.SetGroupVersionKind(gvk)
-				err := k8sClient.Get(ctx,
-					types.NamespacedName{Name: name, Namespace: ns}, check)
-				return err != nil, nil
-			}),
+		require.NoError(t, waitForDeletion(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: name, Namespace: ns}),
 			"%s must be pruned when upstream is excluded", name)
 	}
 	t.Log("Both upstream and downstream pruned — exclusion overrides propagateWhen gate")
@@ -460,16 +441,9 @@ func TestPropagateWhenPatch(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for convergence — contrib should have written v1.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(gvk)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "prop-contrib-target", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			return check.GetAnnotations()["kro.run/value"] == "v1", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "prop-contrib-target", Namespace: ns},
+		[]string{"metadata", "annotations", "kro.run/value"}, "v1"))
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-prop-contrib", Namespace: ns}))
 	t.Log("Patch applied v1, Graph ready")
@@ -485,17 +459,9 @@ func TestPropagateWhenPatch(t *testing.T) {
 	t.Log("Updated control: ready=false, value=v2 → gate closed")
 
 	// Wait for upstream to be updated with v2 data.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(gvk)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "prop-contrib-upstream", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(check.Object, "data")
-			return data["value"] == "v2", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "prop-contrib-upstream", Namespace: ns},
+		[]string{"data", "value"}, "v2"))
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
 		types.NamespacedName{Name: "test-prop-contrib", Namespace: ns}))
 
@@ -587,16 +553,9 @@ func TestIncludeWhenPatchReleaseFields(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for contribution to be applied.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(gvk)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "inc-contrib-target", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			return check.GetAnnotations()["kro.run/managed"] == "true", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, gvk,
+		types.NamespacedName{Name: "inc-contrib-target", Namespace: ns},
+		[]string{"metadata", "annotations", "kro.run/managed"}, "true"))
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
 		types.NamespacedName{Name: "test-inc-contrib", Namespace: ns}))
 	t.Log("Contribution applied, Graph ready")
@@ -688,16 +647,9 @@ func TestForEachPatchScaleDown(t *testing.T) {
 
 	// Wait for all 3 contributions.
 	for _, name := range targets {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				check := &unstructured.Unstructured{}
-				check.SetGroupVersionKind(gvk)
-				if err := k8sClient.Get(ctx,
-					types.NamespacedName{Name: name, Namespace: ns}, check); err != nil {
-					return false, nil
-				}
-				return check.GetAnnotations()["kro.run/managed"] == "true", nil
-			}),
+		require.NoError(t, waitForField(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: name, Namespace: ns},
+			[]string{"metadata", "annotations", "kro.run/managed"}, "true"),
 			"forEach should contribute to %s", name)
 	}
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,
@@ -845,14 +797,8 @@ func TestForEachRevisionTransition(t *testing.T) {
 	}
 
 	for _, name := range []string{"rev-old-a", "rev-old-b"} {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				check := &unstructured.Unstructured{}
-				check.SetGroupVersionKind(gvk)
-				err := k8sClient.Get(ctx,
-					types.NamespacedName{Name: name, Namespace: ns}, check)
-				return err != nil, nil
-			}),
+		require.NoError(t, waitForDeletion(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: name, Namespace: ns}),
 			"old forEach child %s must be pruned after revision transition", name)
 	}
 	t.Log("Rev2: new-x, new-y created; old-a, old-b pruned — forEach + revision transition proved")
@@ -1035,14 +981,8 @@ func TestNestedGraphRevisionTransition(t *testing.T) {
 	require.NoError(t, waitForResource(ctx, k8sClient,
 		types.NamespacedName{Name: "nested-child-v2", Namespace: ns}, newChild))
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(GraphGVK)
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "nested-child-v1", Namespace: ns}, check)
-			return err != nil, nil
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "nested-child-v1", Namespace: ns}))
 	t.Log("V1 child Graph pruned, V2 created — nested Graph revision transition proved")
 }
 
@@ -1134,14 +1074,8 @@ func TestNestedGraphIncludeWhen(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, latest))
 	t.Log("Toggle set to false → child Graph excluded")
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(GraphGVK)
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "nested-inc-child", Namespace: ns}, check)
-			return err != nil, nil
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "nested-inc-child", Namespace: ns}))
 	t.Log("Child Graph pruned after includeWhen exclusion — nested Graph + includeWhen proved")
 }
 
@@ -1237,14 +1171,8 @@ func TestMultipleForEachNodesIndependence(t *testing.T) {
 	t.Log("Scaled down groupA to 1 item")
 
 	for _, name := range []string{"multi-a-a2", "multi-a-a3"} {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				check := &unstructured.Unstructured{}
-				check.SetGroupVersionKind(gvk)
-				err := k8sClient.Get(ctx,
-					types.NamespacedName{Name: name, Namespace: ns}, check)
-				return err != nil, nil
-			}),
+		require.NoError(t, waitForDeletion(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: name, Namespace: ns}),
 			"%s must be pruned after scale-down", name)
 	}
 
@@ -1421,7 +1349,7 @@ func TestForEachFinalizesSequence(t *testing.T) {
 			check.SetGroupVersionKind(gvk)
 			err := k8sClient.Get(ctx,
 				types.NamespacedName{Name: "fe-fin-target", Namespace: ns}, check)
-			return err != nil, nil
+			return apierrors.IsNotFound(err), nil
 		}))
 	t.Log("Target deleted after forEach finalization — forEach + finalizes proved")
 
@@ -1643,17 +1571,9 @@ func TestForEachForceApply(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	for _, name := range []string{"force-target-a", "force-target-b"} {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				check := &unstructured.Unstructured{}
-				check.SetGroupVersionKind(gvk)
-				if err := k8sClient.Get(ctx,
-					types.NamespacedName{Name: name, Namespace: ns}, check); err != nil {
-					return false, nil
-				}
-				data, _, _ := unstructured.NestedStringMap(check.Object, "data")
-				return data["key"] == "graph-value", nil
-			}),
+		require.NoError(t, waitForField(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: name, Namespace: ns},
+			[]string{"data", "key"}, "graph-value"),
 			"forEach with Force should take ownership of %s", name)
 	}
 	require.NoError(t, waitForGraphReady(ctx, k8sClient,

@@ -199,7 +199,12 @@ func buildBinary(moduleRoot string) (string, error) {
 		return "", fmt.Errorf("creating build dir: %w", err)
 	}
 	binaryPath := filepath.Join(buildDir, "kro-graph-controller")
-	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/")
+	args := []string{"build"}
+	if raceDetectorEnabled {
+		args = append(args, "-race")
+	}
+	args = append(args, "-o", binaryPath, "./cmd/")
+	cmd := exec.Command("go", args...)
 	cmd.Dir = moduleRoot
 	cmd.Stdout = os.Stderr // build output goes to stderr, not the log file
 	cmd.Stderr = os.Stderr

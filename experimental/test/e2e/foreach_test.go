@@ -428,14 +428,8 @@ func TestForEachReadyWhenDoesNotGateDownstream(t *testing.T) {
 	t.Log("Summary created while workers not ready (readyWhen no longer gates dependents)")
 
 	// Verify Graph status is InProgress
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReadyStatus(g) == "Unknown", nil
-	}))
+	require.NoError(t, waitForGraphReadyStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, "Unknown"))
 	t.Log("Graph status is InProgress (workers not ready)")
 
 	// Update the Graph spec: change worker template to ready = "true"
@@ -491,14 +485,8 @@ func TestForEachReadyWhenDoesNotGateDownstream(t *testing.T) {
 	t.Logf("Summary created with firstWorker=%s after workers became ready", data["firstWorker"])
 
 	// Verify Graph transitions to Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReady(g), nil
-	}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}))
 	t.Log("Graph transitioned to Active — forEach readyWhen per-item proved")
 }
 
@@ -577,14 +565,8 @@ func TestForEachReadyWhenPassesImmediately(t *testing.T) {
 	t.Logf("Summary created immediately with firstWorker=%s — all workers ready on first pass", data["firstWorker"])
 
 	// Graph should be Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen-pass", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReady(g), nil
-	}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-foreach-readywhen-pass", Namespace: ns}))
 	t.Log("Graph is Active — forEach readyWhen happy path proved")
 }
 
@@ -859,6 +841,8 @@ func TestForEachPropagateWhenMultiChildAggregation(t *testing.T) {
 
 	// Phase 1: All 3 children have ready=false → propagateWhen unsatisfied.
 	// Downstream should NOT exist (gated).
+	graphKey := types.NamespacedName{Name: "test-foreach-pw-agg", Namespace: ns}
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
 	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk,
 		types.NamespacedName{Name: "pw-downstream", Namespace: ns}, 3*time.Second))
 	t.Log("Phase 1: Downstream absent — all 3 children unsatisfied, gate closed")
@@ -876,23 +860,14 @@ func TestForEachPropagateWhenMultiChildAggregation(t *testing.T) {
 
 	// Wait for the workers to pick up the change.
 	for _, name := range []string{"pw-worker-pw-src-a", "pw-worker-pw-src-b"} {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				cm := &unstructured.Unstructured{}
-				cm.SetGroupVersionKind(gvk)
-				if err := k8sClient.Get(ctx,
-					types.NamespacedName{Name: name, Namespace: ns}, cm); err != nil {
-					return false, nil
-				}
-				data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-				return data["ready"] == "true", nil
-			}),
+		require.NoError(t, waitForField(ctx, k8sClient, gvk,
+			types.NamespacedName{Name: name, Namespace: ns},
+			[]string{"data", "ready"}, "true"),
 			"worker %s must update to ready=true", name)
 	}
 
 	// Downstream should still be absent (1/3 still unsatisfied).
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
-		types.NamespacedName{Name: "test-foreach-pw-agg", Namespace: ns}))
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
 	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk,
 		types.NamespacedName{Name: "pw-downstream", Namespace: ns}, 2*time.Second))
 	t.Log("Phase 2: Downstream still absent — 2/3 satisfied, gate still closed")
@@ -914,8 +889,7 @@ func TestForEachPropagateWhenMultiChildAggregation(t *testing.T) {
 		"downstream must be created after all 3 children satisfy propagateWhen")
 	t.Log("Phase 3: Downstream created — all 3 children satisfied, gate opened")
 
-	require.NoError(t, waitForGraphReady(ctx, k8sClient,
-		types.NamespacedName{Name: "test-foreach-pw-agg", Namespace: ns}))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
 	t.Log("forEach propagateWhen multi-child aggregation proved")
 }
 
@@ -1344,6 +1318,8 @@ func TestForEachPropagateWhenBlocksWhenChildFails(t *testing.T) {
 	}
 
 	// One item fails propagateWhen → consumer should NOT be created.
+	graphKey := types.NamespacedName{Name: "foreach-prop-block-test", Namespace: ns}
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
 	err := waitForAbsence(ctx, k8sClient,
 		schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"},
 		types.NamespacedName{Name: "fe-blk-consumer", Namespace: ns},
@@ -1792,7 +1768,7 @@ func TestForEach_PropagateWhenPerItemHaltsCreation(t *testing.T) {
 	// With random ordering within a class, all items may be created
 	// across reconciles, but readyWhen prevents Ready status.
 	// ---------------------------------------------------------------
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
@@ -1891,9 +1867,9 @@ func TestForEach_PropagateWhenPerItemHaltsAtFirstItem(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Let the controller settle, then verify zero workers exist.
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
-		types.NamespacedName{Name: "test-foreach-halt0", Namespace: ns}))
+	// Let the controller converge, then verify zero workers exist.
+	graphKey := types.NamespacedName{Name: "test-foreach-halt0", Namespace: ns}
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
 	require.NoError(t, waitForAbsence(ctx, k8sClient, gvk,
 		types.NamespacedName{Name: "halt0-worker-halt0-src-a", Namespace: ns}, 3*time.Second),
 		"worker A must be absent — gate halts before first item")
@@ -1974,8 +1950,8 @@ func TestForEach_PropagateWhenPerItemScaleDownWhileGated(t *testing.T) {
 
 	graphKey := types.NamespacedName{Name: "test-foreach-sd", Namespace: ns}
 
-	// Phase 1: Wait for graph to settle — not Ready (items not ready).
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+	// Phase 1: Wait for graph to converge — not Ready (items not ready).
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
 	t.Log("Phase 1: Graph settled (not ready)")
 
 	// Phase 2: Remove source C from Watch selector.
@@ -2083,7 +2059,7 @@ func TestForEach_PropagateWhenPerItemOrderingStable(t *testing.T) {
 	graphKey := types.NamespacedName{Name: "test-foreach-ord", Namespace: ns}
 
 	// Phase 1: Graph must NOT be Ready (items not ready).
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
@@ -2249,7 +2225,7 @@ func TestForEach_PropagateWhenUpdatedGatesCreation(t *testing.T) {
 	allSources := []string{"upd-src-a", "upd-src-b", "upd-src-c"}
 
 	graphKey := types.NamespacedName{Name: "test-foreach-updated", Namespace: ns}
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
+	require.NoError(t, waitForObservedGeneration(ctx, k8sClient, graphKey, 1))
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, graphKey, g))
@@ -2399,16 +2375,8 @@ func TestForEach_ReadyFirstOrdering(t *testing.T) {
 		}))
 
 	// Wait for worker-zulu to show ready=true.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			cm := &unstructured.Unstructured{}
-			cm.SetGroupVersionKind(gvk)
-			if err := k8sClient.Get(ctx, workerZulu, cm); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-			return data["ready"] == "true", nil
-		}), "worker-zulu must update to ready=true")
+	require.NoError(t, waitForField(ctx, k8sClient, gvk, workerZulu,
+		[]string{"data", "ready"}, "true"), "worker-zulu must update to ready=true")
 	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
 	t.Log("Phase 1: worker-zulu created and ready")
 
@@ -2457,16 +2425,8 @@ func TestForEach_ReadyFirstOrdering(t *testing.T) {
 
 	// Wait for all workers to show ready=true.
 	for _, wk := range []types.NamespacedName{workerAlpha, workerZulu} {
-		require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-			func(ctx context.Context) (bool, error) {
-				cm := &unstructured.Unstructured{}
-				cm.SetGroupVersionKind(gvk)
-				if err := k8sClient.Get(ctx, wk, cm); err != nil {
-					return false, nil
-				}
-				data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-				return data["ready"] == "true", nil
-			}), "worker %s must update to ready=true", wk.Name)
+		require.NoError(t, waitForField(ctx, k8sClient, gvk, wk,
+			[]string{"data", "ready"}, "true"), "worker %s must update to ready=true", wk.Name)
 	}
 
 	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))

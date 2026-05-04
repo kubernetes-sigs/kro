@@ -1,17 +1,13 @@
 package graphcontroller_test
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // Prune safety tests prove that the controller does not prune resources when
@@ -123,16 +119,8 @@ func TestPruneSafetyPendingBlocksPrune(t *testing.T) {
 	t.Log("Removed toggle field — includeWhen cannot evaluate")
 
 	// Wait for the Graph to enter non-Ready state.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			g := &unstructured.Unstructured{}
-			g.SetGroupVersionKind(GraphGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "test-prune-pending", Namespace: ns}, g); err != nil {
-				return false, nil
-			}
-			return !graphReady(g), nil
-		}))
+	require.NoError(t, waitForGraphReadyStatus(ctx, k8sClient,
+		types.NamespacedName{Name: "test-prune-pending", Namespace: ns}, "Unknown"))
 	t.Log("Graph entered non-Ready state (data-pending)")
 
 	// THE KEY ASSERTION: the conditional resource should NOT be pruned.
@@ -224,17 +212,9 @@ func TestPruneManagedCheckBlocksDeletion(t *testing.T) {
 		"extra-field": "external-value",
 	})
 	// Verify the external field is there before proceeding.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "prune-managed-cm", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(check.Object, "data")
-			return data["extra-field"] == "external-value", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "prune-managed-cm", Namespace: ns},
+		[]string{"data", "extra-field"}, "external-value"))
 	t.Log("External manager applied — ConfigMap now has two managedFields entries")
 
 	// 4. Delete the Graph (sets deletion timestamp, finalizer holds teardown).
@@ -264,14 +244,8 @@ func TestPruneManagedCheckBlocksDeletion(t *testing.T) {
 	t.Log("ConfigMap manually deleted — unblocking teardown")
 
 	// 7. Controller should now complete teardown and remove the Graph finalizer.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(GraphGVK)
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "test-prune-managed-teardown", Namespace: ns}, check)
-			return err != nil, nil // gone = success
-		}))
+	require.NoError(t, waitForDeletion(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-prune-managed-teardown", Namespace: ns}))
 	t.Log("Graph fully deleted after ConfigMap was removed — managedFields teardown block proved")
 }
 
@@ -353,17 +327,9 @@ func TestPruneManagedCheckOnSpecChange(t *testing.T) {
 	applyConfigMapAs(t, ns, "prune-managed-a", "external-manager", map[string]string{
 		"external-key": "external-value",
 	})
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "prune-managed-a", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			data, _, _ := unstructured.NestedStringMap(check.Object, "data")
-			return data["external-key"] == "external-value", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "prune-managed-a", Namespace: ns},
+		[]string{"data", "external-key"}, "external-value"))
 	t.Log("External manager applied to CM-A — CM-A now has two SSA managers")
 
 	// 4. Update Graph spec: remove nodeA. This makes CM-A a prune candidate.
@@ -484,8 +450,6 @@ func TestPruneSafetyConflictBlocksPrune(t *testing.T) {
 	// THE KEY ASSERTION: after settling, the independent resource should NOT
 	// be pruned. Conflict is a blocked state — nothing should be pruned
 	// because of it.
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
-		types.NamespacedName{Name: "test-prune-conflict", Namespace: ns}))
 	check := &unstructured.Unstructured{}
 	check.SetGroupVersionKind(cmGVK)
 	err := k8sClient.Get(ctx,
@@ -575,25 +539,12 @@ func TestPruneSweptOnSpecNodeRemoval(t *testing.T) {
 	// 4. THE KEY ASSERTION: both ConfigMaps must be pruned.
 	// If the controller returns early before the prune phase (len(triggered)==0
 	// early exit), these resources are orphaned and the test fails.
-	// Uses apierrors.IsNotFound to distinguish actual deletion from context
-	// cancellation — without it, a deadline would falsely satisfy err != nil.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			checkA := &unstructured.Unstructured{}
-			checkA.SetGroupVersionKind(cmGVK)
-			errA := k8sClient.Get(ctx, types.NamespacedName{Name: "prune-sweep-a", Namespace: ns}, checkA)
-			if errA != nil && !apierrors.IsNotFound(errA) {
-				return false, nil // transient error — keep polling
-			}
-			checkB := &unstructured.Unstructured{}
-			checkB.SetGroupVersionKind(cmGVK)
-			errB := k8sClient.Get(ctx, types.NamespacedName{Name: "prune-sweep-b", Namespace: ns}, checkB)
-			if errB != nil && !apierrors.IsNotFound(errB) {
-				return false, nil // transient error — keep polling
-			}
-			return apierrors.IsNotFound(errA) && apierrors.IsNotFound(errB), nil
-		}),
-		"both ConfigMaps must be pruned after all nodes are removed from spec")
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "prune-sweep-a", Namespace: ns}),
+		"prune-sweep-a must be pruned after all nodes are removed from spec")
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "prune-sweep-b", Namespace: ns}),
+		"prune-sweep-b must be pruned after all nodes are removed from spec")
 	t.Log("Both ConfigMaps pruned — spec-emptying triggers prune sweep")
 }
 
@@ -685,13 +636,8 @@ func TestPrune_RegressionCrossNamespace(t *testing.T) {
 		}))
 
 	// The cross-namespace resource should be pruned
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			obj := &unstructured.Unstructured{}
-			obj.SetGroupVersionKind(cmGVK)
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: "cross-ns-config", Namespace: targetNS}, obj)
-			return err != nil, nil // wait until NotFound
-		}),
+	require.NoError(t, waitForDeletion(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "cross-ns-config", Namespace: targetNS}),
 		"cross-namespace resource should be pruned after node removed from spec")
 
 	// Local resource should still exist
@@ -806,7 +752,6 @@ func TestPruneSafetyErrorBlocksPrune(t *testing.T) {
 
 	// THE KEY ASSERTION: the computed ConfigMap must NOT be pruned.
 	// The node is in Error state (uncertain absence) so its resource survives.
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
 	surviving := &unstructured.Unstructured{}
 	surviving.SetGroupVersionKind(cmGVK)
 	err := k8sClient.Get(ctx,
@@ -832,17 +777,9 @@ func TestPruneSafetyErrorBlocksPrune(t *testing.T) {
 	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
 
 	// Verify updated result.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "error-prune-result", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			d, _, _ := unstructured.NestedStringMap(check.Object, "data")
-			return d["result"] == "20", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "error-prune-result", Namespace: ns},
+		[]string{"data", "result"}, "20"))
 	t.Log("Phase 3: recovered — computed ConfigMap has result=20")
 }
 
@@ -932,7 +869,6 @@ func TestPruneSafetySystemErrorBlocksPrune(t *testing.T) {
 	t.Log("Phase 2: Node in SystemError — webhook returning 500")
 
 	// THE KEY ASSERTION: resource must survive SystemError (uncertain absence).
-	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, graphKey))
 	surviving := &unstructured.Unstructured{}
 	surviving.SetGroupVersionKind(cmGVK)
 	err := k8sClient.Get(ctx,
@@ -951,16 +887,8 @@ func TestPruneSafetySystemErrorBlocksPrune(t *testing.T) {
 	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey))
 
 	// Verify updated.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
-		func(ctx context.Context) (bool, error) {
-			check := &unstructured.Unstructured{}
-			check.SetGroupVersionKind(cmGVK)
-			if err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: "prune-syserr-cm", Namespace: ns}, check); err != nil {
-				return false, nil
-			}
-			d, _, _ := unstructured.NestedStringMap(check.Object, "data")
-			return d["version"] == "v2", nil
-		}))
+	require.NoError(t, waitForField(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "prune-syserr-cm", Namespace: ns},
+		[]string{"data", "version"}, "v2"))
 	t.Log("Phase 3: recovered — ConfigMap updated to v2")
 }

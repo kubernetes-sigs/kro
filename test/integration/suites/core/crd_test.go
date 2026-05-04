@@ -560,6 +560,70 @@ var _ = Describe("CRD", func() {
 			// Cleanup
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
+
+		It("should update CRD when minimum/maximum markers are removed", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-constraint-removal",
+				generator.WithSchema(
+					"ConstraintRemoval", "v1alpha1",
+					map[string]interface{}{
+						"replicas": "integer | default=3 minimum=1 maximum=10",
+					},
+					nil,
+				),
+			)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			// Wait for RGD to become active and CRD to have constraints
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+				err = env.Client.Get(ctx, types.NamespacedName{
+					Name: "constraintremovals.kro.run",
+				}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
+				g.Expect(props["spec"].Properties["replicas"].Minimum).ToNot(BeNil())
+				g.Expect(*props["spec"].Properties["replicas"].Minimum).To(Equal(1.0))
+				g.Expect(props["spec"].Properties["replicas"].Maximum).ToNot(BeNil())
+				g.Expect(*props["spec"].Properties["replicas"].Maximum).To(Equal(10.0))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Remove minimum and maximum markers
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+					"replicas": "integer | default=3",
+				})
+
+				err = env.Client.Update(ctx, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Verify CRD constraints are removed
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+				err = env.Client.Get(ctx, types.NamespacedName{
+					Name: "constraintremovals.kro.run",
+				}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
+				g.Expect(props["spec"].Properties["replicas"].Minimum).To(BeNil())
+				g.Expect(props["spec"].Properties["replicas"].Maximum).To(BeNil())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Cleanup
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
 	})
 
 	Context("CRD Watch Reconciliation", func() {

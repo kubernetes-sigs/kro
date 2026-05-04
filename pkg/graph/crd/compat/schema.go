@@ -15,6 +15,7 @@ package compat
 
 import (
 	"bytes"
+	"strconv"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
@@ -93,6 +94,9 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps) *Report {
 			result.AddBreakingChange(path+".pattern", PatternChanged, oldSchema.Pattern, newSchema.Pattern)
 		}
 	}
+
+	// Compare numeric/length/items constraints
+	compareConstraints(path, oldSchema, newSchema, result)
 
 	// Compare properties
 	compareProperties(path, oldSchema, newSchema, result)
@@ -292,4 +296,122 @@ func toJsonValueSet(values []v1.JSON) map[string]bool {
 		set[string(val.Raw)] = true
 	}
 	return set
+}
+
+// compareConstraints checks for changes to numeric, length, and items constraints.
+func compareConstraints(path string, oldSchema, newSchema *v1.JSONSchemaProps, result *Report) {
+	compareFloatConstraint(path, "minimum", oldSchema.Minimum, newSchema.Minimum, true, result)
+	compareFloatConstraint(path, "maximum", oldSchema.Maximum, newSchema.Maximum, false, result)
+	compareIntConstraint(path, "minLength", oldSchema.MinLength, newSchema.MinLength, true, result)
+	compareIntConstraint(path, "maxLength", oldSchema.MaxLength, newSchema.MaxLength, false, result)
+	compareIntConstraint(path, "minItems", oldSchema.MinItems, newSchema.MinItems, true, result)
+	compareIntConstraint(path, "maxItems", oldSchema.MaxItems, newSchema.MaxItems, false, result)
+}
+
+// compareFloatConstraint compares a float64 pointer constraint field.
+// isLowerBound=true means this is a minimum-style constraint (increase = breaking).
+// isLowerBound=false means this is a maximum-style constraint (decrease = breaking).
+func compareFloatConstraint(path, name string, oldVal, newVal *float64, isLowerBound bool, result *Report) {
+	if oldVal == nil && newVal == nil {
+		return
+	}
+
+	fieldPath := path + "." + name
+	addedType, removedType, tightenedType, relaxedType := constraintChangeTypes(name)
+
+	if oldVal == nil && newVal != nil {
+		result.AddBreakingChange(fieldPath, addedType, "", formatFloat(*newVal))
+		return
+	}
+	if oldVal != nil && newVal == nil {
+		result.AddNonBreakingChange(fieldPath, removedType, formatFloat(*oldVal), "")
+		return
+	}
+
+	if *oldVal == *newVal {
+		return
+	}
+
+	oldStr := formatFloat(*oldVal)
+	newStr := formatFloat(*newVal)
+
+	if isLowerBound {
+		if *newVal > *oldVal {
+			result.AddBreakingChange(fieldPath, tightenedType, oldStr, newStr)
+		} else {
+			result.AddNonBreakingChange(fieldPath, relaxedType, oldStr, newStr)
+		}
+	} else {
+		if *newVal < *oldVal {
+			result.AddBreakingChange(fieldPath, tightenedType, oldStr, newStr)
+		} else {
+			result.AddNonBreakingChange(fieldPath, relaxedType, oldStr, newStr)
+		}
+	}
+}
+
+// compareIntConstraint compares an int64 pointer constraint field.
+// isLowerBound=true means this is a minimum-style constraint (increase = breaking).
+// isLowerBound=false means this is a maximum-style constraint (decrease = breaking).
+func compareIntConstraint(path, name string, oldVal, newVal *int64, isLowerBound bool, result *Report) {
+	if oldVal == nil && newVal == nil {
+		return
+	}
+
+	fieldPath := path + "." + name
+	addedType, removedType, tightenedType, relaxedType := constraintChangeTypes(name)
+
+	if oldVal == nil && newVal != nil {
+		result.AddBreakingChange(fieldPath, addedType, "", strconv.FormatInt(*newVal, 10))
+		return
+	}
+	if oldVal != nil && newVal == nil {
+		result.AddNonBreakingChange(fieldPath, removedType, strconv.FormatInt(*oldVal, 10), "")
+		return
+	}
+
+	if *oldVal == *newVal {
+		return
+	}
+
+	oldStr := strconv.FormatInt(*oldVal, 10)
+	newStr := strconv.FormatInt(*newVal, 10)
+
+	if isLowerBound {
+		if *newVal > *oldVal {
+			result.AddBreakingChange(fieldPath, tightenedType, oldStr, newStr)
+		} else {
+			result.AddNonBreakingChange(fieldPath, relaxedType, oldStr, newStr)
+		}
+	} else {
+		if *newVal < *oldVal {
+			result.AddBreakingChange(fieldPath, tightenedType, oldStr, newStr)
+		} else {
+			result.AddNonBreakingChange(fieldPath, relaxedType, oldStr, newStr)
+		}
+	}
+}
+
+// constraintChangeTypes returns the (added, removed, tightened, relaxed) ChangeTypes for a named constraint.
+func constraintChangeTypes(name string) (added, removed, tightened, relaxed ChangeType) {
+	switch name {
+	case "minimum":
+		return MinimumAdded, MinimumRemoved, MinimumIncreased, MinimumDecreased
+	case "maximum":
+		return MaximumAdded, MaximumRemoved, MaximumDecreased, MaximumIncreased
+	case "minLength":
+		return MinLengthAdded, MinLengthRemoved, MinLengthIncreased, MinLengthDecreased
+	case "maxLength":
+		return MaxLengthAdded, MaxLengthRemoved, MaxLengthDecreased, MaxLengthIncreased
+	case "minItems":
+		return MinItemsAdded, MinItemsRemoved, MinItemsIncreased, MinItemsDecreased
+	case "maxItems":
+		return MaxItemsAdded, MaxItemsRemoved, MaxItemsDecreased, MaxItemsIncreased
+	default:
+		return ChangeType(name + "_ADDED"), ChangeType(name + "_REMOVED"), ChangeType(name + "_TIGHTENED"), ChangeType(name + "_RELAXED")
+	}
+}
+
+func formatFloat(f float64) string {
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }

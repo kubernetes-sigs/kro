@@ -31,6 +31,20 @@ const (
 	PatternAdded           ChangeType = "PATTERN_ADDED"
 	RequiredDefaultRemoved ChangeType = "REQUIRED_DEFAULT_REMOVED"
 
+	// Breaking - constraint tightened
+	MinimumAdded       ChangeType = "MINIMUM_ADDED"
+	MinimumIncreased   ChangeType = "MINIMUM_INCREASED"
+	MaximumAdded       ChangeType = "MAXIMUM_ADDED"
+	MaximumDecreased   ChangeType = "MAXIMUM_DECREASED"
+	MinLengthAdded     ChangeType = "MIN_LENGTH_ADDED"
+	MinLengthIncreased ChangeType = "MIN_LENGTH_INCREASED"
+	MaxLengthAdded     ChangeType = "MAX_LENGTH_ADDED"
+	MaxLengthDecreased ChangeType = "MAX_LENGTH_DECREASED"
+	MinItemsAdded      ChangeType = "MIN_ITEMS_ADDED"
+	MinItemsIncreased  ChangeType = "MIN_ITEMS_INCREASED"
+	MaxItemsAdded      ChangeType = "MAX_ITEMS_ADDED"
+	MaxItemsDecreased  ChangeType = "MAX_ITEMS_DECREASED"
+
 	// Non-breaking change types
 	PropertyAdded      ChangeType = "PROPERTY_ADDED"
 	DescriptionChanged ChangeType = "DESCRIPTION_CHANGED"
@@ -38,6 +52,20 @@ const (
 	RequiredRemoved    ChangeType = "REQUIRED_REMOVED"
 	EnumExpanded       ChangeType = "ENUM_EXPANDED"
 	PatternRemoved     ChangeType = "PATTERN_REMOVED"
+
+	// Non-breaking - constraint relaxed
+	MinimumRemoved     ChangeType = "MINIMUM_REMOVED"
+	MinimumDecreased   ChangeType = "MINIMUM_DECREASED"
+	MaximumRemoved     ChangeType = "MAXIMUM_REMOVED"
+	MaximumIncreased   ChangeType = "MAXIMUM_INCREASED"
+	MinLengthRemoved   ChangeType = "MIN_LENGTH_REMOVED"
+	MinLengthDecreased ChangeType = "MIN_LENGTH_DECREASED"
+	MaxLengthRemoved   ChangeType = "MAX_LENGTH_REMOVED"
+	MaxLengthIncreased ChangeType = "MAX_LENGTH_INCREASED"
+	MinItemsRemoved    ChangeType = "MIN_ITEMS_REMOVED"
+	MinItemsDecreased  ChangeType = "MIN_ITEMS_DECREASED"
+	MaxItemsRemoved    ChangeType = "MAX_ITEMS_REMOVED"
+	MaxItemsIncreased  ChangeType = "MAX_ITEMS_INCREASED"
 )
 
 // Change represents a single schema change
@@ -163,6 +191,61 @@ func (c Change) Description() string {
 		return fmt.Sprintf("Description field was changed from %s to %s", c.OldValue, c.NewValue)
 	case DefaultChanged:
 		return fmt.Sprintf("Default value was changed from %s to %s", c.OldValue, c.NewValue)
+	default:
+		return c.constraintDescription()
+	}
+}
+
+func (c Change) constraintDescription() string {
+	switch c.ChangeType {
+	case MinimumAdded:
+		return fmt.Sprintf("Minimum constraint %s was added", c.NewValue)
+	case MinimumRemoved:
+		return fmt.Sprintf("Minimum constraint %s was removed", c.OldValue)
+	case MinimumIncreased:
+		return fmt.Sprintf("Minimum was increased from %s to %s", c.OldValue, c.NewValue)
+	case MinimumDecreased:
+		return fmt.Sprintf("Minimum was decreased from %s to %s", c.OldValue, c.NewValue)
+	case MaximumAdded:
+		return fmt.Sprintf("Maximum constraint %s was added", c.NewValue)
+	case MaximumRemoved:
+		return fmt.Sprintf("Maximum constraint %s was removed", c.OldValue)
+	case MaximumDecreased:
+		return fmt.Sprintf("Maximum was decreased from %s to %s", c.OldValue, c.NewValue)
+	case MaximumIncreased:
+		return fmt.Sprintf("Maximum was increased from %s to %s", c.OldValue, c.NewValue)
+	case MinLengthAdded:
+		return fmt.Sprintf("MinLength constraint %s was added", c.NewValue)
+	case MinLengthRemoved:
+		return fmt.Sprintf("MinLength constraint %s was removed", c.OldValue)
+	case MinLengthIncreased:
+		return fmt.Sprintf("MinLength was increased from %s to %s", c.OldValue, c.NewValue)
+	case MinLengthDecreased:
+		return fmt.Sprintf("MinLength was decreased from %s to %s", c.OldValue, c.NewValue)
+	case MaxLengthAdded:
+		return fmt.Sprintf("MaxLength constraint %s was added", c.NewValue)
+	case MaxLengthRemoved:
+		return fmt.Sprintf("MaxLength constraint %s was removed", c.OldValue)
+	case MaxLengthDecreased:
+		return fmt.Sprintf("MaxLength was decreased from %s to %s", c.OldValue, c.NewValue)
+	case MaxLengthIncreased:
+		return fmt.Sprintf("MaxLength was increased from %s to %s", c.OldValue, c.NewValue)
+	case MinItemsAdded:
+		return fmt.Sprintf("MinItems constraint %s was added", c.NewValue)
+	case MinItemsRemoved:
+		return fmt.Sprintf("MinItems constraint %s was removed", c.OldValue)
+	case MinItemsIncreased:
+		return fmt.Sprintf("MinItems was increased from %s to %s", c.OldValue, c.NewValue)
+	case MinItemsDecreased:
+		return fmt.Sprintf("MinItems was decreased from %s to %s", c.OldValue, c.NewValue)
+	case MaxItemsAdded:
+		return fmt.Sprintf("MaxItems constraint %s was added", c.NewValue)
+	case MaxItemsRemoved:
+		return fmt.Sprintf("MaxItems constraint %s was removed", c.OldValue)
+	case MaxItemsDecreased:
+		return fmt.Sprintf("MaxItems was decreased from %s to %s", c.OldValue, c.NewValue)
+	case MaxItemsIncreased:
+		return fmt.Sprintf("MaxItems was increased from %s to %s", c.OldValue, c.NewValue)
 	default:
 		return fmt.Sprintf("Unknown change to %s", c.Path)
 	}

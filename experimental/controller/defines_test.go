@@ -123,7 +123,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 		}}
 		rs := newReconcileScope(graph, nil)
 
-		_, err = c.reconcileForEach(ctx, rs, spec.Nodes[1], eval, nil)
+		_, err = c.reconcileForEach(ctx, rs, spec.Nodes[1], eval)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "forEach defines items")
 	})
@@ -158,7 +158,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 		}}
 		rs := newReconcileScope(graph, nil)
 
-		_, err = c.reconcileForEach(ctx, rs, spec.Nodes[1], eval, nil)
+		_, err = c.reconcileForEach(ctx, rs, spec.Nodes[1], eval)
 		require.Error(t, err, "forEach with failing child templates must return an error")
 
 		_, published := eval.scope["items"]

@@ -88,7 +88,7 @@ work:
 Input-hash and output-hash share the same reference paths. Both are ephemeral — recomputed on cold
 start. The apply-hash survives restarts via the annotation.
 
-**forEach children.** The dispatch loop applies the same input-hash check per child — unchanged
+**forEach children.** The evaluation loop applies the same input-hash check per child — unchanged
 inputs means the child is already on the latest generation and is skipped.
 
 **Watch nodes.** When a single resource changes, the watch node updates its cached list incrementally
@@ -100,6 +100,6 @@ Nodes with no dependency relationship are independent and may be evaluated concu
 correctness invariant is: a node evaluates only after all its hard dependencies have been processed.
 The scheduler is free to parallelize within this constraint.
 
-Dependency-driven scheduling seeds level-0 nodes (no dependencies) and dispatches dependents as each
+Dependency-driven scheduling seeds level-0 nodes (no dependencies) and evaluates dependents as each
 node completes. Independent nodes in the frontier run in parallel. The same applies to prune —
 independent nodes in the reverse frontier can be removed concurrently.

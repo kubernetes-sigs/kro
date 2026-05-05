@@ -166,7 +166,7 @@ func prepareObject(evalMap map[string]any, rs *reconcileScope, nodeID string, no
 	// the scalar index would store namespace="<graph-ns>".
 	obj.SetNamespace(defaultNamespace(obj.GroupVersionKind(), obj.GetNamespace(), rs.namespace, scope))
 
-	// Stamp identity labels per 005-reconciliation.md § API Server Interaction.
+	// Stamp identity labels per 003-ownership.md § Identity Labels.
 	generationStr := fmt.Sprintf("%d", generation)
 	lbls := obj.GetLabels()
 	if lbls == nil {

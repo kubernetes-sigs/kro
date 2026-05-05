@@ -31,9 +31,6 @@ type nodeResult struct {
 	// scope is the published value for this node (full K8s object, collection, or definition map).
 	scope any
 
-	// forEach state — returned by forEach expansion for the walk to merge.
-	forEach *forEachCarryForward
-
 	// resolvedGVK carries the GVK resolved by a dynamic-GVK node's template
 	// evaluation. Used to detect staleness per 004-compilation.md § Deferred Types.
 	resolvedGVK *schema.GroupVersionKind
@@ -182,7 +179,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 
 // nodeIntegrationResult carries the outputs of integrateNodeResult back
 // to the walk loop. Decouples the walk from node-result classification
-// internals (apiErrorInfo, forEachCarryForward structure).
+// internals (apiErrorInfo structure).
 type nodeIntegrationResult struct {
 	errMsgs        []string // "nodeID: reason" error messages for status
 	needsRecompile bool     // dynamic GVK resolved or changed
@@ -259,9 +256,6 @@ func integrateNodeResult(
 		eval.nodeReady[node.ID] = (nr.state == NodeReady)
 	}
 
-	// Merge forEach state updates.
-	state.walk.forEach.merge(nr.forEach)
-
 	// Update plan state.
 	plan.SetState(node.ID, nr.state)
 	if nr.state == NodeNotReady && nr.err != nil && errors.Is(nr.err, ErrReadyWhenFailed) {
@@ -318,12 +312,7 @@ func evaluateNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, nod
 		}
 	}
 
-	// Pass carry-forward forEach state directly for forEach nodes.
-	var prevForEachState *forEachCarryForward
-	if node.ForEach != nil {
-		prevForEachState = state.walk.forEach
-	}
-	out, err := reconcileNode(ctx, c, rs, node, eval, prevForEachState)
+	out, err := reconcileNode(ctx, c, rs, node, eval)
 
 	nr := nodeResult{
 		state: NodeReady,
@@ -333,7 +322,6 @@ func evaluateNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, nod
 	// Unpack nodeOutput fields.
 	if out != nil {
 		nr.keys = out.keys
-		nr.forEach = out.forEach
 	}
 
 	if err != nil {

@@ -206,7 +206,7 @@ spec:
                       + schema.spec.resources.filter(r, !has(r.externalRef)).map(r, r.merge({
                         "readyWhen": r.?readyWhen.orValue([]).map(expr, expr.replace('each.', r.id + '.')),
                         "propagateWhen": r.?propagateWhen.orValue(r.?forEach.orValue([]).size() > 0 ? [] : ["${" + r.id + ".dependencies().all(d, d.ready())}"]),
-                        "forceApply": true,
+                        "lifecycle": {"apply": "Force"},
                         "template": r.template.merge({
                           "metadata": (has(r.template.metadata) ? r.template.metadata : {}).merge({
                             "labels": (has(r.template.metadata) && has(r.template.metadata.labels) ? r.template.metadata.labels : {}).merge({
@@ -247,7 +247,8 @@ spec:
             - id: rgdStatus
               propagateWhen:
                 - "$${!validation.result.valid || crd.ready().orValue(false)}"
-              forceApply: true
+              lifecycle:
+                apply: Force
               patch:
                 apiVersion: kro.run/v1alpha1
                 kind: ResourceGraphDefinition
@@ -291,7 +292,8 @@ spec:
     - id: compilationStatus
       forEach:
         - graph: ${rgds}
-      forceApply: true
+      lifecycle:
+        apply: Force
       patch: >-
         ${
           graph.?status.?conditions.orValue([]).exists(c, c.type == "Compiled" && c.status == "False")

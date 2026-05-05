@@ -63,7 +63,6 @@ func TestInstanceStateIsolation(t *testing.T) {
 	// Mutate state1's mutable fields.
 	state1.walk.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
 	state1.walk.previousPlanStates = &PlanState{States: map[string]NodeState{"node0": NodeReady}}
-	state1.walk.forEach.itemScope["node0/item"] = map[string]any{"a": "b"}
 
 	// state2 should be unaffected.
 	if _, ok := state2.walk.previousScope["node0"]; ok {
@@ -73,9 +72,6 @@ func TestInstanceStateIsolation(t *testing.T) {
 		if _, ok := state2.walk.previousPlanStates.States["node0"]; ok {
 			t.Fatal("previousPlanStates leaked between instances")
 		}
-	}
-	if _, ok := state2.walk.forEach.itemScope["node0/item"]; ok {
-		t.Fatal("forEachItems leaked between instances")
 	}
 
 	// Both should share the same (immutable) compiledGraph.

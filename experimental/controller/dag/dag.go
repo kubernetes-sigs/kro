@@ -92,7 +92,7 @@ func (t *Topology) NodeDeps(idx int) map[string]graph.DepKind {
 // BuildDAG constructs a dependency graph from a node list.
 // exprPaths contains pre-extracted field paths from CEL ASTs (computed during
 // compilation in compileGraphSpec). These replace string-scanning with AST-walked
-// field paths per 005-reconciliation.md § Hash Mechanics.
+// field paths per 007-optimizations.md § Evaluation Caching.
 // exprAccessModes contains per-expression, per-scope-variable access mode
 // classification from pre-rewrite CEL ASTs. Drives DepKind: optional-only
 // access → DepLazy, any direct access → DepHard. Nil means all deps are hard.

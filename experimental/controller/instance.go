@@ -47,13 +47,12 @@ type compiledArtifacts struct {
 
 // walkCarryForward holds state carried forward across reconcile cycles by
 // the DAG walk. Includes previous scope for propagateWhen and lazy deps,
-// previous keys for carry-forward on blocked/pending nodes, previous plan
-// states, and forEach collection state.
+// previous keys for carry-forward on blocked/pending nodes, and previous plan
+// states.
 type walkCarryForward struct {
 	previousScope      map[string]any
 	previousKeys       map[string][]Applied
 	previousPlanStates *PlanState
-	forEach            *forEachCarryForward // nil until first forEach evaluation
 }
 
 // resetForRecompile clears walk state that is structurally incompatible
@@ -64,14 +63,9 @@ type walkCarryForward struct {
 //
 // previousKeys and previousPlanStates are preserved because they use
 // stable resource keys; stale entries for removed nodes are harmless
-// (never read). forEach is reset because node IDs may change and stale
-// carry-forward under old node IDs would never be cleaned up.
+// (never read).
 func (w *walkCarryForward) resetForRecompile() {
 	w.previousScope = make(map[string]any)
-	w.forEach = &forEachCarryForward{
-		itemScope: make(map[string]map[string]any),
-		itemKeys:  make(map[string]map[string][]Applied),
-	}
 }
 
 // pruneCarryForward holds state carried forward across reconcile cycles by
@@ -91,26 +85,6 @@ func (p *pruneCarryForward) resetForRecompile() {
 	p.deferredPruneKeys = nil
 }
 
-// forEachCarryForward holds forEach collection state retained across reconciles.
-type forEachCarryForward struct {
-	itemScope map[string]map[string]any       // nodeID → itemID → scope data
-	itemKeys  map[string]map[string][]Applied // nodeID → itemID → applied keys
-}
-
-// merge incorporates another forEachCarryForward's entries (typically from a
-// single node's evaluation) into this one. Nil other is a no-op.
-func (f *forEachCarryForward) merge(other *forEachCarryForward) {
-	if other == nil {
-		return
-	}
-	for nodeID, itemScopes := range other.itemScope {
-		f.itemScope[nodeID] = itemScopes
-	}
-	for nodeID, itemKeys := range other.itemKeys {
-		f.itemKeys[nodeID] = itemKeys
-	}
-}
-
 // newInstanceState creates a fresh instanceState for a compiledGraph.
 func newInstanceState(compiled *compiler.CompiledGraph, dag *dagpkg.DAG) *instanceState {
 	return &instanceState{
@@ -121,10 +95,6 @@ func newInstanceState(compiled *compiler.CompiledGraph, dag *dagpkg.DAG) *instan
 		walk: walkCarryForward{
 			previousScope: make(map[string]any),
 			previousKeys:  make(map[string][]Applied),
-			forEach: &forEachCarryForward{
-				itemScope: make(map[string]map[string]any),
-				itemKeys:  make(map[string]map[string][]Applied),
-			},
 		},
 	}
 }

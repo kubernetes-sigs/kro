@@ -23,18 +23,13 @@ import (
 // ---------------------------------------------------------------------------
 
 // nodeOutput is the return value of reconcileNode. It replaces the previous
-// ([]string, *forEachCarryForward, error) tuple so forEach-specific state doesn't
-// thread through a generic interface — most node types leave forEach nil.
+// ([]string, error) tuple — most node types just return keys.
 type nodeOutput struct {
-	keys    []Applied
-	forEach *forEachCarryForward // nil for non-forEach nodes
+	keys []Applied
 }
 
 // reconcileNode dispatches to the appropriate handler based on node type.
 // NodeType is a parse-time property of the node; no runtime resolution.
-//
-// prevForEachState carries forEach state from the previous reconcile. It is
-// only used when the node has a forEach clause; nil otherwise.
 //
 // After dispatch, reconcileNode evaluates readyWhen as a post-dispatch step
 // for node types that don't handle their own per-item readiness (Definition,
@@ -45,9 +40,9 @@ type nodeOutput struct {
 //   - ErrPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func reconcileNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, node graphpkg.Node, eval *evaluator, prevForEachState *forEachCarryForward) (*nodeOutput, error) {
+func reconcileNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, node graphpkg.Node, eval *evaluator) (*nodeOutput, error) {
 	if node.ForEach != nil {
-		return c.reconcileForEach(ctx, rs, node, eval, prevForEachState)
+		return c.reconcileForEach(ctx, rs, node, eval)
 	}
 
 	nodeType := node.Type()

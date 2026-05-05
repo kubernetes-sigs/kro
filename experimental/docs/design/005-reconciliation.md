@@ -91,11 +91,11 @@ At each node:
    - `ref:` — GET the named object. Data enters scope. Pending if absent.
    - `watch:` — list matching objects by label selector. List enters scope (supports `.filter()`,
      `.map()`, etc.).
-   - forEach parent — evaluate collection, determine children, dispatch children.
+   - forEach parent — evaluate collection, determine children, evaluate children.
    - `def:` — resolve all values against the current scope. No API calls.
-   - `template:` — evaluate desired state, SSA apply. 409 → Conflict.
+   - `template:` — evaluate desired state, SSA apply. Ownership conflict → Conflict.
    - `patch:` — evaluate desired state, SSA apply to existing resource. Pending if target absent.
-     409 → Conflict. Auto-splits status subresource.
+     Ownership conflict → Conflict. Auto-splits status subresource.
 
    When a template targets both the main resource and the status subresource, the controller splits
    the apply into two operations.
@@ -249,7 +249,7 @@ into children at walk time.
    error, nil dereference — the parent is Pending (upstream not ready) or Error (expression
    failure). Expansion does not proceed and existing children persist. Partial expansion is never
    attempted.
-3. **Dispatch children** — each child evaluates its template like any node, with the iterator
+3. **Evaluate children** — each child evaluates its template like any node, with the iterator
    variable bound to the collection item. readyWhen expressions are evaluated per-child — within
    readyWhen, `${deploys}` binds to the individual child's managed resource. In all other contexts
    (downstream templates, scope), `${deploys}` is the parent's aggregated list.
@@ -260,7 +260,7 @@ into children at walk time.
 
 The parent's state is derived from its children:
 
-- **Pending** — any child has not yet been dispatched or is awaiting its first result
+- **Pending** — any child is Pending
 - **Ready** — all children Ready
 - **NotReady** — any child NotReady, none in error states
 - **Error/Conflict/SystemError** — any child in an error state. Error states take precedence over
@@ -277,7 +277,7 @@ evaluated in any order (or concurrently — see
 [007-optimizations](007-optimizations.md#parallel-evaluation)). But when propagateWhen references
 the parent collection, each child's gate depends on sibling state. This is a lateral dependency the
 DAG does not model. The forEach loop handles it: the parent iterates children sequentially,
-evaluating propagateWhen and updating the parent aggregate after each dispatch.
+evaluating propagateWhen and updating the parent aggregate after each child.
 
 Each child has one of four states relative to the latest generation:
 
@@ -288,17 +288,15 @@ Each child has one of four states relative to the latest generation:
 | false       | true      | **Pending**  | Healthy on old version, good update candidate |
 | false       | false     | **Stuck**    | Broken before rollout, bad update candidate   |
 
-**Dispatch loop.** The parent iterates all children in order. For each child:
+**Evaluation loop.** Before iteration, the controller reads each child's managed resource from the
+informer cache and evaluates readyWhen against live state. Children are ordered by readiness —
+Ready first, NotReady second, errors last; random within each class.
 
-1. propagateWhen satisfied → dispatch, update parent aggregate.
-2. propagateWhen unsatisfied → skip, retain previous state.
+For each child:
 
-The loop always completes. Children whose propagateWhen is unsatisfied are skipped — the loop
-continues to the next child.
-
-**Ordering.** Ready before NotReady, before error states. Within a readiness class, random. This
-avoids baking in a policy for which children go first — the propagateWhen expression controls what
-happens, ordering just determines who is evaluated next.
+1. propagateWhen satisfied → evaluate child, update parent aggregate.
+2. propagateWhen unsatisfied → the child is Pending. Its resource persists in the cluster but is
+   not re-evaluated. No state persists between reconciles.
 
 ### Collection Ordering
 
@@ -343,7 +341,7 @@ Sibling forEach blocks and nested Graphs already compose for multi-resource-per-
 template per forEach keeps the primitive simple.
 
 **Explicit sort-by for forEach rollout ordering.** User-specified sort expressions for controlling
-which children are dispatched first during rollouts. Ready-first with random tiebreaker avoids
+which children are evaluated first during rollouts. Ready-first with random tiebreaker avoids
 baking in a policy. Different use cases want different orderings (oldest-first for patching,
 newest-unhealthy-first for bug fixes). Random within readiness class is neutral — the propagateWhen
 expression controls the rollout, not the ordering.
@@ -356,4 +354,4 @@ removes that flexibility. readyWhen produces the signal, propagateWhen on the co
 **Concurrent propagateWhen evaluation for forEach children.** The propagateWhen expression
 references the parent collection, which includes sibling state. Concurrent evaluation against a
 static snapshot produces incorrect budget enforcement — all children see the same state and all
-dispatch. Sequential evaluation with aggregate updates after each dispatch is required.
+dispatch. Sequential evaluation with aggregate updates after each child is required.

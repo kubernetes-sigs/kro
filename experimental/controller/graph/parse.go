@@ -247,11 +247,6 @@ func ParseNodeList(raw any) ([]Node, error) {
 				node.Lifecycle.Apply = apply
 			}
 		}
-		// Also accept forceApply: true for CEL-generated node maps where
-		// nested map types may not survive JSON round-trip via the API server.
-		if fa, ok := m["forceApply"].(bool); ok && fa {
-			node.Lifecycle.Apply = "Force"
-		}
 		nodes = append(nodes, node)
 	}
 	return nodes, nil

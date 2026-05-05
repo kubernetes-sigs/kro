@@ -19,9 +19,8 @@ import (
 
 // reconcileForEach iterates a collection and stamps the template per item.
 //
-// forEach state is passed in via prevState and returned as new state.
-// The caller merges the output back into the shared cache.
-func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator, prevState *forEachCarryForward) (*nodeOutput, error) {
+// No state is carried between reconciles — each cycle evaluates fresh.
+func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope, node graphpkg.Node, eval *evaluator) (*nodeOutput, error) {
 	logger := log.FromContext(ctx)
 	var keys []Applied
 	// Per-item propagateWhen gate. Per 001-graph.md § propagateWhen:
@@ -32,8 +31,8 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 	// partially-built collection (eval.scope[node.ID]). Items
 	// processed so far have fresh __ready stamps so expressions
 	// like ${workers.filter(w, !w.ready()).size() < 2} reflect
-	// current readiness. Gated items carry forward their previous
-	// applied state (including __ready from the last reconcile).
+	// current readiness. Gated items are Pending — not evaluated, no
+	// scope entry produced.
 	hasPerItemGate := len(node.PropagateWhen) > 0
 
 	varName := node.ForEach.VarName
@@ -69,20 +68,6 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 		currentOrder = append(currentOrder, id)
 	}
 
-	// Load per-item previous state from prevState parameter.
-	var prevItemScope map[string]any
-	var prevItemKeys map[string][]Applied
-	if prevState != nil {
-		prevItemScope = prevState.itemScope[node.ID]
-		prevItemKeys = prevState.itemKeys[node.ID]
-	}
-	if prevItemScope == nil {
-		prevItemScope = map[string]any{}
-	}
-	if prevItemKeys == nil {
-		prevItemKeys = map[string][]Applied{}
-	}
-
 	// Pre-evaluate readiness by fetching each item's resource from the
 	// cache and evaluating readyWhen. This replaces carry-forward readiness
 	// with fresh per-cycle evaluation. Cache hits make this cheap.
@@ -92,10 +77,6 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 	// "Ready before NotReady, before error states. Within a
 	// readiness class, random."
 	sortForEachByReadiness(currentOrder, readinessMap)
-
-	// Prepare output maps for this node.
-	newItemScope := make(map[string]any)
-	newItemKeys := make(map[string][]Applied)
 
 	// Evaluate every item every time (simple, correct).
 	var allApplied []any
@@ -115,18 +96,8 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 			}
 		}
 		if halted {
-			// Carry forward: retain previous applied state for gated items.
-			if prevKeys, ok := prevItemKeys[id]; ok {
-				keys = append(keys, prevKeys...)
-			}
-			if prevScope, ok := prevItemScope[id]; ok {
-				allApplied = append(allApplied, prevScope)
-				newItemScope[id] = prevScope
-				newItemKeys[id] = prevItemKeys[id]
-				if m, ok := prevScope.(map[string]any); ok {
-					m["__updated"] = isForEachItemUpdated(m, node.ID, rs.name, rs.namespace, eval.effectiveGeneration)
-				}
-			}
+			// Halted items are not dispatched. Parent becomes Pending,
+			// blocking downstream. No scope injection for halted items.
 			continue
 		}
 
@@ -151,7 +122,6 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 			// Definitions are always re-evaluated — vacuously updated.
 			evalMap["__updated"] = true
 			allApplied = append(allApplied, evalMap)
-			newItemScope[id] = evalMap
 			// No keys — definition nodes have no managed resources.
 			continue
 		}
@@ -202,10 +172,6 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 			// for proper state aggregation. Don't fail fast on the first error.
 			childErrors = append(childErrors, err)
 			logger.V(1).Info("forEach child error", "node", node.ID, "item", id, "error", err)
-			// Retain previous keys for this item if available
-			if prevKeys, ok := prevItemKeys[id]; ok {
-				keys = append(keys, prevKeys...)
-			}
 			continue
 		}
 		allApplied = append(allApplied, applied.Object)
@@ -218,22 +184,12 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 		}}
 		keys = append(keys, itemKeys...)
 
-		// Record per-item state.
-		newItemScope[id] = applied.Object
-		newItemKeys[id] = itemKeys
-
 		// Inline readyWhen stamp: required when per-item
 		// propagateWhen is active so the gate expression sees
 		// __ready on items processed earlier in this cycle.
 		if hasPerItemGate {
 			stampSingleItemReady(eval, node.ID, applied.Object, node.ReadyWhen)
 		}
-	}
-
-	// Build the new forEach state to return.
-	newState := &forEachCarryForward{
-		itemScope: map[string]map[string]any{node.ID: newItemScope},
-		itemKeys:  map[string]map[string][]Applied{node.ID: newItemKeys},
 	}
 
 	// Per 005-reconciliation.md § Parent State: derive parent state from children.
@@ -247,30 +203,34 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 	// partially-applied array. Error-then-publish (not publish-then-error)
 	// makes the invariant structural rather than coordinator-dependent.
 	if len(childErrors) > 0 {
-		return &nodeOutput{keys: keys, forEach: newState}, highestPriorityChildError(childErrors)
+		delete(eval.scope, node.ID)
+		return &nodeOutput{keys: keys}, highestPriorityChildError(childErrors)
 	}
-
-	eval.scope[node.ID] = allApplied
 
 	// Per-item propagateWhen halted expansion — the collection is
-	// incomplete. Signal NotReady so the controller requeues.
+	// incomplete. Parent is Pending, blocking downstream.
+	// Clean up the partial scope set during gate evaluation.
 	if halted {
-		return &nodeOutput{keys: keys, forEach: newState}, ErrWaitingForReadiness
+		delete(eval.scope, node.ID)
+		return &nodeOutput{keys: keys}, ErrPending
 	}
+
+	// Only publish scope when fully expanded — all items dispatched.
+	eval.scope[node.ID] = allApplied
 
 	// Check readyWhen per-item and stamp __ready on each item.
 	// When per-item propagateWhen is active, readyWhen was already
 	// stamped inline during the loop — skip the post-loop pass.
 	if !hasPerItemGate {
 		if err := forEachStampReadyWhen(eval.scope, node.ID, node.ReadyWhen, eval); err != nil {
-			return &nodeOutput{keys: keys, forEach: newState}, err
+			return &nodeOutput{keys: keys}, err
 		}
 		if len(node.ReadyWhen) > 0 {
 			logger.V(1).Info("all forEach items ready", "node", node.ID)
 		}
 	}
 
-	return &nodeOutput{keys: keys, forEach: newState}, nil
+	return &nodeOutput{keys: keys}, nil
 }
 
 // forEachStampReadyWhen evaluates readyWhen per-item and stamps __ready on
@@ -293,12 +253,9 @@ func forEachStampReadyWhen(scope map[string]any, nodeID string, readyWhen []stri
 		anyNotReady := false
 		for _, applied := range items {
 			saved := scope[nodeID]
-			savedSelf := scope["self"]
 			scope[nodeID] = applied
-			scope["self"] = applied
 			err := eval.evalReadinessConditions(readyWhen, nodeID)
 			scope[nodeID] = saved
-			scope["self"] = savedSelf
 			if err != nil {
 				if m, ok := applied.(map[string]any); ok {
 					m["__ready"] = false
@@ -337,17 +294,12 @@ func stampSingleItemReady(eval *evaluator, nodeID string, item any, readyWhen []
 		m["__ready"] = true
 		return
 	}
-	// Temporarily point scope[nodeID] and scope["self"] at this single
-	// item so readyWhen expressions resolve against the item under
-	// evaluation. Per 001-graph.md § readyWhen: "The expression runs in
-	// a scope containing the node's current value as self."
+	// Temporarily point scope[nodeID] at this single item so readyWhen
+	// expressions resolve against the item under evaluation.
 	saved := eval.scope[nodeID]
-	savedSelf := eval.scope["self"]
 	eval.scope[nodeID] = item
-	eval.scope["self"] = item
 	err := eval.evalReadinessConditions(readyWhen, nodeID)
 	eval.scope[nodeID] = saved
-	eval.scope["self"] = savedSelf
 	if err != nil {
 		m["__ready"] = false
 	} else {
@@ -372,9 +324,6 @@ func forEachItemIdentity(item any) string {
 				return ns + "/" + name
 			case hasName:
 				return name
-			}
-			if uid, ok := md["uid"].(string); ok {
-				return uid
 			}
 		}
 		// No metadata — use deterministic string representation.
@@ -503,19 +452,12 @@ func (c *clusterAccess) preEvaluateOneItem(ctx context.Context, eval *evaluator,
 	// status.readyReplicas == spec.replicas) require the actual resource
 	// from cache — templates have no .status field.
 	savedNode, hadNode := eval.scope[node.ID]
-	savedSelf, hadSelf := eval.scope["self"]
 	eval.scope[node.ID] = existing.Object
-	eval.scope["self"] = existing.Object
 	err = eval.evalReadinessConditions(node.ReadyWhen, node.ID)
 	if hadNode {
 		eval.scope[node.ID] = savedNode
 	} else {
 		delete(eval.scope, node.ID)
-	}
-	if hadSelf {
-		eval.scope["self"] = savedSelf
-	} else {
-		delete(eval.scope, "self")
 	}
 
 	if err != nil {

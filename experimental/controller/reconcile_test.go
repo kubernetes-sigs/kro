@@ -1401,13 +1401,11 @@ func TestReconcileDefinition_StampsUpdated(t *testing.T) {
 		"definition node must have __updated = true (always re-evaluated)")
 }
 
-// TestForEach_CarryForwardStampsUpdatedFromLabel proves that forEach items
-// carried forward by propagateWhen get __updated derived from the generation
-// label on the resource, not hardcoded true. This is the critical path for
-// rollout gating — carried-forward items on an old generation must show
-// updated() = false so propagateWhen can count them as "Pending" in the
-// four-state matrix (005-reconciliation.md § Propagation Control).
-func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
+// TestForEach_HaltedItemsMakeParentPending proves that when forEach's per-item
+// propagateWhen halts expansion, the parent becomes Pending (not NotReady),
+// halted items are not dispatched (no scope injection), and only the keys from
+// dispatched items are returned.
+func TestForEach_HaltedItemsMakeParentPending(t *testing.T) {
 	spec := &graphpkg.GraphSpec{
 		Nodes: []graphpkg.Node{
 			{ID: "source", Def: map[string]any{
@@ -1418,7 +1416,7 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 			}},
 			{ID: "workers", ForEach: &graphpkg.ForEachBinding{VarName: "item", Expr: "${source.items}"},
 				// propagateWhen that immediately halts — forces ALL items
-				// through the carry-forward path.
+				// through the halted path.
 				PropagateWhen: []string{"${false}"},
 				Def:           map[string]any{"name": "${item.metadata.name}"},
 			},
@@ -1439,39 +1437,6 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 		},
 	}
 
-	// Build previous scope data with generation labels.
-	// "alpha" has current generation (5) → __updated = true
-	// "beta" has old generation (4) → __updated = false
-	alphaGenKey := graphpkg.ForEachChildGenerationLabelKey("workers", "alpha", "default", "Deployment", "apps", "test", "default")
-	betaGenKey := graphpkg.ForEachChildGenerationLabelKey("workers", "beta", "default", "Deployment", "apps", "test", "default")
-
-	prevAlpha := map[string]any{
-		"apiVersion": "apps/v1", "kind": "Deployment",
-		"metadata": map[string]any{
-			"name": "alpha", "namespace": "default",
-			"labels": map[string]any{alphaGenKey: "5"},
-		},
-		"__ready": true,
-	}
-	prevBeta := map[string]any{
-		"apiVersion": "apps/v1", "kind": "Deployment",
-		"metadata": map[string]any{
-			"name": "beta", "namespace": "default",
-			"labels": map[string]any{betaGenKey: "4"},
-		},
-		"__ready": true,
-	}
-
-	// Pre-populate forEach state so items are "known" and can be carried forward.
-	prevState := &forEachCarryForward{
-		itemScope: map[string]map[string]any{
-			"workers": {"alpha": prevAlpha, "beta": prevBeta},
-		},
-		itemKeys: map[string]map[string][]Applied{
-			"workers": {"alpha": {{Key: "key-alpha"}}, "beta": {{Key: "key-beta"}}},
-		},
-	}
-
 	graph := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "experimental.kro.run/v1alpha1",
 		"kind":       "Graph",
@@ -1480,30 +1445,13 @@ func TestForEach_CarryForwardStampsUpdatedFromLabel(t *testing.T) {
 
 	r := &GraphReconciler{}
 	rs := newReconcileScope(graph, nil)
-	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval, prevState)
-	// ErrWaitingForReadiness expected — propagateWhen halted expansion.
-	require.ErrorIs(t, err, ErrWaitingForReadiness)
+	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval)
+	// ErrPending expected — propagateWhen halted expansion, parent is Pending.
+	require.ErrorIs(t, err, ErrPending)
 
-	// Verify carried-forward items in scope have correct __updated stamps.
-	items, ok := eval.scope["workers"].([]any)
-	require.True(t, ok, "scope should contain workers as []any")
-	require.Len(t, items, 2)
-
-	// Items may be in any order due to random tiebreak within readiness class.
-	// Find alpha and beta by name.
-	updatedByName := map[string]any{}
-	for _, item := range items {
-		m, ok := item.(map[string]any)
-		require.True(t, ok)
-		md, _ := m["metadata"].(map[string]any)
-		name, _ := md["name"].(string)
-		updatedByName[name] = m["__updated"]
-	}
-
-	assert.Equal(t, true, updatedByName["alpha"],
-		"alpha (generation 5 == effectiveGeneration 5) should be updated")
-	assert.Equal(t, false, updatedByName["beta"],
-		"beta (generation 4 != effectiveGeneration 5) should NOT be updated")
+	// Scope should NOT be published when halted (no partial scope).
+	_, scopePublished := eval.scope["workers"]
+	assert.False(t, scopePublished, "scope should not be published when halted")
 }
 
 // TestForEach_DefinitionItemsAlwaysReEvaluated proves that forEach definition
@@ -1545,7 +1493,7 @@ func TestForEach_DefinitionItemsAlwaysReEvaluated(t *testing.T) {
 
 	r := &GraphReconciler{}
 	rs := newReconcileScope(graph, nil)
-	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval, nil)
+	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval)
 	require.NoError(t, err)
 
 	items, ok := eval.scope["results"].([]any)
@@ -1597,22 +1545,13 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval.scope["config"] = map[string]any{"version": "v1"}
 	eval.scope["source"] = map[string]any{"names": names}
 
-	out, err := c.reconcileForEach(context.Background(), rs, resultsNode, eval, nil)
+	_, err = c.reconcileForEach(context.Background(), rs, resultsNode, eval)
 	require.NoError(t, err)
 	items1, ok := eval.scope["results"].([]any)
 	require.True(t, ok)
 	require.Len(t, items1, 2)
 	for _, item := range items1 {
 		assert.Contains(t, item.(map[string]any)["combined"].(string), "-v1")
-	}
-
-	// Merge newState into instanceState for phase 2.
-	newState := out.forEach
-	for k, v := range newState.itemScope {
-		state.walk.forEach.itemScope[k] = v
-	}
-	for k, v := range newState.itemKeys {
-		state.walk.forEach.itemKeys[k] = v
 	}
 
 	// Phase 2: config.version = "v2", collection unchanged.
@@ -1622,12 +1561,7 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	eval2.scope["config"] = map[string]any{"version": "v2"}
 	eval2.scope["source"] = map[string]any{"names": names}
 
-	prevState2 := &forEachCarryForward{
-		itemScope: state.walk.forEach.itemScope,
-		itemKeys:  state.walk.forEach.itemKeys,
-	}
-
-	_, err = c.reconcileForEach(context.Background(), rs, resultsNode, eval2, prevState2)
+	_, err = c.reconcileForEach(context.Background(), rs, resultsNode, eval2)
 	require.NoError(t, err)
 	items2, ok := eval2.scope["results"].([]any)
 	require.True(t, ok)

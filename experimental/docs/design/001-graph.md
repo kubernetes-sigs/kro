@@ -62,13 +62,13 @@ A node's type is the keyword it declares. Five types exist:
 
 - **`template:`** — Template a Kubernetes resource. The controller creates the resource if it
   doesn't exist, applies changes when the template changes, and deletes the resource on prune.
-- **`patch:`** — Patch fields on an existing resource. Each field has exactly one writer — if two
-  nodes write the same field, the second write is rejected. A patch may apply fields to a resource
-  in another graph. On prune, the fields are released from the resource.
+- **`patch:`** — Patch fields on an existing resource. Each field has exactly one writer —
+  ownership conflicts are detected and surfaced before the write proceeds. A patch may apply fields
+  to a resource in another graph. On prune, the fields are released from the resource.
 - **`ref:`** — Reference a resource outside of this graph and make its fields available to other
   nodes in this graph.
-- **`watch:`** — Watch all resources of a GroupKind and make their fields to other nodes in this
-  graph.
+- **`watch:`** — Watch all resources of a GroupKind matching a label selector and make their fields
+  available to other nodes in this graph.
 - **`def:`** — Define raw data for use by other nodes in this graph. Def nodes do not read or write
   Kubernetes resources.
 
@@ -164,9 +164,13 @@ if it's not.
 Nodes expose functions that enable other nodes to reason about their state.
 
 - **`.ready()`** — true when the node is applied and its `readyWhen` conditions pass.
-- **`.updated()`** — true when the has been evaluated against the latest graph generation.
+- **`.updated()`** — true when the node has been evaluated against the latest graph generation.
 - **`.dependencies()`** — a list of hard and soft dependencies of the node. Useful to chain
   dependency readiness `readyWhen: [${node.dependencies().all(d, d.ready())}]`.
+- **`plural(s)`** — English pluralization. Returns the plural form of the input string. Example:
+  `plural("WebApp").lowerAscii()` → `"webapps"`.
+- **`simpleSchema.toOpenAPI(schema, resources)`** — Converts a SimpleSchema map and resource list
+  into a fully-structured OpenAPI v3 schema object.
 
 ## Modifiers
 
@@ -177,8 +181,7 @@ Modifiers modify the behavior of a node. They use CEL expressions that can refer
 The forEach modifier is a key-value pair that repeats a node for each value in a list CEL
 expression. These child nodes are a set of logical nodes that depend on the parent. The forEach key
 can be referenced in the node's CEL expressions. Additional node modifiers apply to the child nodes,
-not the parent. The parent's `.ready()` is true when all children are ready, and `.updated()` is
-true when all children are updated — these are health signals and do not gate downstream nodes.
+not the parent. The parent's state is a rollup of its children. Its `.ready()` is true when all children are ready, and `.updated()` is true when all children are updated.
 Each child's identity is derived from the parent's ID and the child's GVK, Namespace, and
 Name. Other nodes in the graph see the forEach node as a list of children when referenced in CEL.
 

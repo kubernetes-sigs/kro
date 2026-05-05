@@ -290,9 +290,9 @@ func revisionGeneration(revision *unstructured.Unstructured) int64 {
 // the labels must reflect that revision's generation, not the failed one —
 // otherwise labels lie about which generation materialized the resource.
 //
-// Per 005-reconciliation.md § API Server Interaction: identity labels
-// are "the receipt of what was applied." On a fallback reconcile, what's
-// being applied is the active revision; the receipt must match.
+// Per 003-ownership.md § Identity Labels: identity labels are "the receipt
+// of what was applied." On a fallback reconcile, what's being applied is
+// the active revision; the receipt must match.
 func pickEffectiveGeneration(graph, activeRevision *unstructured.Unstructured, compilationErr error) int64 {
 	if compilationErr != nil && activeRevision != nil {
 		return revisionGeneration(activeRevision)

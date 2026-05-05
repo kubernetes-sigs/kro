@@ -8,7 +8,7 @@
 //
 // The identity label key is unique per node-graph-namespace triple. Multiple
 // Graphs targeting the same resource coexist without collision — each Graph's
-// labels use its own key prefix. See 005-reconciliation.md § API Server Interaction.
+// labels use its own key prefix. See 003-ownership.md § Identity Labels.
 //
 // DNS subdomain format (253-character limit) requires that graph names, node
 // IDs, and namespaces are DNS labels (no dots). Parsing is unambiguous.

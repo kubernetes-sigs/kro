@@ -148,67 +148,12 @@ func ParseNodeList(raw any) ([]Node, error) {
 		if fin, ok := m["finalizes"].(string); ok {
 			node.Finalizes = fin
 		}
-		if fe, ok := m["forEach"].(map[string]any); ok {
-			// Flat map format (Graph templates): forEach: {region: "${...}"}
-			if len(fe) == 0 {
-				return nil, fmt.Errorf("node[%d] %q: forEach must have at least one dimension", i, id)
+		if _, hasForEach := m["forEach"]; hasForEach && m["forEach"] != nil {
+			binding, err := parseForEachBinding(m["forEach"], i, id, allNodeIDsLower, reservedWords)
+			if err != nil {
+				return nil, err
 			}
-			if len(fe) > 1 {
-				return nil, fmt.Errorf("node[%d] %q: forEach must have exactly one variable (got %d); multi-variable cross-product expansion is not supported", i, id, len(fe))
-			}
-			for k, v := range fe {
-				vs, ok := v.(string)
-				if !ok {
-					return nil, fmt.Errorf("node[%d] %q: forEach variable %q value must be a string, got %T", i, id, k, v)
-				}
-				node.ForEach = &ForEachBinding{VarName: k, Expr: vs}
-			}
-		} else if feArr, ok := m["forEach"].([]any); ok {
-			// Array format (upstream kro API): forEach: [{region: "${...}"}]
-			// Each element is a map of variable bindings. Validate exactly one variable total.
-			parsed := make(map[string]string)
-			for j, dim := range feArr {
-				dimMap, ok := dim.(map[string]any)
-				if !ok {
-					return nil, fmt.Errorf("node[%d] %q: forEach[%d] must be a map, got %T", i, id, j, dim)
-				}
-				for k, v := range dimMap {
-					if _, exists := parsed[k]; exists {
-						return nil, fmt.Errorf("node[%d] %q: forEach has duplicate variable %q", i, id, k)
-					}
-					vs, ok := v.(string)
-					if !ok {
-						return nil, fmt.Errorf("node[%d] %q: forEach[%d] variable %q value must be a string, got %T", i, id, j, k, v)
-					}
-					parsed[k] = vs
-				}
-			}
-			if len(parsed) == 0 {
-				return nil, fmt.Errorf("node[%d] %q: forEach must have at least one dimension", i, id)
-			}
-			if len(parsed) > 1 {
-				return nil, fmt.Errorf("node[%d] %q: forEach must have exactly one variable (got %d); multi-variable cross-product expansion is not supported", i, id, len(parsed))
-			}
-			for k, vs := range parsed {
-				node.ForEach = &ForEachBinding{VarName: k, Expr: vs}
-			}
-		} else if _, hasForEach := m["forEach"]; hasForEach && m["forEach"] != nil {
-			return nil, fmt.Errorf("node[%d] %q: forEach must be a map or array, got %T", i, id, m["forEach"])
-		}
-		if node.ForEach != nil {
-			// Validate: forEach iterator variable names must not be reserved keywords.
-			varLower := strings.ToLower(node.ForEach.VarName)
-			if reservedWords[varLower] {
-				return nil, fmt.Errorf("node[%d] %q: forEach iterator %q is a reserved keyword", i, id, node.ForEach.VarName)
-			}
-			// Validate: forEach iterator variable names must not collide
-			// with any node ID in the graph (case-insensitive). Both enter the
-			// same CEL scope, so a collision would shadow the node. The check
-			// uses allNodeIDs (collected in the first pass above) rather than
-			// `seen` to catch collisions with nodes declared later in the list.
-			if collidingID, exists := allNodeIDsLower[varLower]; exists {
-				return nil, fmt.Errorf("node[%d] %q: forEach iterator %q conflicts with resource ID %q", i, id, node.ForEach.VarName, collidingID)
-			}
+			node.ForEach = binding
 		}
 		// Validate: finalizes nodes must not have CEL-evaluated names unless
 		// they also have forEach (which requires dynamic per-item names).
@@ -250,6 +195,76 @@ func ParseNodeList(raw any) ([]Node, error) {
 		nodes = append(nodes, node)
 	}
 	return nodes, nil
+}
+
+// parseForEachBinding parses the two supported forEach formats (flat map and
+// array-of-maps), normalizes them to a single ForEachBinding, and validates
+// cardinality, reserved word conflicts, and node ID collisions.
+func parseForEachBinding(raw any, nodeIdx int, nodeID string, allNodeIDsLower map[string]string, reservedWords map[string]bool) (*ForEachBinding, error) {
+	var binding *ForEachBinding
+
+	switch fe := raw.(type) {
+	case map[string]any:
+		// Flat map format (Graph templates): forEach: {region: "${...}"}
+		if len(fe) == 0 {
+			return nil, fmt.Errorf("node[%d] %q: forEach must have at least one dimension", nodeIdx, nodeID)
+		}
+		if len(fe) > 1 {
+			return nil, fmt.Errorf("node[%d] %q: forEach must have exactly one variable (got %d); multi-variable cross-product expansion is not supported", nodeIdx, nodeID, len(fe))
+		}
+		for k, v := range fe {
+			vs, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("node[%d] %q: forEach variable %q value must be a string, got %T", nodeIdx, nodeID, k, v)
+			}
+			binding = &ForEachBinding{VarName: k, Expr: vs}
+		}
+	case []any:
+		// Array format (upstream kro API): forEach: [{region: "${...}"}]
+		// Each element is a map of variable bindings. Validate exactly one variable total.
+		parsed := make(map[string]string)
+		for j, dim := range fe {
+			dimMap, ok := dim.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("node[%d] %q: forEach[%d] must be a map, got %T", nodeIdx, nodeID, j, dim)
+			}
+			for k, v := range dimMap {
+				if _, exists := parsed[k]; exists {
+					return nil, fmt.Errorf("node[%d] %q: forEach has duplicate variable %q", nodeIdx, nodeID, k)
+				}
+				vs, ok := v.(string)
+				if !ok {
+					return nil, fmt.Errorf("node[%d] %q: forEach[%d] variable %q value must be a string, got %T", nodeIdx, nodeID, j, k, v)
+				}
+				parsed[k] = vs
+			}
+		}
+		if len(parsed) == 0 {
+			return nil, fmt.Errorf("node[%d] %q: forEach must have at least one dimension", nodeIdx, nodeID)
+		}
+		if len(parsed) > 1 {
+			return nil, fmt.Errorf("node[%d] %q: forEach must have exactly one variable (got %d); multi-variable cross-product expansion is not supported", nodeIdx, nodeID, len(parsed))
+		}
+		for k, vs := range parsed {
+			binding = &ForEachBinding{VarName: k, Expr: vs}
+		}
+	default:
+		return nil, fmt.Errorf("node[%d] %q: forEach must be a map or array, got %T", nodeIdx, nodeID, raw)
+	}
+
+	// Validate: forEach iterator variable names must not be reserved keywords.
+	varLower := strings.ToLower(binding.VarName)
+	if reservedWords[varLower] {
+		return nil, fmt.Errorf("node[%d] %q: forEach iterator %q is a reserved keyword", nodeIdx, nodeID, binding.VarName)
+	}
+	// Validate: forEach iterator variable names must not collide with any
+	// node ID in the graph (case-insensitive). Both enter the same CEL scope,
+	// so a collision would shadow the node.
+	if collidingID, exists := allNodeIDsLower[varLower]; exists {
+		return nil, fmt.Errorf("node[%d] %q: forEach iterator %q conflicts with resource ID %q", nodeIdx, nodeID, binding.VarName, collidingID)
+	}
+
+	return binding, nil
 }
 
 // setNodeKeyword populates the Node's classification-bearing fields from the

@@ -151,6 +151,12 @@ func (c *clusterAccess) applySSA(ctx context.Context, rs *reconcileScope, evalMa
 			return nil, err
 		}
 	}
+	if forceApply && nodeType == graphpkg.NodeTypePatch {
+		applied, err = surgicalReleaseThirdPartyManagers(ctx, c.client, applied, rs.graph, nodeID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return applied, nil
 }
 
@@ -362,6 +368,276 @@ func evictThirdPartyManagers(ctx context.Context, c client.Client, readBack *uns
 		log.FromContext(ctx).Info("evicted field manager", "node", nodeID, "manager", mgr, "name", name)
 	}
 	return readBack, nil
+}
+
+// ---------------------------------------------------------------------------
+// Surgical release — release co-ownership on overlapping fields for Patch nodes
+// ---------------------------------------------------------------------------
+
+// surgicalReleaseThirdPartyManagers releases co-ownership on overlapping fields
+// after a force-apply on a Patch node. Per 003-ownership.md § Surgical Release:
+// for each co-owner, apply under their identity with only their non-overlapping
+// fields. This releases their claim on overlapping fields while preserving their
+// claim on fields kro doesn't manage.
+//
+// NOTE: This implementation handles struct fields (f: prefix keys in fieldsV1)
+// but does not handle list/map items (k: and v: prefix keys). The sole-ownership
+// invariant for list items is not enforced by surgical release.
+func surgicalReleaseThirdPartyManagers(ctx context.Context, c client.Client, readBack *unstructured.Unstructured, graph *unstructured.Unstructured, nodeID string) (*unstructured.Unstructured, error) {
+	fieldOwner := graphFieldOwner(graph)
+	ownManager := string(fieldOwner)
+	managers := thirdPartyFieldManagers(readBack, ownManager)
+	if len(managers) == 0 {
+		return readBack, nil
+	}
+
+	logger := log.FromContext(ctx)
+	gvk := readBack.GroupVersionKind()
+	namespace := readBack.GetNamespace()
+	name := readBack.GetName()
+
+	// Extract kro's fieldsV1 (main + status sub-manager).
+	kroFields := extractFieldsV1(readBack, ownManager)
+	kroStatusFields := extractFieldsV1(readBack, ownManager+".status")
+	kroMerged := mergeFieldsTrees(kroFields, kroStatusFields)
+
+	for _, mgr := range managers {
+		coOwnerFields := extractFieldsV1(readBack, mgr)
+		if coOwnerFields == nil {
+			continue
+		}
+
+		nonOverlapping := fieldsSubtract(coOwnerFields, kroMerged)
+		if len(nonOverlapping) == 0 {
+			// All co-owner fields overlap with kro — full eviction release.
+			hasStatus := managerOwnsStatus(readBack, mgr)
+			evicted, err := releaseApply(ctx, c, gvk, namespace, name, client.FieldOwner(mgr), hasStatus)
+			if err != nil {
+				logger.V(1).Info("surgical release: eviction fallback failed", "node", nodeID, "manager", mgr, "error", err)
+				continue
+			}
+			if evicted != nil {
+				readBack = evicted
+			}
+			logger.Info("surgical release: evicted co-owner (full overlap)", "node", nodeID, "manager", mgr, "name", name)
+			continue
+		}
+
+		// Build a body with identity fields + values from the current object
+		// at non-overlapping paths only.
+		body := buildSurgicalBody(readBack, gvk, nonOverlapping)
+
+		obj := &unstructured.Unstructured{Object: body}
+		obj.SetGroupVersionKind(gvk)
+
+		released, err := ssaWrite(ctx, c, obj, client.FieldOwner(mgr), false)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			logger.V(1).Info("surgical release failed", "node", nodeID, "manager", mgr, "error", err)
+			continue
+		}
+		if released != nil {
+			readBack = released
+		}
+		logger.Info("surgical release: retained non-overlapping fields", "node", nodeID, "manager", mgr, "name", name)
+	}
+	return readBack, nil
+}
+
+// extractFieldsV1 returns the fieldsV1 tree for the named manager from managedFields.
+// Returns nil if the manager is not found or has no fieldsV1 data.
+func extractFieldsV1(obj *unstructured.Unstructured, managerName string) map[string]any {
+	for _, mf := range obj.GetManagedFields() {
+		if mf.Manager == managerName && mf.Operation == metav1.ManagedFieldsOperationApply {
+			if mf.FieldsV1 == nil {
+				return nil
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(mf.FieldsV1.Raw, &fields); err != nil {
+				return nil
+			}
+			return fields
+		}
+	}
+	return nil
+}
+
+// mergeFieldsTrees merges two fieldsV1 trees (union). Used to combine
+// main and status sub-manager trees into a single kro ownership view.
+func mergeFieldsTrees(a, b map[string]any) map[string]any {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+	result := make(map[string]any, len(a))
+	for k, v := range a {
+		result[k] = v
+	}
+	for k, v := range b {
+		if existing, ok := result[k]; ok {
+			// Both have this key — recurse if both are maps.
+			aMap, aIsMap := existing.(map[string]any)
+			bMap, bIsMap := v.(map[string]any)
+			if aIsMap && bIsMap {
+				result[k] = mergeFieldsTrees(aMap, bMap)
+			}
+			// If one is a leaf (empty map) and the other is a subtree,
+			// the leaf means "owns this field" — keep it as-is (leaf wins).
+		} else {
+			result[k] = v
+		}
+	}
+	return result
+}
+
+// fieldsSubtract returns the subset of `a` that does NOT overlap with `b`.
+// A field in `a` overlaps with `b` if `b` contains the same path (at the
+// same depth or as a leaf). Returns nil if all fields overlap.
+func fieldsSubtract(a, b map[string]any) map[string]any {
+	if b == nil {
+		return a
+	}
+	result := make(map[string]any)
+	for k, v := range a {
+		bVal, inB := b[k]
+		if !inB {
+			// Not in b — keep entirely.
+			result[k] = v
+			continue
+		}
+		// Both have this key. Check if both are subtrees.
+		aMap, aIsMap := v.(map[string]any)
+		bMap, bIsMap := bVal.(map[string]any)
+		if aIsMap && len(aMap) > 0 && bIsMap && len(bMap) > 0 {
+			// Recurse — partial overlap possible.
+			sub := fieldsSubtract(aMap, bMap)
+			if len(sub) > 0 {
+				result[k] = sub
+			}
+		}
+		// If a is a leaf ({}) and b contains it, it's overlapping — skip.
+		// If a is a subtree but b is a leaf, b owns the whole subtree — skip.
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// buildSurgicalBody creates an unstructured object body containing identity
+// fields (apiVersion, kind, metadata.name, metadata.namespace) plus values
+// extracted from the current object at paths specified by the fieldsV1 tree.
+func buildSurgicalBody(current *unstructured.Unstructured, gvk schema.GroupVersionKind, fields map[string]any) map[string]any {
+	apiVersion := gvk.Group + "/" + gvk.Version
+	if gvk.Group == "" {
+		apiVersion = gvk.Version
+	}
+
+	body := map[string]any{
+		"apiVersion": apiVersion,
+		"kind":       gvk.Kind,
+		"metadata": map[string]any{
+			"name":      current.GetName(),
+			"namespace": current.GetNamespace(),
+		},
+	}
+
+	// Walk the fieldsV1 tree and extract corresponding values from current object.
+	extractFieldValues(current.Object, fields, body)
+	return body
+}
+
+// extractFieldValues walks a fieldsV1 tree and copies matching values from src
+// into dst. Top-level keys "apiVersion", "kind", and "metadata" identity
+// sub-fields (name, namespace) are skipped since they're pre-populated.
+func extractFieldValues(src map[string]any, fieldsTree map[string]any, dst map[string]any) {
+	for key, subtree := range fieldsTree {
+		fieldName := fieldsV1KeyToFieldName(key)
+		if fieldName == "" {
+			continue
+		}
+		// Skip identity fields already in dst.
+		if fieldName == "apiVersion" || fieldName == "kind" {
+			continue
+		}
+
+		srcVal, exists := src[fieldName]
+		if !exists {
+			continue
+		}
+
+		subMap, isMap := subtree.(map[string]any)
+		if !isMap || len(subMap) == 0 {
+			// Leaf — copy value directly.
+			dst[fieldName] = srcVal
+			continue
+		}
+
+		// Subtree — recurse into nested struct.
+		srcNested, srcIsMap := srcVal.(map[string]any)
+		if !srcIsMap {
+			// Source doesn't match expected structure — copy as-is.
+			dst[fieldName] = srcVal
+			continue
+		}
+
+		// For metadata, merge into existing dst metadata (to preserve name/namespace).
+		if fieldName == "metadata" {
+			dstMeta, _ := dst["metadata"].(map[string]any)
+			if dstMeta == nil {
+				dstMeta = map[string]any{}
+				dst["metadata"] = dstMeta
+			}
+			extractFieldValues(srcNested, subMap, dstMeta)
+			continue
+		}
+
+		// For other nested fields, create/merge sub-object.
+		dstNested, _ := dst[fieldName].(map[string]any)
+		if dstNested == nil {
+			dstNested = map[string]any{}
+		}
+		extractFieldValues(srcNested, subMap, dstNested)
+		if len(dstNested) > 0 {
+			dst[fieldName] = dstNested
+		}
+	}
+}
+
+// fieldsV1KeyToFieldName extracts the field name from a fieldsV1 key.
+// "f:fieldName" → "fieldName", "k:{...}" and "v:..." are returned as-is
+// (they represent list/set items and are not simple struct fields).
+func fieldsV1KeyToFieldName(key string) string {
+	if len(key) < 3 {
+		return ""
+	}
+	switch key[0] {
+	case 'f':
+		if key[1] == ':' {
+			return key[2:]
+		}
+	case '.':
+		// "." is used for the root — skip.
+		return ""
+	}
+	// k: and v: entries are list/set items — not simple field extractions.
+	// For now, skip them (surgical release focuses on struct fields).
+	return ""
+}
+
+// managerOwnsStatus returns true if the given manager has a status subresource
+// entry in managedFields (i.e., a manager entry with subresource "status").
+func managerOwnsStatus(obj *unstructured.Unstructured, managerName string) bool {
+	for _, mf := range obj.GetManagedFields() {
+		if mf.Manager == managerName && mf.Subresource == "status" {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

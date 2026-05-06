@@ -2,9 +2,7 @@
 //
 // NodeState tracks the reconcile-time outcome for each node. PlanState
 // aggregates node states across a single reconcile cycle. These are
-// created fresh per reconcile and do not persist across cycles — the
-// controller's instanceState retains what it needs (previousPlanStates)
-// for cross-cycle comparison.
+// created fresh per reconcile and do not persist across cycles.
 //
 // Per 005-reconciliation.md § Node States.
 package graphcontroller
@@ -80,35 +78,6 @@ func NewPlanState(dag *dagpkg.DAG) *PlanState {
 		ps.States[node.ID] = NodeUnvisited
 	}
 	return ps
-}
-
-// FinalizeSkippedStates resolves node states for nodes that took the
-// outputsReady skip path and never re-dispatched via a propagation trigger.
-// Their plan.States stay at NodeUnvisited through the walk; status derivation
-// needs a real state. Restores from previousPlanStates when available, falls
-// back to NodePending when the invariant "skipped nodes have prior state" is
-// violated.
-//
-// Fallthrough case: outputsReady without a previousPlanStates entry is
-// structurally impossible today — the skip paths that set outputsReady only
-// fire when the node has prior state — but defending explicitly makes the
-// invariant checkable. A silent Ready (zero-value NodeUnvisited slipping
-// through PlanSummary, which ignores it) would under-report node count and
-// mask latent bugs. Treat "skipped with no prior state" as Pending.
-func FinalizeSkippedStates(plan *PlanState, outputsReady map[string]bool, previousPlanStates map[string]NodeState, unrecognizedSkip func(nodeID string)) {
-	for nodeID := range outputsReady {
-		if plan.States[nodeID] != NodeUnvisited {
-			continue
-		}
-		if prev, ok := previousPlanStates[nodeID]; ok {
-			plan.States[nodeID] = prev
-			continue
-		}
-		plan.States[nodeID] = NodePending
-		if unrecognizedSkip != nil {
-			unrecognizedSkip(nodeID)
-		}
-	}
 }
 
 // SetState records a node's authoritative state.

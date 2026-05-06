@@ -6,13 +6,12 @@
 // deletion decisions. The prune walk receives completedTargets (safe to delete)
 // and protectedKeys (must not prune) from finalization.
 //
-// State machine phases:
+// State is derived from cluster state each cycle (stateless):
+//   - GET the finalizer resource. If NotFound → create (Creating).
+//   - If exists but not ready → WaitingReady.
+//   - If exists and ready → Complete.
 //
-//	Creating     — some finalizer children don't exist yet
-//	WaitingReady — all children exist, waiting for readyWhen
-//	Complete     — all children satisfy readyWhen; target may be deleted
-//
-// State persists on instanceState.activeFinalization across reconcile cycles.
+// No cross-cycle state needed — idempotent by design.
 package graphcontroller
 
 import (
@@ -29,21 +28,6 @@ import (
 	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
-
-// finalizationPhase represents the current state of a finalization sequence.
-type finalizationPhase string
-
-const (
-	finalizationCreating     finalizationPhase = "Creating"
-	finalizationWaitingReady finalizationPhase = "WaitingReady"
-)
-
-// finalizationEntry tracks a single in-flight finalization sequence.
-// Persisted on instanceState.activeFinalization across reconciles.
-type finalizationEntry struct {
-	Phase     finalizationPhase
-	ChildKeys []string // resource keys of created finalization children
-}
 
 // finalizationResult carries the output of advanceFinalization back to the
 // coordinator. The prune walk uses these to make deletion decisions without
@@ -68,11 +52,7 @@ type finalizationResult struct {
 // It advances each target's state machine and produces a result the prune walk
 // consumes. Called BEFORE the prune walk's deletion loop.
 //
-// The prune walk only needs to:
-//   - Skip protectedKeys
-//   - Delete targets in completedTargets (finalization done)
-//   - Skip targets with finalizers that aren't in completedTargets
-//   - Clean up children after successful target deletion
+// Stateless: derives phase entirely from cluster state (GET each resource).
 func (c *clusterAccess) advanceFinalization(
 	ctx context.Context,
 	rs *reconcileScope,
@@ -83,22 +63,10 @@ func (c *clusterAccess) advanceFinalization(
 	eval *evaluator,
 	state *instanceState,
 ) (*finalizationResult, error) {
-	logger := log.FromContext(ctx)
 	result := &finalizationResult{
 		CompletedTargets:   map[string]bool{},
 		ProtectedKeys:      map[string]bool{},
 		ChildKeysToCleanup: map[string][]string{},
-	}
-
-	if state.prune.activeFinalization == nil {
-		state.prune.activeFinalization = map[string]*finalizationEntry{}
-	}
-
-	// Pre-seed protected keys from persisted active finalization state.
-	for _, entry := range state.prune.activeFinalization {
-		for _, k := range entry.ChildKeys {
-			result.ProtectedKeys[k] = true
-		}
 	}
 
 	// findFinalizers looks up finalizer node IDs for a target across all DAGs.
@@ -111,6 +79,36 @@ func (c *clusterAccess) advanceFinalization(
 		return nil, nil
 	}
 
+	preseedProtectedKeys(result, pruneCandidates, keyToNodeID, nodeIDToKey, findFinalizers)
+
+	// Process each prune candidate that has finalizers.
+	for _, key := range pruneCandidates {
+		nodeID := keyToNodeID[key]
+		if nodeID == "" {
+			continue
+		}
+		finDAG, finalizerNodeIDs := findFinalizers(nodeID)
+		if finDAG == nil {
+			continue // no finalizers — prune walk handles directly
+		}
+
+		if err := c.advanceTarget(ctx, rs, key, nodeID, finalizerNodeIDs, finDAG, eval, result); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
+}
+
+// preseedProtectedKeys seeds the protected keys set from static dependencies
+// of finalizer nodes.
+func preseedProtectedKeys(
+	result *finalizationResult,
+	pruneCandidates []string,
+	keyToNodeID map[string]string,
+	nodeIDToKey map[string]string,
+	findFinalizers func(string) (*dagpkg.DAG, []string),
+) {
 	// Protect static dependencies of finalizer nodes.
 	for _, key := range pruneCandidates {
 		nodeID := keyToNodeID[key]
@@ -136,95 +134,71 @@ func (c *clusterAccess) advanceFinalization(
 			}
 		}
 	}
+}
 
-	// Process each prune candidate that has finalizers.
-	for _, key := range pruneCandidates {
-		nodeID := keyToNodeID[key]
-		if nodeID == "" {
-			continue
-		}
-		finDAG, finalizerNodeIDs := findFinalizers(nodeID)
-		if finDAG == nil {
-			continue // no finalizers — prune walk handles directly
-		}
+// advanceTarget processes a single target's finalization state machine.
+// Stateless: GETs the target, handles NotFound vs exists, runs finalization,
+// and records the resulting phase on result.
+func (c *clusterAccess) advanceTarget(
+	ctx context.Context,
+	rs *reconcileScope,
+	key string,
+	nodeID string,
+	finalizerNodeIDs []string,
+	finDAG *dagpkg.DAG,
+	eval *evaluator,
+	result *finalizationResult,
+) error {
+	logger := log.FromContext(ctx)
 
-		// GET the target to verify it exists.
-		obj, nn, ok := unstructuredFromKey(key)
-		if !ok {
-			continue
+	// GET the target to verify it exists.
+	obj, nn, ok := unstructuredFromKey(key)
+	if !ok {
+		return nil
+	}
+	if getErr := c.reader.Get(ctx, nn, obj); getErr != nil {
+		if apierrors.IsNotFound(getErr) {
+			// Target already gone — finalization complete.
+			logger.Info("finalization skipped: target resource does not exist",
+				"key", key, "finalizers", finalizerNodeIDs)
+			result.Notes = append(result.Notes, fmt.Sprintf("FinalizerSkipped: %s (target absent)", key))
+			result.CompletedTargets[key] = true
+			return nil
 		}
-		if getErr := c.reader.Get(ctx, nn, obj); getErr != nil {
-			if apierrors.IsNotFound(getErr) {
-				// Target already gone — skip finalization.
-				// If a previous cycle created finalizer children, schedule
-				// them for cleanup and unprotect their keys so the prune
-				// walk can reach them.
-				logger.Info("finalization skipped: target resource does not exist",
-					"key", key, "finalizers", finalizerNodeIDs)
-				result.Notes = append(result.Notes, fmt.Sprintf("FinalizerSkipped: %s (target absent)", key))
-				if entry, ok := state.prune.activeFinalization[key]; ok {
-					result.ChildKeysToCleanup[key] = entry.ChildKeys
-					for _, ck := range entry.ChildKeys {
-						delete(result.ProtectedKeys, ck)
-					}
-				}
-				delete(state.prune.activeFinalization, key)
-				result.CompletedTargets[key] = true
-				continue
-			}
-			return nil, fmt.Errorf("checking finalization target %s: %w", key, getErr)
-		}
-
-		// Run the finalization sequence.
-		ready, childKeys, finErr := c.runFinalization(ctx, rs, obj, nodeID, finalizerNodeIDs, finDAG, eval)
-
-		// Protect all child keys from pruning.
-		for _, ck := range childKeys {
-			result.ProtectedKeys[ck] = true
-		}
-
-		prevPhase := finalizationPhase("")
-		if entry, ok := state.prune.activeFinalization[key]; ok {
-			prevPhase = entry.Phase
-		}
-
-		if finErr != nil {
-			logger.Error(finErr, "finalization failed",
-				"key", key, "previousPhase", prevPhase, "newPhase", finalizationCreating)
-			result.BlockedReasons = append(result.BlockedReasons, fmt.Sprintf(
-				"TeardownBlocked: %s (finalizer creation failed: %s)", key, finErr))
-			result.DeferredTargets = append(result.DeferredTargets, key)
-			state.prune.activeFinalization[key] = &finalizationEntry{
-				Phase:     finalizationCreating,
-				ChildKeys: childKeys,
-			}
-			continue
-		}
-
-		if !ready {
-			logger.Info("finalization in progress — deletion deferred",
-				"key", key, "finalizers", finalizerNodeIDs,
-				"previousPhase", prevPhase, "newPhase", finalizationWaitingReady)
-			result.BlockedReasons = append(result.BlockedReasons, fmt.Sprintf(
-				"TeardownBlocked: %s (finalizer not ready: %s)",
-				key, strings.Join(finalizerNodeIDs, ", ")))
-			result.DeferredTargets = append(result.DeferredTargets, key)
-			state.prune.activeFinalization[key] = &finalizationEntry{
-				Phase:     finalizationWaitingReady,
-				ChildKeys: childKeys,
-			}
-			continue
-		}
-
-		// Finalization complete — target can be deleted.
-		logger.Info("finalization complete", "key", key,
-			"previousPhase", prevPhase)
-		result.CompletedTargets[key] = true
-		result.ChildKeysToCleanup[key] = childKeys
-		delete(state.prune.activeFinalization, key)
+		return fmt.Errorf("checking finalization target %s: %w", key, getErr)
 	}
 
-	return result, nil
+	// Run the finalization sequence.
+	ready, childKeys, finErr := c.runFinalization(ctx, rs, obj, nodeID, finalizerNodeIDs, finDAG, eval)
+
+	// Protect all child keys from pruning.
+	for _, ck := range childKeys {
+		result.ProtectedKeys[ck] = true
+	}
+
+	if finErr != nil {
+		logger.Error(finErr, "finalization failed", "key", key)
+		result.BlockedReasons = append(result.BlockedReasons, fmt.Sprintf(
+			"TeardownBlocked: %s (finalizer creation failed: %s)", key, finErr))
+		result.DeferredTargets = append(result.DeferredTargets, key)
+		return nil
+	}
+
+	if !ready {
+		logger.Info("finalization in progress — deletion deferred",
+			"key", key, "finalizers", finalizerNodeIDs)
+		result.BlockedReasons = append(result.BlockedReasons, fmt.Sprintf(
+			"TeardownBlocked: %s (finalizer not ready: %s)",
+			key, strings.Join(finalizerNodeIDs, ", ")))
+		result.DeferredTargets = append(result.DeferredTargets, key)
+		return nil
+	}
+
+	// Finalization complete — target can be deleted.
+	logger.Info("finalization complete", "key", key)
+	result.CompletedTargets[key] = true
+	result.ChildKeysToCleanup[key] = childKeys
+	return nil
 }
 
 // ---------------------------------------------------------------------------

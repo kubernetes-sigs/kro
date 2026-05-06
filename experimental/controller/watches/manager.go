@@ -121,28 +121,28 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource, kind string,
 	m.log.V(1).Info("informer started", "gvr", gvr, "owner", ownerID)
 	m.mu.Unlock()
 
-	// Wait for sync outside the lock. Firing onNewType BEFORE the cache is
-	// synced races the recompile: a Graph that evicts and recompiles on the
-	// notification may hit the schema resolver before the informer has
-	// populated the discovery cache, and compile silently falls back to dyn
-	// again. Sync first, notify second — the informer is authoritative by
-	// the time the callback runs.
-	syncStart := time.Now()
-	m.log.V(1).Info("waiting for cache sync", "gvr", gvr)
-	syncCtx, syncCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer syncCancel()
-	if !cache.WaitForCacheSync(syncCtx.Done(), inf.HasSynced) {
-		m.log.Error(nil, "cache sync timeout", "gvr", gvr, "duration", time.Since(syncStart))
-		m.forceStop(gvr)
-		return fmt.Errorf("cache sync timeout for %s", gvr)
-	}
-	m.log.V(1).Info("cache synced", "gvr", gvr, "duration", time.Since(syncStart))
+	// Wait for cache sync in the background so EnsureWatch never blocks the
+	// reconcile path. If the GVR doesn't exist yet (CRD not installed), the
+	// informer will fail to sync and forceStop cleans it up. The next reconcile
+	// retries. When sync succeeds, onNewType fires to trigger re-reconcile.
+	go func() {
+		syncStart := time.Now()
+		m.log.V(1).Info("waiting for cache sync", "gvr", gvr)
+		syncCtx, syncCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer syncCancel()
+		if !cache.WaitForCacheSync(syncCtx.Done(), inf.HasSynced) {
+			m.log.V(1).Info("cache sync timeout, will retry on next reconcile", "gvr", gvr, "duration", time.Since(syncStart))
+			m.forceStop(gvr)
+			return
+		}
+		m.log.V(1).Info("cache synced", "gvr", gvr, "duration", time.Since(syncStart))
 
-	// Notify that a new type is being watched. This triggers recompilation
-	// for Graphs that had this type unresolved — the schema may now be available.
-	if m.onNewType != nil {
-		m.onNewType(gvr)
-	}
+		// Notify that a new type is being watched. This triggers recompilation
+		// for Graphs that had this type unresolved — the schema may now be available.
+		if m.onNewType != nil {
+			m.onNewType(gvr)
+		}
+	}()
 
 	return nil
 }

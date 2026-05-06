@@ -400,15 +400,40 @@ func DetectCyclesEarly(nodes []graph.Node, allIDs []string) error {
 	for _, id := range allIDs {
 		idSet[id] = true
 	}
-
-	// Build node index and adjacency.
 	nodeIndex := make(map[string]int, len(nodes))
 	for i, n := range nodes {
 		nodeIndex[n.ID] = i
 	}
+	adj, inDegree := buildEarlyAdjacency(nodes, idSet, nodeIndex)
+	return detectCycleKahn(nodes, adj, inDegree)
+}
 
-	inDegree := make([]int, len(nodes))
-	adj := make([][]int, len(nodes)) // forward adjacency: dep → dependent
+// collectNodeExprStrings gathers all expression-bearing strings from a single
+// node: body strings via CollectStrings, TemplateExpr, IncludeWhen, ReadyWhen,
+// PropagateWhen, and ForEach.Expr.
+func collectNodeExprStrings(node graph.Node) []string {
+	var strs []string
+	if body := node.Body(); body != nil {
+		graph.CollectStrings(body, &strs)
+	}
+	if node.TemplateExpr != "" {
+		strs = append(strs, node.TemplateExpr)
+	}
+	strs = append(strs, node.IncludeWhen...)
+	strs = append(strs, node.ReadyWhen...)
+	strs = append(strs, node.PropagateWhen...)
+	if node.ForEach != nil {
+		strs = append(strs, node.ForEach.Expr)
+	}
+	return strs
+}
+
+// buildEarlyAdjacency iterates nodes, calls collectNodeExprStrings per node,
+// scans each string with FindExpr/ExtractFirstIdentifier, and builds the
+// forward adjacency list and in-degree counts.
+func buildEarlyAdjacency(nodes []graph.Node, idSet map[string]bool, nodeIndex map[string]int) (adj [][]int, inDegree []int) {
+	inDegree = make([]int, len(nodes))
+	adj = make([][]int, len(nodes)) // forward adjacency: dep → dependent
 
 	addEdge := func(fromID string, toIdx int) {
 		fromIdx, ok := nodeIndex[fromID]
@@ -420,20 +445,7 @@ func DetectCyclesEarly(nodes []graph.Node, allIDs []string) error {
 	}
 
 	for i, node := range nodes {
-		// Scan all expression-bearing strings in the node's body.
-		var strs []string
-		if body := node.Body(); body != nil {
-			graph.CollectStrings(body, &strs)
-		}
-		if node.TemplateExpr != "" {
-			strs = append(strs, node.TemplateExpr)
-		}
-		strs = append(strs, node.IncludeWhen...)
-		strs = append(strs, node.ReadyWhen...)
-		strs = append(strs, node.PropagateWhen...)
-		if node.ForEach != nil {
-			strs = append(strs, node.ForEach.Expr)
-		}
+		strs := collectNodeExprStrings(node)
 
 		// Extract expression references.
 		seen := make(map[string]bool)
@@ -457,8 +469,12 @@ func DetectCyclesEarly(nodes []graph.Node, allIDs []string) error {
 			}
 		}
 	}
+	return adj, inDegree
+}
 
-	// Kahn's algorithm — cycle detection only (no ordering needed).
+// detectCycleKahn runs Kahn's algorithm for cycle detection only (no ordering
+// needed). Returns a formatted error with cycle node IDs if a cycle is detected.
+func detectCycleKahn(nodes []graph.Node, adj [][]int, inDegree []int) error {
 	queue := make([]int, 0, len(nodes))
 	for i, d := range inDegree {
 		if d == 0 {

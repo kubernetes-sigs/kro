@@ -52,9 +52,6 @@ type propagateResult struct {
 // dependencies are available as optionals in scope but do not gate evaluation.
 // The propagation is sequential — no goroutines, no channels.
 func (r *GraphReconciler) propagate(ctx context.Context, rs *reconcileScope, state *instanceState, eval *evaluator, dag *dagpkg.DAG, plan *PlanState) *propagateResult {
-	logger := log.FromContext(ctx)
-	cluster := r.cluster()
-
 	result := &propagateResult{
 		plan: plan,
 	}
@@ -63,103 +60,12 @@ func (r *GraphReconciler) propagate(ctx context.Context, rs *reconcileScope, sta
 	nodeKeys := make(map[string][]Applied, len(dag.Nodes))
 
 	for _, nodeIdx := range dag.TopologicalOrder {
-		node := &dag.Nodes[nodeIdx]
-
-		// Finalizer nodes are dormant during normal operation — they only
-		// materialize during prune/teardown. Skip them in the forward propagation.
-		if node.Finalizes != "" {
-			plan.SetState(node.ID, NodeReady)
-			continue
-		}
-
-		// --- Dependency gating ---
-		// Check hard dependencies. Lazy deps don't gate dispatch or cause
-		// exclusion — the expression has a branch that handles absent data.
-		gate := checkDependencyGate(node, plan)
-
-		if gate == depExcluded {
-			// Contagious exclusion: any hard dependency Excluded → Excluded.
-			// Per 005-reconciliation.md § Propagation step 1.
-			logger.V(1).Info("node excluded — dependency excluded", "node", node.ID)
-			plan.SetState(node.ID, NodeExcluded)
-			markExcluded(eval, node.ID, state)
-			continue
-		}
-		if gate == depBlocked {
-			logger.V(1).Info("node blocked — dependency in error state", "node", node.ID)
-			plan.SetState(node.ID, NodeBlocked)
-			carryForwardKeys(nodeKeys, node.ID, state)
-			continue
-		}
-		if gate == depPending {
-			logger.V(1).Info("node pending — dependency pending", "node", node.ID)
-			plan.SetState(node.ID, NodePending)
-			carryForwardKeys(nodeKeys, node.ID, state)
-			continue
-		}
-
-		// --- propagateWhen input gate ---
-		// For forEach nodes, propagateWhen is evaluated per-item inside
-		// reconcileForEach, not here.
-		if len(node.PropagateWhen) > 0 && node.ForEach == nil {
-			// Populate __kroDeps for this node so that <id>.dependencies()
-			// expressions resolve correctly.
-			populateDepsMap(eval, node)
-
-			gate := eval.checkPropagateWhen(node.PropagateWhen, node.ID)
-			if gate != gatePass {
-				unsatisfied := eval.firstUnsatisfiedCondition(node.PropagateWhen)
-				logger.V(1).Info("propagateWhen input gate — retaining previous state",
-					"node", node.ID, "unsatisfied", unsatisfied)
-				if prev, ok := state.propagate.previousScope[node.ID]; ok {
-					eval.scope[node.ID] = prev
-				}
-				carryForwardKeys(nodeKeys, node.ID, state)
-				if state.propagate.previousPlanStates != nil {
-					if prevState, ok := state.propagate.previousPlanStates.States[node.ID]; ok {
-						plan.States[node.ID] = prevState
-					} else {
-						plan.States[node.ID] = NodePending
-					}
-				} else {
-					plan.States[node.ID] = NodePending
-				}
-				continue
+		nrOut := r.propagateNode(ctx, rs, state, eval, dag, plan, nodeKeys, nodeIdx)
+		if nrOut != nil {
+			result.nodeErrors = append(result.nodeErrors, nrOut.errMsgs...)
+			if nrOut.needsRecompile {
+				result.needsRecompile = true
 			}
-		}
-
-		// --- includeWhen ---
-		if len(node.IncludeWhen) > 0 {
-			included, err := eval.includeWhen(node.IncludeWhen)
-			if err != nil {
-				carryForwardKeys(nodeKeys, node.ID, state)
-				if errors.Is(err, ErrPending) {
-					plan.SetState(node.ID, NodePending)
-				} else {
-					plan.SetState(node.ID, NodeError)
-				}
-				continue
-			}
-			if !included {
-				logger.V(1).Info("node excluded by includeWhen", "node", node.ID)
-				plan.SetState(node.ID, NodeExcluded)
-				markExcluded(eval, node.ID, state)
-				continue
-			}
-		}
-
-		// --- Evaluate the node ---
-		nr := evaluateNode(ctx, cluster, rs, *node, eval, state)
-
-		// --- Integrate the result into propagation state ---
-		nrOut := integrateNodeResult(ctx, nr, node, eval, state, plan, nodeKeys)
-		result.nodeErrors = append(result.nodeErrors, nrOut.errMsgs...)
-		if nrOut.needsRecompile {
-			result.needsRecompile = true
-		}
-		if nrOut.crdCreated && r.SchemaGen != nil {
-			r.SchemaGen.AdvanceGeneration()
-			result.needsRecompile = true
 		}
 	}
 
@@ -175,6 +81,107 @@ func (r *GraphReconciler) propagate(ctx context.Context, rs *reconcileScope, sta
 	result.summary = plan.Summary()
 
 	return result
+}
+
+// propagateNode processes a single node in the DAG propagation. It encapsulates
+// the per-node sequence: skip finalizers → dependency gating → propagateWhen →
+// includeWhen → evaluate → integrate result.
+//
+// Returns nil when the node was handled without producing integration output
+// (skipped, excluded, blocked, pending), or a nodeIntegrationResult when
+// evaluation occurred.
+func (r *GraphReconciler) propagateNode(
+	ctx context.Context,
+	rs *reconcileScope,
+	state *instanceState,
+	eval *evaluator,
+	dag *dagpkg.DAG,
+	plan *PlanState,
+	nodeKeys map[string][]Applied,
+	nodeIdx int,
+) *nodeIntegrationResult {
+	logger := log.FromContext(ctx)
+	node := &dag.Nodes[nodeIdx]
+
+	// Finalizer nodes are dormant during normal operation — they only
+	// materialize during prune/teardown. Skip them in the forward propagation.
+	if node.Finalizes != "" {
+		plan.SetState(node.ID, NodeReady)
+		return nil
+	}
+
+	// --- Dependency gating ---
+	// Check hard dependencies. Lazy deps don't gate dispatch or cause
+	// exclusion — the expression has a branch that handles absent data.
+	gate := checkDependencyGate(node, plan)
+
+	if gate == depExcluded {
+		// Contagious exclusion: any hard dependency Excluded → Excluded.
+		// Per 005-reconciliation.md § Propagation step 1.
+		logger.V(1).Info("node excluded — dependency excluded", "node", node.ID)
+		plan.SetState(node.ID, NodeExcluded)
+		markExcluded(eval, node.ID, state)
+		return nil
+	}
+	if gate == depBlocked {
+		logger.V(1).Info("node blocked — dependency in error state", "node", node.ID)
+		plan.SetState(node.ID, NodeBlocked)
+		return nil
+	}
+	if gate == depPending {
+		logger.V(1).Info("node pending — dependency pending", "node", node.ID)
+		plan.SetState(node.ID, NodePending)
+		return nil
+	}
+
+	// --- propagateWhen input gate ---
+	// For forEach nodes, propagateWhen is evaluated per-item inside
+	// reconcileForEach, not here.
+	if len(node.PropagateWhen) > 0 && node.ForEach == nil {
+		// Populate __kroDeps for this node so that <id>.dependencies()
+		// expressions resolve correctly.
+		populateDepsMap(eval, node)
+
+		gate := eval.checkPropagateWhen(node.PropagateWhen, node.ID)
+		if gate != gatePass {
+			unsatisfied := eval.firstUnsatisfiedCondition(node.PropagateWhen)
+			logger.V(1).Info("propagateWhen unsatisfied — node pending",
+				"node", node.ID, "unsatisfied", unsatisfied)
+			plan.SetState(node.ID, NodePending)
+			return nil
+		}
+	}
+
+	// --- includeWhen ---
+	if len(node.IncludeWhen) > 0 {
+		included, err := eval.includeWhen(node.IncludeWhen)
+		if err != nil {
+			if errors.Is(err, ErrPending) {
+				plan.SetState(node.ID, NodePending)
+			} else {
+				plan.SetState(node.ID, NodeError)
+			}
+			return nil
+		}
+		if !included {
+			logger.V(1).Info("node excluded by includeWhen", "node", node.ID)
+			plan.SetState(node.ID, NodeExcluded)
+			markExcluded(eval, node.ID, state)
+			return nil
+		}
+	}
+
+	// --- Evaluate the node ---
+	cluster := r.cluster()
+	nr := evaluateNode(ctx, cluster, rs, *node, eval, state)
+
+	// --- Integrate the result into propagation state ---
+	nrOut := integrateNodeResult(ctx, nr, node, eval, state, plan, nodeKeys)
+	if nrOut.crdCreated && r.SchemaGen != nil {
+		r.SchemaGen.AdvanceGeneration()
+		nrOut.needsRecompile = true
+	}
+	return &nrOut
 }
 
 // nodeIntegrationResult carries the outputs of integrateNodeResult back
@@ -208,28 +215,23 @@ func integrateNodeResult(
 	logger := log.FromContext(ctx)
 	var out nodeIntegrationResult
 
-	// --- Error states: set plan state, record error, carry forward keys ---
+	// --- Error states: set plan state, record error ---
 	if nr.state == NodeError {
 		info := classifyAPIError(nr.err)
 		plan.SetState(node.ID, info.state)
 		out.errMsgs = append(out.errMsgs, fmt.Sprintf("%s: %s", node.ID, info.reason))
 		logger.V(0).Info("error on node", "node", node.ID, "state", info.state, "reason", info.reason, "error", nr.err)
-		carryForwardKeys(nodeKeys, node.ID, state)
 		return out
 	}
 	if nr.state == NodeConflict {
 		plan.SetState(node.ID, NodeConflict)
-		state.propagate.previousScope[node.ID] = nr.scope
 		out.errMsgs = append(out.errMsgs, fmt.Sprintf("%s: field conflict", node.ID))
 		logger.V(0).Info("conflict on node", "node", node.ID, "error", nr.err)
-		carryForwardKeys(nodeKeys, node.ID, state)
 		return out
 	}
 	if nr.state == NodePending {
 		plan.SetState(node.ID, NodePending)
-		state.propagate.previousScope[node.ID] = nr.scope
 		logger.V(1).Info("data pending for node", "node", node.ID, "error", nr.err)
-		carryForwardKeys(nodeKeys, node.ID, state)
 		return out
 	}
 
@@ -267,20 +269,14 @@ func integrateNodeResult(
 	// Record applied keys.
 	if nr.state == NodeReady || nr.state == NodeNotReady {
 		nodeKeys[node.ID] = nr.keys
-	} else {
-		carryForwardKeys(nodeKeys, node.ID, state)
 	}
 
-	// Save per-node scope for next reconcile.
-	state.propagate.previousScope[node.ID] = eval.scope[node.ID]
-
-	// Record dynamic GVK resolutions.
+	// Dynamic GVK resolution: signal recompile needed if a dynamic GVK
+	// was resolved (schema was not available at compile time).
 	if nr.resolvedGVK != nil {
-		if state.dynamicGVKs.merge(node.ID, *nr.resolvedGVK) {
-			out.needsRecompile = true
-			logger.Info("dynamic GVK resolved; will recompile with schema on next reconcile",
-				"node", node.ID, "gvk", *nr.resolvedGVK)
-		}
+		out.needsRecompile = true
+		logger.Info("dynamic GVK resolved; will recompile with schema on next reconcile",
+			"node", node.ID, "gvk", *nr.resolvedGVK)
 	}
 
 	return out
@@ -305,11 +301,7 @@ func evaluateNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, nod
 		}
 		// Soft dep not yet in scope — set optional.none() so the
 		// expression's branch that handles absent data can fire.
-		if prev, ok := state.propagate.previousScope[depID]; ok {
-			eval.scope[depID] = celOptionalOf(prev)
-		} else {
-			eval.scope[depID] = celOptionalNone()
-		}
+		eval.scope[depID] = celOptionalNone()
 	}
 
 	out, err := reconcileNode(ctx, c, rs, node, eval)
@@ -407,15 +399,6 @@ func checkDependencyGate(node *graphpkg.Node, plan *PlanState) depGateOutcome {
 	}
 }
 
-// per-node key map. Used when a node is blocked, pending, or in error — the
-// resource may still exist in the cluster, so its keys must remain in the
-// applied set to prevent spurious pruning.
-func carryForwardKeys(nodeKeys map[string][]Applied, nodeID string, state *instanceState) {
-	if prev, ok := state.propagate.previousKeys[nodeID]; ok {
-		nodeKeys[nodeID] = prev
-	}
-}
-
 // populateDepsMap injects the __kroDeps map entry for a node so that
 // <id>.dependencies() CEL expressions resolve correctly.
 func populateDepsMap(eval *evaluator, node *graphpkg.Node) {
@@ -444,7 +427,7 @@ func celOptionalNone() any {
 	return types.OptionalNone
 }
 
-// markExcluded stamps a node as excluded in scope and carry-forward state.
+// markExcluded stamps a node as excluded in scope.
 // Excluded nodes advertise ready=true so that non-excluded status rollup
 // expressions don't block on absent nodes.
 func markExcluded(eval *evaluator, nodeID string, state *instanceState) {
@@ -452,5 +435,4 @@ func markExcluded(eval *evaluator, nodeID string, state *instanceState) {
 	if eval.nodeReady != nil {
 		eval.nodeReady[nodeID] = true
 	}
-	state.propagate.previousScope[nodeID] = eval.scope[nodeID]
 }

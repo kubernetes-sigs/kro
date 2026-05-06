@@ -9,7 +9,6 @@ package graphcontroller
 
 import (
 	"strings"
-	"sync"
 
 	"github.com/gobuffalo/flect"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -21,17 +20,13 @@ import (
 )
 
 // scopeResolver reports whether a GVK is namespace-scoped, using a RESTMapper.
-// Results are cached: RESTMapping is stable for the lifetime of a GVK's
-// registration, so repeat lookups per reconcile are wasteful. A miss (e.g.,
-// CRD not yet installed) is NOT cached — the next reconcile may succeed.
+// Calls the REST mapper directly each time — no caching.
 //
 // A nil *scopeResolver is safe — IsNamespaced returns (false, false),
 // preserving the pre-fix substitution heuristic for callers that don't
 // have access to a RESTMapper.
 type scopeResolver struct {
 	mapper meta.RESTMapper
-	mu     sync.RWMutex
-	cache  map[schema.GroupVersionKind]bool // value = isNamespaced; absence = unknown
 }
 
 // newScopeResolver wraps a RESTMapper. Returns nil if mapper is nil —
@@ -43,19 +38,12 @@ func newScopeResolver(mapper meta.RESTMapper) *scopeResolver {
 	}
 	return &scopeResolver{
 		mapper: mapper,
-		cache:  map[schema.GroupVersionKind]bool{},
 	}
 }
 
 func (r *scopeResolver) IsNamespaced(gvk schema.GroupVersionKind) (bool, bool) {
 	if r == nil {
 		return false, false
-	}
-	r.mu.RLock()
-	v, ok := r.cache[gvk]
-	r.mu.RUnlock()
-	if ok {
-		return v, true
 	}
 	if r.mapper == nil {
 		return false, false
@@ -65,9 +53,6 @@ func (r *scopeResolver) IsNamespaced(gvk schema.GroupVersionKind) (bool, bool) {
 		return false, false
 	}
 	isNamespaced := mapping.Scope != nil && mapping.Scope.Name() == meta.RESTScopeNameNamespace
-	r.mu.Lock()
-	r.cache[gvk] = isNamespaced
-	r.mu.Unlock()
 	return isNamespaced, true
 }
 

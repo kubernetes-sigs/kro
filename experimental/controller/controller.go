@@ -162,23 +162,89 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		return ctrl.Result{}, nil
 	}
 
-	// Set up watch tracking for this reconcile cycle.
+	// Set up watch handle for this reconcile cycle.
 	var watcher *watches.GraphWatcher
-	propagateAttempted := false
 	if r.Watcher != nil {
 		watcher = r.Watcher.ForGraph(req.NamespacedName)
-		defer func() {
-			// Commit watches whenever the walk ran, regardless of
-			// reconcileErr. A post-walk error (e.g., optimistic lock
-			// conflict on status update) should not discard valid watch
-			// registrations from the walk.
-			watcher.Done(propagateAttempted)
-		}()
 	}
 
 	// -----------------------------------------------------------------------
-	// 5. Ensure revision
+	// 5–6. Resolve revision (ensure + compile)
 	// -----------------------------------------------------------------------
+	rev, err := r.resolveRevision(ctx, graph)
+	if err != nil {
+		return rev.result, err
+	}
+	if rev.earlyReturn {
+		return rev.result, nil
+	}
+
+	// -----------------------------------------------------------------------
+	// 7. Propagate the DAG
+	// -----------------------------------------------------------------------
+	rs := newReconcileScope(graph, watcher)
+	wp := r.reconcilePropagate(ctx, rs, rev.state, rev.eval, rev.dag, rev.plan)
+
+	// Post-propagation recompile check: if the propagation created a CRD, re-validate
+	// compilation to catch child graph type errors within the same cycle.
+	if wp.needsRecompile && rev.compilationErr == nil {
+		if _, _, err := r.compileRevision(ctx, graph.GetNamespace(), rev.activeRevision); err != nil {
+			rev.compilationErr = err
+			logger.Error(err, "post-walk recompilation detected error")
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// 8. Prune removed resources
+	// -----------------------------------------------------------------------
+	pr := r.reconcilePrune(ctx, rs, rev.state, rev.eval, rev.dag, wp.keys, rev.supersededRevisions, &wp.summary)
+
+	// -----------------------------------------------------------------------
+	// 9. Update status
+	// -----------------------------------------------------------------------
+	rstate := &reconcileState{
+		compiled:    rev.compilationErr == nil,
+		compiledErr: rev.compilationErr,
+		planSummary: wp.summary,
+		nodeErrors:  append(wp.nodeErrors, pr.errors...),
+		nodeNotes:   pr.notes,
+	}
+	if err := r.updateStatus(ctx, graph, rstate); err != nil {
+		logger.Error(err, "status update")
+	}
+
+	allReady := rstate.compiled && rstate.planSummary.IsClean()
+	r.gcSupersededRevisions(ctx, rev.activeRevision, rev.supersededRevisions, allReady, pr.ok && !pr.pending)
+
+	// -----------------------------------------------------------------------
+	// 10. Requeue if not fully ready
+	// -----------------------------------------------------------------------
+	return r.determineRequeue(wp.needsRecompile, pr.pending, allReady)
+}
+
+// revisionResult bundles the outputs of resolveRevision so the caller can
+// destructure a single return value instead of many.
+type revisionResult struct {
+	activeRevision      *unstructured.Unstructured
+	supersededRevisions []*unstructured.Unstructured
+	compilationErr      error
+	state               *instanceState
+	eval                *evaluator
+	dag                 *dagpkg.DAG
+	plan                *PlanState
+	// earlyReturn is true when resolveRevision already handled the response
+	// (e.g., deterministic compilation error). The caller should return result/nil.
+	earlyReturn bool
+	result      ctrl.Result
+}
+
+// resolveRevision combines phases 5 (ensure revision) and 6 (compile revision).
+// It answers "what are we reconciling?" by producing a compiled DAG, evaluator,
+// and plan — or signals an early return when compilation fails deterministically.
+func (r *GraphReconciler) resolveRevision(ctx context.Context, graph *unstructured.Unstructured) (revisionResult, error) {
+	logger := log.FromContext(ctx)
+
+	// --- Phase 5: Ensure revision ---
 	activeRevision, supersededRevisions, err := r.ensureRevision(ctx, graph)
 	var compilationErr error
 	if err != nil {
@@ -188,13 +254,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		revisions, listErr := listRevisions(ctx, r.Client, graphName, namespace)
 		if listErr != nil || len(revisions) == 0 {
 			if statusErr := r.updateStatus(ctx, graph, &reconcileState{compiled: false, compiledErr: err}); statusErr != nil {
-				return ctrl.Result{}, fmt.Errorf("updating status after revision error: %w", statusErr)
+				return revisionResult{}, fmt.Errorf("updating status after revision error: %w", statusErr)
 			}
 			if isTransientError(err) {
-				return ctrl.Result{}, fmt.Errorf("ensuring revision: %w", err)
+				return revisionResult{}, fmt.Errorf("ensuring revision: %w", err)
 			}
 			logger.Info("deterministic compilation error; status written, awaiting spec change", "error", err)
-			return ctrl.Result{}, nil
+			return revisionResult{earlyReturn: true}, nil
 		}
 		activeRevision = revisions[len(revisions)-1]
 		supersededRevisions = nil
@@ -207,19 +273,17 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	effectiveGeneration := pickEffectiveGeneration(graph, activeRevision, compilationErr)
 
-	// -----------------------------------------------------------------------
-	// 6. Compile revision
-	// -----------------------------------------------------------------------
+	// --- Phase 6: Compile revision ---
 	_, state, err := r.compileRevision(ctx, graph.GetNamespace(), activeRevision)
 	if err != nil {
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{compiled: false, compiledErr: err}); statusErr != nil {
-			return ctrl.Result{}, fmt.Errorf("updating status after compilation error: %w", statusErr)
+			return revisionResult{}, fmt.Errorf("updating status after compilation error: %w", statusErr)
 		}
 		if isTransientError(err) {
-			return ctrl.Result{}, fmt.Errorf("compiling revision: %w", err)
+			return revisionResult{}, fmt.Errorf("compiling revision: %w", err)
 		}
 		logger.Info("deterministic compilation error; status written, awaiting spec change", "error", err)
-		return ctrl.Result{}, nil
+		return revisionResult{earlyReturn: true}, nil
 	}
 
 	eval := newEvaluator(state)
@@ -227,72 +291,26 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	dag := state.compilation.dag
 	plan := NewPlanState(dag)
 
-	// On revision transition, transfer previousAppliedKeys from superseded
-	// revisions so the prune phase knows what the old revision applied.
-	isRevisionTransition := len(supersededRevisions) > 0
-	if isRevisionTransition && state.prune.previousAppliedKeys == nil {
-		for _, rev := range supersededRevisions {
-			oldKey := rev.GetNamespace() + "/" + rev.GetName()
-			if oldState := r.Caches.get(oldKey); oldState != nil {
-				for k, a := range oldState.prune.previousAppliedKeys {
-					if state.prune.previousAppliedKeys == nil {
-						state.prune.previousAppliedKeys = make(map[string]Applied)
-					}
-					state.prune.previousAppliedKeys[k] = a
-				}
-			}
-		}
-	}
+	return revisionResult{
+		activeRevision:      activeRevision,
+		supersededRevisions: supersededRevisions,
+		compilationErr:      compilationErr,
+		state:               state,
+		eval:                eval,
+		dag:                 dag,
+		plan:                plan,
+	}, nil
+}
 
-	// -----------------------------------------------------------------------
-	// 7. Propagate the DAG
-	// -----------------------------------------------------------------------
-	rs := newReconcileScope(graph, watcher)
-	wp := r.reconcilePropagate(ctx, rs, state, eval, dag, plan)
-	propagateAttempted = true
-
-	// Post-propagation recompile check: if the propagation created a CRD, re-validate
-	// compilation to catch child graph type errors within the same cycle.
-	if wp.needsRecompile && compilationErr == nil {
-		if _, _, err := r.compileRevision(ctx, graph.GetNamespace(), activeRevision); err != nil {
-			compilationErr = err
-			logger.Error(err, "post-walk recompilation detected error")
-		}
-	}
-
-	// -----------------------------------------------------------------------
-	// 8. Prune removed resources
-	// -----------------------------------------------------------------------
-	pr := r.reconcilePrune(ctx, rs, state, eval, dag, wp.keys, supersededRevisions, &wp.summary)
-
-	// -----------------------------------------------------------------------
-	// 9. Update status
-	// -----------------------------------------------------------------------
-	rstate := &reconcileState{
-		compiled:    compilationErr == nil,
-		compiledErr: compilationErr,
-		planSummary: wp.summary,
-		nodeErrors:  append(wp.nodeErrors, pr.errors...),
-		nodeNotes:   pr.notes,
-	}
-	if err := r.updateStatus(ctx, graph, rstate); err != nil {
-		logger.Error(err, "status update")
-	}
-
-	allReady := rstate.compiled && rstate.planSummary.IsClean()
-	r.gcSupersededRevisions(ctx, activeRevision, supersededRevisions, allReady, pr.ok && !pr.pending)
-
-	// -----------------------------------------------------------------------
-	// 10. Requeue if not fully ready
-	// -----------------------------------------------------------------------
-
+// determineRequeue decides the ctrl.Result based on post-reconcile state.
+func (r *GraphReconciler) determineRequeue(needsRecompile, prunePending, allReady bool) (ctrl.Result, error) {
 	// Dynamic GVK change needs immediate recompile.
-	if wp.needsRecompile {
+	if needsRecompile {
 		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Finalization in progress — short requeue as a consistency floor.
-	if pr.pending {
+	if prunePending {
 		return ctrl.Result{RequeueAfter: finalizationRequeueInterval}, nil
 	}
 
@@ -316,13 +334,7 @@ func (r *GraphReconciler) reconcilePropagate(
 	dag *dagpkg.DAG,
 	plan *PlanState,
 ) *propagateResult {
-	propagateRes := r.propagate(ctx, rs, state, eval, dag, plan)
-
-	// Transfer carry-forward state for next reconcile.
-	state.propagate.previousPlanStates = propagateRes.plan
-	state.propagate.previousKeys = propagateRes.nodeKeys
-
-	return propagateRes
+	return r.propagate(ctx, rs, state, eval, dag, plan)
 }
 
 // prunePhaseResult carries the outputs of reconcilePrune back to the caller.
@@ -335,12 +347,12 @@ type prunePhaseResult struct {
 
 // reconcilePrune removes resources that are no longer in the applied set.
 // It gates on summary flags (uncertain absence blocks pruning), builds the
-// full previous-applied-key universe from three sources (watch cache,
-// carry-forward, superseded revisions), diffs against the current walk's
-// applied keys, and deletes the difference.
+// previous-applied-key universe from two sources (watch cache and superseded
+// revision static keys), diffs against the current walk's applied keys, and
+// deletes the difference.
 //
-// Side effects: mutates summary (sets HasBlocked/HasError/HasSystemError/
-// HasConflict on prune failures) and state.prune (updates carry-forward keys).
+// No cross-cycle state: prune candidates are derived entirely from
+// cluster-observable state (watch cache label scan + revision specs).
 func (r *GraphReconciler) reconcilePrune(
 	ctx context.Context,
 	rs *reconcileScope,
@@ -363,7 +375,7 @@ func (r *GraphReconciler) reconcilePrune(
 
 	cluster := r.cluster()
 	allPreviousKeys := map[string]Applied{}
-	logger.V(1).Info("prune gate open", "previousAppliedKeys", len(state.prune.previousAppliedKeys), "deferredPruneKeys", len(state.prune.deferredPruneKeys), "superseded", len(supersededRevisions))
+	logger.V(1).Info("prune gate open", "superseded", len(supersededRevisions))
 
 	// Derive the applied set from the watch cache.
 	if r.Watcher != nil {
@@ -375,18 +387,6 @@ func (r *GraphReconciler) reconcilePrune(
 			}
 		}
 	}
-
-	// Include the previous reconcile's applied keys to cover the
-	// informer lag window.
-	for k, a := range state.prune.previousAppliedKeys {
-		allPreviousKeys[k] = a
-	}
-	// Include keys whose deletion was deferred in the previous reconcile.
-	for _, a := range state.prune.deferredPruneKeys {
-		allPreviousKeys[a.Key] = a
-	}
-	// Update the previous key set for the next reconcile.
-	state.prune.updateAppliedKeys(appliedKeys)
 
 	// Extract static keys from superseded revisions for resources
 	// that may not yet be in the informer cache.
@@ -429,9 +429,6 @@ func (r *GraphReconciler) reconcilePrune(
 	deferredKeys := collectDeferredKeys(pr.Outcomes, allPreviousKeys)
 	if len(deferredKeys) > 0 {
 		result.pending = true
-		state.prune.deferredPruneKeys = deferredKeys
-	} else {
-		state.prune.deferredPruneKeys = nil
 	}
 	if pr.Err != nil {
 		logger.Error(pr.Err, "pruning removed resources")

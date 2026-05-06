@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -681,23 +682,66 @@ func TestStaticResourceKey_ExplicitNamespace(t *testing.T) {
 	})
 }
 
-// testScopeResolver returns a *scopeResolver with a pre-populated cache.
-// Used to verify that staticResourceKey produces empty-namespace keys for
-// cluster-scoped kinds, matching what resourceKey(liveObj) produces after
-// an API server response strips the namespace for cluster-scoped responses.
+// testScopeResolver returns a *scopeResolver with a fake RESTMapper that
+// returns pre-configured scope results. Used to verify that staticResourceKey
+// produces empty-namespace keys for cluster-scoped kinds, matching what
+// resourceKey(liveObj) produces after an API server response strips the
+// namespace for cluster-scoped responses.
 func testScopeResolver(entries map[string]bool) *scopeResolver {
-	r := &scopeResolver{
-		cache: map[schema.GroupVersionKind]bool{},
+	return &scopeResolver{
+		mapper: &fakeRESTMapper{scopes: entries},
 	}
-	for k, v := range entries {
-		parts := strings.SplitN(k, "/", 3)
+}
+
+// fakeRESTMapper implements meta.RESTMapper for tests, returning pre-configured
+// scope (namespaced/cluster-scoped) results based on a string-keyed map.
+type fakeRESTMapper struct {
+	scopes map[string]bool // "group/version/Kind" → isNamespaced
+}
+
+func (f *fakeRESTMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*meta.RESTMapping, error) {
+	for key, isNamespaced := range f.scopes {
+		parts := strings.SplitN(key, "/", 3)
 		if len(parts) != 3 {
 			continue
 		}
-		gvk := schema.GroupVersionKind{Group: parts[0], Version: parts[1], Kind: parts[2]}
-		r.cache[gvk] = v
+		if parts[0] == gk.Group && parts[2] == gk.Kind {
+			scope := meta.RESTScopeRoot
+			if isNamespaced {
+				scope = meta.RESTScopeNamespace
+			}
+			return &meta.RESTMapping{Scope: scope}, nil
+		}
 	}
-	return r
+	return nil, fmt.Errorf("no mapping for %v", gk)
+}
+
+func (f *fakeRESTMapper) RESTMappings(gk schema.GroupKind, versions ...string) ([]*meta.RESTMapping, error) {
+	m, err := f.RESTMapping(gk, versions...)
+	if err != nil {
+		return nil, err
+	}
+	return []*meta.RESTMapping{m}, nil
+}
+
+func (f *fakeRESTMapper) KindFor(resource schema.GroupVersionResource) (schema.GroupVersionKind, error) {
+	return schema.GroupVersionKind{}, fmt.Errorf("not implemented")
+}
+
+func (f *fakeRESTMapper) KindsFor(resource schema.GroupVersionResource) ([]schema.GroupVersionKind, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (f *fakeRESTMapper) ResourceFor(input schema.GroupVersionResource) (schema.GroupVersionResource, error) {
+	return schema.GroupVersionResource{}, fmt.Errorf("not implemented")
+}
+
+func (f *fakeRESTMapper) ResourcesFor(input schema.GroupVersionResource) ([]schema.GroupVersionResource, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (f *fakeRESTMapper) ResourceSingularizer(resource string) (string, error) {
+	return "", fmt.Errorf("not implemented")
 }
 
 // TestStaticResourceKey_ClusterScopedNamespace_Regression proves that
@@ -872,75 +916,6 @@ func TestDeriveReadyCondition_PendingSurfacesReasons(t *testing.T) {
 	}
 	outcome := s.deriveReadyCondition()
 	assert.Contains(t, outcome.message, "waiting for input from cfg")
-}
-
-// ---------------------------------------------------------------------------
-// FinalizeSkippedStates — silent Ready fallthrough (#14) regression
-// ---------------------------------------------------------------------------
-
-// TestFinalizeSkippedStates_RestoresPreviousState exercises the happy path —
-// a node in the outputsReady set with a previousPlanStates entry has its
-// state restored so PlanSummary counts it.
-func TestFinalizeSkippedStates_RestoresPreviousState(t *testing.T) {
-	plan := &PlanState{
-		States: map[string]NodeState{
-			"n1": NodeUnvisited,
-		},
-	}
-	outputsReady := map[string]bool{"n1": true}
-	prev := map[string]NodeState{"n1": NodeReady}
-
-	FinalizeSkippedStates(plan, outputsReady, prev, nil)
-
-	assert.Equal(t, NodeReady, plan.States["n1"],
-		"skipped node with prior state should restore to prior state")
-}
-
-// TestFinalizeSkippedStates_RegressionSilentReady guards against the
-// silent-Ready fallthrough documented in #14: a node in outputsReady with no
-// previousPlanStates entry previously stayed NodeUnvisited, which PlanSummary
-// silently counts as zero — the graph appeared Ready with one fewer node
-// than it actually had. The fix explicitly marks such nodes NodePending.
-func TestFinalizeSkippedStates_RegressionSilentReady(t *testing.T) {
-	plan := &PlanState{
-		States: map[string]NodeState{
-			"n1": NodeUnvisited,
-		},
-	}
-	outputsReady := map[string]bool{"n1": true}
-	// Empty previousPlanStates — the structurally-impossible case.
-	prev := map[string]NodeState{}
-
-	var diagnosedNode string
-	FinalizeSkippedStates(plan, outputsReady, prev, func(id string) {
-		diagnosedNode = id
-	})
-
-	assert.Equal(t, NodePending, plan.States["n1"],
-		"skipped node with no prior state must be marked Pending, not left Unvisited")
-	assert.Equal(t, "n1", diagnosedNode,
-		"the callback should surface the diagnostic so logs record the invariant break")
-}
-
-// TestFinalizeSkippedStates_IgnoresNonSkipped confirms the helper only
-// touches nodes in outputsReady AND in NodeUnvisited — nodes that were
-// actually walked keep whatever the walker set.
-func TestFinalizeSkippedStates_IgnoresNonSkipped(t *testing.T) {
-	plan := &PlanState{
-		States: map[string]NodeState{
-			"walked": NodeError,
-			"skip":   NodeUnvisited,
-		},
-	}
-	outputsReady := map[string]bool{"skip": true} // "walked" is NOT in outputsReady
-	prev := map[string]NodeState{"skip": NodeReady, "walked": NodeReady}
-
-	FinalizeSkippedStates(plan, outputsReady, prev, nil)
-
-	assert.Equal(t, NodeError, plan.States["walked"],
-		"node not in outputsReady must not be overwritten")
-	assert.Equal(t, NodeReady, plan.States["skip"],
-		"node in outputsReady with prior state gets restored")
 }
 
 // TestCheckDependencyGate_RegressionExcludedPersistence verifies that when

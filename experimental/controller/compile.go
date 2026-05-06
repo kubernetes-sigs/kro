@@ -1,16 +1,12 @@
 // compile.go orchestrates compilation — turning a GraphRevision's spec into
-// a compiled graph artifact, managing schema staleness and dynamic GVK
-// resolution. Compilation itself lives in the compiler package; this file
-// manages the controller-side instance state.
-//
-// Instance state is keyed by namespace/revision-name (per-Graph mutable state).
+// a compiled graph artifact. Always compiles from scratch every reconcile.
+// No caching of compilation output across cycles.
 package graphcontroller
 
 import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
 	dagpkg "github.com/ellistarn/kro/experimental/controller/dag"
@@ -18,19 +14,10 @@ import (
 )
 
 // compileRevision parses a GraphRevision's spec, compiles it, and returns the
-// compiled graph and per-instance state. Always recompiles; instance state is
-// preserved across reconciles for correctness fields (previousAppliedKeys, etc.).
+// compiled graph and per-instance state. Always recompiles from scratch —
+// no cross-cycle caching.
 func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string, revision *unstructured.Unstructured) (*graphpkg.GraphSpec, *instanceState, error) {
 	instanceKey := revision.GetNamespace() + "/" + revision.GetName()
-
-	// Retrieve existing instance state (may have dynamicGVKs.resolved from
-	// a previous reconcile). These serve as hints for schema resolution of
-	// dynamic GVK nodes on subsequent compilations.
-	existing := r.Caches.get(instanceKey)
-	var dynamicGVKHints map[string]schema.GroupVersionKind
-	if existing != nil {
-		dynamicGVKHints = existing.dynamicGVKs.resolved
-	}
 
 	// Parse spec, resolve types, compile, assemble DAG.
 	spec, err := extractRevisionSpec(revision)
@@ -38,17 +25,8 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 		return nil, nil, err
 	}
 
-	// Resolve types. Then pre-populate schemas for dynamic GVK nodes
-	// whose GVK was resolved on a previous reconcile. The compiler
-	// is unaware of dynamic GVKs — it just sees pre-populated types.
+	// Resolve types. Dynamic GVK nodes compile permissively (no hints needed).
 	typeInfo := compiler.ResolveNodeTypes(spec.Nodes, r.SchemaResolver)
-	if r.SchemaResolver != nil && len(dynamicGVKHints) > 0 {
-		for _, nodeID := range typeInfo.DynamicGVKNodes {
-			if gvk, ok := dynamicGVKHints[nodeID]; ok {
-				typeInfo.PrePopulateSchema(nodeID, gvk, r.SchemaResolver)
-			}
-		}
-	}
 	compiled, err := compiler.CompileGraphSpec(spec, typeInfo)
 	if err != nil {
 		return nil, nil, err
@@ -57,17 +35,7 @@ func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string,
 	// instance's node specs.
 	dag := dagpkg.AssembleDAG(spec.Nodes, compiled.Topology)
 
-	// If existing state exists, atomically replace compilation artifacts
-	// and reset state that is structurally incompatible with the new
-	// compilation. Correctness fields (previousKeys, previousPlanStates,
-	// previousAppliedKeys, activeFinalization) are preserved.
-	if existing != nil {
-		existing.recompile(compiled, dag)
-		r.Caches.set(instanceKey, existing)
-		return spec, existing, nil
-	}
-
-	// New instance — create fresh mutable state.
+	// Always create fresh state — no cross-cycle preservation.
 	state := newInstanceState(compiled, dag)
 	r.Caches.set(instanceKey, state)
 	return spec, state, nil

@@ -60,20 +60,6 @@ func TestInstanceStateIsolation(t *testing.T) {
 	state1 := newInstanceState(compiled, nil)
 	state2 := newInstanceState(compiled, nil)
 
-	// Mutate state1's mutable fields.
-	state1.propagate.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
-	state1.propagate.previousPlanStates = &PlanState{States: map[string]NodeState{"node0": NodeReady}}
-
-	// state2 should be unaffected.
-	if _, ok := state2.propagate.previousScope["node0"]; ok {
-		t.Fatal("previousScope leaked between instances")
-	}
-	if state2.propagate.previousPlanStates != nil {
-		if _, ok := state2.propagate.previousPlanStates.States["node0"]; ok {
-			t.Fatal("previousPlanStates leaked between instances")
-		}
-	}
-
 	// Both should share the same (immutable) compiledGraph.
 	if state1.compilation.compiled != state2.compilation.compiled {
 		t.Fatal("instances should share the same compiledGraph pointer")

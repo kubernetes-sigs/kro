@@ -171,8 +171,7 @@ func (c *CompiledGraph) getOrCompile(expr string, scope map[string]any) (cel.Pro
 // declared type — schema-aware type conversion happens at field-access time.
 //
 // Wrapping is shallow and per-call: the original scope map is never mutated,
-// so hash inputs, previousScope retention, and serialization paths still see
-// plain map[string]any values.
+// so hash inputs and serialization paths still see plain map[string]any values.
 //
 // Entries without a schema (definitions, unresolved CRDs, forEach iterators)
 // pass through unchanged — CEL's default type adapter handles them as before.

@@ -49,11 +49,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 
 	// Build a minimal instanceState for advanceFinalization.
 	rs := newReconcileScope(graph, nil)
-	teardownState := &instanceState{
-		prune: pruneCarryForward{
-			activeFinalization: map[string]*finalizationEntry{},
-		},
-	}
+	teardownState := &instanceState{}
 
 	// -----------------------------------------------------------------------
 	// Delegate to pruneResources: all keys are candidates, currentKeys empty.

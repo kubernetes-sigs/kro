@@ -247,7 +247,7 @@ func (n *Node) Identity() map[string]any {
 // statically — either because the entire body is a CEL expression
 // (TemplateExpr, so Identity() returns nil), or because apiVersion or kind
 // contains a CEL expression that is only resolved at reconcile time
-// (e.g., apiVersion: "${k.spec.group}/${k.spec.version}").
+// (e.g., apiVersion: "${k.spec.schema.apiVersion}").
 //
 // This predicate is scoped to GVR-level dynamism (apiVersion, kind). Dynamic
 // name/namespace do not affect GVR resolution and are not checked.

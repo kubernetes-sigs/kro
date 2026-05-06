@@ -11,10 +11,9 @@ kind: Kind
 metadata:
   name: webapp
 spec:
-  kind: WebApp
-  group: experimental.kro.run
-  version: v1alpha1
   schema:
+    apiVersion: experimental.kro.run/v1alpha1
+    kind: WebApp
     spec:
       image: string | default=nginx
       replicas: integer | default=1

@@ -39,10 +39,9 @@ func TestStdlibKindNodeReadyWhenNotSatisfied(t *testing.T) {
 			"namespace": "kro-system",
 		},
 		"spec": map[string]any{
-			"kind":    "NodeReadyWhen",
-			"group":   "test.stdlib.kro.run",
-			"version": "v1alpha1",
 			"schema": map[string]any{
+				"apiVersion": "test.stdlib.kro.run/v1alpha1",
+				"kind":       "NodeReadyWhen",
 				"spec": map[string]any{
 					"message": "string | default=hello",
 				},
@@ -123,10 +122,9 @@ func TestStdlibKindNodeReadyWhenSatisfied(t *testing.T) {
 			"namespace": "kro-system",
 		},
 		"spec": map[string]any{
-			"kind":    "NodeReadyWhenOk",
-			"group":   "test.stdlib.kro.run",
-			"version": "v1alpha1",
 			"schema": map[string]any{
+				"apiVersion": "test.stdlib.kro.run/v1alpha1",
+				"kind":       "NodeReadyWhenOk",
 				"spec": map[string]any{
 					"value": "string | default=test",
 				},
@@ -196,10 +194,9 @@ func TestStdlibKindDefaultBehavior(t *testing.T) {
 			"namespace": "kro-system",
 		},
 		"spec": map[string]any{
-			"kind":    "DefaultBehaviorThing",
-			"group":   "test.stdlib.kro.run",
-			"version": "v1alpha1",
 			"schema": map[string]any{
+				"apiVersion": "test.stdlib.kro.run/v1alpha1",
+				"kind":       "DefaultBehaviorThing",
 				"spec": map[string]any{
 					"value": "string | default=test",
 				},
@@ -273,10 +270,9 @@ func TestStdlibKindWithPropagateWhen(t *testing.T) {
 			"namespace": "kro-system",
 		},
 		"spec": map[string]any{
-			"kind":    "PropagateWhenThing",
-			"group":   "test.stdlib.kro.run",
-			"version": "v1alpha1",
 			"schema": map[string]any{
+				"apiVersion": "test.stdlib.kro.run/v1alpha1",
+				"kind":       "PropagateWhenThing",
 				"spec": map[string]any{
 					"label": "string | default=default",
 				},

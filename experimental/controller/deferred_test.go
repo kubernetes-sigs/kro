@@ -193,7 +193,7 @@ func TestDeferredExpressionAnalysis(t *testing.T) {
 	})
 
 	t.Run("deferred expression with custom function plural", func(t *testing.T) {
-		// $${plural(k.spec.kind)} should compile — k is a child node ID,
+		// $${plural(k.spec.schema.kind)} should compile — k is a child node ID,
 		// plural() is a custom function available in the child scope.
 		spec := &graph.GraphSpec{Nodes: []graph.Node{
 			watchNode("items", map[string]any{
@@ -222,7 +222,7 @@ func TestDeferredExpressionAnalysis(t *testing.T) {
 								"template": map[string]any{
 									"apiVersion": "v1",
 									"kind":       "ConfigMap",
-									"metadata":   map[string]any{"name": "$${plural(k.spec.kind).lowerAscii()}"},
+									"metadata":   map[string]any{"name": "$${plural(k.spec.schema.kind).lowerAscii()}"},
 								},
 							},
 						},
@@ -397,15 +397,15 @@ func TestStripDeferralLevel(t *testing.T) {
 
 	t.Run("recurses into maps", func(t *testing.T) {
 		input := map[string]any{
-			"name": "$${k.spec.kind}",
+			"name": "$${k.spec.schema.kind}",
 			"nested": map[string]any{
-				"value": "$${k.spec.group}",
+				"value": "$${k.spec.schema.apiVersion}",
 			},
 		}
 		got := compiler.StripDeferralLevel(input).(map[string]any)
-		assert.Equal(t, "${k.spec.kind}", got["name"])
+		assert.Equal(t, "${k.spec.schema.kind}", got["name"])
 		nested := got["nested"].(map[string]any)
-		assert.Equal(t, "${k.spec.group}", nested["value"])
+		assert.Equal(t, "${k.spec.schema.apiVersion}", nested["value"])
 	})
 
 	t.Run("recurses into lists", func(t *testing.T) {

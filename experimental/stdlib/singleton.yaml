@@ -30,9 +30,6 @@ kind: Kind
 metadata:
   name: singleton
 spec:
-  kind: Singleton
-  group: experimental.kro.run
-  version: v1alpha1
   additionalPrinterColumns:
     - name: Claim
       type: string
@@ -47,6 +44,8 @@ spec:
       type: date
       jsonPath: .metadata.creationTimestamp
   schema:
+    apiVersion: experimental.kro.run/v1alpha1
+    kind: Singleton
     spec:
       priority: integer | default=0
       template: object

@@ -62,10 +62,9 @@ func TestStdlibKind(t *testing.T) {
 			"namespace": "kro-system",
 		},
 		"spec": map[string]any{
-			"kind":    "TestWidget",
-			"group":   "test.stdlib.kro.run",
-			"version": "v1alpha1",
 			"schema": map[string]any{
+				"apiVersion": "test.stdlib.kro.run/v1alpha1",
+				"kind":       "TestWidget",
 				"spec": map[string]any{
 					"message": "string | default=hello",
 				},

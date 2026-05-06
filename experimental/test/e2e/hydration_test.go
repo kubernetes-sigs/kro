@@ -20,7 +20,7 @@ import (
 // GraphRevision whose nodes carry the unresolved CEL strings.
 //
 // This directly exercises the pattern used by the Kind stdlib
-// (apiVersion: ${k.spec.group}/${k.spec.version}, kind: ${k.spec.kind}):
+// (apiVersion: ${k.spec.schema.apiVersion}, kind: ${k.spec.schema.kind}):
 //
 //   - The ref node reads a ConfigMap that declares which GVR to watch.
 //   - The watch node uses CEL expressions to derive apiVersion/kind from the ref.

@@ -11,9 +11,6 @@ kind: Kind
 metadata:
   name: decorator
 spec:
-  kind: Decorator
-  group: experimental.kro.run
-  version: v1alpha1
   additionalPrinterColumns:
     - name: Watches
       type: string
@@ -25,6 +22,8 @@ spec:
       type: date
       jsonPath: .metadata.creationTimestamp
   schema:
+    apiVersion: experimental.kro.run/v1alpha1
+    kind: Decorator
     types:
       Node:
         id: string | required=true

@@ -278,7 +278,7 @@ func buildTypedEnvOptions(ts *TypeSource) []cel.EnvOption {
 //
 // This is targeted: only list fields whose items carry preserve-unknown
 // in the raw schema get loosened. Scalar and object fields retain their
-// declared types — field-name checking on e.g. k.spec.kind still catches
+// declared types — field-name checking on e.g. k.spec.schema.kind still catches
 // typos.
 func loosenOpaqueFields(dt *apiservercel.DeclType, schema *spec.Schema) *apiservercel.DeclType {
 	if dt == nil || !dt.IsObject() || schema == nil {

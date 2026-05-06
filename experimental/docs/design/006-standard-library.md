@@ -23,17 +23,15 @@ kind: Kind
 metadata:
   name: webapp
 spec:
-  kind: WebApp
-  group: experimental.kro.run
-  versions:
-    - name: v1alpha1
-      schema:
-        spec:
-          image: string | default=nginx
-          replicas: integer | default=1
-          port: integer | default=80
-        status:
-          deploymentReady: ${deployment.status.availableReplicas == deployment.spec.replicas}
+  schema:
+    apiVersion: experimental.kro.run/v1alpha1
+    kind: WebApp
+    spec:
+      image: string | default=nginx
+      replicas: integer | default=1
+      port: integer | default=80
+    status:
+      deploymentReady: ${deployment.status.availableReplicas == deployment.spec.replicas}
   nodes:
     - id: deployment
       template:
@@ -163,7 +161,7 @@ component.
 The stdlib includes a backwards-compatibility shim that implements the upstream kro
 ResourceGraphDefinition API. RGDs are translated into the same infrastructure as Kind — CRD
 creation, instance watching, per-instance Graphs — but accept the upstream `spec.schema` +
-`spec.resources` shape instead of Kind's `spec.versions` + `spec.nodes`.
+`spec.resources` shape instead of Kind's `spec.schema` + `spec.nodes`.
 
 ### Validation
 

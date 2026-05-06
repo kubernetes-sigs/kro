@@ -384,7 +384,7 @@ func TestParseKeyword_PatchWithStatus(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
-	assert.True(t, nodes[0].HasStatusSubresource())
+	assert.True(t, nodes[0].hasStatusSubresource)
 }
 
 func TestParseKeyword_PatchWithoutStatus(t *testing.T) {
@@ -401,7 +401,7 @@ func TestParseKeyword_PatchWithoutStatus(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
-	assert.False(t, nodes[0].HasStatusSubresource())
+	assert.False(t, nodes[0].hasStatusSubresource)
 }
 
 // ---------------------------------------------------------------------------

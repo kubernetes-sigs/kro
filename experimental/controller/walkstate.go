@@ -1,4 +1,4 @@
-// walkstate.go defines per-reconcile walk state for DAG traversal.
+// walkstate.go defines per-reconcile node and plan state for DAG traversal.
 //
 // NodeState tracks the reconcile-time outcome for each node. PlanState
 // aggregates node states across a single reconcile cycle. These are
@@ -20,8 +20,8 @@ type NodeState int
 
 const (
 	// NodeUnvisited is the zero-value sentinel — "not yet processed by the
-	// walk." The dispatch guard (tryDispatch) uses != NodeUnvisited to detect nodes
-	// that have already been assigned a state by the walk or by propagation.
+	// propagation." The dispatch guard (tryDispatch) uses != NodeUnvisited to detect nodes
+	// that have already been assigned a state by the propagation or by inheritance.
 	NodeUnvisited NodeState = iota
 
 	NodePending     // Data not yet available (retryable)
@@ -126,7 +126,7 @@ func (ps *PlanState) SetState(id string, state NodeState) {
 	ps.States[id] = state
 }
 
-// PlanSummary holds aggregate state from a completed DAG walk.
+// PlanSummary holds aggregate state from a completed DAG propagation.
 type PlanSummary struct {
 	HasPending     bool
 	HasNotReady    bool

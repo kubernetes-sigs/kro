@@ -97,74 +97,11 @@ func ResolveNodeTypes(nodes []graph.Node, schemaResolver resolver.SchemaResolver
 		nodeType := node.Type()
 		switch {
 		case nodeType == graph.NodeTypeDef:
-			// Phase 2: infer type from template structure.
-			typeName := krocel.TypeNamePrefix + node.ID
-			dt := InferObjectType(typeName, node.Payload())
-			ts.DefinitionTypes[node.ID] = dt
-			if node.ForEach != nil {
-				ts.ForEachDefinitions[node.ID] = true
-			}
-
-		case schemaResolver != nil && nodeType != graph.NodeTypeDef:
-			// Phase 1: resolve schema for resource nodes with literal GVK.
-			//
-			// forEach nodes skip schema resolution for the OUTER scope
-			// (the node ID is dyn, permitting both field access and list ops).
-			// The INNER scope (readyWhen on the forEach node itself) uses
-			// element type — see cel.go Phase 4a-3.
-			resolved := false
-			if node.ForEach == nil {
-				gvk := ExtractLiteralGVK(node.Identity())
-				if gvk != nil && !isUpstreamKroInfra(gvk) {
-					s, err := schemaResolver.ResolveSchema(*gvk)
-					if err == nil && s != nil {
-						ts.ResourceSchemas[node.ID] = s
-						if nodeType == graph.NodeTypeWatch {
-							ts.resourceCollections[node.ID] = true
-						}
-						resolved = true
-					} else {
-						ts.UnresolvedGVKs = append(ts.UnresolvedGVKs, *gvk)
-					}
-				} else if gvk == nil && node.HasDynamicGVR() {
-					// Dynamic GVK node — type depends on a CEL expression
-					// evaluated at runtime. Record for tracking. The caller
-					// may pre-populate the schema after resolution via
-					// TypeSource.PrePopulateSchema.
-					ts.DynamicGVKNodes = append(ts.DynamicGVKNodes, node.ID)
-				}
-			} else {
-				// forEach nodes: resolve schema for inner-scope readyWhen
-				// validation but DON'T add to typed declarations. Store
-				// in forEachSchemas for the Phase 4a-3 inner-scope check.
-				gvk := ExtractLiteralGVK(node.Identity())
-				if gvk != nil && !isUpstreamKroInfra(gvk) {
-					s, err := schemaResolver.ResolveSchema(*gvk)
-					if err == nil && s != nil {
-						ts.forEachSchemas[node.ID] = s
-					}
-				}
-			}
-			if !resolved {
-				if nodeType == graph.NodeTypeWatch {
-					// Unresolved Watch nodes are list(dyn) to support
-					// comprehension macros (.map, .filter, .exists).
-					ts.listIDs = append(ts.listIDs, node.ID)
-				} else {
-					// Unresolved forEach nodes stay as dyn (not list(dyn)).
-					// dyn is permissive for both field access and list ops.
-					// list(dyn) breaks field access: ${instances.status}
-					// fails because lists don't have .status.
-					ts.UntypedIDs = append(ts.UntypedIDs, node.ID)
-				}
-			}
-
+			resolveDefType(node, ts)
+		case schemaResolver != nil:
+			resolveResourceSchema(node, ts, schemaResolver)
 		default:
-			if nodeType == graph.NodeTypeWatch {
-				ts.listIDs = append(ts.listIDs, node.ID)
-			} else {
-				ts.UntypedIDs = append(ts.UntypedIDs, node.ID)
-			}
+			addUntyped(node, ts)
 		}
 
 		// forEach iterator variables are always dyn.
@@ -178,6 +115,91 @@ func ResolveNodeTypes(nodes []graph.Node, schemaResolver resolver.SchemaResolver
 	}
 
 	return ts
+}
+
+// resolveDefType handles def-node type inference (Phase 2).
+func resolveDefType(node graph.Node, ts *TypeSource) {
+	typeName := krocel.TypeNamePrefix + node.ID
+	dt := InferObjectType(typeName, node.Payload())
+	ts.DefinitionTypes[node.ID] = dt
+	if node.ForEach != nil {
+		ts.ForEachDefinitions[node.ID] = true
+	}
+}
+
+// resolveResourceSchema handles non-def schema resolution (Phase 1).
+// It resolves OpenAPI schemas from the API server, handling dynamic-GVK
+// detection, forEach inner-scope schemas, and Watch-as-collection typing.
+func resolveResourceSchema(node graph.Node, ts *TypeSource, schemaResolver resolver.SchemaResolver) {
+	// forEach nodes skip schema resolution for the OUTER scope
+	// (the node ID is dyn, permitting both field access and list ops).
+	// The INNER scope (readyWhen on the forEach node itself) uses
+	// element type — see cel.go Phase 4a-3.
+	if node.ForEach != nil {
+		resolveForEachInnerSchema(node, ts, schemaResolver)
+		addUntyped(node, ts)
+		return
+	}
+
+	if resolveStaticGVK(node, ts, schemaResolver) {
+		return
+	}
+
+	// Not resolved — check for dynamic GVK.
+	gvk := ExtractLiteralGVK(node.Identity())
+	if gvk == nil && node.HasDynamicGVR() {
+		// Dynamic GVK node — type depends on a CEL expression evaluated at
+		// runtime. The caller may pre-populate the schema after resolution
+		// via TypeSource.PrePopulateSchema.
+		ts.DynamicGVKNodes = append(ts.DynamicGVKNodes, node.ID)
+	}
+
+	addUntyped(node, ts)
+}
+
+// resolveStaticGVK attempts to resolve the schema for a non-forEach node with
+// a literal GVK. Returns true if the schema was resolved and the node is typed.
+func resolveStaticGVK(node graph.Node, ts *TypeSource, schemaResolver resolver.SchemaResolver) bool {
+	gvk := ExtractLiteralGVK(node.Identity())
+	if gvk == nil || isUpstreamKroInfra(gvk) {
+		return false
+	}
+	s, err := schemaResolver.ResolveSchema(*gvk)
+	if err != nil || s == nil {
+		ts.UnresolvedGVKs = append(ts.UnresolvedGVKs, *gvk)
+		return false
+	}
+	ts.ResourceSchemas[node.ID] = s
+	if node.Type() == graph.NodeTypeWatch {
+		ts.resourceCollections[node.ID] = true
+	}
+	return true
+}
+
+// resolveForEachInnerSchema resolves the schema for a forEach node's inner
+// scope (used for readyWhen validation in Phase 4a-3). The schema is stored
+// in forEachSchemas, not in the typed declarations.
+func resolveForEachInnerSchema(node graph.Node, ts *TypeSource, schemaResolver resolver.SchemaResolver) {
+	gvk := ExtractLiteralGVK(node.Identity())
+	if gvk == nil || isUpstreamKroInfra(gvk) {
+		return
+	}
+	s, err := schemaResolver.ResolveSchema(*gvk)
+	if err == nil && s != nil {
+		ts.forEachSchemas[node.ID] = s
+	}
+}
+
+// addUntyped adds a node to the appropriate untyped list based on its type.
+// Watch nodes become list(dyn); all others become dyn.
+func addUntyped(node graph.Node, ts *TypeSource) {
+	if node.Type() == graph.NodeTypeWatch {
+		// Watch nodes are list(dyn) to support comprehension macros.
+		ts.listIDs = append(ts.listIDs, node.ID)
+	} else {
+		// Other nodes stay as dyn (permissive for both field access and list ops).
+		ts.UntypedIDs = append(ts.UntypedIDs, node.ID)
+	}
 }
 
 // buildTypedEnvOptions constructs CEL environment options from resolved type sources.

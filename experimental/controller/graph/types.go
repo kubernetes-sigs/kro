@@ -40,11 +40,11 @@ const (
 	// DepHard — every evaluation path requires the target's data. Gates
 	// dispatch ordering and contagious exclusion.
 	DepHard DepKind = iota
-	// DepLazy — all evaluation paths access the target through optional
-	// patterns. The scope value is optional.of(data) when present,
-	// optional.none() when absent. Participates in propagation triggering
-	// only — no dispatch ordering, no contagious exclusion.
-	DepLazy
+	// DepSoft — soft dependency. All evaluation paths access the target
+	// through optional patterns. The scope value is optional.of(data) when
+	// present, optional.none() when absent. Participates in propagation
+	// triggering only — no dispatch ordering, no contagious exclusion.
+	DepSoft
 )
 
 const (
@@ -221,12 +221,6 @@ func (n *Node) SetType(t NodeType) {
 	n.nodeType = t
 }
 
-// HasStatusSubresource reports whether the node's body declares a
-// non-nil status field. Exported for test assertions in external
-// test packages.
-func (n *Node) HasStatusSubresource() bool {
-	return n.hasStatusSubresource
-}
 
 // Identity returns the static identity view of this node's target — the
 // map containing apiVersion, kind, and metadata (name/namespace) used

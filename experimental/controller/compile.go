@@ -23,13 +23,13 @@ import (
 func (r *GraphReconciler) compileRevision(ctx context.Context, namespace string, revision *unstructured.Unstructured) (*graphpkg.GraphSpec, *instanceState, error) {
 	instanceKey := revision.GetNamespace() + "/" + revision.GetName()
 
-	// Retrieve existing instance state (may have resolvedDynamicGVKs from
+	// Retrieve existing instance state (may have dynamicGVKs.resolved from
 	// a previous reconcile). These serve as hints for schema resolution of
 	// dynamic GVK nodes on subsequent compilations.
 	existing := r.Caches.get(instanceKey)
 	var dynamicGVKHints map[string]schema.GroupVersionKind
 	if existing != nil {
-		dynamicGVKHints = existing.resolvedDynamicGVKs
+		dynamicGVKHints = existing.dynamicGVKs.resolved
 	}
 
 	// Parse spec, resolve types, compile, assemble DAG.

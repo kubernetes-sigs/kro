@@ -1,7 +1,7 @@
-// walk.go implements the DAG walk algorithm for a single reconcile cycle.
+// propagate.go implements the DAG propagation algorithm for a single reconcile cycle.
 //
-// The walk evaluates nodes sequentially in topological order. Each node is
-// evaluated after all of its hard dependencies have been resolved. The walk
+// The propagation evaluates nodes sequentially in topological order. Each node is
+// evaluated after all of its hard dependencies have been resolved. The propagation
 // is the single writer to shared state (scope, plan, applied keys).
 //
 // Per 005-reconciliation.md § Reconcile: "The coordinator walks the DAG in
@@ -22,7 +22,7 @@ import (
 	graphpkg "github.com/ellistarn/kro/experimental/controller/graph"
 )
 
-// nodeResult carries a node's evaluation output back to the walk loop.
+// nodeResult carries a node's evaluation output back to the propagation loop.
 type nodeResult struct {
 	keys  []Applied
 	state NodeState
@@ -36,8 +36,8 @@ type nodeResult struct {
 	resolvedGVK *schema.GroupVersionKind
 }
 
-// walkResult is the output of a complete DAG walk, consumed by the reconciler.
-type walkResult struct {
+// propagateResult is the output of a complete DAG propagation, consumed by the reconciler.
+type propagateResult struct {
 	keys           []Applied            // flattened applied keys from all nodes
 	nodeKeys       map[string][]Applied // per-node applied keys (for carry-forward on next reconcile)
 	plan           *PlanState    // per-node states
@@ -46,27 +46,27 @@ type walkResult struct {
 	summary        PlanSummary
 }
 
-// walk executes a sequential DAG walk in topological order.
+// propagate executes a sequential DAG propagation in topological order.
 //
 // Each node is evaluated after all hard dependencies have completed. Lazy
 // dependencies are available as optionals in scope but do not gate evaluation.
-// The walk is sequential — no goroutines, no channels.
-func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *instanceState, eval *evaluator, dag *dagpkg.DAG, plan *PlanState) *walkResult {
+// The propagation is sequential — no goroutines, no channels.
+func (r *GraphReconciler) propagate(ctx context.Context, rs *reconcileScope, state *instanceState, eval *evaluator, dag *dagpkg.DAG, plan *PlanState) *propagateResult {
 	logger := log.FromContext(ctx)
 	cluster := r.cluster()
 
-	result := &walkResult{
+	result := &propagateResult{
 		plan: plan,
 	}
 
-	// Per-node applied keys — flattened into result.keys after the walk.
+	// Per-node applied keys — flattened into result.keys after the propagation.
 	nodeKeys := make(map[string][]Applied, len(dag.Nodes))
 
 	for _, nodeIdx := range dag.TopologicalOrder {
 		node := &dag.Nodes[nodeIdx]
 
 		// Finalizer nodes are dormant during normal operation — they only
-		// materialize during prune/teardown. Skip them in the forward walk.
+		// materialize during prune/teardown. Skip them in the forward propagation.
 		if node.Finalizes != "" {
 			plan.SetState(node.ID, NodeReady)
 			continue
@@ -111,12 +111,12 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 				unsatisfied := eval.firstUnsatisfiedCondition(node.PropagateWhen)
 				logger.V(1).Info("propagateWhen input gate — retaining previous state",
 					"node", node.ID, "unsatisfied", unsatisfied)
-				if prev, ok := state.walk.previousScope[node.ID]; ok {
+				if prev, ok := state.propagate.previousScope[node.ID]; ok {
 					eval.scope[node.ID] = prev
 				}
 				carryForwardKeys(nodeKeys, node.ID, state)
-				if state.walk.previousPlanStates != nil {
-					if prevState, ok := state.walk.previousPlanStates.States[node.ID]; ok {
+				if state.propagate.previousPlanStates != nil {
+					if prevState, ok := state.propagate.previousPlanStates.States[node.ID]; ok {
 						plan.States[node.ID] = prevState
 					} else {
 						plan.States[node.ID] = NodePending
@@ -151,7 +151,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 		// --- Evaluate the node ---
 		nr := evaluateNode(ctx, cluster, rs, *node, eval, state)
 
-		// --- Integrate the result into walk state ---
+		// --- Integrate the result into propagation state ---
 		nrOut := integrateNodeResult(ctx, nr, node, eval, state, plan, nodeKeys)
 		result.nodeErrors = append(result.nodeErrors, nrOut.errMsgs...)
 		if nrOut.needsRecompile {
@@ -163,7 +163,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 		}
 	}
 
-	// --- Post-walk ---
+	// --- Post-propagation ---
 
 	// Flatten per-node keys into the applied key set.
 	result.nodeKeys = nodeKeys
@@ -178,7 +178,7 @@ func (r *GraphReconciler) walk(ctx context.Context, rs *reconcileScope, state *i
 }
 
 // nodeIntegrationResult carries the outputs of integrateNodeResult back
-// to the walk loop. Decouples the walk from node-result classification
+// to the propagation loop. Decouples the propagation from node-result classification
 // internals (apiErrorInfo structure).
 type nodeIntegrationResult struct {
 	errMsgs        []string // "nodeID: reason" error messages for status
@@ -187,7 +187,7 @@ type nodeIntegrationResult struct {
 }
 
 // integrateNodeResult processes a single node's evaluation output and
-// updates the walk's shared state: plan states, scope, keys, forEach,
+// updates the propagation's shared state: plan states, scope, keys, forEach,
 // and dynamic GVK resolution. Handles error states (Error, Conflict,
 // Pending) and the success path (scope publish, readiness merge, key
 // recording). Returns status messages and signals for the caller.
@@ -219,7 +219,7 @@ func integrateNodeResult(
 	}
 	if nr.state == NodeConflict {
 		plan.SetState(node.ID, NodeConflict)
-		state.walk.previousScope[node.ID] = nr.scope
+		state.propagate.previousScope[node.ID] = nr.scope
 		out.errMsgs = append(out.errMsgs, fmt.Sprintf("%s: field conflict", node.ID))
 		logger.V(0).Info("conflict on node", "node", node.ID, "error", nr.err)
 		carryForwardKeys(nodeKeys, node.ID, state)
@@ -227,7 +227,7 @@ func integrateNodeResult(
 	}
 	if nr.state == NodePending {
 		plan.SetState(node.ID, NodePending)
-		state.walk.previousScope[node.ID] = nr.scope
+		state.propagate.previousScope[node.ID] = nr.scope
 		logger.V(1).Info("data pending for node", "node", node.ID, "error", nr.err)
 		carryForwardKeys(nodeKeys, node.ID, state)
 		return out
@@ -272,11 +272,11 @@ func integrateNodeResult(
 	}
 
 	// Save per-node scope for next reconcile.
-	state.walk.previousScope[node.ID] = eval.scope[node.ID]
+	state.propagate.previousScope[node.ID] = eval.scope[node.ID]
 
 	// Record dynamic GVK resolutions.
 	if nr.resolvedGVK != nil {
-		if state.mergeDynamicGVK(node.ID, *nr.resolvedGVK) {
+		if state.dynamicGVKs.merge(node.ID, *nr.resolvedGVK) {
 			out.needsRecompile = true
 			logger.Info("dynamic GVK resolved; will recompile with schema on next reconcile",
 				"node", node.ID, "gvk", *nr.resolvedGVK)
@@ -291,21 +291,21 @@ func integrateNodeResult(
 // dispatch (Definition, Template, Patch, Ref, Watch, ForEach) happens
 // inside reconcileNode.
 //
-// The evaluator is used directly (no snapshot) since the walk is sequential.
-// Lazy dependencies are populated as optional values before dispatch.
+// The evaluator is used directly (no snapshot) since the propagation is sequential.
+// Soft dependencies are populated as optional values before dispatch.
 func evaluateNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, node graphpkg.Node, eval *evaluator, state *instanceState) nodeResult {
-	// Populate lazy dependencies as CEL optional values. Per 005-reconciliation.md:
-	// "Lazy dependencies are always in scope as optional values."
+	// Populate soft dependencies as CEL optional values. Per 005-reconciliation.md:
+	// "Soft dependencies are always in scope as optional values."
 	for depID, kind := range node.Dependencies {
-		if kind != graphpkg.DepLazy {
+		if kind != graphpkg.DepSoft {
 			continue
 		}
 		if _, exists := eval.scope[depID]; exists {
 			continue // already in scope from a previous node evaluation
 		}
-		// Lazy dep not yet in scope — set optional.none() so the
+		// Soft dep not yet in scope — set optional.none() so the
 		// expression's branch that handles absent data can fire.
-		if prev, ok := state.walk.previousScope[depID]; ok {
+		if prev, ok := state.propagate.previousScope[depID]; ok {
 			eval.scope[depID] = celOptionalOf(prev)
 		} else {
 			eval.scope[depID] = celOptionalNone()
@@ -411,7 +411,7 @@ func checkDependencyGate(node *graphpkg.Node, plan *PlanState) depGateOutcome {
 // resource may still exist in the cluster, so its keys must remain in the
 // applied set to prevent spurious pruning.
 func carryForwardKeys(nodeKeys map[string][]Applied, nodeID string, state *instanceState) {
-	if prev, ok := state.walk.previousKeys[nodeID]; ok {
+	if prev, ok := state.propagate.previousKeys[nodeID]; ok {
 		nodeKeys[nodeID] = prev
 	}
 }
@@ -452,5 +452,5 @@ func markExcluded(eval *evaluator, nodeID string, state *instanceState) {
 	if eval.nodeReady != nil {
 		eval.nodeReady[nodeID] = true
 	}
-	state.walk.previousScope[nodeID] = eval.scope[nodeID]
+	state.propagate.previousScope[nodeID] = eval.scope[nodeID]
 }

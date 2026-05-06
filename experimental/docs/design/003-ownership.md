@@ -56,30 +56,35 @@ field. Initial value and ongoing ownership are the same declaration.
 
 ### lifecycle
 
-The invariant is sole ownership, always. Two mechanisms enforce it:
+The API server only returns 409 when two managers claim the same field with *different* values.
+When values agree, it silently accepts both — recording shared ownership in `managedFields`
+without error. This creates a latent conflict that surfaces as a surprise 409 when values
+eventually diverge. Sole ownership must be enforced, not assumed.
 
-**Detection (dry-run)** — On the non-force path, the controller dry-runs the SSA apply before
-committing. The dry-run response reveals whether co-ownership would result. If so, the controller
-surfaces Conflict — the real apply does not proceed. This catches most conflicts before the write,
-but is not atomic with it.
+**Non-force path:** Dry-run SSA before the real apply. Two checks on the response:
 
-**Enforcement (post-apply release)** — On all paths, after the real apply, the controller inspects
-managedFields on the response. If any other Apply-type manager co-owns fields with kro, the
-controller issues a release:
+1. *Lifecycle exclusivity (templates only)* — Does the response carry another Graph's template
+   identity label? If so, Conflict. Only one template owner per resource — templates are
+   lifecycle owners, not contributors. Patches skip this check; multiple patches can layer on the
+   same resource.
+2. *Field exclusivity (all nodes)* — Does any field in kro's `managedFields` entry overlap with
+   another Apply-type manager's entry? If so, Conflict. This catches agreed-value co-ownership
+   that the API server would otherwise accept silently.
 
-- Template nodes: eviction release (identity-only body impersonating co-owner — removes their
-  entire entry and all solely-owned fields)
-- Patch nodes: surgical release (body impersonating co-owner containing only their non-overlapping
-  fields — preserves their other claims)
+If both checks pass, the real apply proceeds.
 
-This handles two cases: (1) the force path, where agreed-value fields are not stripped by SSA, and
-(2) the non-force path, where a race between dry-run and apply created co-ownership that the
-dry-run did not predict. After the release, kro is the sole owner of every declared field.
+The dry-run is not atomic with the real apply. A race (another manager applying between dry-run
+and commit) or an external manager arriving between reconciles can create co-ownership despite
+the dry-run passing. The next reconcile's dry-run detects the new co-owner and halts. The
+controller never removes agreeing managers without Force — co-ownership that forms after the
+check is treated identically to co-ownership that existed before it: Conflict, surface, stop.
 
-`lifecycle.apply: Force` adds ForceOwnership to the SSA apply — taking contested fields where values
-disagree (the server strips the other manager). Without Force, value disagreement surfaces as
-Conflict (409 from the real apply). Force does not affect the post-apply release — both paths
-enforce sole ownership identically.
+**Force path:** Skips dry-run. The real apply takes contested fields (server strips the other
+manager). Post-apply, the controller inspects `managedFields` and evicts remaining co-owners —
+eviction release for templates, surgical release for patches.
+
+On success of either path, kro is the sole owner of every declared field — non-force prevents
+co-ownership from forming, force removes it after the fact.
 
 ```yaml
 - id: deploy
@@ -107,19 +112,10 @@ not write to the cluster, so they have nothing to track.
 
 The label value is the source of truth for a resource's prune action. On controller cold start the
 current DAG may not contain the node that wrote the resource; the label decides whether cleanup
-deletes the resource (`template`) or releases its fields (`patch` — see § Release Apply).
-
-Before applying a `template:`, the controller includes the identity label in the SSA payload. If
-another Graph's identity label already exists on the resource, SSA detects the conflict on the label
-field — the apply is rejected unless `lifecycle.apply: Force` is set. This makes ownership checking
-atomic with the write — no separate read-then-check step. Identity labels catch
-template-to-template conflicts atomically — label values are unique per Graph, so a second Graph's
-apply always disagrees on the label field, producing a 409 on the real apply itself. Field-level
-co-ownership (same values, different managers) is caught by post-apply managedFields inspection.
+deletes the resource (`template`) or releases its fields (`patch`).
 
 The label check runs only for `template:`. Two `patch:` nodes on the same target — the
-steady-state pattern — are allowed. When two `patch:` nodes write the same field, SSA 409 catches
-the collision at the field layer.
+steady-state pattern — are allowed.
 
 ### Status Subresource
 
@@ -146,12 +142,9 @@ fields on the same resource. Each field manager owns its fields, no 409. A `patc
 writing status to a resource that a `template:` on another Graph created is the standard pattern; so is
 a Deployment where kro owns `spec.template` and an HPA owns `spec.replicas`.
 
-**Conflict.** A claim collides. The dry-run detection step catches field-level co-ownership — two
-managers writing the same field, whether values agree or disagree. Identity labels provide an
-additional check for template-to-template conflicts — the label field itself is contested, surfacing
-the conflict atomically with the SSA write. Both surface as Conflict on the Graph; reconciliation
-stops on that resource. Resolution: set `lifecycle.apply: Force` to take ownership, or remove the
-contested fields from one side.
+**Conflict.** A claim collides — two managers writing the same field. Surfaces as Conflict on the
+Graph; reconciliation stops on that resource. Resolution: set `lifecycle.apply: Force` to take
+ownership, or remove the contested fields from one side.
 
 **Migration.** Management transfers from one actor to another. The importing side adds a node with
 `lifecycle.apply: Force`. Force SSA takes contested fields; the post-apply release strips the
@@ -202,10 +195,9 @@ Before deleting a `template:` resource, the controller checks managedFields for 
 (excluding the API server's own). If present, deletion is blocked — another actor depends on the
 resource's existence. The condition message names the blocking manager. During prune, the resource
 stays in the applied set until the other manager releases. During teardown, the Graph's finalizer
-holds. Applied set tracking and teardown ordering are defined in
-[005-reconciliation](005-reconciliation.md). For force-managed templates, the post-apply release
-eliminates co-owners before deletion is attempted — so this block only fires for non-force templates
-where an external SSA manager appeared independently.
+holds. For force-managed templates, the post-apply release eliminates co-owners before deletion is
+attempted — so this block only fires for non-force templates where an external SSA manager appeared
+independently.
 
 ## Why Not
 
@@ -223,7 +215,8 @@ releases.
 SSA co-ownership silently (no 409). This is a timebomb: values agree today, diverge tomorrow, and
 the 409 surprises the operator. Worse, co-ownership blocks template deletion (third-party
 managedFields entry persists) and causes released fields to persist unexpectedly (co-owner retains
-them). Sole ownership, enforced by post-apply release, eliminates the class of failure.
+them). Sole ownership, enforced by dry-run detection and post-apply release, eliminates the class
+of failure.
 
 **Always force on patches.** Eliminates 409s entirely, but also eliminates the diagnostic signal.
 The 409 tells the operator "something else writes this field — is that intentional?" Force is an

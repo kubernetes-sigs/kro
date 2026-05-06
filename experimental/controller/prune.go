@@ -158,6 +158,22 @@ func (c *clusterAccess) pruneResources(
 	}
 
 	// Clean up finalization children whose targets were successfully deleted.
+	// Sort in reverse topological order so dependents are deleted before their
+	// dependencies (design: 005-reconciliation.md § Finalization).
+	if len(deferredDeletes) > 1 {
+		keyPosition, maxPos := buildKeyPositionMap(dags, rs.namespace, c.scope)
+		sort.Slice(deferredDeletes, func(i, j int) bool {
+			pi, oki := keyPosition[deferredDeletes[i]]
+			if !oki {
+				pi = maxPos + 1
+			}
+			pj, okj := keyPosition[deferredDeletes[j]]
+			if !okj {
+				pj = maxPos + 1
+			}
+			return pi > pj
+		})
+	}
 	c.deleteByKeys(ctx, deferredDeletes)
 
 	return result

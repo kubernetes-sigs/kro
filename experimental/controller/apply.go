@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -138,8 +139,13 @@ func (c *clusterAccess) applySSA(ctx context.Context, rs *reconcileScope, evalMa
 		return nil, err
 	}
 	registerWatch(rs, nodeID, obj)
-	if err := checkOwnership(ctx, c, obj, rs, nodeType, forceApply); err != nil {
+	if err := checkOwnership(ctx, c, obj, rs, nodeType); err != nil {
 		return nil, err
+	}
+	if !forceApply {
+		if err := dryRunSSA(ctx, c.client, obj, graphFieldOwner(rs.graph), nodeType, rs.name, rs.namespace); err != nil {
+			return nil, err
+		}
 	}
 	applied, err := ssaWrite(ctx, c.client, obj, graphFieldOwner(rs.graph), forceApply)
 	if err != nil {
@@ -158,6 +164,74 @@ func (c *clusterAccess) applySSA(ctx context.Context, rs *reconcileScope, evalMa
 		}
 	}
 	return applied, nil
+}
+
+// dryRunSSA issues a dry-run SSA apply and inspects the response for conflicts.
+// Two checks on the response:
+// 1. Lifecycle exclusivity (templates only): another Graph's template identity label → Conflict.
+// 2. Field exclusivity (all nodes): field-level co-ownership with another Apply-type manager → Conflict.
+func dryRunSSA(ctx context.Context, c client.Client, obj *unstructured.Unstructured, fieldOwner client.FieldOwner, nodeType graphpkg.NodeType, graphName, graphNamespace string) error {
+	// Strip .status from payload — matches what ssaWrite sends.
+	mainPayload := obj.Object
+	if statusData, hasStatus := obj.Object["status"]; hasStatus && statusData != nil {
+		mainPayload = make(map[string]any, len(obj.Object))
+		for k, v := range obj.Object {
+			if k != "status" {
+				mainPayload[k] = v
+			}
+		}
+	}
+
+	data, err := json.Marshal(mainPayload)
+	if err != nil {
+		return fmt.Errorf("marshaling dry-run payload: %w", err)
+	}
+
+	// Deep copy so Patch response doesn't mutate the caller's object.
+	dryRunCopy := &unstructured.Unstructured{}
+	dryRunCopy.SetGroupVersionKind(obj.GroupVersionKind())
+	dryRunCopy.SetName(obj.GetName())
+	dryRunCopy.SetNamespace(obj.GetNamespace())
+
+	if err := c.Patch(ctx, dryRunCopy, client.RawPatch(types.ApplyPatchType, data), fieldOwner, client.DryRunAll); err != nil {
+		if apierrors.IsConflict(err) {
+			return fmt.Errorf("SSA dry-run conflict on %s/%s %s: %w: %w",
+				obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
+		}
+		// Non-conflict errors from dry-run are propagated as-is.
+		return fmt.Errorf("SSA dry-run on %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
+	}
+
+	// Check 1: Lifecycle exclusivity — only one template owner per resource.
+	if nodeType == graphpkg.NodeTypeTemplate {
+		if otherGraph, conflict := graphpkg.HasOtherGraphIdentityLabel(dryRunCopy.GetLabels(), graphName, graphNamespace); conflict {
+			return fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use lifecycle.apply: Force to take ownership): %w",
+				obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, graphName, ErrFieldConflict)
+		}
+	}
+
+	// Check 2: Field exclusivity — no field-level co-ownership with other Apply-type managers.
+	managers := thirdPartyFieldManagers(dryRunCopy, string(fieldOwner))
+	if len(managers) > 0 {
+		// Check field-level overlap — disjoint managers on the same object is fine.
+		kroFields := extractFieldsV1(dryRunCopy, string(fieldOwner))
+		kroStatusFields := extractFieldsV1(dryRunCopy, string(fieldOwner)+".status")
+		kroMerged := mergeFieldsTrees(kroFields, kroStatusFields)
+
+		var coOwners []string
+		for _, mgr := range managers {
+			coOwnerFields := extractFieldsV1(dryRunCopy, mgr)
+			if fieldsOverlap(kroMerged, coOwnerFields) {
+				coOwners = append(coOwners, mgr)
+			}
+		}
+		if len(coOwners) > 0 {
+			return fmt.Errorf("SSA dry-run detected field co-ownership on %s/%s %s by managers [%s]: %w",
+				obj.GetAPIVersion(), obj.GetKind(), obj.GetName(),
+				strings.Join(coOwners, ", "), ErrFieldConflict)
+		}
+	}
+	return nil
 }
 
 // prepareObject creates an Unstructured from the evaluated map, defaults
@@ -214,29 +288,9 @@ func registerWatch(rs *reconcileScope, nodeID string, obj *unstructured.Unstruct
 //   - Patch: checks that the target resource exists — patches apply to
 //     existing resources only. Uses direct API server read to avoid stale
 //     cache giving false negatives.
-func checkOwnership(ctx context.Context, c *clusterAccess, obj *unstructured.Unstructured, rs *reconcileScope, nodeType graphpkg.NodeType, forceApply bool) error {
+func checkOwnership(ctx context.Context, c *clusterAccess, obj *unstructured.Unstructured, rs *reconcileScope, nodeType graphpkg.NodeType) error {
 	if nodeType == graphpkg.NodeTypeTemplate {
-		gvr := gvkToGVR(obj.GroupVersionKind())
-		var existingLabels map[string]string
-		if rs.watcher != nil {
-			existingLabels, _ = rs.watcher.GetLabels(gvr, obj.GetNamespace(), obj.GetName())
-		}
-		if existingLabels == nil {
-			existing := &unstructured.Unstructured{}
-			existing.SetGroupVersionKind(obj.GroupVersionKind())
-			if getErr := c.reader.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing); getErr == nil {
-				existingLabels = existing.GetLabels()
-			}
-		}
-		if existingLabels != nil {
-			if otherGraph, conflict := graphpkg.HasOtherGraphIdentityLabel(existingLabels, rs.name, rs.namespace); conflict {
-				if !forceApply {
-					return fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use lifecycle.apply: Force to take ownership): %w",
-						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), otherGraph, rs.name, ErrFieldConflict)
-				}
-			}
-		}
-		return nil
+		return nil // Templates rely on dryRunSSA for conflict detection.
 	}
 
 	// Patch: target must exist — patches apply to existing resources.
@@ -492,6 +546,33 @@ func mergeFieldsTrees(a, b map[string]any) map[string]any {
 		}
 	}
 	return result
+}
+
+// fieldsOverlap returns true if any field path exists in both fieldsV1 tries.
+func fieldsOverlap(a, b map[string]any) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	for k, v := range a {
+		bVal, inB := b[k]
+		if !inB {
+			continue
+		}
+		// Both have key k
+		aMap, aIsMap := v.(map[string]any)
+		bMap, bIsMap := bVal.(map[string]any)
+		if !aIsMap || len(aMap) == 0 {
+			return true // a is leaf at k, b also has k → overlap
+		}
+		if !bIsMap || len(bMap) == 0 {
+			return true // b is leaf at k, a has subtree at k → b owns all → overlap
+		}
+		// Both are subtrees → recurse
+		if fieldsOverlap(aMap, bMap) {
+			return true
+		}
+	}
+	return false
 }
 
 // fieldsSubtract returns the subset of `a` that does NOT overlap with `b`.

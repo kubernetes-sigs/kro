@@ -25,17 +25,14 @@ import (
 //
 // Fields are separated by lifetime:
 //   - compilation: replaced atomically on every compile
-//   - walk: carry-forward state preserved across reconciles
+//   - propagate: carry-forward state preserved across reconciles
 //   - prune: prune/finalization state preserved across reconciles
-//   - resolvedDynamicGVKs: cross-reconcile hints for deferred typing
+//   - dynamicGVKs: cross-reconcile hints for deferred typing
 type instanceState struct {
 	compilation compiledArtifacts
-	walk        walkCarryForward
+	propagate   propagateCarryForward
 	prune       pruneCarryForward
-
-	// resolvedDynamicGVKs persists across everything including recompile.
-	// Used as hints for schema resolution on subsequent compilations.
-	resolvedDynamicGVKs map[string]schema.GroupVersionKind
+	dynamicGVKs dynamicGVKCache
 }
 
 // compiledArtifacts holds the output of a single compilation. Replaced
@@ -45,17 +42,17 @@ type compiledArtifacts struct {
 	dag      *dagpkg.DAG
 }
 
-// walkCarryForward holds state carried forward across reconcile cycles by
-// the DAG walk. Includes previous scope for propagateWhen and lazy deps,
+// propagateCarryForward holds state carried forward across reconcile cycles by
+// the DAG propagation. Includes previous scope for propagateWhen and lazy deps,
 // previous keys for carry-forward on blocked/pending nodes, and previous plan
 // states.
-type walkCarryForward struct {
+type propagateCarryForward struct {
 	previousScope      map[string]any
 	previousKeys       map[string][]Applied
 	previousPlanStates *PlanState
 }
 
-// resetForRecompile clears walk state that is structurally incompatible
+// resetForRecompile clears propagation state that is structurally incompatible
 // with a new compilation. After recompilation node IDs may change — stale
 // scope entries would cause propagateWhen to evaluate against data from a
 // different node topology. The one-cycle transient Pending is correct —
@@ -64,7 +61,7 @@ type walkCarryForward struct {
 // previousKeys and previousPlanStates are preserved because they use
 // stable resource keys; stale entries for removed nodes are harmless
 // (never read).
-func (w *walkCarryForward) resetForRecompile() {
+func (w *propagateCarryForward) resetForRecompile() {
 	w.previousScope = make(map[string]any)
 }
 
@@ -92,7 +89,7 @@ func newInstanceState(compiled *compiler.CompiledGraph, dag *dagpkg.DAG) *instan
 			compiled: compiled,
 			dag:      dag,
 		},
-		walk: walkCarryForward{
+		propagate: propagateCarryForward{
 			previousScope: make(map[string]any),
 			previousKeys:  make(map[string][]Applied),
 		},
@@ -103,7 +100,7 @@ func newInstanceState(compiled *compiler.CompiledGraph, dag *dagpkg.DAG) *instan
 // structurally incompatible with the new compilation.
 func (s *instanceState) recompile(compiled *compiler.CompiledGraph, dag *dagpkg.DAG) {
 	s.compilation = compiledArtifacts{compiled: compiled, dag: dag}
-	s.walk.resetForRecompile()
+	s.propagate.resetForRecompile()
 	s.prune.resetForRecompile()
 }
 
@@ -116,18 +113,25 @@ func (p *pruneCarryForward) updateAppliedKeys(keys []Applied) {
 	}
 }
 
-// mergeDynamicGVK records a resolved dynamic GVK for a node and reports
-// whether the compilation key has changed (first resolution or GVK change).
-// When stale=true, the caller should requeue: the next reconcile will compute
-// a new compilation key that includes the resolved GVK, causing a cache miss
-// and recompilation with the schema available for type checking.
-func (s *instanceState) mergeDynamicGVK(nodeID string, resolved schema.GroupVersionKind) (stale bool) {
-	if s.resolvedDynamicGVKs == nil {
-		s.resolvedDynamicGVKs = make(map[string]schema.GroupVersionKind)
+// dynamicGVKCache holds resolved dynamic GVKs that persist across everything
+// including recompile. Used as hints for schema resolution on subsequent
+// compilations.
+type dynamicGVKCache struct {
+	resolved map[string]schema.GroupVersionKind
+}
+
+// merge records a resolved dynamic GVK for a node and reports whether the
+// compilation key has changed (first resolution or GVK change). When
+// stale=true, the caller should requeue: the next reconcile will compute a new
+// compilation key that includes the resolved GVK, causing a cache miss and
+// recompilation with the schema available for type checking.
+func (d *dynamicGVKCache) merge(nodeID string, gvk schema.GroupVersionKind) (stale bool) {
+	if d.resolved == nil {
+		d.resolved = make(map[string]schema.GroupVersionKind)
 	}
-	prevGVK, hadPrev := s.resolvedDynamicGVKs[nodeID]
-	stale = !hadPrev || prevGVK != resolved
-	s.resolvedDynamicGVKs[nodeID] = resolved
+	prevGVK, hadPrev := d.resolved[nodeID]
+	stale = !hadPrev || prevGVK != gvk
+	d.resolved[nodeID] = gvk
 	return stale
 }
 

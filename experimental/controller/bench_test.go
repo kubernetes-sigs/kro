@@ -61,15 +61,15 @@ func TestInstanceStateIsolation(t *testing.T) {
 	state2 := newInstanceState(compiled, nil)
 
 	// Mutate state1's mutable fields.
-	state1.walk.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
-	state1.walk.previousPlanStates = &PlanState{States: map[string]NodeState{"node0": NodeReady}}
+	state1.propagate.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
+	state1.propagate.previousPlanStates = &PlanState{States: map[string]NodeState{"node0": NodeReady}}
 
 	// state2 should be unaffected.
-	if _, ok := state2.walk.previousScope["node0"]; ok {
+	if _, ok := state2.propagate.previousScope["node0"]; ok {
 		t.Fatal("previousScope leaked between instances")
 	}
-	if state2.walk.previousPlanStates != nil {
-		if _, ok := state2.walk.previousPlanStates.States["node0"]; ok {
+	if state2.propagate.previousPlanStates != nil {
+		if _, ok := state2.propagate.previousPlanStates.States["node0"]; ok {
 			t.Fatal("previousPlanStates leaked between instances")
 		}
 	}

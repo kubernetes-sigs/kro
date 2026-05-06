@@ -19,9 +19,9 @@ func TestMergeDynamicGVK_FirstResolution(t *testing.T) {
 	state := &instanceState{}
 	widgetGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Widget"}
 
-	stale := state.mergeDynamicGVK("dynamic-node", widgetGVK)
+	stale := state.dynamicGVKs.merge("dynamic-node", widgetGVK)
 	assert.True(t, stale, "first resolution should report stale (key will change)")
-	assert.Equal(t, widgetGVK, state.resolvedDynamicGVKs["dynamic-node"])
+	assert.Equal(t, widgetGVK, state.dynamicGVKs.resolved["dynamic-node"])
 }
 
 // TestMergeDynamicGVK_SameGVK verifies steady-state does not report stale.
@@ -29,10 +29,10 @@ func TestMergeDynamicGVK_SameGVK(t *testing.T) {
 	t.Parallel()
 	widgetGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Widget"}
 	state := &instanceState{
-		resolvedDynamicGVKs: map[string]schema.GroupVersionKind{"dynamic-node": widgetGVK},
+		dynamicGVKs: dynamicGVKCache{resolved: map[string]schema.GroupVersionKind{"dynamic-node": widgetGVK}},
 	}
 
-	stale := state.mergeDynamicGVK("dynamic-node", widgetGVK)
+	stale := state.dynamicGVKs.merge("dynamic-node", widgetGVK)
 	assert.False(t, stale, "same GVK should not report stale")
 }
 
@@ -42,12 +42,12 @@ func TestMergeDynamicGVK_GVKChange(t *testing.T) {
 	widgetGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Widget"}
 	gadgetGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Gadget"}
 	state := &instanceState{
-		resolvedDynamicGVKs: map[string]schema.GroupVersionKind{"dynamic-node": widgetGVK},
+		dynamicGVKs: dynamicGVKCache{resolved: map[string]schema.GroupVersionKind{"dynamic-node": widgetGVK}},
 	}
 
-	stale := state.mergeDynamicGVK("dynamic-node", gadgetGVK)
+	stale := state.dynamicGVKs.merge("dynamic-node", gadgetGVK)
 	assert.True(t, stale, "different GVK should report stale")
-	assert.Equal(t, gadgetGVK, state.resolvedDynamicGVKs["dynamic-node"])
+	assert.Equal(t, gadgetGVK, state.dynamicGVKs.resolved["dynamic-node"])
 }
 
 // TestMergeDynamicGVK_PerNode verifies per-node isolation.
@@ -57,10 +57,10 @@ func TestMergeDynamicGVK_PerNode(t *testing.T) {
 	widgetGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Widget"}
 	gadgetGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Gadget"}
 
-	assert.True(t, state.mergeDynamicGVK("node-a", widgetGVK))
-	assert.True(t, state.mergeDynamicGVK("node-b", gadgetGVK))
-	assert.False(t, state.mergeDynamicGVK("node-a", widgetGVK))
-	assert.False(t, state.mergeDynamicGVK("node-b", gadgetGVK))
+	assert.True(t, state.dynamicGVKs.merge("node-a", widgetGVK))
+	assert.True(t, state.dynamicGVKs.merge("node-b", gadgetGVK))
+	assert.False(t, state.dynamicGVKs.merge("node-a", widgetGVK))
+	assert.False(t, state.dynamicGVKs.merge("node-b", gadgetGVK))
 }
 
 // TestDynamicGVK_ProgressionFromDynToTyped is the end-to-end test proving
@@ -142,7 +142,7 @@ func TestDynamicGVK_ProgressionFromDynToTyped(t *testing.T) {
 		"first compilation should NOT have schema for dynamic node (no hints)")
 
 	// Phase 2: simulate reconciler resolving the GVK (during DAG walk).
-	stale := state1.mergeDynamicGVK("schema", widgetGVK)
+	stale := state1.dynamicGVKs.merge("schema", widgetGVK)
 	assert.True(t, stale, "first resolution should signal requeue")
 
 	// Phase 3: second compileRevision — hints available, typed artifact.

@@ -164,7 +164,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	// Set up watch tracking for this reconcile cycle.
 	var watcher *watches.GraphWatcher
-	walkAttempted := false
+	propagateAttempted := false
 	if r.Watcher != nil {
 		watcher = r.Watcher.ForGraph(req.NamespacedName)
 		defer func() {
@@ -172,7 +172,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			// reconcileErr. A post-walk error (e.g., optimistic lock
 			// conflict on status update) should not discard valid watch
 			// registrations from the walk.
-			watcher.Done(walkAttempted)
+			watcher.Done(propagateAttempted)
 		}()
 	}
 
@@ -245,13 +245,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	// -----------------------------------------------------------------------
-	// 7. Walk the DAG
+	// 7. Propagate the DAG
 	// -----------------------------------------------------------------------
 	rs := newReconcileScope(graph, watcher)
-	wp := r.reconcileWalk(ctx, rs, state, eval, dag, plan)
-	walkAttempted = true
+	wp := r.reconcilePropagate(ctx, rs, state, eval, dag, plan)
+	propagateAttempted = true
 
-	// Post-walk recompile check: if the walk created a CRD, re-validate
+	// Post-propagation recompile check: if the propagation created a CRD, re-validate
 	// compilation to catch child graph type errors within the same cycle.
 	if wp.needsRecompile && compilationErr == nil {
 		if _, _, err := r.compileRevision(ctx, graph.GetNamespace(), activeRevision); err != nil {
@@ -305,24 +305,24 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	return ctrl.Result{}, nil
 }
 
-// reconcileWalk executes the DAG walk and transfers carry-forward state.
+// reconcilePropagate executes the DAG propagation and transfers carry-forward state.
 // It evaluates every node in topological order, applying templates via SSA
 // and recording scope for downstream CEL expressions.
-func (r *GraphReconciler) reconcileWalk(
+func (r *GraphReconciler) reconcilePropagate(
 	ctx context.Context,
 	rs *reconcileScope,
 	state *instanceState,
 	eval *evaluator,
 	dag *dagpkg.DAG,
 	plan *PlanState,
-) *walkResult {
-	walkRes := r.walk(ctx, rs, state, eval, dag, plan)
+) *propagateResult {
+	propagateRes := r.propagate(ctx, rs, state, eval, dag, plan)
 
 	// Transfer carry-forward state for next reconcile.
-	state.walk.previousPlanStates = walkRes.plan
-	state.walk.previousKeys = walkRes.nodeKeys
+	state.propagate.previousPlanStates = propagateRes.plan
+	state.propagate.previousKeys = propagateRes.nodeKeys
 
-	return walkRes
+	return propagateRes
 }
 
 // prunePhaseResult carries the outputs of reconcilePrune back to the caller.

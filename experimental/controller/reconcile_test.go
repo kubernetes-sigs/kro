@@ -1755,7 +1755,7 @@ func TestLazyDepDoesNotGateDispatch(t *testing.T) {
 	// Verify classification
 	cIdx := dag.Index["c"]
 	assert.Equal(t, graphpkg.DepHard, dag.Nodes[cIdx].Dependencies["a"], "a should be hard dep")
-	assert.Equal(t, graphpkg.DepLazy, dag.Nodes[cIdx].Dependencies["b"], "b should be lazy dep")
+	assert.Equal(t, graphpkg.DepSoft, dag.Nodes[cIdx].Dependencies["b"], "b should be lazy dep")
 
 	// A is ready, B is pending — C should still dispatch because B is lazy.
 	plan := NewPlanState(dag)
@@ -1799,7 +1799,7 @@ func TestLazyDepClassification_MixedAccess(t *testing.T) {
 	statusIdx := dag.Index["status"]
 	serviceIdx := dag.Index["service"]
 
-	assert.Equal(t, graphpkg.DepLazy, dag.Nodes[statusIdx].Dependencies["deploy"],
+	assert.Equal(t, graphpkg.DepSoft, dag.Nodes[statusIdx].Dependencies["deploy"],
 		"status accesses deploy only via .ready().orValue() → DepLazy")
 	assert.Equal(t, graphpkg.DepHard, dag.Nodes[serviceIdx].Dependencies["deploy"],
 		"service accesses deploy directly → DepHard")
@@ -1830,7 +1830,7 @@ func TestLazyDepOptionalScope_AbsentReturnsDefault(t *testing.T) {
 	// Verify deploy is lazy for status
 	statusIdx := dag.Index["status"]
 	statusNode := &dag.Nodes[statusIdx]
-	require.Equal(t, graphpkg.DepLazy, statusNode.Dependencies["deploy"])
+	require.Equal(t, graphpkg.DepSoft, statusNode.Dependencies["deploy"])
 
 	// Create evaluator with deploy ABSENT from scope (lazy dep not yet available).
 	// Manually populate lazy deps as optional.none() — matching what
@@ -1874,7 +1874,7 @@ func TestLazyDepOptionalScope_PresentReturnsRealData(t *testing.T) {
 
 	statusIdx := dag.Index["status"]
 	statusNode := &dag.Nodes[statusIdx]
-	require.Equal(t, graphpkg.DepLazy, statusNode.Dependencies["deploy"])
+	require.Equal(t, graphpkg.DepSoft, statusNode.Dependencies["deploy"])
 
 	// Create evaluator with deploy PRESENT in scope with real data.
 	// Populate lazy dep as optional.of(value) — matching what the walk does

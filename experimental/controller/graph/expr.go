@@ -115,7 +115,7 @@ func CopyScope(scope map[string]any) map[string]any {
 // exprAccessModes carries per-expression, per-scope-variable optional-access
 // classification computed from pre-rewrite CEL ASTs. When non-nil, it drives
 // DepKind classification: a dependency accessed only through optional patterns
-// (?.field, .ready(), .updated()) in ALL expressions is DepLazy. When nil,
+// (?.field, .ready(), .updated()) in ALL expressions is DepSoft. When nil,
 // all dependencies default to DepHard.
 //
 // The exprPaths map is computed from CEL ASTs during compilation in
@@ -133,142 +133,181 @@ func ExtractReferencedPathsFromNode(
 	dependencies = map[string]DepKind{}
 	depPaths = map[string][]FieldPath{}
 
-	// Helper: process a CEL expression's pre-extracted paths and access modes.
-	// Field paths (from post-rewrite ASTs) drive hash mechanics.
-	// Access modes (from pre-rewrite ASTs) drive DepKind classification.
-	processExpr := func(expr string, isGateExpr bool) {
-		if exprPaths == nil {
-			// Fallback: string-based dependency detection only.
-			id := ExtractFirstIdentifier(expr)
-			if id != "" && id != node.ID {
-				dependencies[id] = DepHard
-			}
-			return
-		}
-
-		// Register field paths from the post-rewrite AST.
-		if paths, ok := exprPaths[expr]; ok {
-			for scopeVar, fieldPaths := range paths {
-				if scopeVar == node.ID {
-					if isGateExpr {
-						for _, fp := range fieldPaths {
-							AddFieldPath(&selfPaths, fp)
-						}
-					}
-					continue
-				}
-				for _, fp := range fieldPaths {
-					AddPath(depPaths, scopeVar, fp)
-				}
-			}
-		}
-
-		// Classify DepKind from access modes (pre-rewrite AST).
-		// A scope variable accessed only through optional patterns in ALL
-		// expressions → DepLazy. Any direct access → DepHard.
-		if exprAccessModes != nil {
-			if modes, ok := exprAccessModes[expr]; ok {
-				for scopeVar, optionalOnly := range modes {
-					if scopeVar == node.ID {
-						continue
-					}
-					if !optionalOnly {
-						// Direct access in this expression → hard.
-						dependencies[scopeVar] = DepHard
-					} else {
-						// Optional-only in this expression. Set DepLazy if not
-						// already hard from another expression.
-						if _, exists := dependencies[scopeVar]; !exists {
-							dependencies[scopeVar] = DepLazy
-						}
-					}
-				}
-			}
-		} else {
-			// No access modes — default all deps to hard (safe fallback).
-			if paths, ok := exprPaths[expr]; ok {
-				for scopeVar := range paths {
-					if scopeVar != node.ID {
-						dependencies[scopeVar] = DepHard
-					}
-				}
-			}
-		}
-	}
-
-	// Validate .dependencies() references are self-referential only.
-	// Per 001-graph.md § CEL Functions: .dependencies() returns the scope
-	// values of a node's own dependencies. Cross-node .dependencies()
-	// (e.g., ${otherNode.dependencies()...}) would access scope data
-	// without DAG edges — reject it.
-	checkDepsRef := func(expr string) {
-		remaining := expr
-		for {
-			idx := strings.Index(remaining, ".dependencies()")
-			if idx < 0 {
-				return
-			}
-			end := idx
-			start := end
-			for start > 0 && isIdentContinue(remaining[start-1]) {
-				start--
-			}
-			if start < end && isIdentStart(remaining[start]) {
-				id := remaining[start:end]
-				if id != node.ID {
-					err = fmt.Errorf("node %q: .dependencies() can only be called on self (%q), not %q", node.ID, node.ID, id)
-					return
-				}
-			}
-			remaining = remaining[idx+len(".dependencies()"):]
-		}
-	}
-
-	// Process body + includeWhen + forEach expressions → depPaths.
-	// Walk every possible body map — Template/Patch/Def (Payload) plus
-	// Ref/Watch (Identity) — because identity fields on Ref and
-	// Watch may still carry CEL expressions (e.g., a dynamic name
-	// from an upstream node).
-	var templateStrs []string
-	if body := node.Body(); body != nil {
-		CollectStrings(body, &templateStrs)
-	}
-	if node.TemplateExpr != "" {
-		templateStrs = append(templateStrs, node.TemplateExpr)
-	}
-	for _, s := range node.IncludeWhen {
-		templateStrs = append(templateStrs, s)
-	}
-	if node.ForEach != nil {
-		templateStrs = append(templateStrs, node.ForEach.Expr)
-	}
-
-	WalkExpressions(templateStrs, func(expr string) {
-		processExpr(expr, false)
-		checkDepsRef(expr)
-	})
+	// Process body + includeWhen + forEach + templateExpr expressions → depPaths.
+	bodyStrs := collectBodyStrings(node)
+	err = walkAndAccumulate(bodyStrs, false, node.ID, exprPaths, exprAccessModes, dependencies, depPaths, &selfPaths)
 	if err != nil {
 		return
 	}
 
 	// Process readyWhen + propagateWhen → depPaths + selfPaths.
-	var gateStrs []string
-	for _, s := range node.ReadyWhen {
-		gateStrs = append(gateStrs, s)
-	}
-	for _, s := range node.PropagateWhen {
-		gateStrs = append(gateStrs, s)
-	}
-
-	WalkExpressions(gateStrs, func(expr string) {
-		processExpr(expr, true)
-		checkDepsRef(expr)
-	})
+	gateStrs := collectGateStrings(node)
+	err = walkAndAccumulate(gateStrs, true, node.ID, exprPaths, exprAccessModes, dependencies, depPaths, &selfPaths)
 	if err != nil {
 		return
 	}
 
 	return dependencies, depPaths, selfPaths, nil
+}
+
+// collectBodyStrings gathers all strings from the node body, templateExpr,
+// includeWhen, and forEach that need expression scanning.
+func collectBodyStrings(node Node) []string {
+	var strs []string
+	if body := node.Body(); body != nil {
+		CollectStrings(body, &strs)
+	}
+	if node.TemplateExpr != "" {
+		strs = append(strs, node.TemplateExpr)
+	}
+	for _, s := range node.IncludeWhen {
+		strs = append(strs, s)
+	}
+	if node.ForEach != nil {
+		strs = append(strs, node.ForEach.Expr)
+	}
+	return strs
+}
+
+// collectGateStrings gathers readyWhen and propagateWhen strings.
+func collectGateStrings(node Node) []string {
+	var strs []string
+	for _, s := range node.ReadyWhen {
+		strs = append(strs, s)
+	}
+	for _, s := range node.PropagateWhen {
+		strs = append(strs, s)
+	}
+	return strs
+}
+
+// walkAndAccumulate scans expression strings and accumulates dependency and
+// field path information into the provided accumulators. isGateExpr controls
+// whether self-references are recorded into selfPaths.
+func walkAndAccumulate(
+	strs []string,
+	isGateExpr bool,
+	nodeID string,
+	exprPaths map[string]map[string][]FieldPath,
+	exprAccessModes map[string]map[string]bool,
+	dependencies map[string]DepKind,
+	depPaths map[string][]FieldPath,
+	selfPaths *[]FieldPath,
+) error {
+	var err error
+	WalkExpressions(strs, func(expr string) {
+		if err != nil {
+			return
+		}
+		accumulateExprPaths(expr, isGateExpr, nodeID, exprPaths, dependencies, depPaths, selfPaths)
+		classifyDepKinds(expr, nodeID, exprPaths, exprAccessModes, dependencies)
+		err = checkDepsRef(expr, nodeID)
+	})
+	return err
+}
+
+// accumulateExprPaths registers field paths from the post-rewrite AST for a
+// single expression. When exprPaths is nil, falls back to string-based
+// dependency detection.
+func accumulateExprPaths(
+	expr string,
+	isGateExpr bool,
+	nodeID string,
+	exprPaths map[string]map[string][]FieldPath,
+	dependencies map[string]DepKind,
+	depPaths map[string][]FieldPath,
+	selfPaths *[]FieldPath,
+) {
+	if exprPaths == nil {
+		id := ExtractFirstIdentifier(expr)
+		if id != "" && id != nodeID {
+			dependencies[id] = DepHard
+		}
+		return
+	}
+	paths, ok := exprPaths[expr]
+	if !ok {
+		return
+	}
+	for scopeVar, fieldPaths := range paths {
+		if scopeVar == nodeID {
+			if isGateExpr {
+				for _, fp := range fieldPaths {
+					AddFieldPath(selfPaths, fp)
+				}
+			}
+			continue
+		}
+		for _, fp := range fieldPaths {
+			AddPath(depPaths, scopeVar, fp)
+		}
+	}
+}
+
+// classifyDepKinds classifies DepKind from access modes (pre-rewrite AST).
+// A scope variable accessed only through optional patterns in ALL expressions
+// is DepSoft. Any direct access makes it DepHard.
+func classifyDepKinds(
+	expr string,
+	nodeID string,
+	exprPaths map[string]map[string][]FieldPath,
+	exprAccessModes map[string]map[string]bool,
+	dependencies map[string]DepKind,
+) {
+	if exprPaths == nil {
+		return
+	}
+	if exprAccessModes != nil {
+		modes, ok := exprAccessModes[expr]
+		if !ok {
+			return
+		}
+		for scopeVar, optionalOnly := range modes {
+			if scopeVar == nodeID {
+				continue
+			}
+			if !optionalOnly {
+				dependencies[scopeVar] = DepHard
+			} else if _, exists := dependencies[scopeVar]; !exists {
+				dependencies[scopeVar] = DepSoft
+			}
+		}
+	} else {
+		paths, ok := exprPaths[expr]
+		if !ok {
+			return
+		}
+		for scopeVar := range paths {
+			if scopeVar != nodeID {
+				dependencies[scopeVar] = DepHard
+			}
+		}
+	}
+}
+
+// checkDepsRef validates that .dependencies() calls reference only the node
+// itself. Cross-node .dependencies() would access scope data without DAG
+// edges.
+func checkDepsRef(expr string, nodeID string) error {
+	remaining := expr
+	for {
+		idx := strings.Index(remaining, ".dependencies()")
+		if idx < 0 {
+			return nil
+		}
+		end := idx
+		start := end
+		for start > 0 && isIdentContinue(remaining[start-1]) {
+			start--
+		}
+		if start < end && isIdentStart(remaining[start]) {
+			id := remaining[start:end]
+			if id != nodeID {
+				return fmt.Errorf("node %q: .dependencies() can only be called on self (%q), not %q", nodeID, nodeID, id)
+			}
+		}
+		remaining = remaining[idx+len(".dependencies()"):]
+	}
 }
 
 // WalkExpressions scans strs for ${...} expression blocks (skipping

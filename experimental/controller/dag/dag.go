@@ -95,7 +95,7 @@ func (t *Topology) NodeDeps(idx int) map[string]graph.DepKind {
 // field paths per 007-optimizations.md § Evaluation Caching.
 // exprAccessModes contains per-expression, per-scope-variable access mode
 // classification from pre-rewrite CEL ASTs. Drives DepKind: optional-only
-// access → DepLazy, any direct access → DepHard. Nil means all deps are hard.
+// access → DepSoft, any direct access → DepHard. Nil means all deps are hard.
 // Returns an error if the dependency graph contains a cycle (ErrCircularDependency).
 // Topological order is computed via Kahn's algorithm with a min-heap keyed by
 // declaration index, so independent nodes preserve their spec.nodes ordering.
@@ -113,11 +113,46 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 		Topology: topo,
 	}
 
+	// Extract dependencies from expressions and index nodes.
+	if err := extractNodeDependencies(dag, nodes, exprPaths, exprAccessModes); err != nil {
+		return nil, err
+	}
+
+	// Build finalizer map and validate targets.
+	if err := injectFinalizerEdges(dag); err != nil {
+		return nil, err
+	}
+
+	// Build reverse adjacency list (Dependents).
+	buildDependentsIndex(dag)
+
+	// Validate propagateWhen self-references.
+	if err := validatePropagateWhen(dag, exprPaths); err != nil {
+		return nil, err
+	}
+
+	// Topological sort with cycle detection.
+	order, err := topologicalSort(dag)
+	if err != nil {
+		return nil, err
+	}
+	dag.TopologicalOrder = order
+
+	// Compute parallel levels from topological order.
+	dag.Levels = computeLevels(dag, order)
+
+	return dag, nil
+}
+
+// extractNodeDependencies scans expression paths for each node, classifies
+// edges as hard or soft based on access modes, and populates the DAG index.
+func extractNodeDependencies(dag *DAG, nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldPath, exprAccessModes map[string]map[string]bool) error {
+	topo := dag.Topology
 	for i, node := range nodes {
 		var err error
 		node.Dependencies, _, _, err = graph.ExtractReferencedPathsFromNode(node, exprPaths, exprAccessModes)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		dag.Nodes[i] = node
 		topo.Index[node.ID] = i
@@ -125,35 +160,42 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 		// Store per-node dependency metadata in topology for AssembleDAG.
 		topo.nodeDeps[i] = node.Dependencies
 	}
+	return nil
+}
 
-	// Build finalizer map: target node ID → list of finalizer node IDs.
-	// Validate that finalizer targets exist in the DAG and manage resources.
+// injectFinalizerEdges builds the finalizer map (target node ID → finalizer
+// node IDs) and validates that finalizer targets exist and manage resources.
+func injectFinalizerEdges(dag *DAG) error {
 	for _, node := range dag.Nodes {
-		if node.Finalizes != "" {
-			targetIdx, exists := dag.Index[node.Finalizes]
-			if !exists {
-				return nil, fmt.Errorf("node %q declares finalizes %q, but no node with that ID exists", node.ID, node.Finalizes)
-			}
-			// Finalization only applies to resource-managing nodes (Template,
-			// Patch). Definition, Ref, and Watch nodes never produce managed
-			// resources and never become prune candidates — finalizing them
-			// is nonsensical.
-			targetRef := dag.NodeTypes[dag.Nodes[targetIdx].ID]
-			switch targetRef {
-			case graph.NodeTypeDef:
-				return nil, fmt.Errorf("node %q cannot finalize %q: Definition nodes do not manage resources", node.ID, node.Finalizes)
-			case graph.NodeTypeRef:
-				return nil, fmt.Errorf("node %q cannot finalize %q: Ref nodes are read-only", node.ID, node.Finalizes)
-			case graph.NodeTypeWatch:
-				return nil, fmt.Errorf("node %q cannot finalize %q: Watch nodes are read-only", node.ID, node.Finalizes)
-			}
-			dag.Finalizers[node.Finalizes] = append(dag.Finalizers[node.Finalizes], node.ID)
+		if node.Finalizes == "" {
+			continue
 		}
+		targetIdx, exists := dag.Index[node.Finalizes]
+		if !exists {
+			return fmt.Errorf("node %q declares finalizes %q, but no node with that ID exists", node.ID, node.Finalizes)
+		}
+		// Finalization only applies to resource-managing nodes (Template,
+		// Patch). Definition, Ref, and Watch nodes never produce managed
+		// resources and never become prune candidates — finalizing them
+		// is nonsensical.
+		targetRef := dag.NodeTypes[dag.Nodes[targetIdx].ID]
+		switch targetRef {
+		case graph.NodeTypeDef:
+			return fmt.Errorf("node %q cannot finalize %q: Definition nodes do not manage resources", node.ID, node.Finalizes)
+		case graph.NodeTypeRef:
+			return fmt.Errorf("node %q cannot finalize %q: Ref nodes are read-only", node.ID, node.Finalizes)
+		case graph.NodeTypeWatch:
+			return fmt.Errorf("node %q cannot finalize %q: Watch nodes are read-only", node.ID, node.Finalizes)
+		}
+		dag.Finalizers[node.Finalizes] = append(dag.Finalizers[node.Finalizes], node.ID)
 	}
+	return nil
+}
 
-	// Build reverse adjacency list: for each node, record which nodes depend on it.
-	// Both hard and lazy dependencies create Dependents entries — propagation
-	// triggering uses the unified Dependents index.
+// buildDependentsIndex builds the reverse adjacency list: for each node,
+// records which nodes depend on it. Both hard and soft dependencies create
+// entries — propagation triggering uses the unified Dependents index.
+func buildDependentsIndex(dag *DAG) {
 	for i, node := range dag.Nodes {
 		for depID := range node.Dependencies {
 			if _, exists := dag.Index[depID]; exists {
@@ -161,64 +203,70 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 			}
 		}
 	}
+}
 
-	// Validate propagateWhen: reject self-references for scalar nodes.
-	// propagateWhen on a scalar node is an input gate — it runs before the
-	// node evaluates, so the node's own data is not in scope. Self-referencing
-	// expressions would deadlock (node can't evaluate to produce data its
-	// gate requires).
-	//
-	// forEach nodes are exempt because their propagateWhen evaluates per-item
-	// inside the expansion loop, where the partially-built collection IS in
-	// scope. Self-reference is the intended pattern — the gate inspects
-	// items already processed in this cycle to decide whether to continue.
-	if exprPaths != nil {
-		for _, node := range dag.Nodes {
-			if node.ForEach != nil {
+// validatePropagateWhen rejects self-references in propagateWhen expressions
+// for scalar nodes. forEach nodes are exempt because their propagateWhen
+// evaluates per-item inside the expansion loop where the partially-built
+// collection IS in scope.
+func validatePropagateWhen(dag *DAG, exprPaths map[string]map[string][]graph.FieldPath) error {
+	if exprPaths == nil {
+		return nil
+	}
+	for _, node := range dag.Nodes {
+		if node.ForEach != nil {
+			continue
+		}
+		if err := validateNodePropagateWhen(node, exprPaths); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateNodePropagateWhen checks a single scalar node's propagateWhen
+// expressions for self-references.
+func validateNodePropagateWhen(node graph.Node, exprPaths map[string]map[string][]graph.FieldPath) error {
+	for _, pw := range node.PropagateWhen {
+		pos := 0
+		for {
+			dollars, expr, start, _ := graph.FindExpr(pw, pos)
+			if start < 0 {
+				break
+			}
+			pos = start + len(dollars) + len(expr) + 2
+			if len(dollars) != 1 {
 				continue
 			}
-			for _, pw := range node.PropagateWhen {
-				pos := 0
-				for {
-					dollars, expr, start, _ := graph.FindExpr(pw, pos)
-					if start < 0 {
-						break
-					}
-					pos = start + len(dollars) + len(expr) + 2
-					if len(dollars) != 1 {
-						continue
-					}
-					if paths, ok := exprPaths[expr]; ok {
-						if _, selfRef := paths[node.ID]; selfRef {
-							return nil, fmt.Errorf("node %q: propagateWhen expression %q references itself — "+
-								"propagateWhen is an input gate evaluated before the node processes, "+
-								"so the node's own data is not in scope. Use a cross-node reference "+
-								"(e.g., ${dependency.ready()}) instead", node.ID, pw)
-						}
-					}
-					// Also catch direct .ready() self-references like ${node.ready()}.
-					// This does NOT flag .ready() inside comprehensions (e.g.,
-					// ${node.dependencies().all(d, d.ready())}) because the
-					// check is for the specific pattern "<nodeID>.ready()".
-					if strings.Contains(expr, node.ID+".ready()") {
-						return nil, fmt.Errorf("node %q: propagateWhen expression %q references its own .ready() — "+
-							"propagateWhen is an input gate evaluated before the node processes, "+
-							"so the node's own readiness is not available. Use a cross-node reference "+
-							"(e.g., ${dependency.ready()}) instead", node.ID, pw)
-					}
+			if paths, ok := exprPaths[expr]; ok {
+				if _, selfRef := paths[node.ID]; selfRef {
+					return fmt.Errorf("node %q: propagateWhen expression %q references itself — "+
+						"propagateWhen is an input gate evaluated before the node processes, "+
+						"so the node's own data is not in scope. Use a cross-node reference "+
+						"(e.g., ${dependency.ready()}) instead", node.ID, pw)
 				}
+			}
+			// Also catch direct .ready() self-references like ${node.ready()}.
+			// This does NOT flag .ready() inside comprehensions (e.g.,
+			// ${node.dependencies().all(d, d.ready())}) because the
+			// check is for the specific pattern "<nodeID>.ready()".
+			if strings.Contains(expr, node.ID+".ready()") {
+				return fmt.Errorf("node %q: propagateWhen expression %q references its own .ready() — "+
+					"propagateWhen is an input gate evaluated before the node processes, "+
+					"so the node's own readiness is not available. Use a cross-node reference "+
+					"(e.g., ${dependency.ready()}) instead", node.ID, pw)
 			}
 		}
 	}
+	return nil
+}
 
-	// Kahn's algorithm with min-heap: topological sort with cycle detection.
-	// The min-heap is keyed by declaration index so that among nodes whose
-	// dependencies are all satisfied, the one declared earliest in spec.nodes
-	// is emitted first. This makes TopologicalOrder stable with respect to
-	// input ordering — independent nodes appear in declaration order.
-	// inDegree counts how many hard in-graph dependencies each node has.
-	// Lazy deps do not contribute to topological ordering.
-	n := len(nodes)
+// topologicalSort computes topological order via Kahn's algorithm with a
+// min-heap keyed by declaration index. Returns ErrCircularDependency if the
+// graph contains a cycle. Only hard dependencies contribute to ordering;
+// soft/lazy deps do not gate dispatch.
+func topologicalSort(dag *DAG) ([]int, error) {
+	n := len(dag.Nodes)
 	inDegree := make([]int, n)
 	for i, node := range dag.Nodes {
 		for depID, kind := range node.Dependencies {
@@ -246,8 +294,6 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 
 		currID := dag.Nodes[curr].ID
 		// Decrement in-degree for every node that has a hard dep on curr.
-		// Dependents includes both hard and lazy deps; only hard deps
-		// contribute to topological ordering (in-degree).
 		for _, depIdx := range dag.Dependents[currID] {
 			if dag.Nodes[depIdx].Dependencies[currID] == graph.DepHard {
 				inDegree[depIdx]--
@@ -259,7 +305,6 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 	}
 
 	if len(order) != n {
-		// Nodes remaining with non-zero in-degree form the cycle.
 		var cycleIDs []string
 		for i, d := range inDegree {
 			if d > 0 {
@@ -268,12 +313,14 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 		}
 		return nil, fmt.Errorf("graph contains a cycle: nodes %v: %w", cycleIDs, ErrCircularDependency)
 	}
+	return order, nil
+}
 
-	dag.TopologicalOrder = order
-
-	// Compute topological levels. Level[i] = max(Level[hard dep] + 1).
-	// Nodes with no hard dependencies are level 0. Lazy deps don't
-	// affect level computation (they don't gate dispatch).
+// computeLevels groups node indices by topological level. Level[i] =
+// max(Level[hard dep] + 1). Nodes within the same level are independent
+// and can be processed in parallel. Soft deps don't affect level computation.
+func computeLevels(dag *DAG, order []int) [][]int {
+	n := len(dag.Nodes)
 	nodeLevel := make([]int, n)
 	maxLevel := 0
 	for _, idx := range order {
@@ -292,12 +339,11 @@ func BuildDAG(nodes []graph.Node, exprPaths map[string]map[string][]graph.FieldP
 			maxLevel = level
 		}
 	}
-	dag.Levels = make([][]int, maxLevel+1)
+	levels := make([][]int, maxLevel+1)
 	for idx, level := range nodeLevel {
-		dag.Levels[level] = append(dag.Levels[level], idx)
+		levels[level] = append(levels[level], idx)
 	}
-
-	return dag, nil
+	return levels
 }
 
 // AssembleDAG builds a per-instance DAG from an instance's nodes and a shared

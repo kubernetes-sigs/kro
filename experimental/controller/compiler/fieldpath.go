@@ -193,7 +193,7 @@ func extractFieldPathsFromAST(expr celast.Expr, scopeVars map[string]bool, compr
 // Direct access: regular Select, bare Ident, bare .ready()/.updated(), or
 // any other use. Bare .ready() (without .orValue()) is direct — the user
 // is not handling absence, so the dep must be present.
-// This classification drives DepKind: optional-only across ALL expressions → DepLazy.
+// This classification drives DepKind: optional-only across ALL expressions → DepSoft.
 func classifyAccessModes(expr celast.Expr, scopeVars map[string]bool, comprehensionVars map[string]bool) map[string]bool {
 	result := map[string]bool{}
 
@@ -217,57 +217,9 @@ func classifyAccessModes(expr celast.Expr, scopeVars map[string]bool, comprehens
 		},
 		onCall: func(e celast.Expr, sv, cv map[string]bool, walk func(celast.Expr)) bool {
 			call := e.AsCall()
-
-			// _?._ (OptSelect): scope var as first arg → optional access.
-			if call.FunctionName() == operators.OptSelect && len(call.Args()) == 2 {
-				arg0 := call.Args()[0]
-				if arg0.Kind() == celast.IdentKind {
-					root := arg0.AsIdent()
-					if sv[root] && (cv == nil || !cv[root]) {
-						markAccess(root, true)
-						return true
-					}
-				}
-				walk(call.Args()[0])
-				return true
-			}
-
-			// _[?_] (OptIndex): same pattern as OptSelect.
-			if call.FunctionName() == operators.OptIndex && len(call.Args()) == 2 {
-				arg0 := call.Args()[0]
-				if arg0.Kind() == celast.IdentKind {
-					root := arg0.AsIdent()
-					if sv[root] && (cv == nil || !cv[root]) {
-						markAccess(root, true)
-						return true
-					}
-				}
-				walk(call.Args()[0])
-				return true
-			}
-
-			// .orValue() wrapping .ready()/.updated() → optional access.
-			if call.IsMemberFunction() && call.FunctionName() == "orValue" {
-				if target := call.Target(); target != nil && target.Kind() == celast.CallKind {
-					inner := target.AsCall()
-					if inner.IsMemberFunction() &&
-						(inner.FunctionName() == "ready" || inner.FunctionName() == "updated") {
-						if innerTarget := inner.Target(); innerTarget != nil &&
-							innerTarget.Kind() == celast.IdentKind {
-							root := innerTarget.AsIdent()
-							if sv[root] && (cv == nil || !cv[root]) {
-								markAccess(root, true)
-								for _, arg := range call.Args() {
-									walk(arg)
-								}
-								return true
-							}
-						}
-					}
-				}
-			}
-
-			return false // not consumed — let walkAST do generic recursion
+			return classifyOptSelect(call, sv, cv, markAccess, walk) ||
+				classifyOptIndex(call, sv, cv, markAccess, walk) ||
+				classifyReadyOrUpdatedOrValue(call, sv, cv, markAccess, walk)
 		},
 		onIdent: func(name string) {
 			markAccess(name, false) // direct access — bare identifier
@@ -281,6 +233,72 @@ func classifyAccessModes(expr celast.Expr, scopeVars map[string]bool, comprehens
 	})
 
 	return result
+}
+
+// classifyOptSelect recognizes the _?._ (OptSelect) pattern where the first
+// argument is a scope variable. Returns true if the call was consumed.
+func classifyOptSelect(call celast.CallExpr, sv, cv map[string]bool, markAccess func(string, bool), walk func(celast.Expr)) bool {
+	if call.FunctionName() != operators.OptSelect || len(call.Args()) != 2 {
+		return false
+	}
+	arg0 := call.Args()[0]
+	if arg0.Kind() == celast.IdentKind {
+		root := arg0.AsIdent()
+		if sv[root] && (cv == nil || !cv[root]) {
+			markAccess(root, true)
+			return true
+		}
+	}
+	walk(call.Args()[0])
+	return true
+}
+
+// classifyOptIndex recognizes the _[?_] (OptIndex) pattern where the first
+// argument is a scope variable. Returns true if the call was consumed.
+func classifyOptIndex(call celast.CallExpr, sv, cv map[string]bool, markAccess func(string, bool), walk func(celast.Expr)) bool {
+	if call.FunctionName() != operators.OptIndex || len(call.Args()) != 2 {
+		return false
+	}
+	arg0 := call.Args()[0]
+	if arg0.Kind() == celast.IdentKind {
+		root := arg0.AsIdent()
+		if sv[root] && (cv == nil || !cv[root]) {
+			markAccess(root, true)
+			return true
+		}
+	}
+	walk(call.Args()[0])
+	return true
+}
+
+// classifyReadyOrUpdatedOrValue recognizes the .ready().orValue(x) and
+// .updated().orValue(x) patterns where the target is a scope variable.
+// Returns true if the call was consumed.
+func classifyReadyOrUpdatedOrValue(call celast.CallExpr, sv, cv map[string]bool, markAccess func(string, bool), walk func(celast.Expr)) bool {
+	if !call.IsMemberFunction() || call.FunctionName() != "orValue" {
+		return false
+	}
+	target := call.Target()
+	if target == nil || target.Kind() != celast.CallKind {
+		return false
+	}
+	inner := target.AsCall()
+	if !inner.IsMemberFunction() || (inner.FunctionName() != "ready" && inner.FunctionName() != "updated") {
+		return false
+	}
+	innerTarget := inner.Target()
+	if innerTarget == nil || innerTarget.Kind() != celast.IdentKind {
+		return false
+	}
+	root := innerTarget.AsIdent()
+	if !sv[root] || (cv != nil && cv[root]) {
+		return false
+	}
+	markAccess(root, true)
+	for _, arg := range call.Args() {
+		walk(arg)
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------

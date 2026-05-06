@@ -48,6 +48,22 @@ func ExtractGraphSpec(graphObj map[string]any) (*GraphSpec, error) {
 // and have no CEL-as-whole-body form.
 var bodyKeywords = []string{"template", "patch", "ref", "watch", "def"}
 
+// reservedWords lists identifiers that must not be used as node IDs or
+// forEach iterator variable names. Limited to CEL language keywords and
+// internal scope variables that would cause actual conflicts.
+// Application-level conventions (like "schema", "instance") are not
+// included — they are valid node IDs used by stdlib graphs.
+var reservedWords = map[string]bool{
+	// CEL language keywords
+	"true": true, "false": true, "null": true, "in": true,
+	"as": true, "break": true, "const": true, "continue": true,
+	"else": true, "for": true, "function": true, "if": true,
+	"import": true, "let": true, "loop": true, "package": true,
+	"return": true, "var": true, "void": true, "while": true,
+	// Graph controller internal scope variables
+	"self": true,
+}
+
 // ParseNodeList converts a raw node list into Nodes.
 // Returns an error on the first invalid node: missing ID, duplicate ID,
 // invalid keyword combinations, or per-keyword shape violations.
@@ -62,34 +78,14 @@ func ParseNodeList(raw any) ([]Node, error) {
 	// "The node ID is lowercased when embedded in the identity label key;
 	// IDs that collide after lowercasing are rejected at compile time."
 	seenLower := make(map[string]string, len(list)) // lowercased → original
-	// Reserved words that must not be used as node IDs or forEach iterator
-	// variable names. Limited to CEL language keywords and internal scope
-	// variables that would cause actual conflicts. Application-level
-	// conventions (like "schema", "instance") are not included — they are
-	// valid node IDs used by stdlib graphs.
-	reservedWords := map[string]bool{
-		// CEL language keywords
-		"true": true, "false": true, "null": true, "in": true,
-		"as": true, "break": true, "const": true, "continue": true,
-		"else": true, "for": true, "function": true, "if": true,
-		"import": true, "let": true, "loop": true, "package": true,
-		"return": true, "var": true, "void": true, "while": true,
-		// Graph controller internal scope variables
-		"self": true,
-	}
+
 	// First pass: collect all node IDs (lowercased) so the forEach
 	// variable collision check can catch collisions with nodes declared
 	// anywhere in the list, not just those parsed so far. Both node IDs
 	// and forEach variables enter the same CEL scope — collisions cause
 	// silent shadowing.
-	allNodeIDsLower := make(map[string]string, len(list)) // lowercased → original
-	for _, item := range list {
-		if m, ok := item.(map[string]any); ok {
-			if id, ok := m["id"].(string); ok && id != "" {
-				allNodeIDsLower[strings.ToLower(id)] = id
-			}
-		}
-	}
+	allNodeIDsLower := collectNodeIDs(list)
+
 	var nodes []Node
 	for i, item := range list {
 		m, ok := item.(map[string]any)
@@ -97,104 +93,154 @@ func ParseNodeList(raw any) ([]Node, error) {
 			return nil, fmt.Errorf("node[%d] is %T, want map", i, item)
 		}
 
-		node := Node{}
-		id, ok := m["id"].(string)
-		if !ok || id == "" {
-			return nil, fmt.Errorf("node[%d]: missing or empty id", i)
-		}
-		// Per 001-graph.md: node IDs must be lower camelCase identifiers.
-		// This check subsumes hyphen, underscore, uppercase-first, digit-first,
-		// and special-character rejections in a single regex.
-		if !nodeIDRe.MatchString(id) {
-			return nil, fmt.Errorf("node[%d] %q: naming convention violation: id %s is not a valid KRO resource id: must be lower camelCase", i, id, id)
-		}
-		// Reserved words must not be used as node IDs — they shadow built-in
-		// scope variables or CEL keywords.
-		if reservedWords[strings.ToLower(id)] {
-			return nil, fmt.Errorf("node[%d] %q: naming convention violation: id %s is a reserved keyword", i, id, id)
-		}
-		if seen[id] {
-			return nil, fmt.Errorf("node[%d]: found duplicate resource IDs %q", i, id)
-		}
-		lower := strings.ToLower(id)
-		if orig, exists := seenLower[lower]; exists && orig != id {
-			return nil, fmt.Errorf("node[%d] %q: collides with %q after lowercasing (both produce %q in identity labels)", i, id, orig, lower)
+		// Phase 1: Extract and validate ID.
+		id, err := validateNodeID(m, i, seen, seenLower)
+		if err != nil {
+			return nil, err
 		}
 		seen[id] = true
-		seenLower[lower] = id
-		node.ID = id
+		seenLower[strings.ToLower(id)] = id
 
-		// Collect which of the five mutually-exclusive classification
-		// keywords are present. Exactly one must be set.
-		var present []string
-		for _, kw := range bodyKeywords {
-			if _, ok := m[kw]; ok {
-				present = append(present, kw)
-			}
+		// Phase 2: Determine node type and parse body.
+		node := Node{ID: id}
+		kw, err := determineNodeType(m, i, id)
+		if err != nil {
+			return nil, err
 		}
-		if len(present) == 0 {
-			return nil, fmt.Errorf("node[%d] %q: exactly one of %s must be set, got none", i, id, strings.Join(bodyKeywords, "/"))
-		}
-		if len(present) > 1 {
-			return nil, fmt.Errorf("node[%d] %q: exactly one of %s must be set, got {%s}", i, id, strings.Join(bodyKeywords, "/"), strings.Join(present, ", "))
-		}
-
-		kw := present[0]
-		rawBody := m[kw]
-		if err := setNodeKeyword(&node, kw, rawBody); err != nil {
+		if err := setNodeKeyword(&node, kw, m[kw]); err != nil {
 			return nil, fmt.Errorf("node[%d] %q: %w", i, id, err)
 		}
 
-		if fin, ok := m["finalizes"].(string); ok {
-			node.Finalizes = fin
-		}
-		if _, hasForEach := m["forEach"]; hasForEach && m["forEach"] != nil {
-			binding, err := parseForEachBinding(m["forEach"], i, id, allNodeIDsLower, reservedWords)
-			if err != nil {
-				return nil, err
-			}
-			node.ForEach = binding
-		}
-		// Validate: finalizes nodes must not have CEL-evaluated names unless
-		// they also have forEach (which requires dynamic per-item names).
-		// Static-name finalizers are looked up by key during prune; forEach
-		// finalizers use label-based discovery for cleanup.
-		// NOTE: This check must run after forEach is parsed above.
-		if node.Finalizes != "" && node.ForEach == nil {
-			if body := node.Identity(); body != nil {
-				if md, ok := body["metadata"].(map[string]any); ok {
-					if name, ok := md["name"].(string); ok && strings.Contains(name, "${") {
-						return nil, fmt.Errorf("node[%d] %q: finalizes nodes must not have CEL-evaluated names (found expression in metadata.name); use forEach for per-item finalizers", i, id)
-					}
-				}
-			}
-			if node.Type() == NodeTypeDef {
-				return nil, fmt.Errorf("node[%d] %q: finalizes is not valid on def nodes (no Kubernetes resource to finalize)", i, id)
-			}
-		}
-		if iw, err := parseStringList(m, "includeWhen", i, id); err != nil {
+		// Phase 3: Parse shared modifier fields.
+		if err := parseModifiers(&node, m, i, id, allNodeIDsLower); err != nil {
 			return nil, err
-		} else if len(iw) > 0 {
-			node.IncludeWhen = iw
 		}
-		if rw, err := parseStringList(m, "readyWhen", i, id); err != nil {
+
+		// Phase 4: Cross-field constraint validation.
+		if err := validateNodeConstraints(&node, i, id); err != nil {
 			return nil, err
-		} else if len(rw) > 0 {
-			node.ReadyWhen = rw
 		}
-		if pw, err := parseStringList(m, "propagateWhen", i, id); err != nil {
-			return nil, err
-		} else if len(pw) > 0 {
-			node.PropagateWhen = pw
-		}
-		if lc, ok := m["lifecycle"].(map[string]any); ok {
-			if apply, ok := lc["apply"].(string); ok {
-				node.Lifecycle.Apply = apply
-			}
-		}
+
 		nodes = append(nodes, node)
 	}
 	return nodes, nil
+}
+
+// collectNodeIDs pre-scans the raw list to gather all node IDs (lowercased)
+// for forEach variable collision detection.
+func collectNodeIDs(list []any) map[string]string {
+	ids := make(map[string]string, len(list))
+	for _, item := range list {
+		if m, ok := item.(map[string]any); ok {
+			if id, ok := m["id"].(string); ok && id != "" {
+				ids[strings.ToLower(id)] = id
+			}
+		}
+	}
+	return ids
+}
+
+// validateNodeID extracts the node ID from the raw map, validates its format,
+// checks for reserved words, duplicates, and case-collisions.
+func validateNodeID(m map[string]any, i int, seen map[string]bool, seenLower map[string]string) (string, error) {
+	id, ok := m["id"].(string)
+	if !ok || id == "" {
+		return "", fmt.Errorf("node[%d]: missing or empty id", i)
+	}
+	if !nodeIDRe.MatchString(id) {
+		return "", fmt.Errorf("node[%d] %q: naming convention violation: id %s is not a valid KRO resource id: must be lower camelCase", i, id, id)
+	}
+	if reservedWords[strings.ToLower(id)] {
+		return "", fmt.Errorf("node[%d] %q: naming convention violation: id %s is a reserved keyword", i, id, id)
+	}
+	if seen[id] {
+		return "", fmt.Errorf("node[%d]: found duplicate resource IDs %q", i, id)
+	}
+	lower := strings.ToLower(id)
+	if orig, exists := seenLower[lower]; exists && orig != id {
+		return "", fmt.Errorf("node[%d] %q: collides with %q after lowercasing (both produce %q in identity labels)", i, id, orig, lower)
+	}
+	return id, nil
+}
+
+// determineNodeType identifies which of the five mutually-exclusive
+// classification keywords is present in the node map. Returns the keyword
+// name or an error if zero or multiple keywords are set.
+func determineNodeType(m map[string]any, i int, id string) (string, error) {
+	var present []string
+	for _, kw := range bodyKeywords {
+		if _, ok := m[kw]; ok {
+			present = append(present, kw)
+		}
+	}
+	if len(present) == 0 {
+		return "", fmt.Errorf("node[%d] %q: exactly one of %s must be set, got none", i, id, strings.Join(bodyKeywords, "/"))
+	}
+	if len(present) > 1 {
+		return "", fmt.Errorf("node[%d] %q: exactly one of %s must be set, got {%s}", i, id, strings.Join(bodyKeywords, "/"), strings.Join(present, ", "))
+	}
+	return present[0], nil
+}
+
+// parseModifiers extracts shared modifier fields (finalizes, forEach,
+// includeWhen, readyWhen, propagateWhen, lifecycle) from the raw node map
+// into the Node struct. No cross-field validation is performed here.
+func parseModifiers(node *Node, m map[string]any, i int, id string, allNodeIDsLower map[string]string) error {
+	if fin, ok := m["finalizes"].(string); ok {
+		node.Finalizes = fin
+	}
+	if _, hasForEach := m["forEach"]; hasForEach && m["forEach"] != nil {
+		binding, err := parseForEachBinding(m["forEach"], i, id, allNodeIDsLower, reservedWords)
+		if err != nil {
+			return err
+		}
+		node.ForEach = binding
+	}
+	if iw, err := parseStringList(m, "includeWhen", i, id); err != nil {
+		return err
+	} else if len(iw) > 0 {
+		node.IncludeWhen = iw
+	}
+	if rw, err := parseStringList(m, "readyWhen", i, id); err != nil {
+		return err
+	} else if len(rw) > 0 {
+		node.ReadyWhen = rw
+	}
+	if pw, err := parseStringList(m, "propagateWhen", i, id); err != nil {
+		return err
+	} else if len(pw) > 0 {
+		node.PropagateWhen = pw
+	}
+	if lc, ok := m["lifecycle"].(map[string]any); ok {
+		if apply, ok := lc["apply"].(string); ok {
+			node.Lifecycle.Apply = apply
+		}
+	}
+	return nil
+}
+
+// validateNodeConstraints checks cross-field constraints that depend on
+// multiple parsed fields being present together. Must run after both the
+// body keyword and modifiers have been parsed.
+func validateNodeConstraints(node *Node, i int, id string) error {
+	if node.Finalizes == "" || node.ForEach != nil {
+		return nil
+	}
+	// Finalizes nodes must not have CEL-evaluated names unless they also
+	// have forEach (which requires dynamic per-item names). Static-name
+	// finalizers are looked up by key during prune; forEach finalizers use
+	// label-based discovery for cleanup.
+	if body := node.Identity(); body != nil {
+		if md, ok := body["metadata"].(map[string]any); ok {
+			if name, ok := md["name"].(string); ok && strings.Contains(name, "${") {
+				return fmt.Errorf("node[%d] %q: finalizes nodes must not have CEL-evaluated names (found expression in metadata.name); use forEach for per-item finalizers", i, id)
+			}
+		}
+	}
+	if node.Type() == NodeTypeDef {
+		return fmt.Errorf("node[%d] %q: finalizes is not valid on def nodes (no Kubernetes resource to finalize)", i, id)
+	}
+	return nil
 }
 
 // parseForEachBinding parses the two supported forEach formats (flat map and

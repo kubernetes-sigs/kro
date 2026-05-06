@@ -206,6 +206,14 @@ func extractStaticKeysFromRevisions(revisions []*unstructured.Unstructured, name
 	return keys
 }
 
+// nodeHasStatusSubresource reports whether a graph node's body declares a
+// non-nil status field. This is an apply-time concern: the controller uses
+// it to decide whether to split SSA applies into main + status subresource
+// patches.
+func nodeHasStatusSubresource(n *graphpkg.Node) bool {
+	return templateHasStatus(n.Payload())
+}
+
 // templateHasStatus returns true if a template map contains a non-nil
 // status field. Used during teardown to determine whether release apply
 // must also release the status subresource.

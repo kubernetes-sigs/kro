@@ -3,7 +3,6 @@ package graphcontroller
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -278,8 +277,7 @@ func TestForEach_ErrorPathNoStaleKeys(t *testing.T) {
 	// Build a fake client:
 	// - Get returns NotFound (no existing resource → ownership check passes,
 	//   preEvaluateReadiness classifies as "not ready")
-	// - Patch succeeds for the first call, fails for the second
-	var patchCount atomic.Int32
+	// - Patch succeeds for item-one, fails for item-two
 	patchErr := fmt.Errorf("simulated API error on second item")
 
 	scheme := runtime.NewScheme()
@@ -294,19 +292,13 @@ func TestForEach_ErrorPathNoStaleKeys(t *testing.T) {
 					schema.GroupResource{Resource: "configmaps"}, key.Name)
 			},
 			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-				count := patchCount.Add(1)
-				if count <= 2 {
-					// First two patches are for item-one:
-					// 1. main payload patch
-					// 2. could be status patch (but our template has no status)
-					// Actually with no status field, only 1 patch per item.
-					// Let's handle by name.
-					u := obj.(*unstructured.Unstructured)
-					if u.GetName() == "item-one" {
-						u.SetNamespace("default")
-						u.SetResourceVersion("1")
-						return nil
-					}
+				// Route by name — order-independent since
+				// sortForEachByReadiness randomizes within a class.
+				u := obj.(*unstructured.Unstructured)
+				if u.GetName() == "item-one" {
+					u.SetNamespace("default")
+					u.SetResourceVersion("1")
+					return nil
 				}
 				// item-two fails.
 				return patchErr

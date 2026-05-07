@@ -279,7 +279,7 @@ publish-debug-image: ## Publish kro controller debug image with pprof enabled.
 .PHONY: inject-helm-version
 inject-helm-version:
 	sed $(SED_INPLACE_FLAGS) 's/tag: .*/tag: "$(RELEASE_VERSION)"/' helm/values.yaml
-	sed $(SED_INPLACE_FLAGS) 's/version: .*/version: $(RELEASE_VERSION:v%=%)/' helm/Chart.yaml
+	sed $(SED_INPLACE_FLAGS) 's/version: .*/version: $(RELEASE_VERSION)/' helm/Chart.yaml
 	sed $(SED_INPLACE_FLAGS) 's/appVersion: .*/appVersion: "$(RELEASE_VERSION)"/' helm/Chart.yaml
 
 .PHONY: package-helm

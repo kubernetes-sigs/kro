@@ -33,7 +33,7 @@ type nodeOutput struct {
 //
 // After dispatch, reconcileNode evaluates readyWhen as a post-dispatch step
 // for node types that don't handle their own per-item readiness (Definition,
-// Template, Patch). Watch and ForEach return early — they handle
+// Template, Patch, Metric). Watch and ForEach return early — they handle
 // readiness internally (per-item for ForEach, per-collection for Watch).
 //
 // Error contract:
@@ -49,6 +49,10 @@ func reconcileNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, no
 	switch nodeType {
 	case graphpkg.NodeTypeDef:
 		if err := reconcileDefinition(ctx, node, eval); err != nil {
+			return nil, err
+		}
+	case graphpkg.NodeTypeMetric:
+		if err := reconcileMetric(ctx, node, eval, rs.metricStore, rs.graphKey); err != nil {
 			return nil, err
 		}
 	case graphpkg.NodeTypeWatch:
@@ -69,7 +73,7 @@ func reconcileNode(ctx context.Context, c *clusterAccess, rs *reconcileScope, no
 		return &nodeOutput{keys: []Applied{appliedEntry}}, eval.evalReadiness(node.ID, node.ReadyWhen)
 	}
 
-	// Post-dispatch readyWhen for Definition and Ref (no keys to return).
+	// Post-dispatch readyWhen for Definition, Metric, and Ref (no keys to return).
 	return &nodeOutput{}, eval.evalReadiness(node.ID, node.ReadyWhen)
 }
 

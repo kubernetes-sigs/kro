@@ -175,7 +175,7 @@ func injectFinalizerEdges(dag *DAG) error {
 			return fmt.Errorf("node %q declares finalizes %q, but no node with that ID exists", node.ID, node.Finalizes)
 		}
 		// Finalization only applies to resource-managing nodes (Template,
-		// Patch). Definition, Ref, and Watch nodes never produce managed
+		// Patch). Definition, Ref, Watch, and Metric nodes never produce managed
 		// resources and never become prune candidates — finalizing them
 		// is nonsensical.
 		targetRef := dag.NodeTypes[dag.Nodes[targetIdx].ID]
@@ -186,6 +186,8 @@ func injectFinalizerEdges(dag *DAG) error {
 			return fmt.Errorf("node %q cannot finalize %q: Ref nodes are read-only", node.ID, node.Finalizes)
 		case graph.NodeTypeWatch:
 			return fmt.Errorf("node %q cannot finalize %q: Watch nodes are read-only", node.ID, node.Finalizes)
+		case graph.NodeTypeMetric:
+			return fmt.Errorf("node %q cannot finalize %q: Metric nodes do not manage resources", node.ID, node.Finalizes)
 		}
 		dag.Finalizers[node.Finalizes] = append(dag.Finalizers[node.Finalizes], node.ID)
 	}

@@ -98,6 +98,9 @@ func ResolveNodeTypes(nodes []graph.Node, schemaResolver resolver.SchemaResolver
 		switch {
 		case nodeType == graph.NodeTypeDef:
 			resolveDefType(node, ts)
+		case nodeType == graph.NodeTypeMetric:
+			// Metric nodes don't publish to scope — declare as dyn for DAG participation.
+			ts.UntypedIDs = append(ts.UntypedIDs, node.ID)
 		case schemaResolver != nil:
 			resolveResourceSchema(node, ts, schemaResolver)
 		default:

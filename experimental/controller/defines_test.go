@@ -121,7 +121,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 		graph := &unstructured.Unstructured{Object: map[string]any{
 			"metadata": map[string]any{"name": "test", "namespace": "default"},
 		}}
-		rs := newReconcileScope(graph, nil)
+		rs := newReconcileScope(graph, nil, nil)
 
 		_, err = c.reconcileForEach(ctx, rs, spec.Nodes[1], eval)
 		require.Error(t, err)
@@ -156,7 +156,7 @@ func TestDefinesForEachReconcile(t *testing.T) {
 		graph := &unstructured.Unstructured{Object: map[string]any{
 			"metadata": map[string]any{"name": "test", "namespace": "default"},
 		}}
-		rs := newReconcileScope(graph, nil)
+		rs := newReconcileScope(graph, nil, nil)
 
 		_, err = c.reconcileForEach(ctx, rs, spec.Nodes[1], eval)
 		require.Error(t, err, "forEach with failing child templates must return an error")

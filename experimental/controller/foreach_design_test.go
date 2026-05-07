@@ -87,7 +87,7 @@ func TestForEach_HaltedMidCollectionCleansScope(t *testing.T) {
 	}}
 
 	r := &GraphReconciler{}
-	rs := newReconcileScope(graph, nil)
+	rs := newReconcileScope(graph, nil, nil)
 	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval)
 
 	// Error must be ErrPending — propagateWhen halted expansion.
@@ -141,7 +141,7 @@ func TestForEach_NoCarryForwardBetweenCycles(t *testing.T) {
 	}}
 
 	r := &GraphReconciler{}
-	rs := newReconcileScope(graph, nil)
+	rs := newReconcileScope(graph, nil, nil)
 
 	// --- Cycle 1: propagateWhen allows all items ---
 	state := newInstanceState(compiled, nil)
@@ -272,7 +272,7 @@ func TestForEach_ErrorPathNoStaleKeys(t *testing.T) {
 		"kind":       "Graph",
 		"metadata":   map[string]any{"name": "test", "namespace": "default"},
 	}}
-	rs := newReconcileScope(graph, nil)
+	rs := newReconcileScope(graph, nil, nil)
 
 	// Build a fake client:
 	// - Get returns NotFound (no existing resource → ownership check passes,

@@ -83,6 +83,14 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 	var childErrors []error                     // track per-child errors for state derivation
 	seenResourceKeys := make(map[string]string) // resource key → item identity
 	halted := false
+
+	// For forEach metric nodes: reset the metric before iteration so stale
+	// dimensions from previous cycles (disappeared items) are removed.
+	// Each child contributes fresh values — only active series survive.
+	if node.Type() == graphpkg.NodeTypeMetric && node.Metric != nil && rs.metricStore != nil {
+		rs.metricStore.Reset(rs.graphKey, node.Metric.Name)
+	}
+
 	for _, id := range currentOrder {
 		// --- Per-item propagateWhen gate ---
 		if hasPerItemGate && !halted {
@@ -104,6 +112,19 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 		item := currentItems[id]
 
 		if !node.HasBody() {
+			// Metric nodes don't have a map body (HasBody checks Payload/TemplateExpr).
+			// Handle metric forEach inline — evaluate per child with child scope.
+			if node.Type() == graphpkg.NodeTypeMetric {
+				innerScope := graphpkg.CopyScope(eval.scope)
+				innerScope[varName] = item
+				innerEval := eval.withScope(innerScope)
+				if err := reconcileForEachMetricChild(ctx, node, innerEval, rs.metricStore, rs.graphKey); err != nil {
+					childErrors = append(childErrors, fmt.Errorf("forEach metric %s item: %w", node.ID, err))
+					logger.V(1).Info("forEach metric item error", "node", node.ID, "item", id, "error", err)
+				}
+				allApplied = append(allApplied, map[string]any{"__updated": true})
+				continue
+			}
 			continue
 		}
 		innerScope := graphpkg.CopyScope(eval.scope)
@@ -213,6 +234,13 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 	if halted {
 		delete(eval.scope, node.ID)
 		return &nodeOutput{keys: keys}, ErrPending
+	}
+
+	// Per 001-graph.md: metric nodes "do not publish to scope." Skip scope
+	// publication for metric forEach — no downstream node should reference
+	// a metric's internal data.
+	if node.Type() == graphpkg.NodeTypeMetric {
+		return &nodeOutput{keys: keys}, nil
 	}
 
 	// Only publish scope when fully expanded — all items dispatched.

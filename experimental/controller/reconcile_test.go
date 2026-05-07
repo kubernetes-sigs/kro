@@ -1419,7 +1419,7 @@ func TestForEach_HaltedItemsMakeParentPending(t *testing.T) {
 	}}
 
 	r := &GraphReconciler{}
-	rs := newReconcileScope(graph, nil)
+	rs := newReconcileScope(graph, nil, nil)
 	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval)
 	// ErrPending expected — propagateWhen halted expansion, parent is Pending.
 	require.ErrorIs(t, err, ErrPending)
@@ -1467,7 +1467,7 @@ func TestForEach_DefinitionItemsAlwaysReEvaluated(t *testing.T) {
 	}}
 
 	r := &GraphReconciler{}
-	rs := newReconcileScope(graph, nil)
+	rs := newReconcileScope(graph, nil, nil)
 	_, err = r.cluster().reconcileForEach(context.Background(), rs, spec.Nodes[1], eval)
 	require.NoError(t, err)
 
@@ -1510,7 +1510,7 @@ func TestForEach_RegressionSharedContextPropagation(t *testing.T) {
 	}}
 	r := &GraphReconciler{}
 	c := r.cluster()
-	rs := newReconcileScope(graph, nil)
+	rs := newReconcileScope(graph, nil, nil)
 	names := []any{"alpha", "beta"}
 
 	// Phase 1: config.version = "v1"

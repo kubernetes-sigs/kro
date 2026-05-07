@@ -58,7 +58,7 @@ expressions. Must be an alphanumeric string (case-insensitive) and unique within
 
 #### type
 
-A node's type is the keyword it declares. Five types exist:
+A node's type is the keyword it declares. Six types exist:
 
 - **`template:`** — Template a Kubernetes resource. The controller creates the resource if it
   doesn't exist, applies changes when the template changes, and deletes the resource on prune.
@@ -71,6 +71,10 @@ A node's type is the keyword it declares. Five types exist:
   available to other nodes in this graph.
 - **`def:`** — Define raw data for use by other nodes in this graph. Def nodes do not read or write
   Kubernetes resources.
+- **`metric:`** — Emit a prometheus gauge driven by CEL. Value is an explicit CEL expression that
+  evaluates to a number. Labels are direct CEL expressions evaluated in scope. Metric names are
+  unique across Graphs. Propagation-driven — re-evaluates when upstream dependencies change. Does
+  not publish to scope.
 
 ```yaml
 # def: — reusable naming values, no Kubernetes resource created
@@ -125,6 +129,25 @@ A node's type is the keyword it declares. Five types exist:
     kind: Pod
     selector:
       app: ${naming.prefix}
+
+# metric: — emits a prometheus gauge with an explicit value
+- id: podCount
+  metric:
+    type: gauge
+    name: pod_count
+    help: Total number of pods matching the app selector.
+    value: ${size(appPods)}
+
+# metric: — with forEach, emits a gauge per dimension
+- id: podsByPhase
+  forEach:
+    phase: ${appPods.map(p, p.status.phase).distinct()}
+  metric:
+    type: gauge
+    name: pods_by_phase
+    labels:
+      phase: ${phase}
+    value: ${size(appPods.filter(p, p.status.phase == phase))}
 ```
 
 ## Dependencies

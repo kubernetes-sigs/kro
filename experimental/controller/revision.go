@@ -150,6 +150,25 @@ func snapshotNode(node graphpkg.Node) map[string]any {
 			if node.Def != nil {
 				entry["def"] = deepCopyMap(node.Def)
 			}
+		case graphpkg.NodeTypeMetric:
+			if node.Metric != nil {
+				metricMap := map[string]any{
+					"type":  node.Metric.Type,
+					"name":  node.Metric.Name,
+					"value": node.Metric.Value,
+				}
+				if node.Metric.Help != "" {
+					metricMap["help"] = node.Metric.Help
+				}
+				if len(node.Metric.Labels) > 0 {
+					labels := make(map[string]any, len(node.Metric.Labels))
+					for k, v := range node.Metric.Labels {
+						labels[k] = v
+					}
+					metricMap["labels"] = labels
+				}
+				entry["metric"] = metricMap
+			}
 		}
 	}
 	if node.ForEach != nil {

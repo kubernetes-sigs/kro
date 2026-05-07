@@ -121,6 +121,7 @@ func (r *GraphReconciler) propagateNode(
 		logger.V(1).Info("node excluded — dependency excluded", "node", node.ID)
 		plan.SetState(node.ID, NodeExcluded)
 		markExcluded(eval, node.ID, state)
+		removeMetricIfExcluded(rs, node)
 		return nil
 	}
 	if gate == depBlocked {
@@ -167,6 +168,7 @@ func (r *GraphReconciler) propagateNode(
 			logger.V(1).Info("node excluded by includeWhen", "node", node.ID)
 			plan.SetState(node.ID, NodeExcluded)
 			markExcluded(eval, node.ID, state)
+			removeMetricIfExcluded(rs, node)
 			return nil
 		}
 	}
@@ -434,5 +436,14 @@ func markExcluded(eval *evaluator, nodeID string, state *instanceState) {
 	eval.scope[nodeID] = map[string]any{"__ready": true}
 	if eval.nodeReady != nil {
 		eval.nodeReady[nodeID] = true
+	}
+}
+
+// removeMetricIfExcluded removes a metric node's prometheus metric when the
+// node becomes excluded (includeWhen false or contagious exclusion). Without
+// this, an excluded metric retains its last-emitted value from when it was active.
+func removeMetricIfExcluded(rs *reconcileScope, node *graphpkg.Node) {
+	if node.Type() == graphpkg.NodeTypeMetric && node.Metric != nil && rs.metricStore != nil {
+		rs.metricStore.Remove(rs.graphKey, node.Metric.Name)
 	}
 }

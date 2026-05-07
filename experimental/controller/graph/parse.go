@@ -39,14 +39,15 @@ func ExtractGraphSpec(graphObj map[string]any) (*GraphSpec, error) {
 	return &GraphSpec{Nodes: nodes}, nil
 }
 
-// bodyKeywords enumerates the five mutually-exclusive classification keywords.
+// bodyKeywords enumerates the six mutually-exclusive classification keywords.
 // Exactly one must be set per node. The value shape disambiguates map-vs-expr:
 //   - map[string]any → static body
 //   - string         → CEL expression evaluating to the body at runtime
 //
 // Ref and Watch accept only maps — they are identity-only classifications
-// and have no CEL-as-whole-body form.
-var bodyKeywords = []string{"template", "patch", "ref", "watch", "def"}
+// and have no CEL-as-whole-body form. Metric accepts only a map with
+// type/name/help/labels/value fields — it has no CEL-as-whole-body form.
+var bodyKeywords = []string{"template", "patch", "ref", "watch", "def", "metric"}
 
 // reservedWords lists identifiers that must not be used as node IDs or
 // forEach iterator variable names. Limited to CEL language keywords and
@@ -240,6 +241,9 @@ func validateNodeConstraints(node *Node, i int, id string) error {
 	if node.Type() == NodeTypeDef {
 		return fmt.Errorf("node[%d] %q: finalizes is not valid on def nodes (no Kubernetes resource to finalize)", i, id)
 	}
+	if node.Type() == NodeTypeMetric {
+		return fmt.Errorf("node[%d] %q: finalizes is not valid on metric nodes (no Kubernetes resource to finalize)", i, id)
+	}
 	return nil
 }
 
@@ -397,6 +401,17 @@ func setNodeKeyword(node *Node, kw string, raw any) error {
 		default:
 			return fmt.Errorf("def: expected map or string (CEL expression), got %T", raw)
 		}
+	case "metric":
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("metric: expected map with type/name/value fields, got %T", raw)
+		}
+		metric, err := validateMetric(m)
+		if err != nil {
+			return err
+		}
+		node.Metric = metric
+		node.nodeType = NodeTypeMetric
 	default:
 		return fmt.Errorf("unknown keyword %q", kw) // unreachable — caller already filtered
 	}
@@ -516,6 +531,88 @@ func validateDef(tmpl map[string]any) error {
 		return fmt.Errorf("def: kind is not valid (def produces values into scope, not a Kubernetes resource)")
 	}
 	return nil
+}
+
+// prometheusMetricNameRe validates prometheus metric names per the prometheus
+// data model: [a-zA-Z_:][a-zA-Z0-9_:]*.
+var prometheusMetricNameRe = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
+
+// prometheusLabelNameRe validates prometheus label names: [a-zA-Z_][a-zA-Z0-9_]*.
+// Labels beginning with __ are reserved for internal use but we allow them
+// for flexibility.
+var prometheusLabelNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// validateMetric enforces shape rules for metric: bodies.
+// Required: type (metric type), name (static prometheus metric name),
+//           value (CEL expression → number).
+// Optional: help (prometheus help text), labels (map of label name → CEL expression).
+func validateMetric(m map[string]any) (*MetricBody, error) {
+	metricType, _ := m["type"].(string)
+	if metricType == "" {
+		metricType = "gauge" // default to gauge for now
+	}
+	switch metricType {
+	case "gauge":
+		// supported
+	default:
+		return nil, fmt.Errorf("metric: unsupported type %q (supported: gauge)", metricType)
+	}
+
+	name, ok := m["name"].(string)
+	if !ok || name == "" {
+		return nil, fmt.Errorf("metric: missing or empty name (prometheus metric name required)")
+	}
+	if !prometheusMetricNameRe.MatchString(name) {
+		return nil, fmt.Errorf("metric: invalid metric name %q: must match [a-zA-Z_:][a-zA-Z0-9_:]*", name)
+	}
+
+	value, ok := m["value"].(string)
+	if !ok || value == "" {
+		return nil, fmt.Errorf("metric: missing or empty value (CEL expression that returns a number required)")
+	}
+
+	help, _ := m["help"].(string)
+
+	// Validate no unexpected fields
+	for key := range m {
+		switch key {
+		case "type", "name", "help", "labels", "value":
+			continue
+		default:
+			return nil, fmt.Errorf("metric: unexpected field %q (allowed: type, name, help, labels, value)", key)
+		}
+	}
+
+	metric := &MetricBody{
+		Type:  metricType,
+		Name:  name,
+		Help:  help,
+		Value: value,
+	}
+
+	// Parse labels if present
+	if labelsRaw, ok := m["labels"]; ok {
+		labelsMap, ok := labelsRaw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("metric: labels must be a map of label name to CEL expression, got %T", labelsRaw)
+		}
+		metric.Labels = make(map[string]string, len(labelsMap))
+		for labelName, labelExpr := range labelsMap {
+			if !prometheusLabelNameRe.MatchString(labelName) {
+				return nil, fmt.Errorf("metric: invalid label name %q: must match [a-zA-Z_][a-zA-Z0-9_]*", labelName)
+			}
+			exprStr, ok := labelExpr.(string)
+			if !ok {
+				return nil, fmt.Errorf("metric: label %q value must be a string (CEL expression), got %T", labelName, labelExpr)
+			}
+			if exprStr == "" {
+				return nil, fmt.Errorf("metric: label %q has empty expression", labelName)
+			}
+			metric.Labels[labelName] = exprStr
+		}
+	}
+
+	return metric, nil
 }
 
 // parseStringList extracts a validated []string from a map key that holds []any.

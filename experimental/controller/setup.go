@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
@@ -249,8 +250,15 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int)
 		// silently miss cluster-scoped resources because their keys
 		// never match post-apply resourceKey(). Per 003-ownership.md
 		// § Priority Resolution.
-		Scope: newScopeResolver(mgr.GetRESTMapper()),
+		Scope:  newScopeResolver(mgr.GetRESTMapper()),
+		Metrics: NewMetricStore(),
 	}
+
+	// Register the MetricStore as a collector so graph metrics appear on /metrics.
+	// Each metric gets its own prometheus.Registry; the MetricStore collector
+	// iterates all metrics on each scrape. Uses unchecked collector pattern
+	// (no Describe) since the set of metrics is dynamic.
+	metricsserver.Registry.MustRegister(reconciler.Metrics)
 
 	// Watch CRDs for schema changes. Per 004-compilation.md § Compilation Cache:
 	// "Any schema change (CRD installed, updated, removed) advances [the

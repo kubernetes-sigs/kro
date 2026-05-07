@@ -70,6 +70,13 @@ const (
 	// scope as map[string]any. No resync timer, no applied-set entry,
 	// nothing to clean up.
 	NodeTypeDef
+	// NodeTypeMetric — a prometheus metric driven by CEL evaluation. The
+	// node produces no Kubernetes resource and does not publish to scope.
+	// Its sole side-effect is emitting a prometheus metric (gauge, counter,
+	// etc.) whose value is an explicit CEL expression. Labels are direct
+	// CEL expressions evaluated in normal scope. Propagation-driven:
+	// re-evaluates when upstream dependencies change.
+	NodeTypeMetric
 )
 
 // String returns the human-readable name of the NodeType for logging and display.
@@ -85,6 +92,8 @@ func (r NodeType) String() string {
 		return "watch"
 	case NodeTypeDef:
 		return "def"
+	case NodeTypeMetric:
+		return "metric"
 	default:
 		return fmt.Sprintf("NodeType(%d)", int(r))
 	}
@@ -125,6 +134,24 @@ func NodeTypeFromLabelValue(s string) (NodeType, bool) {
 type ForEachBinding struct {
 	VarName string // CEL scope variable name
 	Expr    string // CEL expression yielding the collection
+}
+
+// MetricBody holds the parsed body of a metric: node. A metric emits a
+// prometheus metric (gauge, counter, etc.) whose value is determined by an
+// explicit CEL expression. Labels are direct CEL expressions evaluated in
+// normal scope — no implicit iteration.
+//
+//   - Type: metric type ("gauge"; future: "counter", "histogram")
+//   - Name: prometheus metric name (static string, not CEL)
+//   - Help: prometheus help text (static string, optional)
+//   - Labels: map[labelName]CEL — expressions evaluated in scope
+//   - Value: CEL expression that must evaluate to a number
+type MetricBody struct {
+	Type   string            // metric type: "gauge" (future: "counter", "histogram")
+	Name   string            // prometheus metric name (static)
+	Help   string            // prometheus help text (static, optional)
+	Labels map[string]string // label name → CEL expression (evaluated in scope)
+	Value  string            // CEL expression → numeric value
 }
 
 // Node is a parsed Graph node entry — a user's declaration of intent about
@@ -168,6 +195,7 @@ type Node struct {
 	Ref      map[string]any // single-object reference (apiVersion + kind + metadata.name)
 	Watch    map[string]any // collection observation (apiVersion + kind + optional selector)
 	Def      map[string]any // Definition — computed values into scope, no K8s resource
+	Metric   *MetricBody    // metric: — prometheus metric driven by CEL evaluation
 
 	// TemplateExpr — CEL expression string that evaluates to the whole body
 	// map at runtime. Set when a body-producing keyword (template / patch /
@@ -296,7 +324,7 @@ func (n *Node) Payload() map[string]any {
 
 // HasBody returns true if the node has an evaluable body — either a
 // static map or a CEL expression that yields a map at runtime. Returns
-// false for Ref/Watch (identity-only).
+// false for Ref/Watch (identity-only) and Metric (uses MetricBody, not a map).
 func (n *Node) HasBody() bool {
 	return n.Payload() != nil || n.TemplateExpr != ""
 }
@@ -377,6 +405,14 @@ func (s *GraphSpec) AllExpressions() []string {
 			templateStrings = append(templateStrings, node.TemplateExpr)
 		}
 		add(templateStrings)
+
+		// Metric value expression and label expressions
+		if node.Metric != nil {
+			add([]string{node.Metric.Value})
+			for _, labelExpr := range node.Metric.Labels {
+				add([]string{labelExpr})
+			}
+		}
 
 		// ForEach collection expressions
 		if node.ForEach != nil {

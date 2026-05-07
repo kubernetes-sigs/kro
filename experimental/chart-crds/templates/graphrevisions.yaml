@@ -85,6 +85,13 @@ spec:
                           puts values into scope. Value is a map of key-value
                           pairs or a CEL expression string.
                         x-kubernetes-preserve-unknown-fields: true
+                      metric:
+                        description: >-
+                          Prometheus metric driven by CEL. Emits a metric
+                          (gauge, counter, etc.) whose value is an explicit
+                          CEL expression. Labels are direct CEL expressions.
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
                       forEach:
                         description: >-
                           Expands the node once per item in a collection.

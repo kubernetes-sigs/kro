@@ -48,7 +48,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	}
 
 	// Build a minimal instanceState for advanceFinalization.
-	rs := newReconcileScope(graph, nil)
+	rs := newReconcileScope(graph, nil, r.Metrics)
 	teardownState := &instanceState{}
 
 	// -----------------------------------------------------------------------
@@ -126,6 +126,11 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		r.Caches.remove(rev.GetNamespace() + "/" + rev.GetName())
 	}
 
+	// Clean up metric registrations.
+	if r.Metrics != nil {
+		r.Metrics.Cleanup(graph.GetNamespace() + "/" + graph.GetName())
+	}
+
 	controllerutil.RemoveFinalizer(graph, finalizer)
 	if err := r.Client.Update(ctx, graph); err != nil {
 		return ctrl.Result{}, err
@@ -198,7 +203,7 @@ func (r *GraphReconciler) collectTeardownKeys(ctx context.Context, cluster *clus
 	}
 
 	// Include dynamically-named resources found by label selector.
-	rs := newReconcileScope(graph, nil) // watcher is handled specially in teardown
+	rs := newReconcileScope(graph, nil, r.Metrics) // watcher is handled specially in teardown
 	dynamicKeys, findErr := cluster.findManagedResourceKeys(ctx, rs)
 	if findErr != nil {
 		logger.Error(findErr, "finding dynamically-named resources during teardown; forEach children may be orphaned if not in watch cache")

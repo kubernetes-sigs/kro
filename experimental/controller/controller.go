@@ -75,6 +75,7 @@ type GraphReconciler struct {
 	Watcher        *watches.WatchCoordinator  // nil = no dynamic watches (backward compat with existing tests)
 	Caches         *InstanceMap               // per-revision compiled expression caches
 	Scope          *scopeResolver             // nil = unknown scope; staticResourceKey falls back to namespace-substitution heuristic
+	Metrics        *MetricStore               // per-controller metric store; nil = metrics disabled
 }
 
 // reconcileScope bundles the per-reconcile identity context that threads
@@ -86,14 +87,19 @@ type reconcileScope struct {
 	// Pre-derived fields to avoid repeated calls.
 	name      string
 	namespace string
+	graphKey  string // "namespace/name" — used by metric store
+	// Metric store reference — persists across reconcile cycles.
+	metricStore *MetricStore
 }
 
-func newReconcileScope(graph *unstructured.Unstructured, watcher *watches.GraphWatcher) *reconcileScope {
+func newReconcileScope(graph *unstructured.Unstructured, watcher *watches.GraphWatcher, metricStore *MetricStore) *reconcileScope {
 	return &reconcileScope{
-		graph:     graph,
-		watcher:   watcher,
-		name:      graph.GetName(),
-		namespace: graph.GetNamespace(),
+		graph:       graph,
+		watcher:     watcher,
+		name:        graph.GetName(),
+		namespace:   graph.GetNamespace(),
+		graphKey:    graph.GetNamespace() + "/" + graph.GetName(),
+		metricStore: metricStore,
 	}
 }
 
@@ -182,7 +188,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// -----------------------------------------------------------------------
 	// 7. Propagate the DAG
 	// -----------------------------------------------------------------------
-	rs := newReconcileScope(graph, watcher)
+	rs := newReconcileScope(graph, watcher, r.Metrics)
 	wp := r.reconcilePropagate(ctx, rs, rev.state, rev.eval, rev.dag, rev.plan)
 
 	// Post-propagation recompile check: if the propagation created a CRD, re-validate
@@ -373,6 +379,11 @@ func (r *GraphReconciler) reconcilePrune(
 		return result
 	}
 
+	// Prune stale metrics: any metric in a superseded revision but
+	// absent from the current DAG is orphaned (node removed or metric renamed).
+	if r.Metrics != nil && len(supersededRevisions) > 0 {
+		r.pruneStaleMetrics(ctx, rs, dag, supersededRevisions)
+	}
 	cluster := r.cluster()
 	allPreviousKeys := map[string]Applied{}
 	logger.V(1).Info("prune gate open", "superseded", len(supersededRevisions))
@@ -445,4 +456,35 @@ func (r *GraphReconciler) reconcilePrune(
 		result.errors = append(result.errors, fmt.Sprintf("prune: %s", info.reason))
 	}
 	return result
+}
+
+// pruneStaleMetrics removes prometheus metrics that existed in superseded revisions
+// but are absent from the current DAG. Mirrors resource pruning: propagation
+// creates/updates metrics, prune removes them when their nodes disappear.
+func (r *GraphReconciler) pruneStaleMetrics(ctx context.Context, rs *reconcileScope, dag *dagpkg.DAG, supersededRevisions []*unstructured.Unstructured) {
+	logger := log.FromContext(ctx)
+
+	// Collect metric names from current DAG.
+	currentMetrics := map[string]bool{}
+	if dag != nil {
+		for _, node := range dag.Nodes {
+			if node.Metric != nil {
+				currentMetrics[node.Metric.Name] = true
+			}
+		}
+	}
+
+	// Collect metric names from superseded revisions.
+	for _, rev := range supersededRevisions {
+		spec, err := extractRevisionSpec(rev)
+		if err != nil {
+			continue
+		}
+		for _, node := range spec.Nodes {
+			if node.Metric != nil && !currentMetrics[node.Metric.Name] {
+				logger.Info("pruning stale metric", "metric", node.Metric.Name, "fromRevision", rev.GetName())
+				r.Metrics.Remove(rs.graphKey, node.Metric.Name)
+			}
+		}
+	}
 }

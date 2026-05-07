@@ -285,7 +285,17 @@ func validateExternalRefMetadata(metadata v1alpha1.ExternalRefMetadata) error {
 	}
 
 	if bytes.Contains(raw, []byte("${")) {
-		return nil
+		if raw[0] != '{' {
+			// The entire selector is a string (e.g. a standalone CEL expression
+			// that resolves to a LabelSelector at runtime). Allow it; the
+			// downstream parser will validate the expression.
+			return nil
+		}
+		// The selector is an object containing CEL markers in some values.
+		// Validate structural types of known fields so that a string at a
+		// position that expects an object is caught the same way the
+		// schema-aware parser would catch it for other RawExtension fields.
+		return validateSelectorStructure(raw)
 	}
 
 	if raw[0] == '"' {
@@ -305,6 +315,42 @@ func validateExternalRefMetadata(metadata v1alpha1.ExternalRefMetadata) error {
 		return fmt.Errorf("invalid label selector: %w", err)
 	}
 
+	return nil
+}
+
+// validateSelectorStructure validates the structural types of known fields
+// within a LabelSelector object that contains CEL markers. This mirrors the
+// type enforcement the schema-aware parser performs for other RawExtension
+// fields (e.g. Template, Schema.Spec).
+func validateSelectorStructure(raw []byte) error {
+	var selectorMap map[string]interface{}
+	if err := json.Unmarshal(raw, &selectorMap); err != nil {
+		return fmt.Errorf("invalid selector object: %w", err)
+	}
+	if ml, ok := selectorMap["matchLabels"]; ok {
+		switch v := ml.(type) {
+		case map[string]interface{}:
+			// valid
+		case string:
+			if !(strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}")) {
+				return fmt.Errorf("expected object type for path metadata.selector.matchLabels, got string")
+			}
+		default:
+			return fmt.Errorf("expected object type for path metadata.selector.matchLabels, got string")
+		}
+	}
+	if me, ok := selectorMap["matchExpressions"]; ok {
+		switch v := me.(type) {
+		case []interface{}:
+			// valid
+		case string:
+			if !(strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}")) {
+				return fmt.Errorf("expected array type for path metadata.selector.matchExpressions, got string")
+			}
+		default:
+			return fmt.Errorf("expected array type for path metadata.selector.matchExpressions, got string")
+		}
+	}
 	return nil
 }
 

@@ -4432,3 +4432,33 @@ func TestBuilderHelperCases(t *testing.T) {
 		t.Run(tt.name, tt.run)
 	}
 }
+
+func TestSelectorFieldType(t *testing.T) {
+	tests := []struct {
+		path string
+		want *cel.Type
+	}{
+		{"metadata.selector", cel.MapType(cel.StringType, cel.DynType)},
+		{"metadata.selector.matchLabels", cel.MapType(cel.StringType, cel.StringType)},
+		{"metadata.selector.matchLabels.app", cel.StringType},
+		{"metadata.selector.matchLabels.some-key", cel.StringType},
+		{"metadata.selector.matchExpressions", cel.ListType(cel.DynType)},
+		{"metadata.name", nil},
+		{"spec.replicas", nil},
+		{"metadata.labels", nil},
+		{"", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := selectorFieldType(tt.path)
+			if tt.want == nil {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.True(t, tt.want.IsEquivalentType(got),
+					"path %q: got %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}

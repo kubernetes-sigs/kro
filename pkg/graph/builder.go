@@ -1053,6 +1053,14 @@ func resolveSchemaAndTypeName(c *schema.Cache, segments []fieldpath.Segment, roo
 // expectedTypeForField computes the expected CEL type for a field descriptor
 // by deriving it from the OpenAPI schema at the path.
 func expectedTypeForField(bc *buildContext, descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string) *cel.Type {
+	// Paths under metadata.selector come from ExternalRef synthetic resources.
+	// The selector is always a LabelSelector, whose structure is known, but
+	// it doesn't exist in the target resource's OpenAPI schema. Return the
+	// concrete types so the CEL type checker can catch mismatches.
+	if t := selectorFieldType(descriptor.Path); t != nil {
+		return t
+	}
+
 	segments, err := fieldpath.Parse(descriptor.Path)
 	if err != nil {
 		return cel.DynType
@@ -1064,6 +1072,24 @@ func expectedTypeForField(bc *buildContext, descriptor *variable.FieldDescriptor
 	}
 
 	return celTypeFromSchema(bc, s, typeName)
+}
+
+// selectorFieldType returns the expected CEL type for well-known
+// LabelSelector fields under metadata.selector. Returns nil for paths
+// that are not part of the selector structure.
+func selectorFieldType(path string) *cel.Type {
+	switch {
+	case path == "metadata.selector":
+		return cel.MapType(cel.StringType, cel.DynType)
+	case path == "metadata.selector.matchLabels":
+		return cel.MapType(cel.StringType, cel.StringType)
+	case strings.HasPrefix(path, "metadata.selector.matchLabels."):
+		return cel.StringType
+	case path == "metadata.selector.matchExpressions":
+		return cel.ListType(cel.DynType)
+	default:
+		return nil
+	}
 }
 
 // celTypeFromSchema looks up a pre-registered CEL type by name from the

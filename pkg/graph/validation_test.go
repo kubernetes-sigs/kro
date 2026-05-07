@@ -894,6 +894,65 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 			},
 			wantErr: "invalid label selector",
 		},
+		{
+			name: "matchLabels unterminated CEL string is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchLabels": "${schema.spec.selector",
+				}),
+			},
+			wantErr: "expected object type for path metadata.selector.matchLabels, got string",
+		},
+		{
+			name: "matchLabels escaped CEL string is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchLabels": "\\${schema.spec.selector}",
+				}),
+			},
+			wantErr: "expected object type for path metadata.selector.matchLabels, got string",
+		},
+		{
+			name: "matchLabels plain string with CEL marker is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchLabels": "prefix-${schema.spec.selector}",
+				}),
+			},
+			wantErr: "expected object type for path metadata.selector.matchLabels, got string",
+		},
+		{
+			name: "matchExpressions string with CEL marker is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchExpressions": "${schema.spec.expressions",
+				}),
+			},
+			wantErr: "expected array type for path metadata.selector.matchExpressions, got string",
+		},
+		{
+			name: "matchLabels number with CEL elsewhere is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchLabels":      42,
+					"matchExpressions": "${schema.spec.expressions}",
+				}),
+			},
+			wantErr: "expected object type for path metadata.selector.matchLabels, got string",
+		},
+		{
+			// Standalone CEL expressions at matchLabels/matchExpressions pass
+			// validateExternalRefMetadata — the function cannot run the CEL
+			// type checker. Type mismatches (e.g. string where map is expected)
+			// are caught later by validateAndCompileTemplates via
+			// selectorFieldType, which returns the concrete expected types.
+			name: "matchExpressions standalone CEL passes validateExternalRefMetadata",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchExpressions": "${schema.spec.expressions}",
+				}),
+			},
+		},
 	}
 
 	for _, tt := range tests {

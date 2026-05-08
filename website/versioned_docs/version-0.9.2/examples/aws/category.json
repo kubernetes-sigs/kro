@@ -1,0 +1,10 @@
+{
+  "label": "AWS Examples",
+  "position": 300,
+  "link": {
+    "type": "generated-index",
+    "description": "Examples of using Kro with AWS"
+  },
+  "collapsible": true,
+  "collapsed": true
+} 

@@ -1,0 +1,10 @@
+{
+  "label": "GCP Examples",
+  "position": 400,
+  "link": {
+    "type": "generated-index",
+    "description": "Examples of using Kro with Google Cloud Platform"
+  },
+  "collapsible": true,
+  "collapsed": true
+} 

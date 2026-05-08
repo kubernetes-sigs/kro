@@ -362,8 +362,14 @@ func (c *Controller) processRegularNode(
 		node.SetObserved([]*unstructured.Unstructured{current})
 	}
 
-	// Apply decorator labels to desired object
-	c.applyDecoratorLabels(rcx, desired, id, nil)
+	// Evaluate lifecycle policy for this resource
+	policy, err := node.Policy()
+	if err != nil {
+		return nil, errorState(err), err
+	}
+
+	// Apply decorator labels and lifecycle annotation to desired object
+	c.applyDecoratorLabels(rcx, desired, id, nil, policy)
 
 	resource := applyset.Resource{
 		ID:      id,
@@ -380,6 +386,7 @@ func (c *Controller) applyDecoratorLabels(
 	obj *unstructured.Unstructured,
 	nodeID string,
 	collectionInfo *CollectionInfo,
+	policy runtime.Policy,
 ) {
 	labels := obj.GetLabels()
 	if labels == nil {
@@ -414,6 +421,17 @@ func (c *Controller) applyDecoratorLabels(
 	}
 
 	obj.SetLabels(labels)
+
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	if policy.ShouldRetain() {
+		annotations[metadata.LifecyclePolicyAnnotation] = metadata.LifecyclePolicyRetain
+	} else {
+		annotations[metadata.LifecyclePolicyAnnotation] = metadata.LifecyclePolicyDelete
+	}
+	obj.SetAnnotations(annotations)
 }
 
 // patchInstanceWithApplySetMetadata applies applyset metadata to the parent instance.

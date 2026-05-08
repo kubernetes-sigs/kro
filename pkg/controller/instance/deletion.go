@@ -151,6 +151,12 @@ func (c *Controller) planNodesForDeletion(
 				state.SetError(err)
 				return nil, err
 			}
+			// If resource exists but has no KRO labels, it was orphaned and should be
+			// considered deleted from KRO's perspective.
+			if !metadata.IsKROOwned(observed) {
+				state.SetDeleted()
+				continue
+			}
 			node.SetObserved([]*unstructured.Unstructured{observed})
 			state.SetInProgress()
 			deletionNode = node
@@ -175,6 +181,31 @@ func (c *Controller) deleteTarget(
 		return err
 	}
 	if len(targets) == 0 {
+		state.SetDeleted()
+		return nil
+	}
+
+	// Check if the resource should be retained based on its lifecycle policy
+	policy, err := node.Policy()
+	if err != nil {
+		state.SetError(err)
+		return err
+	}
+
+	// If policy says to retain, orphan all targets and mark node as deleted.
+	if policy.ShouldRetain() {
+		rcx.Log.Info("Lifecycle policy says retain, orphaning resources", "resource", node.Spec.Meta.ID, "targetCount", len(targets))
+		for _, target := range targets {
+			rcx.Log.Info("Removing KRO labels and field managers from resource", "resource", node.Spec.Meta.ID, "name", target.GetName(), "namespace", target.GetNamespace())
+			if err := metadata.RemoveKroLabelsAndFieldManagersToRetainResource(rcx.Ctx, rcx.Client, node.Spec.Meta.GVR, target.GetNamespace(), target.GetName()); err != nil {
+				rcx.Log.Error(err, "Failed to orphan resource", "resource", node.Spec.Meta.ID, "name", target.GetName())
+				state.SetError(err)
+				return err
+			}
+			rcx.Log.Info("Successfully orphaned resource", "resource", node.Spec.Meta.ID, "name", target.GetName())
+		}
+		// All resources orphaned - mark as deleted (from KRO's perspective)
+		rcx.Log.Info("All resources orphaned, marking node as deleted", "resource", node.Spec.Meta.ID)
 		state.SetDeleted()
 		return nil
 	}

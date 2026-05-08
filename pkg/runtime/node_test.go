@@ -1873,6 +1873,7 @@ type testNodeBuilder struct {
 	templateVars     []*variable.ResourceField
 	template         *unstructured.Unstructured
 	resourceSchema   *spec.Schema
+	lifecycle        *krocel.Expression
 }
 
 // newTestNode creates a new test node builder with the given ID and type.
@@ -2020,6 +2021,12 @@ func (b *testNodeBuilder) withResourceSchema(schema *spec.Schema) *testNodeBuild
 	return b
 }
 
+// withLifecycle sets the lifecycle expression.
+func (b *testNodeBuilder) withLifecycle(expr string) *testNodeBuilder {
+	b.lifecycle = mustCompileTestExpr(expr)
+	return b
+}
+
 // build constructs the Node.
 func (b *testNodeBuilder) build() *Node {
 	node := &Node{
@@ -2029,7 +2036,8 @@ func (b *testNodeBuilder) build() *Node {
 				Type:       b.nodeType,
 				Namespaced: b.namespaced,
 			},
-			Template: b.template,
+			Template:  b.template,
+			Lifecycle: b.lifecycle,
 		},
 		deps:             b.deps,
 		observed:         b.observed,
@@ -3483,6 +3491,83 @@ func TestNode_HardResolveCollection_Errors(t *testing.T) {
 			if tt.wantErrContain != "" {
 				assert.Contains(t, err.Error(), tt.wantErrContain)
 			}
+		})
+	}
+}
+func TestNode_ShouldRetain(t *testing.T) {
+	tests := []struct {
+		name           string
+		node           *Node
+		wantRetain     bool
+		wantErr        bool
+		wantErrContain string
+	}{
+		{
+			name:       "no lifecycle policy means do not retain",
+			node:       newTestNode("test", graph.NodeTypeResource).build(),
+			wantRetain: false,
+		},
+		{
+			name:       "empty policy means do not retain",
+			node:       newTestNode("test", graph.NodeTypeResource).withLifecycle("policy()").build(),
+			wantRetain: false,
+		},
+		{
+			name:       "policy with retain returns true",
+			node:       newTestNode("test", graph.NodeTypeResource).withLifecycle("policy().withRetain()").build(),
+			wantRetain: true,
+		},
+		{
+			name:       "policy with delete returns false",
+			node:       newTestNode("test", graph.NodeTypeResource).withLifecycle("policy().withDelete()").build(),
+			wantRetain: false,
+		},
+		{
+			name: "conditional policy with retain based on instance",
+			node: newTestNode("test", graph.NodeTypeResource).
+				withLifecycle("schema.spec.env == 'prod' ? policy().withRetain() : policy()").
+				withDep(newTestNode("schema", graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{"env": "prod"},
+					}).build()).build(),
+			wantRetain: true,
+		},
+		{
+			name: "conditional policy without retain when not prod",
+			node: newTestNode("test", graph.NodeTypeResource).
+				withLifecycle("schema.spec.env == 'prod' ? policy().withRetain() : policy()").
+				withDep(newTestNode("schema", graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{"env": "dev"},
+					}).build()).build(),
+			wantRetain: false,
+		},
+		{
+			name:           "invalid lifecycle expression (not a map)",
+			node:           newTestNode("test", graph.NodeTypeResource).withLifecycle("true").build(),
+			wantErr:        true,
+			wantErrContain: "must evaluate to a map",
+		},
+		{
+			name:           "invalid deletePolicy type (not a string)",
+			node:           newTestNode("test", graph.NodeTypeResource).withLifecycle("{\"deletePolicy\": 123}").build(),
+			wantErr:        true,
+			wantErrContain: "must be a string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policy, err := tt.node.Policy()
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantErrContain != "" {
+					assert.Contains(t, err.Error(), tt.wantErrContain)
+				}
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantRetain, policy.ShouldRetain())
 		})
 	}
 }

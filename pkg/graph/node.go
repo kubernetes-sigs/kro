@@ -139,6 +139,10 @@ type Node struct {
 	// ForEach holds the forEach dimensions for collection resources.
 	// nil or empty means this is not a collection.
 	ForEach []ForEachDimension
+
+	// Lifecycle holds the compiled CEL expression for lifecycle policy.
+	// nil means no lifecycle policy is specified.
+	Lifecycle *krocel.Expression
 }
 
 // DeepCopy creates a deep copy of the Node.
@@ -160,6 +164,7 @@ func (n *Node) DeepCopy() *Node {
 		IncludeWhen: slices.Clone(n.IncludeWhen),
 		ReadyWhen:   slices.Clone(n.ReadyWhen),
 		ForEach:     slices.Clone(n.ForEach),
+		Lifecycle:   n.Lifecycle,
 	}
 
 	if n.Template != nil {

@@ -16,6 +16,7 @@ kro includes a rich set of CEL function libraries from three sources: kro's own 
 | Maps                        | kro        | [kro](#maps), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#Maps) |
 | Index Mutation              | kro        | [kro](#index-mutation), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#Lists) |
 | Omit                        | kro        | [kro](#omit), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#Omit) |
+| Policy                      | kro        | [Lifecycle](./02-resource-definitions/06-lifecycle.md) |
 | Strings                     | cel-go     | [kro](#strings), [Go doc](https://pkg.go.dev/github.com/google/cel-go/ext#Strings) |
 | Lists (cel-go)              | cel-go     | [kro](#lists-cel-go), [Go doc](https://pkg.go.dev/github.com/google/cel-go/ext#Lists) |
 | Encoders                    | cel-go     | [kro](#encoders), [Go doc](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders) |
@@ -157,6 +158,26 @@ nodeSelector: ${schema.spec.pinToNode ? {"kubernetes.io/hostname": schema.spec.n
 :::note
 `omit()` is only allowed in resource template fields. It is rejected in `includeWhen`, `readyWhen`, and `forEach` expressions.
 :::
+
+### Policy
+
+The `policy()` builder defines resource lifecycle behavior. See [Lifecycle](./02-resource-definitions/06-lifecycle.md) for full documentation.
+
+| Function | Returns | Description |
+|---|---|---|
+| `policy()` | `Policy` | Creates an empty lifecycle policy builder. |
+| `<Policy>.withRetain()` | `Policy` | Resource is orphaned (KRO labels removed) on instance deletion. |
+| `<Policy>.withDelete()` | `Policy` | Resource is deleted on instance deletion (default). |
+
+**Examples:**
+
+```kro
+# Retain storage on deletion
+lifecycle: "${policy().withRetain()}"
+
+# Conditional retention
+lifecycle: "${schema.spec.env == 'prod' ? policy().withRetain() : policy().withDelete()}"
+```
 
 
 ## cel-go Libraries

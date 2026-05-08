@@ -183,3 +183,31 @@ func WithResourceCollection(
 		})
 	}
 }
+
+// WithResourceWithLifecycle adds a resource with a lifecycle policy to the ResourceGraphDefinition.
+// Lifecycle can be either a map (deletePolicy: retain) or interface{} for CEL expressions.
+func WithResourceWithLifecycle(
+	id string,
+	template map[string]interface{},
+	readyWhen []string,
+	includeWhen []string,
+	lifecycle string,
+) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		templateRaw, err := json.Marshal(template)
+		if err != nil {
+			panic(err)
+		}
+
+		rgd.Spec.Resources = append(rgd.Spec.Resources, &krov1alpha1.Resource{
+			ID:          id,
+			ReadyWhen:   readyWhen,
+			IncludeWhen: includeWhen,
+			Template: runtime.RawExtension{
+				Object: &unstructured.Unstructured{Object: template},
+				Raw:    templateRaw,
+			},
+			Lifecycle: lifecycle,
+		})
+	}
+}

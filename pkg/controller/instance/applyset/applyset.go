@@ -60,9 +60,13 @@ type Interface interface {
 	// Batch metadata contains only GKs/namespaces from THIS apply (not parent memory).
 	Apply(ctx context.Context, resources []Resource, mode ApplyMode) (*ApplyResult, Metadata, error)
 
-	// Prune deletes orphaned resources (those with applyset label but not in KeepUIDs).
-	// Pass Project().PruneScope() to search both current batch locations AND parent memory.
-	Prune(ctx context.Context, opts PruneOptions) (*PruneResult, error)
+	// ListOrphans discovers orphaned resources without deleting them.
+	// Returns candidates that the caller can order (e.g. reverse-topological)
+	// before issuing deletes via DeleteOrphan.
+	ListOrphans(ctx context.Context, opts PruneOptions) ([]OrphanCandidate, error)
+
+	// DeleteOrphan deletes a single orphan candidate using a UID precondition.
+	DeleteOrphan(ctx context.Context, candidate OrphanCandidate) (DeleteOrphanResult, error)
 }
 
 // Resource is an input to Apply.
@@ -85,7 +89,7 @@ type ApplyMode struct {
 	Concurrency int // 0 = len(resources)
 }
 
-// PruneOptions controls Prune behavior.
+// PruneOptions controls ListOrphans behavior.
 type PruneOptions struct {
 	// KeepUIDs are UIDs of resources that should NOT be pruned.
 	// Typically from ApplyResult.ObservedUIDs().
@@ -95,8 +99,6 @@ type PruneOptions struct {
 	// Pass the superset scope (union of batch + parent) to ensure
 	// prune finds all orphans.
 	Scope *PruneScope
-	// Concurrency limits parallel delete operations. 0 = len(candidates).
-	Concurrency int
 }
 
 // PruneScope defines the search space for orphan detection.
@@ -332,37 +334,6 @@ func (a *ApplySet) Apply(ctx context.Context, resources []Resource, mode ApplyMo
 	return result, a.buildMetadata(desiredGKs, desiredNamespaces), nil
 }
 
-// Prune deletes orphaned resources (those with applyset label but not in KeepUIDs).
-func (a *ApplySet) Prune(ctx context.Context, opts PruneOptions) (*PruneResult, error) {
-	scopeGKs := opts.Scope.GroupKinds
-
-	// Always include parent namespace in prune scope
-	scopeNamespaces := opts.Scope.Namespaces.Clone()
-	if a.parentNamespace != "" {
-		scopeNamespaces.Insert(a.parentNamespace)
-	} else {
-		scopeNamespaces.Insert(metav1.NamespaceDefault)
-	}
-
-	// Convert GKs to RESTMappings
-	pruneMappings := make([]*meta.RESTMapping, 0, len(scopeGKs))
-	for gk := range scopeGKs {
-		mapping, err := a.restMapper.RESTMapping(gk)
-		if err != nil {
-			return nil, fmt.Errorf("RESTMapping failed for %v: %w", gk, err)
-		}
-		pruneMappings = append(pruneMappings, mapping)
-	}
-
-	// List and delete orphans
-	pruned, conflicts, err := a.prune(ctx, pruneMappings, scopeNamespaces, opts.KeepUIDs, opts.Concurrency)
-	if err != nil {
-		return nil, err
-	}
-
-	return &PruneResult{Pruned: pruned, Conflicts: conflicts}, nil
-}
-
 func (a *ApplySet) applyResource(
 	ctx context.Context,
 	r Resource,
@@ -467,23 +438,80 @@ func (a *ApplySet) resolveNamespace(ns string) string {
 	return ns
 }
 
-func (a *ApplySet) prune(
+// ListOrphans discovers orphaned resources (applyset members not in KeepUIDs)
+// without deleting them. The caller can order the returned candidates before
+// issuing deletes via DeleteOrphan.
+func (a *ApplySet) ListOrphans(ctx context.Context, opts PruneOptions) ([]OrphanCandidate, error) {
+	scopeGKs := opts.Scope.GroupKinds
+
+	scopeNamespaces := opts.Scope.Namespaces.Clone()
+	if a.parentNamespace != "" {
+		scopeNamespaces.Insert(a.parentNamespace)
+	} else {
+		scopeNamespaces.Insert(metav1.NamespaceDefault)
+	}
+
+	mappings := make([]*meta.RESTMapping, 0, len(scopeGKs))
+	for gk := range scopeGKs {
+		mapping, err := a.restMapper.RESTMapping(gk)
+		if err != nil {
+			return nil, fmt.Errorf("RESTMapping failed for %v: %w", gk, err)
+		}
+		mappings = append(mappings, mapping)
+	}
+
+	return a.listOrphans(ctx, mappings, scopeNamespaces, opts.KeepUIDs)
+}
+
+// DeleteOrphan deletes a single orphan candidate using a UID precondition
+// to avoid deleting a resource that was recreated since listing.
+func (a *ApplySet) DeleteOrphan(ctx context.Context, candidate OrphanCandidate) (DeleteOrphanResult, error) {
+	uid := candidate.Object.GetUID()
+	deleteOpts := metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &uid},
+	}
+
+	var err error
+	if candidate.Object.GetNamespace() != "" {
+		err = a.client.Resource(candidate.GVR).Namespace(candidate.Object.GetNamespace()).Delete(ctx, candidate.Object.GetName(), deleteOpts)
+	} else {
+		err = a.client.Resource(candidate.GVR).Delete(ctx, candidate.Object.GetName(), deleteOpts)
+	}
+
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return DeleteOrphanResult{}, nil
+		}
+		if apierrors.IsConflict(err) {
+			a.log.V(2).Info("skipped prune due to UID mismatch (resource recreated)",
+				"name", candidate.Object.GetName(),
+				"namespace", candidate.Object.GetNamespace(),
+				"gvr", candidate.GVR.String(),
+			)
+			return DeleteOrphanResult{Conflict: true}, nil
+		}
+		return DeleteOrphanResult{}, fmt.Errorf("delete %s/%s: %w", candidate.Object.GetNamespace(), candidate.Object.GetName(), err)
+	}
+
+	a.log.V(2).Info("pruned resource",
+		"name", candidate.Object.GetName(),
+		"namespace", candidate.Object.GetNamespace(),
+		"gvr", candidate.GVR.String(),
+	)
+	return DeleteOrphanResult{Pruned: &PruneResultItem{Object: candidate.Object}}, nil
+}
+
+// listOrphans lists applyset members not in keepUIDs. This is the listing half
+// of the former prune() method.
+func (a *ApplySet) listOrphans(
 	ctx context.Context,
 	mappings []*meta.RESTMapping,
 	namespaces sets.Set[string],
 	keepUIDs sets.Set[types.UID],
-	concurrency int,
-) ([]PruneResultItem, int, error) {
-	// Track candidates with their GVR for deletion
-	type pruneCandidate struct {
-		obj *unstructured.Unstructured
-		gvr schema.GroupVersionResource
-	}
-
-	// Build list tasks
+) ([]OrphanCandidate, error) {
 	type listTask struct {
 		gvr       schema.GroupVersionResource
-		namespace string // empty for cluster-scoped
+		namespace string
 		scoped    bool
 	}
 	var tasks []listTask
@@ -498,14 +526,10 @@ func (a *ApplySet) prune(
 		}
 	}
 
-	// List resources in parallel
-	var listMu sync.Mutex
-	var candidates []pruneCandidate
+	var mu sync.Mutex
+	var candidates []OrphanCandidate
 
 	listGroup, listCtx := errgroup.WithContext(ctx)
-	if concurrency > 0 {
-		listGroup.SetLimit(concurrency)
-	}
 	for _, task := range tasks {
 		listGroup.Go(func() error {
 			var list *unstructured.UnstructuredList
@@ -526,87 +550,25 @@ func (a *ApplySet) prune(
 				}
 			}
 
-			var local []pruneCandidate
+			var local []OrphanCandidate
 			for i := range list.Items {
 				obj := &list.Items[i]
 				if !keepUIDs.Has(obj.GetUID()) {
-					local = append(local, pruneCandidate{obj: obj, gvr: task.gvr})
+					local = append(local, OrphanCandidate{Object: obj, GVR: task.gvr})
 				}
 			}
 
-			listMu.Lock()
+			mu.Lock()
 			candidates = append(candidates, local...)
-			listMu.Unlock()
+			mu.Unlock()
 			return nil
 		})
 	}
 	if err := listGroup.Wait(); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
-	// Delete candidates concurrently
-	if concurrency <= 0 {
-		concurrency = len(candidates)
-	}
-	if concurrency == 0 {
-		concurrency = 1
-	}
-
-	eg, egCtx := errgroup.WithContext(ctx)
-	eg.SetLimit(concurrency)
-
-	var mu sync.Mutex
-	var results []PruneResultItem
-	conflicts := 0
-
-	for _, c := range candidates {
-		eg.Go(func() error {
-			deleteOpts := metav1.DeleteOptions{
-				Preconditions: &metav1.Preconditions{UID: new(c.obj.GetUID())},
-			}
-			var err error
-			if c.obj.GetNamespace() != "" {
-				err = a.client.Resource(c.gvr).Namespace(c.obj.GetNamespace()).Delete(egCtx, c.obj.GetName(), deleteOpts)
-			} else {
-				err = a.client.Resource(c.gvr).Delete(egCtx, c.obj.GetName(), deleteOpts)
-			}
-
-			if err != nil {
-				if apierrors.IsNotFound(err) {
-					return nil
-				}
-				if apierrors.IsConflict(err) {
-					a.log.V(2).Info("skipped prune due to UID mismatch (resource recreated)",
-						"name", c.obj.GetName(),
-						"namespace", c.obj.GetNamespace(),
-						"gvr", c.gvr.String(),
-					)
-					mu.Lock()
-					conflicts++
-					mu.Unlock()
-					return nil
-				}
-				return fmt.Errorf("delete %s/%s: %w", c.obj.GetNamespace(), c.obj.GetName(), err)
-			}
-
-			mu.Lock()
-			results = append(results, PruneResultItem{Object: c.obj})
-			mu.Unlock()
-
-			a.log.V(2).Info("pruned resource",
-				"name", c.obj.GetName(),
-				"namespace", c.obj.GetNamespace(),
-				"gvr", c.gvr.String(),
-			)
-			return nil
-		})
-	}
-
-	if err := eg.Wait(); err != nil {
-		return nil, 0, err
-	}
-
-	return results, conflicts, nil
+	return candidates, nil
 }
 
 func (a *ApplySet) parentAnnotationSets() (sets.Set[schema.GroupKind], sets.Set[string]) {

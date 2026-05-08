@@ -15,6 +15,7 @@
 package applyset
 
 import (
+	"context"
 	"errors"
 	"regexp"
 	"sync/atomic"
@@ -33,6 +34,31 @@ import (
 	"k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
+
+// listAndDeleteOrphans is a test helper that replicates the old Prune() behavior
+// using ListOrphans + DeleteOrphan. It returns aggregated pruned items and conflict count.
+func listAndDeleteOrphans(t *testing.T, ctx context.Context, applier *ApplySet, opts PruneOptions) ([]PruneResultItem, int) {
+	t.Helper()
+	candidates, err := applier.ListOrphans(ctx, opts)
+	if err != nil {
+		t.Fatalf("ListOrphans() error = %v", err)
+	}
+	var pruned []PruneResultItem
+	conflicts := 0
+	for _, c := range candidates {
+		res, err := applier.DeleteOrphan(ctx, c)
+		if err != nil {
+			t.Fatalf("DeleteOrphan() error = %v", err)
+		}
+		if res.Pruned != nil {
+			pruned = append(pruned, *res.Pruned)
+		}
+		if res.Conflict {
+			conflicts++
+		}
+	}
+	return pruned, conflicts
+}
 
 // testParent is a minimal implementation of the parent interface for testing.
 type testParent struct {
@@ -576,16 +602,13 @@ func TestPrune(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Project() error = %v", err)
 			}
-			pruneResult, err := applier.Prune(ctx, PruneOptions{
+			pruned, _ := listAndDeleteOrphans(t, ctx, applier, PruneOptions{
 				KeepUIDs: result.ObservedUIDs(),
 				Scope:    projectMeta.PruneScope(),
 			})
-			if err != nil {
-				t.Fatalf("Prune() error = %v", err)
-			}
 
-			if len(pruneResult.Pruned) != tt.wantPruned {
-				t.Errorf("Prune() pruned %d resources, want %d", len(pruneResult.Pruned), tt.wantPruned)
+			if len(pruned) != tt.wantPruned {
+				t.Errorf("Prune() pruned %d resources, want %d", len(pruned), tt.wantPruned)
 			}
 		})
 	}
@@ -638,18 +661,15 @@ func TestPrune_UIDPrecondition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Project() error = %v", err)
 		}
-		pruneResult, err := applier.Prune(ctx, PruneOptions{
+		pruned, conflicts := listAndDeleteOrphans(t, ctx, applier, PruneOptions{
 			KeepUIDs: result.ObservedUIDs(),
 			Scope:    projectMeta.PruneScope(),
 		})
-		if err != nil {
-			t.Fatalf("Prune() error = %v", err)
+		if len(pruned) != 1 {
+			t.Errorf("Prune() pruned %d resources, want 1", len(pruned))
 		}
-		if len(pruneResult.Pruned) != 1 {
-			t.Errorf("Prune() pruned %d resources, want 1", len(pruneResult.Pruned))
-		}
-		if pruneResult.Conflicts != 0 {
-			t.Errorf("Prune() conflicts = %d, want 0", pruneResult.Conflicts)
+		if conflicts != 0 {
+			t.Errorf("Prune() conflicts = %d, want 0", conflicts)
 		}
 	})
 
@@ -736,18 +756,15 @@ func TestPrune_UIDPrecondition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Project() error = %v", err)
 		}
-		pruneResult, err := applier.Prune(ctx, PruneOptions{
+		pruned, conflicts := listAndDeleteOrphans(t, ctx, applier, PruneOptions{
 			KeepUIDs: result.ObservedUIDs(),
 			Scope:    projectMeta.PruneScope(),
 		})
-		if err != nil {
-			t.Fatalf("Prune() error = %v, want nil (409 Conflict should be ignored)", err)
+		if len(pruned) != 0 {
+			t.Errorf("Prune() pruned %d resources, want 0 (UID mismatch should skip)", len(pruned))
 		}
-		if len(pruneResult.Pruned) != 0 {
-			t.Errorf("Prune() pruned %d resources, want 0 (UID mismatch should skip)", len(pruneResult.Pruned))
-		}
-		if pruneResult.Conflicts != 1 {
-			t.Errorf("Prune() conflicts = %d, want 1", pruneResult.Conflicts)
+		if conflicts != 1 {
+			t.Errorf("Prune() conflicts = %d, want 1", conflicts)
 		}
 
 		// Verify the resource still exists in the fake client
@@ -964,18 +981,15 @@ func TestPrune_ParentAnnotationsContributeToPruneScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Project() error = %v", err)
 	}
-	pruneResult, err := applier.Prune(t.Context(), PruneOptions{
+	pruned, _ := listAndDeleteOrphans(t, t.Context(), applier, PruneOptions{
 		KeepUIDs: result.ObservedUIDs(),
 		Scope:    projectMeta.PruneScope(),
 	})
-	if err != nil {
-		t.Fatalf("Prune() error = %v", err)
-	}
 
 	// The orphan Secret in old-ns should be pruned because parent annotations
 	// included Secret GK and old-ns namespace in prune scope
-	if len(pruneResult.Pruned) != 1 {
-		t.Errorf("Prune() pruned %d resources, want 1 (orphan from parent annotations)", len(pruneResult.Pruned))
+	if len(pruned) != 1 {
+		t.Errorf("Prune() pruned %d resources, want 1 (orphan from parent annotations)", len(pruned))
 	}
 }
 
@@ -1117,21 +1131,18 @@ func TestPrune_ClusterScopedResource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Project() error = %v", err)
 	}
-	pruneResult, err := applier.Prune(ctx, PruneOptions{
+	pruned, _ := listAndDeleteOrphans(t, ctx, applier, PruneOptions{
 		KeepUIDs: result.ObservedUIDs(),
 		Scope:    projectMeta.PruneScope(),
 	})
-	if err != nil {
-		t.Fatalf("Prune() error = %v", err)
-	}
 
 	// The orphan cluster-scoped Namespace should be pruned
-	if len(pruneResult.Pruned) != 1 {
-		t.Errorf("Prune() pruned %d resources, want 1 (cluster-scoped orphan)", len(pruneResult.Pruned))
+	if len(pruned) != 1 {
+		t.Errorf("Prune() pruned %d resources, want 1 (cluster-scoped orphan)", len(pruned))
 	}
 
-	if len(pruneResult.Pruned) > 0 && pruneResult.Pruned[0].Object.GetName() != "orphan-ns" {
-		t.Errorf("Pruned wrong resource: got %q, want %q", pruneResult.Pruned[0].Object.GetName(), "orphan-ns")
+	if len(pruned) > 0 && pruned[0].Object.GetName() != "orphan-ns" {
+		t.Errorf("Pruned wrong resource: got %q, want %q", pruned[0].Object.GetName(), "orphan-ns")
 	}
 }
 

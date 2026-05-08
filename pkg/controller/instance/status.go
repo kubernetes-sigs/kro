@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -180,15 +179,6 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 			}
 			status[k] = v
 		}
-	}
-
-	// Skip the API server write if status hasn't changed. This prevents an
-	// infinite reconcile loop where every unconditional UpdateStatus bumps
-	// resourceVersion, which triggers a watch event, which re-enqueues the
-	// instance, which reconciles again.
-	oldStatus, _, _ := unstructured.NestedMap(rcx.Instance.Object, "status")
-	if equality.Semantic.DeepEqual(oldStatus, status) {
-		return nil
 	}
 
 	inst := rcx.Instance.DeepCopy()

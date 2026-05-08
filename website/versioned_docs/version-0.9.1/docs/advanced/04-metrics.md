@@ -102,16 +102,15 @@ All RGD controller metrics include the label `name` (the `metadata.name` of the 
 
 ## Instance Controller Metrics
 
-| Metric | Type | Labels | Description | Stability |
-|--------|------|--------|-------------|-----------|
-| `instance_state_transitions_total` | Counter | `gvr`, `from_state`, `to_state` | Total number of instance state transitions per GVR | ALPHA |
-| `instance_reconcile_duration_seconds` | Histogram | `gvr` | Duration of instance reconciliation in seconds per GVR | ALPHA |
-| `instance_reconcile_total` | Counter | `gvr` | Total number of instance reconciliations per GVR | ALPHA |
-| `instance_reconcile_errors_total` | Counter | `gvr` | Total number of instance reconciliation errors per GVR | ALPHA |
-| `instance_graph_resolution_success_total` | Counter | `gvr` | Total number of successful graph resolutions during instance reconciliation | ALPHA |
-| `instance_graph_resolution_failures_total` | Counter | `gvr`, `reason` | Total number of graph resolution failures during instance reconciliation | ALPHA |
-| `instance_graph_resolution_pending_total` | Counter | `gvr` | Total number of graph resolutions deferred due to pending revision | ALPHA |
-| `instance_condition_current_status_seconds` | Gauge | `gvr`, `namespace`, `name`, `condition_type`, `condition_status`, `reason` | The current amount of time in seconds that an instance status condition has been in a specific state | ALPHA |
+| Metric | Type | Description | Stability |
+|--------|------|-------------|-----------|
+| `instance_state_transitions_total` | Counter | Total number of instance state transitions per GVR | ALPHA |
+| `instance_reconcile_duration_seconds` | Histogram | Duration of instance reconciliation in seconds per GVR | ALPHA |
+| `instance_reconcile_total` | Counter | Total number of instance reconciliations per GVR | ALPHA |
+| `instance_reconcile_errors_total` | Counter | Total number of instance reconciliation errors per GVR | ALPHA |
+| `instance_graph_resolution_success_total` | Counter | Total number of successful graph resolutions during instance reconciliation | ALPHA |
+| `instance_graph_resolution_failures_total` | Counter | Total number of graph resolution failures during instance reconciliation | ALPHA |
+| `instance_graph_resolution_pending_total` | Counter | Total number of graph resolutions deferred due to pending revision | ALPHA |
 
 ## GraphRevision Controller Metrics
 

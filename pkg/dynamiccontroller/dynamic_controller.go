@@ -59,6 +59,7 @@ package dynamiccontroller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -445,7 +446,8 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 			// This covers an edge case where the user only updates the reconcile annotation from disabled to enabled,
 			// which will trigger this func, but the generation won't change since it's a metadata-only update.
 			// We want to make sure this transition still triggers a reconciliation.
-			if !reconcileEnabledInUpdate(oldMeta, newMeta) {
+			// Similarly, enqueue if labels or annotations changed so that metadata propagation is applied.
+			if !reconcileEnabledInUpdate(oldMeta, newMeta) && !metadataNeedsReconcile(oldMeta, newMeta) {
 				dc.log.V(2).Info("Skipping update due to unchanged generation",
 					"name", newMeta.GetName(), "namespace", newMeta.GetNamespace(), "generation", newMeta.GetGeneration())
 				return
@@ -465,6 +467,17 @@ func reconcileEnabledInUpdate(oldMeta, newMeta metav1.Object) bool {
 	oldSuspended := v1alpha1.IsReconcileSuspended(oldMeta.GetAnnotations()[v1alpha1.InstanceReconcileAnnotation])
 	newSuspended := v1alpha1.IsReconcileSuspended(newMeta.GetAnnotations()[v1alpha1.InstanceReconcileAnnotation])
 	return oldSuspended && !newSuspended
+}
+
+// metadataNeedsReconcile returns true if labels or annotations changed in a way
+// that should trigger reconciliation. Changes are ignored when reconcile is being
+// suspended on the new object — in that case we never want to sneak in a reconcile.
+func metadataNeedsReconcile(oldMeta, newMeta metav1.Object) bool {
+	if v1alpha1.IsReconcileSuspended(newMeta.GetAnnotations()[v1alpha1.InstanceReconcileAnnotation]) {
+		return false
+	}
+	return !maps.Equal(oldMeta.GetLabels(), newMeta.GetLabels()) ||
+		!maps.Equal(oldMeta.GetAnnotations(), newMeta.GetAnnotations())
 }
 
 // Deregister removes a parent GVR handler and cleans up coordinator state.

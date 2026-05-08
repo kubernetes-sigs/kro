@@ -782,6 +782,160 @@ func TestReconcileEnabledInUpdate(t *testing.T) {
 	}
 }
 
+func TestMetadataNeedsReconcile(t *testing.T) {
+	makeObj := func(labels, annotations map[string]string) *v1.PartialObjectMetadata {
+		obj := &v1.PartialObjectMetadata{}
+		obj.SetLabels(labels)
+		obj.SetAnnotations(annotations)
+		return obj
+	}
+	suspended := map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"}
+
+	tests := []struct {
+		name   string
+		old    *v1.PartialObjectMetadata
+		new    *v1.PartialObjectMetadata
+		expect bool
+	}{
+		{
+			name:   "both nil — no change",
+			old:    makeObj(nil, nil),
+			new:    makeObj(nil, nil),
+			expect: false,
+		},
+		{
+			name:   "same labels — no change",
+			old:    makeObj(map[string]string{"team": "platform"}, nil),
+			new:    makeObj(map[string]string{"team": "platform"}, nil),
+			expect: false,
+		},
+		{
+			name:   "same annotations — no change",
+			old:    makeObj(nil, map[string]string{"env": "prod"}),
+			new:    makeObj(nil, map[string]string{"env": "prod"}),
+			expect: false,
+		},
+		{
+			name:   "label added",
+			old:    makeObj(nil, nil),
+			new:    makeObj(map[string]string{"team": "platform"}, nil),
+			expect: true,
+		},
+		{
+			name:   "label removed",
+			old:    makeObj(map[string]string{"team": "platform"}, nil),
+			new:    makeObj(nil, nil),
+			expect: true,
+		},
+		{
+			name:   "label value changed",
+			old:    makeObj(map[string]string{"team": "platform"}, nil),
+			new:    makeObj(map[string]string{"team": "infra"}, nil),
+			expect: true,
+		},
+		{
+			name:   "annotation added",
+			old:    makeObj(nil, nil),
+			new:    makeObj(nil, map[string]string{"env": "prod"}),
+			expect: true,
+		},
+		{
+			name:   "annotation removed",
+			old:    makeObj(nil, map[string]string{"env": "prod"}),
+			new:    makeObj(nil, nil),
+			expect: true,
+		},
+		{
+			name:   "annotation value changed",
+			old:    makeObj(nil, map[string]string{"env": "prod"}),
+			new:    makeObj(nil, map[string]string{"env": "staging"}),
+			expect: true,
+		},
+		{
+			name:   "both labels and annotations changed",
+			old:    makeObj(map[string]string{"k": "a"}, map[string]string{"env": "prod"}),
+			new:    makeObj(map[string]string{"k": "b"}, map[string]string{"env": "staging"}),
+			expect: true,
+		},
+		{
+			name:   "reconcile suspended on new — label change ignored",
+			old:    makeObj(map[string]string{"team": "platform"}, nil),
+			new:    makeObj(map[string]string{"team": "infra"}, suspended),
+			expect: false,
+		},
+		{
+			name:   "reconcile suspended on new — annotation change ignored",
+			old:    makeObj(nil, map[string]string{"env": "prod"}),
+			new:    makeObj(nil, suspended),
+			expect: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expect, metadataNeedsReconcile(tt.old, tt.new))
+		})
+	}
+}
+
+func TestEnqueueFromInformer_MetadataChange(t *testing.T) {
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	makeObj := func(name, ns string, gen int64, labels, annotations map[string]string) *v1.PartialObjectMetadata {
+		obj := &v1.PartialObjectMetadata{}
+		obj.SetName(name)
+		obj.SetNamespace(ns)
+		obj.SetGeneration(gen)
+		obj.SetLabels(labels)
+		obj.SetAnnotations(annotations)
+		return obj
+	}
+
+	tests := []struct {
+		name        string
+		oldObj      *v1.PartialObjectMetadata
+		newObj      *v1.PartialObjectMetadata
+		expectQueue int
+	}{
+		{
+			name:        "same generation, label added — enqueues for metadata propagation",
+			oldObj:      makeObj("a", "default", 5, nil, nil),
+			newObj:      makeObj("a", "default", 5, map[string]string{"team": "platform"}, nil),
+			expectQueue: 1,
+		},
+		{
+			name:        "same generation, label removed — enqueues for metadata propagation",
+			oldObj:      makeObj("a", "default", 5, map[string]string{"team": "platform"}, nil),
+			newObj:      makeObj("a", "default", 5, nil, nil),
+			expectQueue: 1,
+		},
+		{
+			name:        "same generation, annotation changed — enqueues for metadata propagation",
+			oldObj:      makeObj("a", "default", 5, nil, map[string]string{"env": "prod"}),
+			newObj:      makeObj("a", "default", 5, nil, map[string]string{"env": "staging"}),
+			expectQueue: 1,
+		},
+		{
+			name:        "same generation, identical metadata — skips",
+			oldObj:      makeObj("a", "default", 5, map[string]string{"team": "platform"}, nil),
+			newObj:      makeObj("a", "default", 5, map[string]string{"team": "platform"}, nil),
+			expectQueue: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, v1.AddMetaToScheme(scheme))
+			client := fake.NewSimpleMetadataClient(scheme)
+			mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+			dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+			dc.enqueueFromInformer(parentGVR, tt.oldObj, tt.newObj, EventUpdate)
+			assert.Equal(t, tt.expectQueue, dc.queue.Len())
+		})
+	}
+}
+
 func TestRegister_EnsureWatchSyncError(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, v1.AddMetaToScheme(scheme))

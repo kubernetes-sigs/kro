@@ -61,6 +61,9 @@ type ReconcileConfig struct {
 	DeletionPolicy string
 	// RGDConfig holds RGD runtime configuration parameters.
 	RGDConfig graph.RGDConfig
+	// MetadataPropagation defines which labels and annotations from instances are
+	// propagated to child resources. Nil means nothing is propagated.
+	MetadataPropagation *v1alpha1.MetadataPropagation
 }
 
 // GraphRevisionResolver resolves compiled graph revisions for a single RGD.

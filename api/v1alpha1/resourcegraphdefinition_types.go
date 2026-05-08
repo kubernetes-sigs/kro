@@ -35,6 +35,11 @@ type ResourceGraphDefinitionSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	Resources []*Resource `json:"resources,omitempty"`
+	// MetadataPropagation defines which labels and annotations from an instance are
+	// propagated to all child resources. If not set, nothing is propagated.
+	//
+	// +kubebuilder:validation:Optional
+	MetadataPropagation *MetadataPropagation `json:"metadataPropagation,omitempty"`
 }
 
 // Schema defines the structure and behavior of instances created from a ResourceGraphDefinition.
@@ -118,6 +123,19 @@ type CRDMetadata struct {
 	// Annotations to apply to the generated CRD
 	// +kubebuilder:validation:Optional
 	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// MetadataPropagation defines which labels and annotations from an RGI should be
+// propagated to all child resources created from that instance.
+type MetadataPropagation struct {
+	// Labels to propagate. Supports exact matches (e.g. "team") and wildcards (e.g. "myorg.com/*").
+	//
+	// +kubebuilder:validation:Optional
+	Labels []string `json:"labels,omitempty"`
+	// Annotations to propagate. Supports exact matches (e.g. "environment") and wildcards (e.g. "myorg.com/*").
+	//
+	// +kubebuilder:validation:Optional
+	Annotations []string `json:"annotations,omitempty"`
 }
 
 // +kubebuilder:validation:XValidation:rule="(has(self.name) && !has(self.selector)) || (!has(self.name) && has(self.selector))",message="exactly one of name or selector must be provided"

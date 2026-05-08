@@ -69,6 +69,24 @@ spec:
               It contains the schema for instances (defining the CRD structure) and the list of
               Kubernetes resources that make up the graph.
             properties:
+              metadataPropagation:
+                description: |-
+                  MetadataPropagation defines which labels and annotations from an instance are
+                  propagated to all child resources. If not set, nothing is propagated.
+                properties:
+                  annotations:
+                    description: Annotations to propagate. Supports exact matches
+                      (e.g. "environment") and wildcards (e.g. "myorg.com/*").
+                    items:
+                      type: string
+                    type: array
+                  labels:
+                    description: Labels to propagate. Supports exact matches (e.g.
+                      "team") and wildcards (e.g. "myorg.com/*").
+                    items:
+                      type: string
+                    type: array
+                type: object
               resources:
                 description: |-
                   Resources is the list of Kubernetes resources that will be created and managed

@@ -15,6 +15,7 @@
 package applyset
 
 import (
+	"context"
 	"errors"
 	"regexp"
 	"sync/atomic"
@@ -33,6 +34,31 @@ import (
 	"k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
+
+// listAndDeleteOrphans is a test helper that replicates the old Prune() behavior
+// using ListOrphans + DeleteOrphan. It returns aggregated pruned items and conflict count.
+func listAndDeleteOrphans(t *testing.T, ctx context.Context, applier *ApplySet, opts PruneOptions) ([]PruneResultItem, int) {
+	t.Helper()
+	candidates, err := applier.ListOrphans(ctx, opts)
+	if err != nil {
+		t.Fatalf("ListOrphans() error = %v", err)
+	}
+	var pruned []PruneResultItem
+	conflicts := 0
+	for _, c := range candidates {
+		res, err := applier.DeleteOrphan(ctx, c)
+		if err != nil {
+			t.Fatalf("DeleteOrphan() error = %v", err)
+		}
+		if res.Pruned != nil {
+			pruned = append(pruned, *res.Pruned)
+		}
+		if res.Conflict {
+			conflicts++
+		}
+	}
+	return pruned, conflicts
+}
 
 // testParent is a minimal implementation of the parent interface for testing.
 type testParent struct {
@@ -576,16 +602,13 @@ func TestPrune(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Project() error = %v", err)
 			}
-			pruneResult, err := applier.Prune(ctx, PruneOptions{
+			pruned, _ := listAndDeleteOrphans(t, ctx, applier, PruneOptions{
 				KeepUIDs: result.ObservedUIDs(),
 				Scope:    projectMeta.PruneScope(),
 			})
-			if err != nil {
-				t.Fatalf("Prune() error = %v", err)
-			}
 
-			if len(pruneResult.Pruned) != tt.wantPruned {
-				t.Errorf("Prune() pruned %d resources, want %d", len(pruneResult.Pruned), tt.wantPruned)
+			if len(pruned) != tt.wantPruned {
+				t.Errorf("Prune() pruned %d resources, want %d", len(pruned), tt.wantPruned)
 			}
 		})
 	}
@@ -638,18 +661,15 @@ func TestPrune_UIDPrecondition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Project() error = %v", err)
 		}
-		pruneResult, err := applier.Prune(ctx, PruneOptions{
+		pruned, conflicts := listAndDeleteOrphans(t, ctx, applier, PruneOptions{
 			KeepUIDs: result.ObservedUIDs(),
 			Scope:    projectMeta.PruneScope(),
 		})
-		if err != nil {
-			t.Fatalf("Prune() error = %v", err)
+		if len(pruned) != 1 {
+			t.Errorf("Prune() pruned %d resources, want 1", len(pruned))
 		}
-		if len(pruneResult.Pruned) != 1 {
-			t.Errorf("Prune() pruned %d resources, want 1", len(pruneResult.Pruned))
-		}
-		if pruneResult.Conflicts != 0 {
-			t.Errorf("Prune() conflicts = %d, want 0", pruneResult.Conflicts)
+		if conflicts != 0 {
+			t.Errorf("Prune() conflicts = %d, want 0", conflicts)
 		}
 	})
 
@@ -736,18 +756,15 @@ func TestPrune_UIDPrecondition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Project() error = %v", err)
 		}
-		pruneResult, err := applier.Prune(ctx, PruneOptions{
+		pruned, conflicts := listAndDeleteOrphans(t, ctx, applier, PruneOptions{
 			KeepUIDs: result.ObservedUIDs(),
 			Scope:    projectMeta.PruneScope(),
 		})
-		if err != nil {
-			t.Fatalf("Prune() error = %v, want nil (409 Conflict should be ignored)", err)
+		if len(pruned) != 0 {
+			t.Errorf("Prune() pruned %d resources, want 0 (UID mismatch should skip)", len(pruned))
 		}
-		if len(pruneResult.Pruned) != 0 {
-			t.Errorf("Prune() pruned %d resources, want 0 (UID mismatch should skip)", len(pruneResult.Pruned))
-		}
-		if pruneResult.Conflicts != 1 {
-			t.Errorf("Prune() conflicts = %d, want 1", pruneResult.Conflicts)
+		if conflicts != 1 {
+			t.Errorf("Prune() conflicts = %d, want 1", conflicts)
 		}
 
 		// Verify the resource still exists in the fake client
@@ -964,18 +981,15 @@ func TestPrune_ParentAnnotationsContributeToPruneScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Project() error = %v", err)
 	}
-	pruneResult, err := applier.Prune(t.Context(), PruneOptions{
+	pruned, _ := listAndDeleteOrphans(t, t.Context(), applier, PruneOptions{
 		KeepUIDs: result.ObservedUIDs(),
 		Scope:    projectMeta.PruneScope(),
 	})
-	if err != nil {
-		t.Fatalf("Prune() error = %v", err)
-	}
 
 	// The orphan Secret in old-ns should be pruned because parent annotations
 	// included Secret GK and old-ns namespace in prune scope
-	if len(pruneResult.Pruned) != 1 {
-		t.Errorf("Prune() pruned %d resources, want 1 (orphan from parent annotations)", len(pruneResult.Pruned))
+	if len(pruned) != 1 {
+		t.Errorf("Prune() pruned %d resources, want 1 (orphan from parent annotations)", len(pruned))
 	}
 }
 
@@ -1117,21 +1131,18 @@ func TestPrune_ClusterScopedResource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Project() error = %v", err)
 	}
-	pruneResult, err := applier.Prune(ctx, PruneOptions{
+	pruned, _ := listAndDeleteOrphans(t, ctx, applier, PruneOptions{
 		KeepUIDs: result.ObservedUIDs(),
 		Scope:    projectMeta.PruneScope(),
 	})
-	if err != nil {
-		t.Fatalf("Prune() error = %v", err)
-	}
 
 	// The orphan cluster-scoped Namespace should be pruned
-	if len(pruneResult.Pruned) != 1 {
-		t.Errorf("Prune() pruned %d resources, want 1 (cluster-scoped orphan)", len(pruneResult.Pruned))
+	if len(pruned) != 1 {
+		t.Errorf("Prune() pruned %d resources, want 1 (cluster-scoped orphan)", len(pruned))
 	}
 
-	if len(pruneResult.Pruned) > 0 && pruneResult.Pruned[0].Object.GetName() != "orphan-ns" {
-		t.Errorf("Pruned wrong resource: got %q, want %q", pruneResult.Pruned[0].Object.GetName(), "orphan-ns")
+	if len(pruned) > 0 && pruned[0].Object.GetName() != "orphan-ns" {
+		t.Errorf("Pruned wrong resource: got %q, want %q", pruned[0].Object.GetName(), "orphan-ns")
 	}
 }
 
@@ -1448,5 +1459,206 @@ func TestMetadata_Annotations(t *testing.T) {
 
 	if got := annotations[ApplySetAdditionalNamespacesAnnotation]; got != "default" {
 		t.Errorf("Annotations()[%s] = %q, want %q", ApplySetAdditionalNamespacesAnnotation, got, "default")
+	}
+}
+
+func TestProject_DuplicateResources(t *testing.T) {
+	tests := []struct {
+		name      string
+		resources []Resource
+		wantErr   bool
+		errMatch  string
+	}{
+		{
+			name: "no duplicates - different names",
+			resources: []Resource{
+				{
+					ID: "configmap1",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config-one",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+				{
+					ID: "configmap2",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config-two",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "duplicate detected - same GVK/namespace/name",
+			resources: []Resource{
+				{
+					ID: "configmap1",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+				{
+					ID: "configmap2",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+			},
+			wantErr:  true,
+			errMatch: "resourceID: configmap2 conflicts with resourceID: configmap1",
+		},
+		{
+			name: "multiple duplicates reported together",
+			resources: []Resource{
+				{
+					ID: "configmap1",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+				{
+					ID: "configmap2",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+				{
+					ID: "secret1",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "Secret",
+							"metadata": map[string]interface{}{
+								"name":      "creds",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+				{
+					ID: "secret2",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "Secret",
+							"metadata": map[string]interface{}{
+								"name":      "creds",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+			},
+			wantErr:  true,
+			errMatch: "configmap2 conflicts with.*configmap1.*secret2 conflicts with.*secret1",
+		},
+		{
+			name: "skip resources marked as SkipApply",
+			resources: []Resource{
+				{
+					ID: "configmap1",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+					SkipApply: false,
+				},
+				{
+					ID: "configmap2",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+					SkipApply: true,
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent := newTestParent(schema.GroupVersionKind{
+				Group:   "kro.run",
+				Version: "v1alpha1",
+				Kind:    "ResourceGroup",
+			})
+
+			a := New(Config{
+				Client:          fake.NewSimpleDynamicClient(runtime.NewScheme()),
+				RESTMapper:      newTestRESTMapper(),
+				Log:             logr.Discard(),
+				ParentNamespace: "default",
+			}, parent)
+
+			_, err := a.Project(tt.resources)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("Project() expected error matching %q, got nil", tt.errMatch)
+					return
+				}
+				matched, _ := regexp.MatchString(tt.errMatch, err.Error())
+				if !matched {
+					t.Errorf("Project() error = %q, want match %q", err.Error(), tt.errMatch)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Project() unexpected error = %v", err)
+				}
+			}
+		})
 	}
 }

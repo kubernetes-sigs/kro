@@ -1,0 +1,169 @@
+---
+sidebar_position: 1
+---
+
+import ControllerFlow from '@site/src/components/ControllerFlow';
+import IntroFlow from '@site/src/components/IntroFlow';
+import EngineCapabilities from '@site/src/components/EngineCapabilities';
+
+# What is kro?
+
+**kro** (Kube Resource Orchestrator) lets you turn a set of Kubernetes resources
+into a reusable API. You define the API schema, describe the resources behind
+it in YAML, and connect them with CEL expressions. kro turns that definition
+into a CRD, watches for instances of that API, and reconciles the underlying
+resources for each one.
+
+A **ResourceGraphDefinition (RGD)** is the blueprint for a custom API: it describes
+the interface users work with and the resources each instance should produce. kro
+validates that definition before it ever reconciles an instance, catching
+schema errors, invalid expressions, and broken references before they become
+runtime failures.
+
+<ControllerFlow />
+
+## How it works
+
+A ResourceGraphDefinition has two parts: a [**schema**](./concepts/rgd/schema) that defines your API
+surface (the fields users fill in), and [**resource templates**](./concepts/rgd/resource-definitions/resource-basics) that reference
+those fields with [CEL expressions](./concepts/rgd/cel-expressions). kro parses the expressions, infers the
+[dependency graph](./concepts/rgd/dependencies-ordering), generates a CRD, and stands up a controller - all at runtime.
+
+<IntroFlow />
+
+## In practice
+
+Once the definition is installed, users work with the generated API like any
+other Kubernetes resource.
+
+```yaml
+apiVersion: kro.run/v1alpha1
+kind: WebApp
+metadata:
+  name: my-app
+spec:
+  image: nginx
+  bucketName: my-app-assets
+```
+
+```text
+$ kubectl get webapp my-app -o yaml
+status:
+  bucketArn: arn:aws:s3:::my-app-assets
+
+$ kubectl get configmap,bucket,deploy,svc
+NAME                    AGE
+configmap/my-app-config 45s
+
+NAME                                       AGE
+bucket.s3.services.k8s.aws/my-app-assets   45s
+
+NAME                     READY   AGE
+deployment.apps/my-app   1/1     45s
+
+NAME             TYPE        PORT(S)
+service/my-app   ClusterIP   80/TCP
+```
+
+Users apply one `WebApp`. kro creates the `ConfigMap`, `Bucket`, `Deployment`,
+and `Service`, and writes useful outputs like `bucketArn` back onto the same
+object.
+
+### The definition behind it
+
+A **ResourceGraphDefinition** defines the API under `spec.schema` (see [Simple Schema](./concepts/rgd/schema)) and the
+backing resources under `spec.resources`. CEL expressions (`${}`) are what tie
+those two parts together (this example uses S3 via
+[ACK](https://aws-controllers-k8s.github.io/docs/), but kro works with any
+Kubernetes resource - native or CRD. For example, Azure Blob Storage via
+[ASO](https://azure.github.io/azure-service-operator/) or GCP Cloud Storage via
+[Config Connector](https://cloud.google.com/config-connector/docs/overview)).
+
+```kro title="webapp-rgd.kro"
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: webapp
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: WebApp
+    spec:
+      image: string | default=nginx
+      bucketName: string
+    status:
+      bucketArn: ${bucket.status.arn}
+
+  resources:
+    - id: config
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.metadata.name}-config
+        data:
+          APP_NAME: ${schema.metadata.name}
+
+    - id: bucket
+      template:
+        apiVersion: s3.services.k8s.aws/v1alpha1
+        kind: Bucket
+        metadata:
+          name: ${schema.spec.bucketName}
+        spec:
+          name: ${schema.spec.bucketName}
+
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.metadata.name}
+        spec:
+          selector:
+            matchLabels:
+              app: ${schema.metadata.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.metadata.name}
+            spec:
+              containers:
+                - name: app
+                  image: ${schema.spec.image}
+                  envFrom:
+                    - configMapRef:
+                        name: ${config.metadata.name}
+                  env:
+                    - name: BUCKET_ARN
+                      value: ${bucket.status.arn}
+
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${deployment.metadata.name}
+        spec:
+          selector: ${deployment.spec.selector.matchLabels}
+```
+
+`bucket.status.arn` does not exist when you apply this definition. kro waits for
+it before reconciling `deployment`, and it knows `service` comes after
+`deployment` because the selector is derived from
+`${deployment.spec.selector.matchLabels}`.
+
+## What kro handles for you
+
+Once the graph is defined, kro takes care of the mechanics that usually end up
+in custom controller code.
+
+<EngineCapabilities />
+
+## Get started
+
+- [Install kro](./getting-started/Installation) to run the controller in your cluster
+- [Deploy your first RGD](./getting-started/deploy-a-resource-graph-definition) to create a new API end to end
+- [Browse examples](../../examples/) to see more patterns
+
+Need help or want to contribute? Join [#kro on Kubernetes Slack](https://kubernetes.slack.com/archives/C081TMY9D6Y), browse [GitHub](https://github.com/kubernetes-sigs/kro), or read [Contributing](https://github.com/kubernetes-sigs/kro/blob/main/CONTRIBUTING.md).

@@ -131,21 +131,22 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration
+test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration, pass extra args after --
 ifeq ($(WHAT),integration)
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" \
 		go tool ginkgo -p -v \
 		--cover \
 		--coverprofile=integration-cover.out \
 		-coverpkg=github.com/kubernetes-sigs/kro/pkg/... \
+		$(filter-out $@,$(MAKECMDGOALS)) \
 		./test/integration/suites/...
 else ifeq ($(WHAT),unit)
-	go test -race ./pkg/... -coverprofile unit-cover.out
+	go test -race ./pkg/... -coverprofile unit-cover.out $(filter-out $@,$(MAKECMDGOALS))
 else ifeq ($(WHAT),upgrade)
 	KRO_UPGRADE_FROM_VERSION=$(KRO_UPGRADE_FROM_VERSION) \
 	KRO_UPGRADE_MODE=$(MODE) \
 	KRO_UPGRADE_SKIP_GR_ASSERTIONS=$(KRO_UPGRADE_SKIP_GR_ASSERTIONS) \
-		go tool ginkgo -v ./test/upgrade/...
+		go tool ginkgo -v $(filter-out $@,$(MAKECMDGOALS)) ./test/upgrade/...
 else
 	@echo "Error: WHAT must be either 'unit', 'integration', or 'upgrade'"
 	@echo "Usage: make test WHAT=unit|integration|upgrade"
@@ -363,6 +364,9 @@ cli:
 	go build -o bin/kro cmd/kro/main.go
 	sudo mv bin/kro /usr/local/bin
 	@echo "CLI built successfully"
+
+%:
+	@:
 
 ##@ E2E Tests
 

@@ -831,15 +831,27 @@ func TestReconcile(t *testing.T) {
 				gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
 				require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
 
-				manager := &stubCRDManager{}
-				return &ResourceGraphDefinitionReconciler{
+				// Set up CRD with ownership label
+				crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)
+				crd := &extv1.CustomResourceDefinition{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: crdName,
+						Labels: map[string]string{
+							metadata.ResourceGraphDefinitionNameLabel: rgd.Name,
+						},
+					},
+				}
+				manager := &stubCRDManager{getReturn: crd}
+				reconciler := &ResourceGraphDefinitionReconciler{
 					Client:            c,
 					apiReader:         c,
 					cfg:               Config{AllowCRDDeletion: true},
 					dynamicController: dc,
 					crdManager:        manager,
 					revisionsRegistry: revisions.NewRegistry(),
-				}, c, rgd, manager
+				}
+				reconciler.registeredControllers.Store(rgd.UID, true)
+				return reconciler, c, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, manager *stubCRDManager) {
 				require.NoError(t, err)
@@ -860,15 +872,30 @@ func TestReconcile(t *testing.T) {
 				rgd.DeletionTimestamp = new(metav1.Now())
 
 				c := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy())
-				manager := &stubCRDManager{deleteErr: errors.New("delete boom")}
-				return &ResourceGraphDefinitionReconciler{
+				// Set up CRD with ownership label
+				crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)
+				crd := &extv1.CustomResourceDefinition{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: crdName,
+						Labels: map[string]string{
+							metadata.ResourceGraphDefinitionNameLabel: rgd.Name,
+						},
+					},
+				}
+				manager := &stubCRDManager{
+					deleteErr: errors.New("delete boom"),
+					getReturn: crd,
+				}
+				reconciler := &ResourceGraphDefinitionReconciler{
 					Client:            c,
 					apiReader:         c,
 					cfg:               Config{AllowCRDDeletion: true},
 					dynamicController: newRunningDynamicController(t),
 					crdManager:        manager,
 					revisionsRegistry: revisions.NewRegistry(),
-				}, c, rgd, manager
+				}
+				reconciler.registeredControllers.Store(rgd.UID, true)
+				return reconciler, c, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
 				assert.Equal(t, ctrl.Result{}, result)
@@ -894,13 +921,15 @@ func TestReconcile(t *testing.T) {
 				gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
 				require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
 
-				return &ResourceGraphDefinitionReconciler{
+				reconciler := &ResourceGraphDefinitionReconciler{
 					Client:            c,
 					apiReader:         c,
 					dynamicController: dc,
 					crdManager:        &stubCRDManager{},
 					revisionsRegistry: revisions.NewRegistry(),
-				}, c, rgd, nil
+				}
+				reconciler.registeredControllers.Store(rgd.UID, true)
+				return reconciler, c, rgd, nil
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
 				assert.Equal(t, ctrl.Result{}, result)

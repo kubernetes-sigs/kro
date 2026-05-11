@@ -71,6 +71,37 @@ func TestApplyMarkers(t *testing.T) {
 			markers:    "default=true",
 			want:       &extv1.JSONSchemaProps{Type: "boolean", Default: &extv1.JSON{Raw: []byte("true")}},
 		},
+		// Invalid default values should error
+		{
+			name:       "integer with string default",
+			schemaType: "integer",
+			markers:    `default="hello"`,
+			wantErr:    true,
+		},
+		{
+			name:       "integer with invalid number",
+			schemaType: "integer",
+			markers:    "default=3.14",
+			wantErr:    true,
+		},
+		{
+			name:       "number with string default",
+			schemaType: "number",
+			markers:    `default="notanumber"`,
+			wantErr:    true,
+		},
+		{
+			name:       "boolean with string default",
+			schemaType: "boolean",
+			markers:    `default="maybe"`,
+			wantErr:    true,
+		},
+		{
+			name:       "boolean with invalid default",
+			schemaType: "boolean",
+			markers:    "default=yes",
+			wantErr:    true,
+		},
 		// Description marker
 		{
 			name:       "description",
@@ -308,6 +339,88 @@ func TestApplyMarkers(t *testing.T) {
 			markers:    "maxItems=10",
 			wantErr:    true,
 		},
+		// ListType marker
+		{
+			name:       "listType=map",
+			schemaType: "array",
+			markers:    "listType=map listMapKey=name",
+			want: &extv1.JSONSchemaProps{
+				Type:         "array",
+				XListType:    new("map"),
+				XListMapKeys: []string{"name"},
+			},
+		},
+		{
+			name:       "listType=set",
+			schemaType: "array",
+			markers:    "listType=set",
+			want: &extv1.JSONSchemaProps{
+				Type:      "array",
+				XListType: new("set"),
+			},
+		},
+		{
+			name:       "listType=atomic",
+			schemaType: "array",
+			markers:    "listType=atomic",
+			want: &extv1.JSONSchemaProps{
+				Type:      "array",
+				XListType: new("atomic"),
+			},
+		},
+		{
+			name:       "invalid listType value",
+			schemaType: "array",
+			markers:    "listType=invalid",
+			wantErr:    true,
+		},
+		{
+			name:       "listType on non-array",
+			schemaType: "string",
+			markers:    "listType=map",
+			wantErr:    true,
+		},
+		{
+			name:       "listType conflicts with uniqueItems",
+			schemaType: "array",
+			markers:    "uniqueItems=true listType=map",
+			wantErr:    true,
+		},
+		// ListMapKey marker
+		{
+			name:       "listMapKey with listType=map",
+			schemaType: "array",
+			markers:    "listType=map listMapKey=name listMapKey=namespace",
+			want: &extv1.JSONSchemaProps{
+				Type:         "array",
+				XListType:    new("map"),
+				XListMapKeys: []string{"name", "namespace"},
+			},
+		},
+		{
+			name:       "listMapKey without listType",
+			schemaType: "array",
+			markers:    "listMapKey=name",
+			wantErr:    true,
+		},
+		{
+			name:       "listMapKey with listType=set",
+			schemaType: "array",
+			markers:    "listType=set listMapKey=name",
+			wantErr:    true,
+		},
+		{
+			name:       "listMapKey on non-array",
+			schemaType: "string",
+			markers:    "listMapKey=name",
+			wantErr:    true,
+		},
+		{
+			name:       "duplicate listMapKey",
+			schemaType: "array",
+			markers:    "listType=map listMapKey=name listMapKey=name",
+			wantErr:    true,
+		},
 		// Combined markers
 		{
 			name:       "multiple markers",
@@ -319,6 +432,30 @@ func TestApplyMarkers(t *testing.T) {
 				Description: "A test field",
 			},
 			wantParent: &extv1.JSONSchemaProps{Required: []string{"field"}},
+		},
+		{
+			name:       "immutable and validation markers together",
+			schemaType: "string",
+			markers:    `immutable=true validation="self.matches('^(pending|active|done)$')"`,
+			want: &extv1.JSONSchemaProps{
+				Type: "string",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self == oldSelf", Message: "field is immutable"},
+					{Rule: "self.matches('^(pending|active|done)$')", Message: "validation failed"},
+				},
+			},
+		},
+		{
+			name:       "validation and immutable markers together (reversed order)",
+			schemaType: "string",
+			markers:    `validation="self.size() > 0" immutable=true`,
+			want: &extv1.JSONSchemaProps{
+				Type: "string",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self.size() > 0", Message: "validation failed"},
+					{Rule: "self == oldSelf", Message: "field is immutable"},
+				},
+			},
 		},
 	}
 
@@ -538,6 +675,41 @@ func TestParseMarkers(t *testing.T) {
 			input: "minLength=0",
 			want: []*Marker{
 				{MarkerType: MarkerTypeMinLength, Key: "minLength", Value: "0"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "listType marker",
+			input: "listType=map",
+			want: []*Marker{
+				{MarkerType: MarkerTypeListType, Key: "listType", Value: "map"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "listMapKey marker",
+			input: "listMapKey=name",
+			want: []*Marker{
+				{MarkerType: MarkerTypeListMapKey, Key: "listMapKey", Value: "name"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "multiple listMapKey markers",
+			input: "listMapKey=name listMapKey=namespace",
+			want: []*Marker{
+				{MarkerType: MarkerTypeListMapKey, Key: "listMapKey", Value: "name"},
+				{MarkerType: MarkerTypeListMapKey, Key: "listMapKey", Value: "namespace"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "listType with listMapKey markers",
+			input: "listType=map listMapKey=name listMapKey=id",
+			want: []*Marker{
+				{MarkerType: MarkerTypeListType, Key: "listType", Value: "map"},
+				{MarkerType: MarkerTypeListMapKey, Key: "listMapKey", Value: "name"},
+				{MarkerType: MarkerTypeListMapKey, Key: "listMapKey", Value: "id"},
 			},
 			wantErr: false,
 		},

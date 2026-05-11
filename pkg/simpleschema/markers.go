@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -86,6 +87,10 @@ const (
 	MarkerTypeMinItems MarkerType = "minItems"
 	// MarkerTypeMaxItems represents the `maxItems` marker.
 	MarkerTypeMaxItems MarkerType = "maxItems"
+	// MarkerTypeListType represents the `listType` marker.
+	MarkerTypeListType MarkerType = "listType"
+	// MarkerTypeListMapKey represents the `listMapKey` marker.
+	MarkerTypeListMapKey MarkerType = "listMapKey"
 )
 
 func markerTypeFromString(s string) (MarkerType, error) {
@@ -93,7 +98,7 @@ func markerTypeFromString(s string) (MarkerType, error) {
 	case MarkerTypeRequired, MarkerTypeDefault, MarkerTypeDescription,
 		MarkerTypeMinimum, MarkerTypeMaximum, MarkerTypeValidation, MarkerTypeEnum, MarkerTypeImmutable,
 		MarkerTypePattern, MarkerTypeUniqueItems, MarkerTypeMinLength, MarkerTypeMaxLength, MarkerTypeMinItems,
-		MarkerTypeMaxItems:
+		MarkerTypeMaxItems, MarkerTypeListType, MarkerTypeListMapKey:
 		return MarkerType(s), nil
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnknownMarker, s)
@@ -221,6 +226,26 @@ func applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, 
 			return err
 		}
 	}
+
+	if err := fieldLevelValidation(schema); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// apply validations that need to check the interaction between markers.
+func fieldLevelValidation(schema *extv1.JSONSchemaProps) error {
+	if len(schema.XListMapKeys) > 0 {
+		if schema.XListType == nil {
+			return fmt.Errorf("listMapKey set while listType is unset, listType must be set to map")
+		}
+		if *schema.XListType != "map" {
+			return fmt.Errorf(
+				"listMapKey set while listType is set to %s, listType must be set to map", *schema.XListType)
+		}
+	}
+
 	return nil
 }
 
@@ -232,7 +257,7 @@ func applyMarker(schema *extv1.JSONSchemaProps, marker *Marker, key string, pare
 	case MarkerTypeRequired:
 		return applyRequiredMarker(marker, key, parentSchema)
 	case MarkerTypeDefault:
-		applyDefaultMarker(schema, marker)
+		return applyDefaultMarker(schema, marker)
 	case MarkerTypeDescription:
 		schema.Description = marker.Value
 	case MarkerTypeMinimum:
@@ -257,9 +282,48 @@ func applyMarker(schema *extv1.JSONSchemaProps, marker *Marker, key string, pare
 		return applyMinItemsMarker(schema, marker)
 	case MarkerTypeMaxItems:
 		return applyMaxItemsMarker(schema, marker)
+	case MarkerTypeListType:
+		return applyListTypeMarker(schema, marker)
+	case MarkerTypeListMapKey:
+		return applyListMapKeyMarker(schema, marker)
 	default:
 		return fmt.Errorf("%w: %s", ErrUnknownMarker, marker.MarkerType)
 	}
+	return nil
+}
+
+func applyListTypeMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
+	if schema.Type != schemaTypeArray {
+		return fmt.Errorf("listType marker only applies to array types")
+	}
+	if marker.Value != "atomic" && marker.Value != "set" && marker.Value != "map" {
+		return fmt.Errorf(
+			"unsupported value for listType %s, needs to be one of atomic, set, or map", marker.Value)
+	}
+
+	// Setting unique=true sets XListType to "set", don't overwrite another listType.
+	if schema.XListType != nil && *schema.XListType != marker.Value {
+		return fmt.Errorf("listType attempting to overwrite set type of %s, "+
+			"this can happen if you set contradictory markers like unique=true | listType=map", *schema.XListType)
+	}
+	schema.XListType = &marker.Value
+
+	return nil
+}
+
+func applyListMapKeyMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
+	if schema.Type != schemaTypeArray {
+		return fmt.Errorf("listMapKey marker only applies to array types")
+	}
+
+	if slices.Contains(schema.XListMapKeys, marker.Value) {
+		return fmt.Errorf("duplicate listMapKey marker, value %s", marker.Value)
+	}
+	schema.XListMapKeys = append(schema.XListMapKeys, marker.Value)
+
+	// Intentionally leaving some validations to Kubernetes for simplicity
+	// 1. that the fields specified exist and are not nested
+	// 2. that the fields are set either to required or have a default value
 	return nil
 }
 
@@ -274,17 +338,31 @@ func applyRequiredMarker(marker *Marker, key string, parentSchema *extv1.JSONSch
 	return nil
 }
 
-func applyDefaultMarker(schema *extv1.JSONSchemaProps, marker *Marker) {
+func applyDefaultMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
 	var defaultValue []byte
 	switch schema.Type {
 	case schemaTypeString:
 		defaultValue = []byte(fmt.Sprintf("\"%s\"", marker.Value))
-	case schemaTypeInteger, schemaTypeNumber, schemaTypeBoolean:
+	case schemaTypeInteger:
+		if _, err := strconv.ParseInt(marker.Value, 10, 64); err != nil {
+			return fmt.Errorf("default value must be a valid integer, got: %s", marker.Value)
+		}
+		defaultValue = []byte(marker.Value)
+	case schemaTypeNumber:
+		if _, err := strconv.ParseFloat(marker.Value, 64); err != nil {
+			return fmt.Errorf("default value must be a valid number, got: %s", marker.Value)
+		}
+		defaultValue = []byte(marker.Value)
+	case schemaTypeBoolean:
+		if _, err := strconv.ParseBool(marker.Value); err != nil {
+			return fmt.Errorf("default value must be a valid boolean, got: %s", marker.Value)
+		}
 		defaultValue = []byte(marker.Value)
 	default:
 		defaultValue = []byte(marker.Value)
 	}
 	schema.Default = &extv1.JSON{Raw: defaultValue}
+	return nil
 }
 
 func applyMinimumMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
@@ -309,9 +387,10 @@ func applyValidationMarker(schema *extv1.JSONSchemaProps, marker *Marker) error 
 	if strings.TrimSpace(marker.Value) == "" {
 		return fmt.Errorf("validation failed")
 	}
-	schema.XValidations = []extv1.ValidationRule{
-		{Rule: marker.Value, Message: "validation failed"},
-	}
+	schema.XValidations = append(schema.XValidations, extv1.ValidationRule{
+		Rule:    marker.Value,
+		Message: "validation failed",
+	})
 	return nil
 }
 
@@ -404,6 +483,9 @@ func applyUniqueItemsMarker(schema *extv1.JSONSchemaProps, marker *Marker) error
 		return fmt.Errorf("uniqueItems marker is only valid for array types, got type: %s", schema.Type)
 	}
 	if isUnique {
+		if schema.XListType != nil && *schema.XListType != "set" {
+			return fmt.Errorf("cannot set unique when listType is set to %s", *schema.XListType)
+		}
 		// Always set x-kubernetes-list-type to "set" when uniqueItems is true
 		// https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions
 		schema.XListType = new("set")

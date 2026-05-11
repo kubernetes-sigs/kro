@@ -359,6 +359,7 @@ func (r *ResourceGraphDefinitionReconciler) ensureResourceGraphDefinitionControl
 	if err != nil {
 		return newMicroControllerError(err)
 	}
+	r.registeredControllers.Store(rgd.UID, true)
 	return nil
 }
 

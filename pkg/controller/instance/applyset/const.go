@@ -26,6 +26,9 @@ import (
 // be overwritten without explicit action.
 var ErrApplySetConflict = errors.New("resource belongs to a different ApplySet")
 
+// ErrDuplicateResource is returned when multiple resource IDs target the same Kubernetes object.
+var ErrDuplicateResource = errors.New("found resources with conflicts")
+
 // ApplySetConflictError provides details about an ApplySet membership conflict.
 type ApplySetConflictError struct {
 	ResourceName      string

@@ -73,8 +73,12 @@ func compileDeferredExpressions(spec *graph.GraphSpec) error {
 		// extract node IDs and forEach variables from spec.nodes.
 		scope := ExtractChildScopeFromBody(body)
 
-		// Validate deferred expressions against the child scope.
-		if len(deferred) > 0 {
+		// Validate deferred expressions against the child scope. When the
+		// scope is empty (non-Graph CR or non-static node list), skip
+		// validation — the child controller will catch errors at its own
+		// compile time. We only validate when we can statically determine
+		// the full child scope.
+		if len(deferred) > 0 && len(scope.NodeIDs) > 0 {
 			if err := validateDeferredExprs(node.ID, scope, deferred); err != nil {
 				return err
 			}
@@ -105,7 +109,7 @@ func ExtractChildScopeFromBody(body map[string]any) ChildScope {
 		return ChildScope{}
 	}
 
-	// Check if this is a Graph CR template.
+	// Only Graph CRs have a statically-extractable child scope.
 	apiVersion, _ := body["apiVersion"].(string)
 	kind, _ := body["kind"].(string)
 	if !graph.IsGraphCRLiteral(apiVersion, kind) {

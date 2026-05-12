@@ -311,3 +311,121 @@ func TestStdlibSingleton(t *testing.T) {
 	// scale-down prune doesn't fire (same root cause as
 	// TestMultipleForEachNodesIndependence).
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Kind wrapped in Graph (deferred expressions)
+//
+// When a Kind is created by an outer Graph using $${...} expressions, the
+// compiler must recognize the Kind template's child scope (implicit "schema"
+// + spec.nodes IDs) and validate deferred expressions against it.
+//
+// Regression test for: deferred expression validation rejected Kind templates
+// with "undeclared reference to 'schema'" because ExtractChildScopeFromBody
+// only recognized kind: Graph, not kind: Kind.
+//
+// Pipeline: outer Graph → Kind → CRD → instance → per-instance Graph → child resources
+// ═══════════════════════════════════════════════════════════════════════════════
+
+func TestStdlibKindWrappedInGraph(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, waitForCRD(ctx, k8sClient, "kinds.experimental.kro.run", stdlibCRDTimeout))
+
+	// Phase 1: Create an outer Graph that templates a Kind with $${...} expressions.
+	t.Log("creating outer Graph that stamps a Kind with deferred expressions")
+	graph := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "experimental.kro.run/v1alpha1",
+		"kind":       "Graph",
+		"metadata": map[string]any{
+			"name":      "kind-in-graph",
+			"namespace": "kro-system",
+		},
+		"spec": map[string]any{
+			"nodes": []any{
+				map[string]any{
+					"id": "mykind",
+					"template": map[string]any{
+						"apiVersion": "experimental.kro.run/v1alpha1",
+						"kind":       "Kind",
+						"metadata": map[string]any{
+							"name":      "graphwidget",
+							"namespace": "kro-system",
+						},
+						"spec": map[string]any{
+							"schema": map[string]any{
+								"apiVersion": "test.kindingrph.kro.run/v1alpha1",
+								"kind":       "GraphWidget",
+								"spec": map[string]any{
+									"message": "string | default=from-graph",
+								},
+								"status": map[string]any{
+									"configMapName": "$${cm.metadata.name}",
+								},
+							},
+							"nodes": []any{
+								map[string]any{
+									"id": "cm",
+									"template": map[string]any{
+										"apiVersion": "v1",
+										"kind":       "ConfigMap",
+										"metadata": map[string]any{
+											"name":      "$${schema.metadata.name}-fromgraph",
+											"namespace": "$${schema.metadata.namespace}",
+										},
+										"data": map[string]any{
+											"message": "$${schema.spec.message}",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), graph) })
+
+	// Phase 2: Verify the outer Graph compiles and reaches Ready.
+	t.Log("waiting for outer Graph to be Ready...")
+	graphKey := types.NamespacedName{Name: "kind-in-graph", Namespace: "kro-system"}
+	require.NoError(t, waitForGraphReady(ctx, k8sClient, graphKey, stdlibReconcileTimeout),
+		"outer Graph did not reach Ready — deferred expression compilation may have failed")
+	t.Log("outer Graph is Ready")
+
+	// Phase 3: Wait for the GraphWidget CRD (created by the Kind controller).
+	t.Log("waiting for GraphWidget CRD...")
+	require.NoError(t, waitForCRD(ctx, k8sClient, "graphwidgets.test.kindingrph.kro.run", stdlibCRDTimeout))
+	t.Log("GraphWidget CRD established")
+
+	// Phase 4: Create an instance of GraphWidget.
+	widget := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "test.kindingrph.kro.run/v1alpha1",
+		"kind":       "GraphWidget",
+		"metadata": map[string]any{
+			"name":      "gw-instance",
+			"namespace": "kro-system",
+		},
+		"spec": map[string]any{
+			"message": "hello from kind-in-graph",
+		},
+	}}
+	require.NoError(t, k8sClient.Create(ctx, widget))
+	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), widget) })
+
+	// Phase 5: Verify the child ConfigMap appears with correct data.
+	// Chain: Graph → Kind → CRD → instance → per-instance Graph → ConfigMap.
+	t.Log("waiting for per-instance ConfigMap...")
+	cmObj := &unstructured.Unstructured{}
+	cmObj.SetAPIVersion("v1")
+	cmObj.SetKind("ConfigMap")
+	cmKey := types.NamespacedName{Name: "gw-instance-fromgraph", Namespace: "kro-system"}
+
+	require.NoError(t, waitForResource(ctx, k8sClient, cmKey, cmObj, stdlibReconcileTimeout),
+		"ConfigMap gw-instance-fromgraph not created within timeout")
+
+	data, _, _ := unstructured.NestedStringMap(cmObj.Object, "data")
+	assert.Equal(t, "hello from kind-in-graph", data["message"],
+		"ConfigMap should carry the widget's message through the full Kind-in-Graph pipeline")
+	t.Log("Kind-in-Graph pipeline works: Graph → Kind → CRD → instance → ConfigMap")
+}

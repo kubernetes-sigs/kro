@@ -54,7 +54,7 @@ func TestEmitConditionMetrics_NewCondition(t *testing.T) {
 	EmitConditionMetrics(log, gvr, inst, initial, final)
 
 	// Gauge should have one series.
-	gaugeCount := testutil_countMetrics(t, InstanceConditionCurrentStatusSeconds)
+	gaugeCount := testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds)
 	assert.Equal(t, 1, gaugeCount)
 }
 
@@ -80,7 +80,7 @@ func TestEmitConditionMetrics_NoTransition(t *testing.T) {
 	EmitConditionMetrics(log, gvr, inst, conds, conds)
 
 	// Gauge should still be set (updated duration).
-	gaugeCount := testutil_countMetrics(t, InstanceConditionCurrentStatusSeconds)
+	gaugeCount := testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds)
 	assert.Equal(t, 1, gaugeCount)
 }
 
@@ -111,10 +111,16 @@ func TestEmitConditionMetrics_StatusTransition(t *testing.T) {
 		},
 	}
 
+	// Pre-populate the old series to verify it gets cleaned up.
+	InstanceConditionCurrentStatusSeconds.WithLabelValues(
+		gvr.String(), "default", "my-app", "ResourcesReady", "False", "NotReady",
+	).Set(42)
+	assert.Equal(t, 1, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
+
 	EmitConditionMetrics(log, gvr, inst, initial, final)
 
-	// Gauge should be updated with the new condition state.
-	gaugeCount := testutil_countMetrics(t, InstanceConditionCurrentStatusSeconds)
+	// Only the new series should remain; the old False/NotReady series must be deleted.
+	gaugeCount := testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds)
 	assert.Equal(t, 1, gaugeCount)
 }
 
@@ -147,7 +153,7 @@ func TestEmitConditionMetrics_DisappearedCondition(t *testing.T) {
 	EmitConditionMetrics(log, gvr, inst, initial, final)
 
 	// Gauge should be cleaned up (no series left).
-	gaugeCount := testutil_countMetrics(t, InstanceConditionCurrentStatusSeconds)
+	gaugeCount := testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds)
 	assert.Equal(t, 0, gaugeCount)
 }
 
@@ -161,12 +167,12 @@ func TestDeleteInstanceMetrics(t *testing.T) {
 	InstanceConditionCurrentStatusSeconds.WithLabelValues(gvrKey, "default", "app-1", "Ready", "True", "AllReady").Set(5)
 	InstanceConditionCurrentStatusSeconds.WithLabelValues(gvrKey, "default", "app-2", "Ready", "True", "AllReady").Set(10)
 
-	assert.Equal(t, 2, testutil_countMetrics(t, InstanceConditionCurrentStatusSeconds))
+	assert.Equal(t, 2, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
 
 	DeleteInstanceMetrics(gvr, "default", "app-1")
 
 	// Only app-2 should remain.
-	assert.Equal(t, 1, testutil_countMetrics(t, InstanceConditionCurrentStatusSeconds))
+	assert.Equal(t, 1, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
 }
 
 func TestDeleteGVRMetrics(t *testing.T) {
@@ -179,12 +185,12 @@ func TestDeleteGVRMetrics(t *testing.T) {
 	InstanceConditionCurrentStatusSeconds.WithLabelValues(gvrKey, "default", "app-1", "Ready", "True", "AllReady").Set(5)
 	InstanceConditionCurrentStatusSeconds.WithLabelValues(gvrKey, "default", "app-2", "Ready", "True", "AllReady").Set(10)
 
-	assert.Equal(t, 2, testutil_countMetrics(t, InstanceConditionCurrentStatusSeconds))
+	assert.Equal(t, 2, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
 
 	DeleteGVRMetrics(gvr)
 
 	// All metrics for this GVR should be gone.
-	assert.Equal(t, 0, testutil_countMetrics(t, InstanceConditionCurrentStatusSeconds))
+	assert.Equal(t, 0, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
 }
 
 func TestEmitConditionMetrics_DurationIsPositive(t *testing.T) {
@@ -210,7 +216,7 @@ func TestEmitConditionMetrics_DurationIsPositive(t *testing.T) {
 	EmitConditionMetrics(log, gvr, inst, initial, final)
 
 	// The gauge value should be >= 30 seconds.
-	val := testutil_getGaugeValue(t, InstanceConditionCurrentStatusSeconds, gvr.String(), "default", "my-app", "Ready", "True", "AllReady")
+	val := testutilGetGaugeValue(t, InstanceConditionCurrentStatusSeconds, gvr.String(), "default", "my-app", "Ready", "True", "AllReady")
 	assert.GreaterOrEqual(t, val, 30.0)
 }
 
@@ -218,8 +224,8 @@ func strPtr(s string) *string {
 	return &s
 }
 
-// testutil_countMetrics returns the number of active metric series in a collector.
-func testutil_countMetrics(t *testing.T, c prometheus.Collector) int {
+// testutilCountMetrics returns the number of active metric series in a collector.
+func testutilCountMetrics(t *testing.T, c prometheus.Collector) int {
 	t.Helper()
 	ch := make(chan prometheus.Metric, 100)
 	c.Collect(ch)
@@ -231,8 +237,8 @@ func testutil_countMetrics(t *testing.T, c prometheus.Collector) int {
 	return count
 }
 
-// testutil_getGaugeValue retrieves the value of a specific gauge series.
-func testutil_getGaugeValue(t *testing.T, gv *prometheus.GaugeVec, labels ...string) float64 {
+// testutilGetGaugeValue retrieves the value of a specific gauge series.
+func testutilGetGaugeValue(t *testing.T, gv *prometheus.GaugeVec, labels ...string) float64 {
 	t.Helper()
 	gauge, err := gv.GetMetricWithLabelValues(labels...)
 	require.NoError(t, err)

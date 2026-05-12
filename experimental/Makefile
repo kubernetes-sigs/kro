@@ -175,17 +175,17 @@ vet: ## Run go vet against experimental code.
 
 .PHONY: run
 run: ## Run the graph controller locally (apply CRDs first).
-	kubectl apply -f $(EXPDIR)/chart-crds/templates/
+	kubectl apply -f $(EXPDIR)/charts/crds/templates/
 	cd $(EXPDIR) && go run ./cmd/
 
 .PHONY: apply
 apply: ## Build image with ko and deploy via helm.
-	cd $(EXPDIR) && helm upgrade --install krocodile-crds chart-crds/ \
+	cd $(EXPDIR) && helm upgrade --install krocodile-crds charts/crds/ \
 		-n kro-system --create-namespace
-	cd $(EXPDIR) && helm upgrade --install krocodile chart/ \
+	cd $(EXPDIR) && helm upgrade --install krocodile charts/controller/ \
 		-n kro-system \
 		--set image=$$($(KO) build --bare ./cmd/)
-	cd $(EXPDIR) && helm upgrade --install krocodile-stdlib chart-stdlib/ \
+	cd $(EXPDIR) && helm upgrade --install krocodile-stdlib charts/stdlib/ \
 		-n kro-system
 
 .PHONY: delete

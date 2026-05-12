@@ -3,6 +3,7 @@ package stdlib
 import (
 	"bytes"
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -19,7 +20,14 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
+
+	chartstdlib "github.com/ellistarn/kro/experimental/charts/stdlib"
 )
+
+// resources contains the stdlib YAML files that live in this package.
+//
+//go:embed *.yaml
+var resources embed.FS
 
 // Apply installs the stdlib resources with retry. Some resources
 // reference CRDs that don't exist yet — they fail on first attempt
@@ -105,19 +113,22 @@ func apply(ctx context.Context, dc dynamic.Interface, r resource) error {
 
 // fileOrder defines the bootstrap sequence. Kind is the bootstrap root
 // (raw Graph). All others are Kinds that depend on the Kind CRD existing.
-var fileOrder = []string{
-	"kind.yaml",
-	"decorator.yaml",
-	"singleton.yaml",
-	"rgd.yaml",
+var fileOrder = []struct {
+	name string
+	fs   fs.FS
+}{
+	{"templates/kind.yaml", chartstdlib.Templates},
+	{"decorator.yaml", resources},
+	{"singleton.yaml", resources},
+	{"rgd.yaml", resources},
 }
 
 func loadResources() ([]resource, error) {
 	var out []resource
-	for _, name := range fileOrder {
-		raw, err := fs.ReadFile(Resources, name)
+	for _, entry := range fileOrder {
+		raw, err := fs.ReadFile(entry.fs, entry.name)
 		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", name, err)
+			return nil, fmt.Errorf("reading %s: %w", entry.name, err)
 		}
 		for _, doc := range bytes.Split(raw, []byte("\n---")) {
 			doc = bytes.TrimSpace(doc)

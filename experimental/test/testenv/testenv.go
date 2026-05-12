@@ -102,7 +102,7 @@ func (e *Environment) Start() (*rest.Config, error) {
 	}
 
 	// Start envtest with chart CRDs + any additional test CRDs.
-	chartCRDDir := filepath.Join(moduleRoot, "chart-crds", "templates")
+	chartCRDDir := filepath.Join(moduleRoot, "charts", "crds", "templates")
 	crdPaths := append([]string{chartCRDDir}, e.CRDDirectoryPaths...)
 	e.testEnv = &envtest.Environment{
 		BinaryAssetsDirectory: ResolveEnvtestAssets(),

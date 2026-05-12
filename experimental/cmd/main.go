@@ -1,11 +1,11 @@
 // Binary entrypoint for the experimental Graph controller.
 //
-// CRDs are installed by the Helm chart (experimental/chart/).
-// Stdlib Graphs are installed by the Helm chart (experimental/chart-stdlib/).
+// CRDs are installed by the Helm chart (experimental/charts/controller/).
+// Stdlib Graphs are installed by the Helm chart (experimental/charts/stdlib/).
 //
 // For local development, apply CRDs manually first:
 //
-//	kubectl apply -f experimental/chart-crds/templates/
+//	kubectl apply -f experimental/charts/crds/templates/
 //	go run ./experimental/cmd/
 package main
 

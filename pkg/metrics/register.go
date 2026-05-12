@@ -65,6 +65,7 @@ func Register(registry prometheus.Registerer) {
 		InstanceGraphResolutionSuccessTotal,
 		InstanceGraphResolutionFailuresTotal,
 		InstanceGraphResolutionPendingTotal,
+		InstanceConditionCurrentStatusSeconds,
 
 		// RGD controller
 		RGDGraphBuildTotal,

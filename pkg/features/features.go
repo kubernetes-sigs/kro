@@ -19,11 +19,15 @@ import (
 )
 
 const (
-	// InstanceConditionEvents enables emitting Kubernetes Events on instance
-	// status condition transitions (e.g. ResourcesReady False → True). When
-	// enabled, every condition change is surfaced as an Event on the instance
-	// object, visible via `kubectl describe`.
+	// InstanceConditionEvents enables Kubernetes Events on instance condition
+	// transitions. When enabled, the controller emits a K8s Event (visible
+	// via `kubectl describe`) every time a status condition changes state.
+	// This is opt-in to avoid noisy event streams in large clusters.
 	InstanceConditionEvents featuregate.Feature = "InstanceConditionEvents"
+
+	// InstanceConditionMetrics enables a Prometheus duration gauge per
+	// instance condition and structured log lines on every status change.
+	InstanceConditionMetrics featuregate.Feature = "InstanceConditionMetrics"
 
 	// CELOmitFunction enables the omit() CEL function for conditional field
 	// omission in resource templates. When enabled, CEL expressions can return
@@ -37,8 +41,9 @@ const (
 // To add a new feature, define a Feature constant above and add it here with
 // its default state and maturity stage (Alpha, Beta, or GA).
 var defaultKroFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
-	InstanceConditionEvents: {Default: false, PreRelease: featuregate.Alpha},
-	CELOmitFunction:         {Default: false, PreRelease: featuregate.Alpha},
+	InstanceConditionEvents:  {Default: false, PreRelease: featuregate.Alpha},
+	InstanceConditionMetrics: {Default: false, PreRelease: featuregate.Alpha},
+	CELOmitFunction:          {Default: false, PreRelease: featuregate.Alpha},
 }
 
 // FeatureGate is the shared global MutableFeatureGate for KRO.

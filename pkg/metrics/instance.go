@@ -133,12 +133,25 @@ func EmitConditionMetrics(
 		if cond.LastTransitionTime != nil {
 			durationSeconds = time.Since(cond.LastTransitionTime.Time).Seconds()
 		}
+
+		oldCond, existed := initialByType[cond.Type]
+
+		// Delete the old series when status or reason changed to avoid stale gauges.
+		if existed {
+			oldReason := ptr.Deref(oldCond.Reason, "")
+			if oldCond.Status != cond.Status || oldReason != reason {
+				InstanceConditionCurrentStatusSeconds.DeleteLabelValues(
+					gvrKey, ns, name,
+					string(oldCond.Type), string(oldCond.Status), oldReason,
+				)
+			}
+		}
+
 		InstanceConditionCurrentStatusSeconds.WithLabelValues(
 			gvrKey, ns, name,
 			string(cond.Type), string(cond.Status), reason,
 		).Set(durationSeconds)
 
-		oldCond, existed := initialByType[cond.Type]
 		if !existed || oldCond.Status != cond.Status {
 			oldStatus := "none"
 			if existed {

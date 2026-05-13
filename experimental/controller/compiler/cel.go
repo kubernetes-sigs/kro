@@ -69,6 +69,12 @@ type CompiledGraph struct {
 	// CEL as their declared runtime types (types.Bytes, not types.String).
 	// Mirrors upstream pkg/runtime/node_context.go buildContext.
 	ResourceSchemas map[string]*spec.Schema
+
+	// TimeComparisons maps expression strings to their time-solving metadata.
+	// Only populated for expressions matching solvable patterns (e.g.,
+	// `time.now() - timestamp(X) >= duration('2h')`). Used at eval time to
+	// compute precise requeue durations when such expressions return false.
+	TimeComparisons map[string]*TimeComparison
 }
 
 // Env returns the CEL environment for use in tests and downstream compilation.
@@ -306,6 +312,9 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 	declared[ReservedNodeReadyVar] = true
 	declared[ReservedDepsMapVar] = true
 
+	// Phase 5: analyze time comparison patterns for precise requeue scheduling.
+	timeComparisons := analyzeTimeComparisons(env, exprResult.checkedASTs)
+
 	return &CompiledGraph{
 		env:             env,
 		Programs:        exprResult.programs,
@@ -314,6 +323,7 @@ func CompileGraphSpec(spec *graph.GraphSpec, typeInfo *TypeSource) (*CompiledGra
 		UnresolvedGVKs:  typeInfo.UnresolvedGVKs,
 		CollectionIDs:   collectionIDs,
 		ResourceSchemas: typeInfo.ResourceSchemas,
+		TimeComparisons: timeComparisons,
 	}, nil
 }
 
@@ -325,6 +335,7 @@ type expressionResult struct {
 	fieldPaths  map[string]map[string][]graph.FieldPath
 	accessModes map[string]map[string]bool
 	exprTypes   map[string]*cel.Type
+	checkedASTs map[string]*cel.Ast // expression string → checked AST (for time analysis)
 }
 
 // ---------------------------------------------------------------------------
@@ -368,6 +379,7 @@ func compileExpressions(
 	exprPaths := make(map[string]map[string][]graph.FieldPath, len(expressions))
 	exprAccessModes := make(map[string]map[string]bool, len(expressions))
 	exprTypes := make(map[string]*cel.Type, len(expressions))
+	checkedASTs := make(map[string]*cel.Ast, len(expressions))
 
 	for _, expr := range expressions {
 		// Parse first so we can rewrite `<wk_id>.ready()` into a scope
@@ -392,6 +404,7 @@ func compileExpressions(
 			return nil, fmt.Errorf("checking expression %q: %w: %w", expr, ErrInvalidExpression, issues.Err())
 		}
 		exprTypes[expr] = ast.OutputType()
+		checkedASTs[expr] = ast
 
 		// Extract field paths from the AST before creating the program.
 		// Per 004-compilation.md § Algorithm, Phase 4 step 5: field path
@@ -408,6 +421,7 @@ func compileExpressions(
 		fieldPaths:  exprPaths,
 		accessModes: exprAccessModes,
 		exprTypes:   exprTypes,
+		checkedASTs: checkedASTs,
 	}, nil
 }
 

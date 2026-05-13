@@ -225,7 +225,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// -----------------------------------------------------------------------
 	// 10. Requeue if not fully ready
 	// -----------------------------------------------------------------------
-	return r.determineRequeue(wp.needsRecompile, pr.pending, allReady)
+	return r.determineRequeue(wp.needsRecompile, pr.pending, allReady, wp.NextRequeue)
 }
 
 // revisionResult bundles the outputs of resolveRevision so the caller can
@@ -309,7 +309,10 @@ func (r *GraphReconciler) resolveRevision(ctx context.Context, graph *unstructur
 }
 
 // determineRequeue decides the ctrl.Result based on post-reconcile state.
-func (r *GraphReconciler) determineRequeue(needsRecompile, prunePending, allReady bool) (ctrl.Result, error) {
+// The timeHint parameter carries the minimum requeue duration from time
+// comparison solving — when a propagateWhen gate blocks on a time expression,
+// the solver computes exactly when it will become true.
+func (r *GraphReconciler) determineRequeue(needsRecompile, prunePending, allReady bool, timeHint time.Duration) (ctrl.Result, error) {
 	// Dynamic GVK change needs immediate recompile.
 	if needsRecompile {
 		return ctrl.Result{Requeue: true}, nil
@@ -320,10 +323,22 @@ func (r *GraphReconciler) determineRequeue(needsRecompile, prunePending, allRead
 		return ctrl.Result{RequeueAfter: finalizationRequeueInterval}, nil
 	}
 
-	// If not all ready, requeue after a short interval as a safety net.
-	// Watch events handle the primary convergence path.
+	// If not all ready, requeue after the time hint if available (precise
+	// scheduling for time-gated conditions), otherwise fall back to the
+	// default polling interval. Watch events handle earlier state changes
+	// independently.
 	if !allReady {
+		if timeHint > 0 {
+			return ctrl.Result{RequeueAfter: timeHint}, nil
+		}
 		return ctrl.Result{RequeueAfter: notReadyRequeueInterval}, nil
+	}
+
+	// All ready, but a time-based gate may need future re-evaluation.
+	// This handles the case where all nodes are ready now but a
+	// propagateWhen with time.now() will eventually gate a future change.
+	if timeHint > 0 {
+		return ctrl.Result{RequeueAfter: timeHint}, nil
 	}
 
 	return ctrl.Result{}, nil

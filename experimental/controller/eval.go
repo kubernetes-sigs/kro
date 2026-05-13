@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ellistarn/kro/experimental/controller/compiler"
 	"github.com/ellistarn/kro/experimental/controller/graph"
@@ -47,6 +48,12 @@ type evaluator struct {
 	// to flow through the per-item __ready stamping — those are unaffected
 	// by this sidecar. Per 001-graph.md § readyWhen.
 	nodeReady map[string]bool
+
+	// requeueHint accumulates the minimum requeue duration from time
+	// comparisons encountered in value expressions (templates). Gate-level
+	// hints flow through checkPropagateWhen; this field captures hints
+	// from non-gate expressions so they can be merged into the final result.
+	requeueHint time.Duration
 }
 
 // newEvaluator creates an evaluator for a reconcile cycle.
@@ -75,7 +82,7 @@ func (e *evaluator) withScope(scope map[string]any) *evaluator {
 			scope[compiler.ReservedNodeReadyVar] = e.nodeReady
 		}
 	}
-	return &evaluator{compiled: e.compiled, scope: scope, nodeReady: e.nodeReady, effectiveGeneration: e.effectiveGeneration}
+	return &evaluator{compiled: e.compiled, scope: scope, nodeReady: e.nodeReady, effectiveGeneration: e.effectiveGeneration, requeueHint: e.requeueHint}
 }
 
 // evalBoolCondition evaluates a CEL expression and coerces the result to bool.
@@ -243,12 +250,22 @@ func (e *evaluator) evalReadinessConditions(conditions []string, nodeID string) 
 // can't evaluate because its inputs are missing, which should allow
 // contagious exclusion to proceed. gateBlock means the gate actively
 // decided "no" with valid inputs.
-func (e *evaluator) checkPropagateWhen(conditions []string, nodeID string) gateResult {
+//
+// The returned duration is a requeue hint from time comparison solving:
+// when a condition evaluates to false and matches a solvable time pattern,
+// the solver computes the exact duration until the condition becomes true.
+// Zero means no hint available.
+func (e *evaluator) checkPropagateWhen(conditions []string, nodeID string) (gateResult, time.Duration) {
 	if len(conditions) == 0 {
-		return gatePass
+		return gatePass, 0
 	}
 	gate, _ := e.evalConditions(conditions, nodeID, false)
-	return gate
+	if gate != gateBlock {
+		return gate, 0
+	}
+	// Gate blocked — attempt time comparison solving on the blocking conditions.
+	hint := e.solveTimeHint(conditions)
+	return gateBlock, hint
 }
 
 // firstUnsatisfiedCondition returns the first condition expression that
@@ -262,6 +279,28 @@ func (e *evaluator) firstUnsatisfiedCondition(conditions []string) string {
 		}
 	}
 	return ""
+}
+
+// solveTimeHint attempts time comparison solving on conditions that evaluated
+// to false. Returns the minimum positive duration across all solvable conditions,
+// or 0 if none are solvable.
+func (e *evaluator) solveTimeHint(conditions []string) time.Duration {
+	if e.compiled.TimeComparisons == nil {
+		return 0
+	}
+	var minHint time.Duration
+	for _, cond := range conditions {
+		// Strip ${...} wrapping to match TimeComparisons keys (bare expressions).
+		expr := cond
+		if strings.HasPrefix(expr, "${") && strings.HasSuffix(expr, "}") {
+			expr = expr[2 : len(expr)-1]
+		}
+		d := e.compiled.SolveTimeComparison(expr, e.scope)
+		if d > 0 && (minHint == 0 || d < minHint) {
+			minHint = d
+		}
+	}
+	return minHint
 }
 
 // toMap evaluates a template and asserts the result is a map.
@@ -358,6 +397,7 @@ func (e *evaluator) evalString(s string) (any, error) {
 			}
 			return nil, fmt.Errorf("evaluating %q: %w", expr, err)
 		}
+		e.accumulateTimeHint(expr)
 		return result, nil
 	}
 
@@ -380,6 +420,7 @@ func (e *evaluator) evalString(s string) (any, error) {
 				}
 				return nil, fmt.Errorf("evaluating %q: %w", expr, err)
 			}
+			e.accumulateTimeHint(expr)
 			result.WriteString(fmt.Sprintf("%v", val))
 		} else {
 			result.WriteString(dollars[1:] + "{" + expr + "}")
@@ -387,6 +428,21 @@ func (e *evaluator) evalString(s string) (any, error) {
 		pos = end
 	}
 	return result.String(), nil
+}
+
+// accumulateTimeHint checks if a just-evaluated expression has a time
+// comparison entry and, if so, solves for the requeue duration. If positive,
+// it updates the evaluator's accumulated requeueHint (taking the minimum).
+// This is safe to call unconditionally: if the comparison already passed,
+// SolveTimeComparison returns 0 and no hint is recorded.
+func (e *evaluator) accumulateTimeHint(expr string) {
+	if e.compiled.TimeComparisons == nil {
+		return
+	}
+	d := e.compiled.SolveTimeComparison(expr, e.scope)
+	if d > 0 && (e.requeueHint == 0 || d < e.requeueHint) {
+		e.requeueHint = d
+	}
 }
 
 // includeWhen evaluates all includeWhen conditions for a node.

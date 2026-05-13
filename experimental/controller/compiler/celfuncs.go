@@ -8,6 +8,7 @@ package compiler
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -254,16 +255,121 @@ func celDependenciesFunction() []cel.EnvOption {
 	}
 }
 
+// celTimeNowFunction returns CEL env options for the time.now() function.
+// Returns the pre-computed wall clock as a CEL-native Timestamp (UTC).
+// The time is captured once at compile time (per reconcile) so that every
+// evaluation within the same reconcile sees a consistent value.
+func celTimeNowFunction(now time.Time) []cel.EnvOption {
+	return []cel.EnvOption{
+		cel.Function("time.now",
+			cel.Overload("time_now",
+				[]*cel.Type{},
+				cel.TimestampType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					return types.Timestamp{Time: now}
+				}),
+			),
+		),
+	}
+}
+
+// celConditionFunction returns CEL env options for the .condition(type, status, reason, message)
+// member function. Builds a Kubernetes-style condition map from the receiver's metadata.generation
+// and preserves lastTransitionTime when the status hasn't changed.
+// The provided now time is used for lastTransitionTime when a transition occurs,
+// ensuring consistency with time.now() within the same reconcile.
+func celConditionFunction(now time.Time) []cel.EnvOption {
+	nowStr := now.Format(time.RFC3339)
+	return []cel.EnvOption{
+		cel.Function("condition",
+			cel.MemberOverload("dyn_condition_string_string_string_string",
+				[]*cel.Type{cel.DynType, cel.StringType, cel.StringType, cel.StringType, cel.StringType},
+				cel.DynType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					// args[0] = receiver (scope entry)
+					// args[1] = type, args[2] = status, args[3] = reason, args[4] = message
+					receiver, err := conversion.GoNativeType(args[0])
+					if err != nil {
+						return types.NewErr("condition: converting receiver: %v", err)
+					}
+					receiverMap, ok := receiver.(map[string]any)
+					if !ok {
+						return types.NewErr("condition: receiver must be a map, got %T", receiver)
+					}
+
+					condType := args[1].Value().(string)
+					condStatus := args[2].Value().(string)
+					reason := args[3].Value().(string)
+					message := args[4].Value().(string)
+
+					// Extract metadata.generation
+					var generation int64
+					if meta, ok := receiverMap["metadata"].(map[string]any); ok {
+						switch g := meta["generation"].(type) {
+						case int64:
+							generation = g
+						case float64:
+							generation = int64(g)
+						}
+					}
+
+					// Extract status.conditions
+					var conditions []any
+					if status, ok := receiverMap["status"].(map[string]any); ok {
+						if c, ok := status["conditions"].([]any); ok {
+							conditions = c
+						}
+					}
+
+					// Determine lastTransitionTime
+					lastTransitionTime := nowStr
+					for _, item := range conditions {
+						c, ok := item.(map[string]any)
+						if !ok {
+							continue
+						}
+						if cType, _ := c["type"].(string); cType == condType {
+							// Found existing condition with same type
+							if cStatus, _ := c["status"].(string); cStatus == condStatus {
+								// Status unchanged — preserve existing timestamp
+								if ltt, ok := c["lastTransitionTime"].(string); ok {
+									lastTransitionTime = ltt
+								}
+							}
+							break
+						}
+					}
+
+					result := map[string]any{
+						"type":               condType,
+						"status":             condStatus,
+						"reason":             reason,
+						"message":            message,
+						"observedGeneration": generation,
+						"lastTransitionTime": lastTransitionTime,
+					}
+
+					reg := types.NewEmptyRegistry()
+					return reg.NativeToValue(result)
+				}),
+			),
+		),
+	}
+}
+
 // customCELFunctions returns all custom CEL extension functions registered
 // into every compilation environment. Centralizes the registration list so
 // that CompileGraphSpec (outer, refined, forEach inner-scope) and
 // validateDeferredExprs all share a single definition.
 func customCELFunctions() []cel.EnvOption {
+	now := time.Now().UTC()
 	var opts []cel.EnvOption
 	opts = append(opts, celPluralFunction()...)
 	opts = append(opts, celFlagFunction("ready", "__ready")...)
 	opts = append(opts, celSimpleSchemaFunction()...)
 	opts = append(opts, celFlagFunction("updated", "__updated")...)
 	opts = append(opts, celDependenciesFunction()...)
+	opts = append(opts, celTimeNowFunction(now)...)
+	opts = append(opts, celConditionFunction(now)...)
 	return opts
 }

@@ -374,7 +374,7 @@ func ExtractFirstIdentifier(expr string) string {
 	switch id {
 	case "true", "false", "null", "size", "has", "exists", "all",
 		"filter", "map", "int", "uint", "double", "string", "bool",
-		"bytes", "list", "type", "duration", "timestamp":
+		"bytes", "list", "type", "duration", "timestamp", "time":
 		return ""
 	}
 	return id

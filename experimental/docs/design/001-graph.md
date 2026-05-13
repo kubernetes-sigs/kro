@@ -160,7 +160,7 @@ node cannot be evaluated until all of its edges can been evaluated.
 
 Nodes can have soft dependencies on other nodes by defining CEL expressions with
 [Optional Types](https://pkg.go.dev/github.com/google/cel-go/cel#OptionalTypes) (`?`, `.orValue()`).
-A node's expression uses the data of another node if its availabile, but defines alternative values
+A node's expression uses the data of another node if its available, but defines alternative values
 if it's not.
 
 ```yaml
@@ -169,18 +169,18 @@ if it's not.
 
 - id: appStatus
   patch:
+    apiVersion: kro.run/v1alpha1
+    kind: WebApp
+    metadata:
+      name: my-app
     status:
-      conditions:
-        - type: DeploymentReady
-          status: ${deployment.ready().orValue(false) ? 'True' : 'Unknown'}
-          message: ${deployment.ready().orValue(false) ? 'Deployment available' : 'Waiting for deployment'}
       replicas: ${deployment.?status.?availableReplicas.orValue(0)}
+      endpoint: ${service.?status.?loadBalancer.?ingress[0].?hostname.orValue('pending')}
 ```
 
-`appStatus` evaluates immediately. While `deployment` is absent, `.ready().orValue(false)` returns
-`false` — the condition reports `Unknown`, and `.?replicas.orValue(0)` returns `0`. When
-`deployment` completes and becomes ready, the `appStatus` re-evaluates and the condition flips to
-`True`.
+`appStatus` evaluates immediately. While `deployment` is absent, `.?availableReplicas.orValue(0)`
+returns `0`. While `service` has no load balancer, `.?hostname.orValue('pending')` returns
+`'pending'`. When both resolve, the patch reflects the live values.
 
 ### CEL Functions
 
@@ -190,6 +190,12 @@ Nodes expose functions that enable other nodes to reason about their state.
 - **`.updated()`** — true when the node has been evaluated against the latest graph generation.
 - **`.dependencies()`** — a list of hard and soft dependencies of the node. Useful to chain
   dependency readiness `readyWhen: [${node.dependencies().all(d, d.ready())}]`.
+- **`time.now()`** — the current wall clock as a CEL-native `timestamp`. When it appears in a
+  comparison, kro solves for the moment the comparison becomes true and enqueues reconciliation.
+- **`.condition(type, status, reason, message)`** — constructs a Kubernetes status condition.
+  Reads the scope entry's `.status.conditions` to find the existing condition by type. Preserves
+  `lastTransitionTime` when status is unchanged; stamps `time.now()` on transition. Sets
+  `observedGeneration` from `.metadata.generation`.
 - **`plural(s)`** — English pluralization. Returns the plural form of the input string. Example:
   `plural("WebApp").lowerAscii()` → `"webapps"`.
 - **`simpleSchema.toOpenAPI(schema, resources)`** — Converts a SimpleSchema map and resource list
@@ -347,6 +353,112 @@ It's common to combine `finalizes` with `readyWhen` to coordinate graceful remov
   readyWhen:
     - ${snapshot.status.readyToUse == true}
 ```
+
+## Time
+
+`time.now()` returns the current wall clock as a CEL-native `timestamp`. All duration arithmetic
+uses standard CEL operators (`timestamp - timestamp → duration`, `timestamp + duration →
+timestamp`). When `time.now()` appears in a comparison, kro solves for the moment that comparison
+becomes true and enqueues reconciliation for exactly that time. The comparison operator is what gives
+kro something to solve — it works wherever the comparison appears: gate expressions, ternaries,
+value expressions.
+
+```yaml
+# Wait 2 hours after staging is ready before rolling out production.
+- id: staging
+  readyWhen:
+    - ${staging.status.availableReplicas == staging.spec.replicas}
+  template:
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: my-app-staging
+      namespace: us-west-2
+    spec:
+      replicas: 2
+      # ...
+
+- id: production
+  propagateWhen:
+    - ${staging.ready()}
+    - >-
+      ${time.now() - timestamp(staging.status.conditions.filter(
+        c, c.type == 'Available' && c.status == 'True'
+      )[0].lastTransitionTime) >= duration('2h')}
+  template:
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: my-app
+      namespace: us-east-1
+    spec:
+      replicas: 10
+      # ...
+```
+
+Kro solves `time.now() - lastTransitionTime >= 2h` → enqueue at `lastTransitionTime + 2h`. Two
+hours after staging becomes ready, one reconciliation fires and `production` proceeds.
+
+Without a comparison, `time.now()` is a raw value — nothing to solve, no enqueue. Writing
+`time.now()` directly onto a resource produces a new value on every reconciliation. Use
+`.condition()` for status timestamps — it settles by preserving `lastTransitionTime` when status is
+unchanged. Raw `time.now()` in a write path without a settling mechanism is the user's
+responsibility to manage.
+
+### Status Conditions
+
+`.condition(type, status, reason, message)` constructs a Kubernetes status condition with correct
+`lastTransitionTime` semantics. Called on a scope entry that carries `.status.conditions` and
+`.metadata.generation`:
+
+```yaml
+- id: instanceStatus
+  patch:
+    apiVersion: myapp.example.com/v1
+    kind: MyApp
+    metadata:
+      name: ${schema.metadata.name}
+      namespace: ${schema.metadata.namespace}
+    status:
+      conditions: ${[
+        schema.condition('Ready',
+          deployment.ready() && service.ready() ? 'True' : 'False',
+          'Ready', 'All resources reconciled'),
+        schema.condition('DatabaseReady',
+          db.ready() ? 'True' : 'False',
+          'Connected', 'Database connection established'),
+      ]}
+```
+
+The function is equivalent to:
+
+```cel
+{
+  "type": type,
+  "status": status,
+  "reason": reason,
+  "message": message,
+  "observedGeneration": schema.metadata.generation,
+  "lastTransitionTime": schema.status.conditions.exists(c, c.type == type)
+    ? (schema.status.conditions.filter(c, c.type == type)[0].status == status
+        ? schema.status.conditions.filter(c, c.type == type)[0].lastTransitionTime
+        : time.now())
+    : time.now()
+}
+```
+
+`lastTransitionTime` is preserved when status is unchanged. `time.now()` only stamps on actual
+transitions.
+
+### Why Not
+
+**`tick(d)` as an explicit scheduling function.** Exposes scheduling mechanics to the user —
+polling intervals to tune, side effects to reason about. A comparison involving `time.now()` gives
+kro enough information to solve for the exact enqueue time.
+
+**Automatic condition management by the runtime.** Users should decide what conditions exist, what
+they mean, and when they transition. `time.now()` provides the clock, `.condition()` provides the
+sugar, `patch:` writes the result — no implicit conditions created by the system.
 
 ## Nested Graphs
 
@@ -526,3 +638,13 @@ spec:
 
 The ownerReference triggers self-deletion. The patch holds the owner until teardown prunes it — SSA
 releases the finalizer, the owner completes deletion.
+
+## Why Not
+
+**`observed` as a user-visible scope variable.** Ref nodes already provide live resource state in
+scope. The scope entry _is_ the observed state — adding a parallel variable duplicates data under a
+different name.
+
+**`immutable()` as a CEL function.** Write constraints (preventing field mutation after creation)
+are a policy concern, not a value expression. CEL expressions produce values; they do not constrain
+what values are acceptable.

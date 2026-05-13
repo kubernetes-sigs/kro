@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/cel-go/common/types"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -44,6 +45,9 @@ type propagateResult struct {
 	needsRecompile bool          // dynamic GVK resolved or changed
 	nodeErrors     []string      // "nodeID: reason" for status reporting
 	summary        PlanSummary
+	// NextRequeue is the minimum requeue duration computed by time comparison
+	// solving across all blocked propagateWhen gates. Zero means no hint.
+	NextRequeue time.Duration
 }
 
 // propagate executes a sequential DAG propagation in topological order.
@@ -65,6 +69,9 @@ func (r *GraphReconciler) propagate(ctx context.Context, rs *reconcileScope, sta
 			result.nodeErrors = append(result.nodeErrors, nrOut.errMsgs...)
 			if nrOut.needsRecompile {
 				result.needsRecompile = true
+			}
+			if nrOut.requeueHint > 0 && (result.NextRequeue == 0 || nrOut.requeueHint < result.NextRequeue) {
+				result.NextRequeue = nrOut.requeueHint
 			}
 		}
 	}
@@ -139,16 +146,39 @@ func (r *GraphReconciler) propagateNode(
 	// For forEach nodes, propagateWhen is evaluated per-item inside
 	// reconcileForEach, not here.
 	if len(node.PropagateWhen) > 0 && node.ForEach == nil {
+		// Populate soft dependencies as optional.none() before propagateWhen
+		// evaluation. propagateWhen expressions may reference soft deps via
+		// optional chaining (e.g. source.?data), which requires the variable
+		// to exist in scope as an optional value.
+		for depID, kind := range node.Dependencies {
+			if kind != graphpkg.DepSoft {
+				continue
+			}
+			if _, exists := eval.scope[depID]; exists {
+				continue
+			}
+			eval.scope[depID] = celOptionalNone()
+		}
+
 		// Populate __kroDeps for this node so that <id>.dependencies()
 		// expressions resolve correctly.
 		populateDepsMap(eval, node)
 
-		gate := eval.checkPropagateWhen(node.PropagateWhen, node.ID)
+		gate, requeueHint := eval.checkPropagateWhen(node.PropagateWhen, node.ID)
 		if gate != gatePass {
 			unsatisfied := eval.firstUnsatisfiedCondition(node.PropagateWhen)
 			logger.V(1).Info("propagateWhen unsatisfied — node pending",
 				"node", node.ID, "unsatisfied", unsatisfied)
 			plan.SetState(node.ID, NodePending)
+			// Use eval's accumulated hint as fallback (from accumulateTimeHint
+			// during gate evaluation).
+			if requeueHint == 0 {
+				requeueHint = eval.requeueHint
+			}
+			// Return a synthetic result carrying just the requeue hint.
+			if requeueHint > 0 {
+				return &nodeIntegrationResult{requeueHint: requeueHint}
+			}
 			return nil
 		}
 	}
@@ -193,6 +223,7 @@ type nodeIntegrationResult struct {
 	errMsgs        []string // "nodeID: reason" error messages for status
 	needsRecompile bool     // dynamic GVK resolved or changed
 	crdCreated     bool     // template node created a CRD (caller advances SchemaGen)
+	requeueHint    time.Duration // time comparison solving hint (0 = none)
 }
 
 // integrateNodeResult processes a single node's evaluation output and
@@ -279,6 +310,11 @@ func integrateNodeResult(
 		out.needsRecompile = true
 		logger.Info("dynamic GVK resolved; will recompile with schema on next reconcile",
 			"node", node.ID, "gvk", *nr.resolvedGVK)
+	}
+
+	// Merge evaluator-accumulated time hints from value expressions.
+	if eval.requeueHint > 0 && (out.requeueHint == 0 || eval.requeueHint < out.requeueHint) {
+		out.requeueHint = eval.requeueHint
 	}
 
 	return out

@@ -97,7 +97,8 @@ func (c *clusterAccess) reconcileForEach(ctx context.Context, rs *reconcileScope
 			// Expose the partially-built collection so the gate
 			// expression can inspect already-processed items.
 			eval.scope[node.ID] = allApplied
-			if eval.checkPropagateWhen(node.PropagateWhen, node.ID) != gatePass {
+			gate, _ := eval.checkPropagateWhen(node.PropagateWhen, node.ID)
+			if gate != gatePass {
 				halted = true
 				logger.V(1).Info("per-item propagateWhen halted forEach expansion",
 					"node", node.ID, "haltedAt", id, "processedCount", len(allApplied))

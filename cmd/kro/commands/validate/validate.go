@@ -32,16 +32,43 @@ var validateCmd = &cobra.Command{
 		`if the ResourceGraphDefinition is valid and can be used to create a ResourceGraph.`,
 }
 
-var resourceGroupDefinitionFile string
+var (
+	resourceGroupDefinitionFile string
+	kubernetesVersion           string
+	crdsDir                     string
+	fromCluster                 bool
+)
+
+// defaultRGDConfig is the default RGD configuration for CLI validation
+var defaultRGDConfig = graph.RGDConfig{
+	MaxCollectionSize:          1000,
+	MaxCollectionDimensionSize: 10,
+}
 
 func init() {
 	validateRGDCmd.PersistentFlags().StringVarP(&resourceGroupDefinitionFile, "file", "f", "",
 		"Path to the ResourceGroupDefinition file")
+	validateRGDCmd.PersistentFlags().StringVar(&kubernetesVersion, "kubernetes-version", "",
+		"Kubernetes version for embedded schemas (e.g., v1.30). Uses latest if not specified.")
+	validateRGDCmd.PersistentFlags().StringVar(&crdsDir, "crds", "",
+		"Directory containing local CRD files for schema resolution")
+	validateRGDCmd.PersistentFlags().BoolVar(&fromCluster, "from-cluster", false,
+		"Discover schemas from Kubernetes API server (requires kubeconfig)")
 }
 
 var validateRGDCmd = &cobra.Command{
 	Use:   "rgd [FILE]",
 	Short: "Validate a ResourceGraphDefinition file",
+	Long: `Validate a ResourceGraphDefinition file using different schema resolution strategies:
+
+  Offline (default): Uses embedded Kubernetes schemas for validation
+  --crds <dir>: Include local CRD files (extends embedded schemas)
+  --kubernetes-version <version>: Specify Kubernetes version (defaults to latest)
+  --from-cluster: Validate against live cluster API server
+
+Offline validation is useful for CI/CD pipelines and pre-deployment validation without
+requiring cluster access. Use --from-cluster when you need to validate against cluster-specific
+CRDs or alpha/beta APIs that may differ between Kubernetes versions.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if resourceGroupDefinitionFile == "" {
 			return fmt.Errorf("ResourceGroupDefinition file is required")
@@ -49,12 +76,12 @@ var validateRGDCmd = &cobra.Command{
 
 		data, err := os.ReadFile(resourceGroupDefinitionFile)
 		if err != nil {
-			return fmt.Errorf("failed to read ResourceGroupDefinition file: %w", err)
+			return fmt.Errorf("reading ResourceGroupDefinition file: %w", err)
 		}
 
 		var rgd v1alpha1.ResourceGraphDefinition
 		if err = yaml.Unmarshal(data, &rgd); err != nil {
-			return fmt.Errorf("failed to unmarshal ResourceGroupDefinition: %w", err)
+			return fmt.Errorf("unmarshaling ResourceGroupDefinition: %w", err)
 		}
 
 		if err := validateRGD(&rgd); err != nil {
@@ -67,17 +94,31 @@ var validateRGDCmd = &cobra.Command{
 }
 
 func validateRGD(rgd *v1alpha1.ResourceGraphDefinition) error {
-	set, err := kroclient.NewSet(kroclient.Config{})
-	if err != nil {
-		return fmt.Errorf("failed to create client set: %w", err)
+	var builder *graph.Builder
+	var err error
+
+	if fromCluster {
+		// Cluster validation - use live API server
+		set, err := kroclient.NewSet(kroclient.Config{})
+		if err != nil {
+			return fmt.Errorf("creating client set: %w", err)
+		}
+
+		builder, err = graph.NewBuilder(set.RESTConfig(), set.HTTPClient())
+		if err != nil {
+			return fmt.Errorf("creating graph builder: %w", err)
+		}
+	} else {
+		// Offline validation - use single resolver for both schemas and scopes
+		resolver, err := NewOfflineSchemaResolver(kubernetesVersion, crdsDir)
+		if err != nil {
+			return fmt.Errorf("creating offline resolver: %w", err)
+		}
+
+		builder = graph.NewBuilderWithResolver(resolver, resolver)
 	}
 
-	builder, err := graph.NewBuilder(set.RESTConfig(), set.HTTPClient())
-	if err != nil {
-		return fmt.Errorf("failed to create graph builder: %w", err)
-	}
-
-	_, err = builder.NewResourceGraphDefinition(rgd)
+	_, err = builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create ResourceGraphDefinition: %w", err)
 	}

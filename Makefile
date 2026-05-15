@@ -111,6 +111,10 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object paths="./..."
 
+.PHONY: generate-schemas-for-cli
+generate-schemas-for-cli: ## Generate embedded Kubernetes OpenAPI schemas for CLI offline validation
+	./cmd/kro/embeddedschemas/generate.sh
+
 tt:
 	$(CONTROLLER_GEN) object paths="./pkg/controller/resourcegraphdefinition"
 

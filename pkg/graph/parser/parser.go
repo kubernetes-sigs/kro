@@ -135,8 +135,9 @@ func handleSchemaExtensions(schema *spec.Schema) ([]string, bool) {
 		return typesAny, true
 	}
 
-	// Handle "x-kubernetes-int-or-string" extension
-	if hasStructuralSchemaMarkerEnabled(schema, xKubernetesIntOrString) {
+	// Handle "x-kubernetes-int-or-string" extension or format
+	// Built-in K8s types use format: "int-or-string" while CRDs use the extension
+	if hasStructuralSchemaMarkerEnabled(schema, xKubernetesIntOrString) || schema.Format == "int-or-string" {
 		return typesStringOrInteger, true
 	}
 

@@ -328,27 +328,40 @@ func ssaWrite(ctx context.Context, c client.Client, obj *unstructured.Unstructur
 		}
 	}
 
-	data, err := json.Marshal(mainPayload)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling: %w", err)
+	// If the main payload only contains identity fields (apiVersion, kind, metadata),
+	// skip the main-object apply — it serves no purpose and would needlessly register
+	// a field manager on the main resource, causing ownership conflicts.
+	mainOnlyIdentity := true
+	for k := range mainPayload {
+		if k != "apiVersion" && k != "kind" && k != "metadata" {
+			mainOnlyIdentity = false
+			break
+		}
 	}
 
-	applied := &unstructured.Unstructured{}
-	applied.SetGroupVersionKind(obj.GroupVersionKind())
-	applied.SetName(obj.GetName())
-	applied.SetNamespace(obj.GetNamespace())
+	var readBack *unstructured.Unstructured
+	if !mainOnlyIdentity {
+		data, err := json.Marshal(mainPayload)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling: %w", err)
+		}
 
-	if err := c.Patch(ctx, applied, client.RawPatch(types.ApplyPatchType, data), patchOpts...); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, err
+		applied := &unstructured.Unstructured{}
+		applied.SetGroupVersionKind(obj.GroupVersionKind())
+		applied.SetName(obj.GetName())
+		applied.SetNamespace(obj.GetNamespace())
+
+		if err := c.Patch(ctx, applied, client.RawPatch(types.ApplyPatchType, data), patchOpts...); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, err
+			}
+			if apierrors.IsConflict(err) {
+				return nil, fmt.Errorf("SSA conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
+			}
+			return nil, fmt.Errorf("applying %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
 		}
-		if apierrors.IsConflict(err) {
-			return nil, fmt.Errorf("SSA conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
-		}
-		return nil, fmt.Errorf("applying %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
+		readBack = applied
 	}
-
-	readBack := applied
 	if hasStatus && statusData != nil {
 		statusPayload := map[string]any{
 			"apiVersion": obj.GetAPIVersion(),

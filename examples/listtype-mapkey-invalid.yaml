@@ -1,0 +1,37 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: invalidapp.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: InvalidApp
+    spec:
+      name: string
+      # This should fail K8s validation: listMapKey references a field
+      # that is not required and has no default value
+      containers: |
+        []object | listType=map listMapKey=name listMapKey=optionalPort
+        name: string | required=true
+        image: string | required=true
+        optionalPort: integer
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: test
+          template:
+            metadata:
+              labels:
+                app: test
+            spec:
+              containers:
+                - name: test
+                  image: nginx

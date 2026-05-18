@@ -1,0 +1,26 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: envapp.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: EnvApp
+    spec:
+      name: string
+      namespace: string | default=default
+      # Array of env var objects with listType=map and listMapKey
+      env: |
+        []object | listType=map listMapKey=name
+        name: string | required=true
+        value: string | required=true
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        data:
+          app: config

@@ -1,0 +1,32 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: errortest.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ErrorTest
+    spec:
+      name: string
+      # This should error: listMapKey with listType=set (not map)
+      tags: '[]string | listType=set listMapKey=otherField'
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: test
+          template:
+            metadata:
+              labels:
+                app: test
+            spec:
+              containers:
+                - name: test
+                  image: nginx

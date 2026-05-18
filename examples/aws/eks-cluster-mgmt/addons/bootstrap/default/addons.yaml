@@ -11,7 +11,7 @@ syncPolicy:
       maxDuration: 10m # the maximum amount of time allowed for the backoff strategy
   syncOptions:
     - CreateNamespace=true
-    - ServerSideApply=true  # Big CRDs.
+    - ServerSideApply=true # Big CRDs.
 syncPolicyAppSet:
   preserveResourcesOnDeletion: false # to be able to cleanup
 useSelectors: true
@@ -24,11 +24,9 @@ valueFiles:
   - clusters/{{.nameNormalized}}/addons
 useValuesFilePrefix: true
 valuesFilePrefix: 'tenants/{{.metadata.labels.tenant}}/'
-
 ########################################
 # define Addons
 ########################################
-
 external-secrets:
   enabled: false
   enableACK: false
@@ -42,11 +40,11 @@ external-secrets:
     matchExpressions:
       - key: enable_external_secrets
         operator: In
-        values: ['true']
+        values:
+          - 'true'
   valuesObject:
     serviceAccount:
       name: "external-secrets-sa"
-
 kro-eks-rgs:
   enabled: false
   type: manifest
@@ -60,8 +58,8 @@ kro-eks-rgs:
     matchExpressions:
       - key: enable_kro_eks_rgs
         operator: In
-        values: ['true']
-
+        values:
+          - 'true'
 multi-acct:
   enabled: false
   namespace: kro
@@ -73,4 +71,5 @@ multi-acct:
     matchExpressions:
       - key: enable_multi_acct
         operator: In
-        values: ['true']
+        values:
+          - 'true'

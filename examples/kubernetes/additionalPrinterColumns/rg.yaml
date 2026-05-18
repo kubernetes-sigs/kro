@@ -24,7 +24,6 @@ spec:
       - jsonPath: .spec.ingress.enabled
         name: Enabled Ingress
         type: boolean
-
   resources:
     - id: deployment
       template:

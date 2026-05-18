@@ -1,0 +1,29 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: podwithcontainers.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: PodWithContainers
+    # Define custom types
+    types:
+      Container:
+        name: string | required=true
+        image: string | required=true
+        port: integer | required=true
+    spec:
+      podName: string
+      namespace: string | default=default
+      # Use custom type in array with listType=map and listMapKey
+      containers: '[]Container | listType=map listMapKey=name listMapKey=port'
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.podName}
+          namespace: ${schema.spec.namespace}
+        data:
+          info: "Pod configuration"

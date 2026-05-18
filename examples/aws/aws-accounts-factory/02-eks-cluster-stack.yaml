@@ -7,8 +7,8 @@ spec:
   schema:
     apiVersion: v1alpha1
     kind: EKSClusterStack
-    spec: 
-    # RGD Input Parameters 
+    spec:
+      # RGD Input Parameters 
       clusterName: string
       region: string
       version: string
@@ -49,7 +49,6 @@ spec:
           tags:
             - key: Name
               value: ${schema.spec.clusterName}-role
-    
     - id: nodeRole
       template:
         apiVersion: iam.services.k8s.aws/v1alpha1
@@ -77,7 +76,6 @@ spec:
           tags:
             - key: Name
               value: ${schema.spec.clusterName}-node-role
-    
     - id: cluster
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
@@ -108,7 +106,6 @@ spec:
           tags:
             Name: ${schema.spec.clusterName}
             Environment: demo
-    
     - id: nodeGroup
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1

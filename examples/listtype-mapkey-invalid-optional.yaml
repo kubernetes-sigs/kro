@@ -1,0 +1,30 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: invalidpod.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: InvalidPod
+    # Define custom type with an optional field used as listMapKey
+    types:
+      BadContainer:
+        name: string | required=true
+        image: string | required=true
+        # optionalPort is NOT required - this will cause K8s validation to fail
+        optionalPort: integer
+    spec:
+      podName: string
+      namespace: string | default=default
+      # This should fail: optionalPort is used as listMapKey but isn't required
+      containers: '[]BadContainer | listType=map listMapKey=name listMapKey=optionalPort'
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.podName}
+          namespace: ${schema.spec.namespace}
+        data:
+          info: "Pod configuration"

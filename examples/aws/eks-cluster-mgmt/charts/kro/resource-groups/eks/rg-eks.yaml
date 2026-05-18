@@ -38,138 +38,134 @@ spec:
         addonsRepoPath: string | default="bootstrap"
         addonsRepoRevision: string | default="main"
         addonsRepoUrl: string | default="https://github.com/allamand/eks-cluster-mgmt"
-
         fleetRepoBasePath: string | default="fleet/"
         fleetRepoPath: string | default="bootstrap"
         fleetRepoRevision: string | default="main"
         fleetRepoUrl: string | default="https://github.com/allamand/eks-cluster-mgmt"
-
       addons:
-
         enable_external_secrets: string | default="true"
         external_secrets_namespace: string | default="external-secrets"
         external_secrets_service_account: string | default="external-secrets-sa"
-
   resources:
-  - id: vpc
-    includeWhen:
-      - ${schema.spec.vpc.create}
-    readyWhen:
-    - ${vpc.status.conditions.exists(x, x.type == 'Ready' && x.status == "True")} # Check on kro conditions
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: Vpc
-      metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.name}
-        labels:
-          app.kubernetes.io/instance: ${schema.spec.name}
-        annotations:
-          argocd.argoproj.io/tracking-id: clusters:kro.run/Vpc:${schema.spec.name}/${schema.spec.name}
-      spec:
-        name: ${schema.spec.name}
-        region: ${schema.spec.region}
-        cidr:
-          vpcCidr: ${schema.spec.vpc.vpcCidr}
-          publicSubnet1Cidr: ${schema.spec.vpc.publicSubnet1Cidr}
-          publicSubnet2Cidr: ${schema.spec.vpc.publicSubnet2Cidr}
-          privateSubnet1Cidr: ${schema.spec.vpc.privateSubnet1Cidr}
-          privateSubnet2Cidr: ${schema.spec.vpc.privateSubnet2Cidr}
-  - id: eksWithVpc
-    includeWhen:
-      - ${schema.spec.vpc.create}
-    readyWhen:
-      - ${eksWithVpc.status.conditions.exists(x, x.type == 'Ready' && x.status == "True")} # Check on kro conditions
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: EksClusterBasic
-      metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.name}
-        labels:
-          app.kubernetes.io/instance: ${schema.spec.name}
-        annotations:
-          argocd.argoproj.io/tracking-id: clusters:kro.run/EksCluster:${schema.spec.name}/${schema.spec.name}
-      spec:
-        name: ${schema.spec.name}
-        tenant: ${schema.spec.tenant}
-        environment: ${schema.spec.environment}
-        region: ${schema.spec.region}
-        accountId: ${schema.spec.accountId}
-        managementAccountId: ${schema.spec.managementAccountId}
-        k8sVersion: ${schema.spec.k8sVersion}
-        adminRoleName: ${schema.spec.adminRoleName}
-        fleetSecretManagerSecretNameSuffix: ${schema.spec.fleetSecretManagerSecretNameSuffix}
-        domainName: ${schema.spec.domainName}
-        network:
-          vpcID: "${vpc.status.vpcID}"
-          subnets:
-            controlplane:
-              subnet1ID: "${vpc.status.privateSubnet1ID}"
-              subnet2ID: "${vpc.status.privateSubnet2ID}"
-            workers:
-              subnet1ID: "${vpc.status.privateSubnet1ID}"
-              subnet2ID: "${vpc.status.privateSubnet2ID}"
-        workloads: ${schema.spec.workloads}
-        gitops:
-          addonsRepoBasePath: ${schema.spec.gitops.addonsRepoBasePath}
-          addonsRepoPath: ${schema.spec.gitops.addonsRepoPath}
-          addonsRepoRevision: ${schema.spec.gitops.addonsRepoRevision}
-          addonsRepoUrl: ${schema.spec.gitops.addonsRepoUrl}
-          fleetRepoBasePath: ${schema.spec.gitops.fleetRepoBasePath}
-          fleetRepoPath: ${schema.spec.gitops.fleetRepoPath}
-          fleetRepoRevision: ${schema.spec.gitops.fleetRepoRevision}
-          fleetRepoUrl: ${schema.spec.gitops.fleetRepoUrl}
-        addons:
-          enable_external_secrets: ${schema.spec.addons.enable_external_secrets}
-          external_secrets_namespace: ${schema.spec.addons.external_secrets_namespace}
-          external_secrets_service_account: ${schema.spec.addons.external_secrets_service_account}
-  - id: eksExistingVpc
-    includeWhen:
-      - ${!schema.spec.vpc.create}
-    readyWhen:
-      - ${eksExistingVpc.status.conditions.exists(x, x.type == 'Ready' && x.status == "True")} # Check on kro conditions
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: EksClusterBasic
-      metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.name}
-        labels:
-          app.kubernetes.io/instance: ${schema.spec.name}
-        annotations:
-          argocd.argoproj.io/tracking-id: clusters:kro.run/EksCluster:${schema.spec.name}/${schema.spec.name}
-      spec:
-        name: ${schema.spec.name}
-        tenant: ${schema.spec.tenant}
-        environment: ${schema.spec.environment}
-        region: ${schema.spec.region}
-        accountId: ${schema.spec.accountId}
-        managementAccountId: ${schema.spec.managementAccountId}
-        k8sVersion: ${schema.spec.k8sVersion}
-        adminRoleName: ${schema.spec.adminRoleName}
-        fleetSecretManagerSecretNameSuffix: ${schema.spec.fleetSecretManagerSecretNameSuffix}
-        domainName: ${schema.spec.domainName}
-        network:
-          vpcID: "${schema.spec.vpc.vpcId}"
-          subnets:
-            controlplane:
-              subnet1ID: "${schema.spec.vpc.privateSubnet1Id}"
-              subnet2ID: "${schema.spec.vpc.privateSubnet2Id}"
-            workers:
-              subnet1ID: "${schema.spec.vpc.privateSubnet1Id}"
-              subnet2ID: "${schema.spec.vpc.privateSubnet2Id}"
-        workloads: ${schema.spec.workloads}
-        gitops:
-          addonsRepoBasePath: ${schema.spec.gitops.addonsRepoBasePath}
-          addonsRepoPath: ${schema.spec.gitops.addonsRepoPath}
-          addonsRepoRevision: ${schema.spec.gitops.addonsRepoRevision}
-          addonsRepoUrl: ${schema.spec.gitops.addonsRepoUrl}
-          fleetRepoBasePath: ${schema.spec.gitops.fleetRepoBasePath}
-          fleetRepoPath: ${schema.spec.gitops.fleetRepoPath}
-          fleetRepoRevision: ${schema.spec.gitops.fleetRepoRevision}
-          fleetRepoUrl: ${schema.spec.gitops.fleetRepoUrl}
-        addons:
-          enable_external_secrets: ${schema.spec.addons.enable_external_secrets}
-          external_secrets_namespace: ${schema.spec.addons.external_secrets_namespace}
-          external_secrets_service_account: ${schema.spec.addons.external_secrets_service_account}
+    - id: vpc
+      includeWhen:
+        - ${schema.spec.vpc.create}
+      readyWhen:
+        - ${vpc.status.conditions.exists(x, x.type == 'Ready' && x.status == "True")} # Check on kro conditions
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: Vpc
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.name}
+          labels:
+            app.kubernetes.io/instance: ${schema.spec.name}
+          annotations:
+            argocd.argoproj.io/tracking-id: clusters:kro.run/Vpc:${schema.spec.name}/${schema.spec.name}
+        spec:
+          name: ${schema.spec.name}
+          region: ${schema.spec.region}
+          cidr:
+            vpcCidr: ${schema.spec.vpc.vpcCidr}
+            publicSubnet1Cidr: ${schema.spec.vpc.publicSubnet1Cidr}
+            publicSubnet2Cidr: ${schema.spec.vpc.publicSubnet2Cidr}
+            privateSubnet1Cidr: ${schema.spec.vpc.privateSubnet1Cidr}
+            privateSubnet2Cidr: ${schema.spec.vpc.privateSubnet2Cidr}
+    - id: eksWithVpc
+      includeWhen:
+        - ${schema.spec.vpc.create}
+      readyWhen:
+        - ${eksWithVpc.status.conditions.exists(x, x.type == 'Ready' && x.status == "True")} # Check on kro conditions
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: EksClusterBasic
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.name}
+          labels:
+            app.kubernetes.io/instance: ${schema.spec.name}
+          annotations:
+            argocd.argoproj.io/tracking-id: clusters:kro.run/EksCluster:${schema.spec.name}/${schema.spec.name}
+        spec:
+          name: ${schema.spec.name}
+          tenant: ${schema.spec.tenant}
+          environment: ${schema.spec.environment}
+          region: ${schema.spec.region}
+          accountId: ${schema.spec.accountId}
+          managementAccountId: ${schema.spec.managementAccountId}
+          k8sVersion: ${schema.spec.k8sVersion}
+          adminRoleName: ${schema.spec.adminRoleName}
+          fleetSecretManagerSecretNameSuffix: ${schema.spec.fleetSecretManagerSecretNameSuffix}
+          domainName: ${schema.spec.domainName}
+          network:
+            vpcID: "${vpc.status.vpcID}"
+            subnets:
+              controlplane:
+                subnet1ID: "${vpc.status.privateSubnet1ID}"
+                subnet2ID: "${vpc.status.privateSubnet2ID}"
+              workers:
+                subnet1ID: "${vpc.status.privateSubnet1ID}"
+                subnet2ID: "${vpc.status.privateSubnet2ID}"
+          workloads: ${schema.spec.workloads}
+          gitops:
+            addonsRepoBasePath: ${schema.spec.gitops.addonsRepoBasePath}
+            addonsRepoPath: ${schema.spec.gitops.addonsRepoPath}
+            addonsRepoRevision: ${schema.spec.gitops.addonsRepoRevision}
+            addonsRepoUrl: ${schema.spec.gitops.addonsRepoUrl}
+            fleetRepoBasePath: ${schema.spec.gitops.fleetRepoBasePath}
+            fleetRepoPath: ${schema.spec.gitops.fleetRepoPath}
+            fleetRepoRevision: ${schema.spec.gitops.fleetRepoRevision}
+            fleetRepoUrl: ${schema.spec.gitops.fleetRepoUrl}
+          addons:
+            enable_external_secrets: ${schema.spec.addons.enable_external_secrets}
+            external_secrets_namespace: ${schema.spec.addons.external_secrets_namespace}
+            external_secrets_service_account: ${schema.spec.addons.external_secrets_service_account}
+    - id: eksExistingVpc
+      includeWhen:
+        - ${!schema.spec.vpc.create}
+      readyWhen:
+        - ${eksExistingVpc.status.conditions.exists(x, x.type == 'Ready' && x.status == "True")} # Check on kro conditions
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: EksClusterBasic
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.name}
+          labels:
+            app.kubernetes.io/instance: ${schema.spec.name}
+          annotations:
+            argocd.argoproj.io/tracking-id: clusters:kro.run/EksCluster:${schema.spec.name}/${schema.spec.name}
+        spec:
+          name: ${schema.spec.name}
+          tenant: ${schema.spec.tenant}
+          environment: ${schema.spec.environment}
+          region: ${schema.spec.region}
+          accountId: ${schema.spec.accountId}
+          managementAccountId: ${schema.spec.managementAccountId}
+          k8sVersion: ${schema.spec.k8sVersion}
+          adminRoleName: ${schema.spec.adminRoleName}
+          fleetSecretManagerSecretNameSuffix: ${schema.spec.fleetSecretManagerSecretNameSuffix}
+          domainName: ${schema.spec.domainName}
+          network:
+            vpcID: "${schema.spec.vpc.vpcId}"
+            subnets:
+              controlplane:
+                subnet1ID: "${schema.spec.vpc.privateSubnet1Id}"
+                subnet2ID: "${schema.spec.vpc.privateSubnet2Id}"
+              workers:
+                subnet1ID: "${schema.spec.vpc.privateSubnet1Id}"
+                subnet2ID: "${schema.spec.vpc.privateSubnet2Id}"
+          workloads: ${schema.spec.workloads}
+          gitops:
+            addonsRepoBasePath: ${schema.spec.gitops.addonsRepoBasePath}
+            addonsRepoPath: ${schema.spec.gitops.addonsRepoPath}
+            addonsRepoRevision: ${schema.spec.gitops.addonsRepoRevision}
+            addonsRepoUrl: ${schema.spec.gitops.addonsRepoUrl}
+            fleetRepoBasePath: ${schema.spec.gitops.fleetRepoBasePath}
+            fleetRepoPath: ${schema.spec.gitops.fleetRepoPath}
+            fleetRepoRevision: ${schema.spec.gitops.fleetRepoRevision}
+            fleetRepoUrl: ${schema.spec.gitops.fleetRepoUrl}
+          addons:
+            enable_external_secrets: ${schema.spec.addons.enable_external_secrets}
+            external_secrets_namespace: ${schema.spec.addons.external_secrets_namespace}
+            external_secrets_service_account: ${schema.spec.addons.external_secrets_service_account}

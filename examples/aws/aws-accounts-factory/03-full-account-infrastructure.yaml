@@ -8,7 +8,7 @@ spec:
     apiVersion: v1alpha1
     kind: FullAccountInfrastructure
     spec:
-    # Input parameters
+      # Input parameters
       accountName: string
       accountEmail: string
       accountRoleName: string | default="OrganizationAccountAccessRole"
@@ -31,7 +31,6 @@ spec:
         kind: Namespace
         metadata:
           name: ${schema.spec.accountName}
-    
     - id: account
       template:
         apiVersion: organizations.services.k8s.aws/v1alpha1
@@ -43,7 +42,6 @@ spec:
           name: ${schema.spec.accountName}
           email: ${schema.spec.accountEmail}
           roleName: ${schema.spec.accountRoleName}
-    
     - id: iamRoleSelector
       template:
         apiVersion: services.k8s.aws/v1alpha1
@@ -55,7 +53,6 @@ spec:
           namespaceSelector:
             names:
               - ${accountNamespace.metadata.name}
-    
     - id: network
       # Depends on iamRoleSelector (via name label) to ensure cross-account
       # role selection is configured before ACK creates resources
@@ -72,7 +69,6 @@ spec:
           cidrBlock: ${schema.spec.vpcCidr}
           region: ${schema.spec.region}
           availabilityZones: ${schema.spec.availabilityZones}
-
     - id: eksCluster
       template:
         apiVersion: kro.run/v1alpha1

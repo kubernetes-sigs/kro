@@ -12,48 +12,48 @@ spec:
       containerName: string | default=krocontainer
       location: string | required=true
   resources:
-  # These are the resources in Azure needed to run the TODO site
-  - id: resourcegroup
-    template:
-      apiVersion: resources.azure.com/v1api20200601
-      kind: ResourceGroup
-      metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
-      spec:
-        location: ${schema.spec.location}
-  - id: storageAccount
-    template:
-      apiVersion: storage.azure.com/v1api20230101
-      kind: StorageAccount
-      metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
-      spec:
-        location: ${schema.spec.location}
-        kind: StorageV2
-        sku:
-          name: Standard_LRS
-        owner:
-          name: ${resourcegroup.metadata.name}
-        accessTier: Hot
-  - id: blobService
-    template:
-      apiVersion: storage.azure.com/v1api20230101
-      kind: StorageAccountsBlobService
-      metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
-      spec:
-        owner:
-          name: ${storageAccount.metadata.name}
-  - id: container
-    template:
-      apiVersion: storage.azure.com/v1api20230101
-      kind: StorageAccountsBlobServicesContainer
-      metadata:
-        name: ${schema.spec.containerName}
-        namespace: ${schema.spec.namespace}
-      spec:
-        owner:
-          name: ${blobService.metadata.name}
+    # These are the resources in Azure needed to run the TODO site
+    - id: resourcegroup
+      template:
+        apiVersion: resources.azure.com/v1api20200601
+        kind: ResourceGroup
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          location: ${schema.spec.location}
+    - id: storageAccount
+      template:
+        apiVersion: storage.azure.com/v1api20230101
+        kind: StorageAccount
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          location: ${schema.spec.location}
+          kind: StorageV2
+          sku:
+            name: Standard_LRS
+          owner:
+            name: ${resourcegroup.metadata.name}
+          accessTier: Hot
+    - id: blobService
+      template:
+        apiVersion: storage.azure.com/v1api20230101
+        kind: StorageAccountsBlobService
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          owner:
+            name: ${storageAccount.metadata.name}
+    - id: container
+      template:
+        apiVersion: storage.azure.com/v1api20230101
+        kind: StorageAccountsBlobServicesContainer
+        metadata:
+          name: ${schema.spec.containerName}
+          namespace: ${schema.spec.namespace}
+        spec:
+          owner:
+            name: ${blobService.metadata.name}

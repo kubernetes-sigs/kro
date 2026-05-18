@@ -1,0 +1,38 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: containerapp.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ContainerApp
+    spec:
+      name: string
+      namespace: string | default=default
+      # Array with listType=map and listMapKey markers
+      containers: |
+        array | listType=map listMapKey=name
+        name: string | required=true
+        image: string | required=true
+        port: integer | default=8080
+      # Array with listType=set
+      tags: array[string] | listType=set
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.spec.name}
+            spec:
+              containers: ${schema.spec.containers}

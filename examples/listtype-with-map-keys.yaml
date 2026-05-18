@@ -1,0 +1,27 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: podapp.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: PodApp
+    spec:
+      name: string
+      namespace: string | default=default
+      # Array of objects with listType=map and listMapKey
+      containers: |
+        []object | listType=map listMapKey=name listMapKey=port
+        name: string | required=true
+        image: string | required=true
+        port: integer | required=true
+  resources:
+    - id: pod
+      template:
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          containers: ${schema.spec.containers}

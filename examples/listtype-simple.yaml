@@ -1,0 +1,36 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: simpleapp.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: SimpleApp
+    spec:
+      name: string
+      namespace: string | default=default
+      # Simple array with listType=set
+      tags: '[]string | listType=set'
+      # Simple array with listType=atomic (explicit)
+      labels: '[]string | listType=atomic'
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.spec.name}
+            spec:
+              containers:
+                - name: app
+                  image: nginx

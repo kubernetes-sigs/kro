@@ -1,0 +1,27 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: nestedapp.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: NestedApp
+    spec:
+      name: string
+      namespace: string | default=default
+      # Try nested structure for object array
+      containers:
+        items: |
+          []object | listType=map listMapKey=name
+          name: string | required=true
+          image: string | required=true
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        data:
+          app: config

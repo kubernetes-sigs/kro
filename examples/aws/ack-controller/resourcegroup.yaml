@@ -64,7 +64,6 @@ spec:
           tag: string | default=1.1.2
           serviceAccount:
             name: string | default=sqs-controller-sa
-            
         imageConfig:
           deletePolicy: string | default=delete
           resources:
@@ -77,284 +76,283 @@ spec:
         log:
           enabled: boolean | default=false
           level: string | default=info
-
   resources:
-  - id: iamController
-    includeWhen:
-    - ${schema.spec.values.iam.enabled} 
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: IAMController
-      metadata:
-        name: ${schema.spec.name}-iam-controller
-        namespace: ${schema.spec.namespace}
-      spec:
-        name: ${schema.spec.name}-iam-controller
-        namespace: ${schema.spec.namespace}
-        values:
-          aws:
-            region: ${schema.spec.values.aws.region}
-          deployment:
-            containerPort: ${schema.spec.values.deployment.containerPort}
-            replicas: ${schema.spec.values.deployment.replicas}
-          image:
-            deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
-            repository: ${schema.spec.values.iam.repository}
-            tag: ${schema.spec.values.iam.tag}
-            resources:
-              requests:
-                memory: ${schema.spec.values.imageConfig.resources.requests.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
-              limits:
-                memory: ${schema.spec.values.imageConfig.resources.limits.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
-          log:
-            enabled: ${schema.spec.values.log.enabled}
-            level: ${schema.spec.values.log.level}
-          serviceAccount:
-            name: ${schema.spec.values.iam.serviceAccount.name}
-            roleArn: ${schema.spec.values.iam.serviceAccount.roleArn}
-  - id: ec2Controller
-    includeWhen:
-    - ${schema.spec.values.ec2.enabled}
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: EC2Controller
-      metadata:
-        name: ${schema.spec.name}-ec2-controller
-        namespace: ${schema.spec.namespace}
-      spec:
-        name: ${schema.spec.name}-ec2-controller
-        namespace: ${schema.spec.namespace}
-        values:
-          aws:
-            accountID: ${schema.spec.values.aws.accountID}
-            region: ${schema.spec.values.aws.region}
-          deployment:
-            containerPort: ${schema.spec.values.deployment.containerPort}
-            replicas: ${schema.spec.values.deployment.replicas}
-          iamRole:
-            maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
-            oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
-            roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
-          image:
-            deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
-            repository: ${schema.spec.values.ec2.repository}
-            tag: ${schema.spec.values.ec2.tag}
-            resources:
-              requests:
-                memory: ${schema.spec.values.imageConfig.resources.requests.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
-              limits:
-                memory: ${schema.spec.values.imageConfig.resources.limits.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
-          log:
-            enabled: ${schema.spec.values.log.enabled}
-            level: ${schema.spec.values.log.level}
-          serviceAccount:
-            name: ${schema.spec.values.ec2.serviceAccount.name}
-  - id: eksController
-    includeWhen:
-    - ${schema.spec.values.eks.enabled}
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: EKSController
-      metadata:
-        name: ${schema.spec.name}-eks-controller
-        namespace: ${schema.spec.namespace}
-      spec:
-        name: ${schema.spec.name}-eks-controller
-        namespace: ${schema.spec.namespace}
-        values:
-          aws:
-            accountID: ${schema.spec.values.aws.accountID}
-            region: ${schema.spec.values.aws.region}
-          deployment:
-            containerPort: ${schema.spec.values.deployment.containerPort}
-            replicas: ${schema.spec.values.deployment.replicas}
-          iamRole:
-            maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
-            oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
-            roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
-          iamPolicy:
-            description: ${schema.spec.values.iam.iamRole.roleDescription}
-          image:
-            deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
-            repository: ${schema.spec.values.eks.repository}
-            tag: ${schema.spec.values.eks.tag}
-            resources:
-              requests:
-                memory: ${schema.spec.values.imageConfig.resources.requests.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
-              limits:
-                memory: ${schema.spec.values.imageConfig.resources.limits.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
-          log:
-            enabled: ${schema.spec.values.log.enabled}
-            level: ${schema.spec.values.log.level}
-          serviceAccount:
-            name: ${schema.spec.values.eks.serviceAccount.name}
-  - id: sqsController
-    includeWhen:
-    - ${schema.spec.values.sqs.enabled}
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: SQSController
-      metadata:
-        name: ${schema.spec.name}-sqs-controller
-        namespace: ${schema.spec.namespace}
-      spec:
-        name: ${schema.spec.name}-sqs-controller
-        namespace: ${schema.spec.namespace}
-        values:
-          aws:
-            accountID: ${schema.spec.values.aws.accountID}
-            region: ${schema.spec.values.aws.region}
-          deployment:
-            containerPort: ${schema.spec.values.deployment.containerPort}
-            replicas: ${schema.spec.values.deployment.replicas}
-          iamRole:
-            maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
-            oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
-            roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
-          iamPolicy:
-            description: ${schema.spec.values.iam.iamRole.roleDescription}
-          image:
-            deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
-            repository: ${schema.spec.values.sqs.repository}
-            tag: ${schema.spec.values.sqs.tag}
-            resources:
-              requests:
-                memory: ${schema.spec.values.imageConfig.resources.requests.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
-              limits:
-                memory: ${schema.spec.values.imageConfig.resources.limits.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
-          log:
-            enabled: ${schema.spec.values.log.enabled}
-            level: ${schema.spec.values.log.level}
-          serviceAccount:
-            name: ${schema.spec.values.sqs.serviceAccount.name}
-  - id: s3Controller
-    includeWhen:
-    - ${schema.spec.values.s3.enabled}
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: S3Controller
-      metadata:
-        name: ${schema.spec.name}-s3-controller
-        namespace: ${schema.spec.namespace}
-      spec:
-        name: ${schema.spec.name}-s3-controller
-        namespace: ${schema.spec.namespace}
-        values:
-          aws:
-            accountID: ${schema.spec.values.aws.accountID}
-            region: ${schema.spec.values.aws.region}
-          deployment:
-            containerPort: ${schema.spec.values.deployment.containerPort}
-            replicas: ${schema.spec.values.deployment.replicas}
-          iamRole:
-            maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
-            oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
-            roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
-          iamPolicy:
-            description: ${schema.spec.values.iam.iamRole.roleDescription}
-          image:
-            deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
-            repository: ${schema.spec.values.s3.repository}
-            tag: ${schema.spec.values.s3.tag}
-            resources:
-              requests:
-                memory: ${schema.spec.values.imageConfig.resources.requests.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
-              limits:
-                memory: ${schema.spec.values.imageConfig.resources.limits.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
-          log:
-            enabled: ${schema.spec.values.log.enabled}
-            level: ${schema.spec.values.log.level}
-          serviceAccount:
-            name: ${schema.spec.values.s3.serviceAccount.name}
-  - id: ecrController
-    includeWhen:
-    - ${schema.spec.values.ecr.enabled}
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: ECRController
-      metadata:
-        name: ${schema.spec.name}-ecr-controller
-        namespace: ${schema.spec.namespace}
-      spec:
-        name: ${schema.spec.name}-ecr-controller
-        namespace: ${schema.spec.namespace}
-        values:
-          aws:
-            accountID: ${schema.spec.values.aws.accountID}
-            region: ${schema.spec.values.aws.region}
-          deployment:
-            containerPort: ${schema.spec.values.deployment.containerPort}
-            replicas: ${schema.spec.values.deployment.replicas}
-          iamRole:
-            maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
-            oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
-            roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
-          iamPolicy:
-            description: ${schema.spec.values.iam.iamRole.roleDescription}
-          image:
-            deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
-            repository: ${schema.spec.values.ecr.repository}
-            tag: ${schema.spec.values.ecr.tag}
-            resources:
-              requests:
-                memory: ${schema.spec.values.imageConfig.resources.requests.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
-              limits:
-                memory: ${schema.spec.values.imageConfig.resources.limits.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
-          log:
-            enabled: ${schema.spec.values.log.enabled}
-            level: ${schema.spec.values.log.level}
-          serviceAccount:
-            name: ${schema.spec.values.ecr.serviceAccount.name}
-  - id: ecrPublicController
-    includeWhen:
-    - ${schema.spec.values.ecrpublic.enabled}
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: ECRPublicController
-      metadata:
-        name: ${schema.spec.name}-ecrpublic-controller
-        namespace: ${schema.spec.namespace}
-      spec:
-        name: ${schema.spec.name}-ecrpublic-controller
-        namespace: ${schema.spec.namespace}
-        values:
-          aws:
-            accountID: ${schema.spec.values.aws.accountID}
-            region: ${schema.spec.values.aws.region}
-          deployment:
-            containerPort: ${schema.spec.values.deployment.containerPort}
-            replicas: ${schema.spec.values.deployment.replicas}
-          iamRole:
-            maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
-            oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
-            roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
-          iamPolicy:
-            description: ${schema.spec.values.iam.iamRole.roleDescription}
-          image:
-            deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
-            repository: ${schema.spec.values.ecrpublic.repository}
-            tag: ${schema.spec.values.ecrpublic.tag}
-            resources:
-              requests:
-                memory: ${schema.spec.values.imageConfig.resources.requests.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
-              limits:
-                memory: ${schema.spec.values.imageConfig.resources.limits.memory}
-                cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
-          log:
-            enabled: ${schema.spec.values.log.enabled}
-            level: ${schema.spec.values.log.level}
-          serviceAccount:
-            name: ${schema.spec.values.ecrpublic.serviceAccount.name}
+    - id: iamController
+      includeWhen:
+        - ${schema.spec.values.iam.enabled}
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: IAMController
+        metadata:
+          name: ${schema.spec.name}-iam-controller
+          namespace: ${schema.spec.namespace}
+        spec:
+          name: ${schema.spec.name}-iam-controller
+          namespace: ${schema.spec.namespace}
+          values:
+            aws:
+              region: ${schema.spec.values.aws.region}
+            deployment:
+              containerPort: ${schema.spec.values.deployment.containerPort}
+              replicas: ${schema.spec.values.deployment.replicas}
+            image:
+              deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
+              repository: ${schema.spec.values.iam.repository}
+              tag: ${schema.spec.values.iam.tag}
+              resources:
+                requests:
+                  memory: ${schema.spec.values.imageConfig.resources.requests.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
+                limits:
+                  memory: ${schema.spec.values.imageConfig.resources.limits.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
+            log:
+              enabled: ${schema.spec.values.log.enabled}
+              level: ${schema.spec.values.log.level}
+            serviceAccount:
+              name: ${schema.spec.values.iam.serviceAccount.name}
+              roleArn: ${schema.spec.values.iam.serviceAccount.roleArn}
+    - id: ec2Controller
+      includeWhen:
+        - ${schema.spec.values.ec2.enabled}
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: EC2Controller
+        metadata:
+          name: ${schema.spec.name}-ec2-controller
+          namespace: ${schema.spec.namespace}
+        spec:
+          name: ${schema.spec.name}-ec2-controller
+          namespace: ${schema.spec.namespace}
+          values:
+            aws:
+              accountID: ${schema.spec.values.aws.accountID}
+              region: ${schema.spec.values.aws.region}
+            deployment:
+              containerPort: ${schema.spec.values.deployment.containerPort}
+              replicas: ${schema.spec.values.deployment.replicas}
+            iamRole:
+              maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
+              oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
+              roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
+            image:
+              deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
+              repository: ${schema.spec.values.ec2.repository}
+              tag: ${schema.spec.values.ec2.tag}
+              resources:
+                requests:
+                  memory: ${schema.spec.values.imageConfig.resources.requests.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
+                limits:
+                  memory: ${schema.spec.values.imageConfig.resources.limits.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
+            log:
+              enabled: ${schema.spec.values.log.enabled}
+              level: ${schema.spec.values.log.level}
+            serviceAccount:
+              name: ${schema.spec.values.ec2.serviceAccount.name}
+    - id: eksController
+      includeWhen:
+        - ${schema.spec.values.eks.enabled}
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: EKSController
+        metadata:
+          name: ${schema.spec.name}-eks-controller
+          namespace: ${schema.spec.namespace}
+        spec:
+          name: ${schema.spec.name}-eks-controller
+          namespace: ${schema.spec.namespace}
+          values:
+            aws:
+              accountID: ${schema.spec.values.aws.accountID}
+              region: ${schema.spec.values.aws.region}
+            deployment:
+              containerPort: ${schema.spec.values.deployment.containerPort}
+              replicas: ${schema.spec.values.deployment.replicas}
+            iamRole:
+              maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
+              oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
+              roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
+            iamPolicy:
+              description: ${schema.spec.values.iam.iamRole.roleDescription}
+            image:
+              deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
+              repository: ${schema.spec.values.eks.repository}
+              tag: ${schema.spec.values.eks.tag}
+              resources:
+                requests:
+                  memory: ${schema.spec.values.imageConfig.resources.requests.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
+                limits:
+                  memory: ${schema.spec.values.imageConfig.resources.limits.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
+            log:
+              enabled: ${schema.spec.values.log.enabled}
+              level: ${schema.spec.values.log.level}
+            serviceAccount:
+              name: ${schema.spec.values.eks.serviceAccount.name}
+    - id: sqsController
+      includeWhen:
+        - ${schema.spec.values.sqs.enabled}
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: SQSController
+        metadata:
+          name: ${schema.spec.name}-sqs-controller
+          namespace: ${schema.spec.namespace}
+        spec:
+          name: ${schema.spec.name}-sqs-controller
+          namespace: ${schema.spec.namespace}
+          values:
+            aws:
+              accountID: ${schema.spec.values.aws.accountID}
+              region: ${schema.spec.values.aws.region}
+            deployment:
+              containerPort: ${schema.spec.values.deployment.containerPort}
+              replicas: ${schema.spec.values.deployment.replicas}
+            iamRole:
+              maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
+              oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
+              roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
+            iamPolicy:
+              description: ${schema.spec.values.iam.iamRole.roleDescription}
+            image:
+              deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
+              repository: ${schema.spec.values.sqs.repository}
+              tag: ${schema.spec.values.sqs.tag}
+              resources:
+                requests:
+                  memory: ${schema.spec.values.imageConfig.resources.requests.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
+                limits:
+                  memory: ${schema.spec.values.imageConfig.resources.limits.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
+            log:
+              enabled: ${schema.spec.values.log.enabled}
+              level: ${schema.spec.values.log.level}
+            serviceAccount:
+              name: ${schema.spec.values.sqs.serviceAccount.name}
+    - id: s3Controller
+      includeWhen:
+        - ${schema.spec.values.s3.enabled}
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: S3Controller
+        metadata:
+          name: ${schema.spec.name}-s3-controller
+          namespace: ${schema.spec.namespace}
+        spec:
+          name: ${schema.spec.name}-s3-controller
+          namespace: ${schema.spec.namespace}
+          values:
+            aws:
+              accountID: ${schema.spec.values.aws.accountID}
+              region: ${schema.spec.values.aws.region}
+            deployment:
+              containerPort: ${schema.spec.values.deployment.containerPort}
+              replicas: ${schema.spec.values.deployment.replicas}
+            iamRole:
+              maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
+              oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
+              roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
+            iamPolicy:
+              description: ${schema.spec.values.iam.iamRole.roleDescription}
+            image:
+              deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
+              repository: ${schema.spec.values.s3.repository}
+              tag: ${schema.spec.values.s3.tag}
+              resources:
+                requests:
+                  memory: ${schema.spec.values.imageConfig.resources.requests.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
+                limits:
+                  memory: ${schema.spec.values.imageConfig.resources.limits.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
+            log:
+              enabled: ${schema.spec.values.log.enabled}
+              level: ${schema.spec.values.log.level}
+            serviceAccount:
+              name: ${schema.spec.values.s3.serviceAccount.name}
+    - id: ecrController
+      includeWhen:
+        - ${schema.spec.values.ecr.enabled}
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: ECRController
+        metadata:
+          name: ${schema.spec.name}-ecr-controller
+          namespace: ${schema.spec.namespace}
+        spec:
+          name: ${schema.spec.name}-ecr-controller
+          namespace: ${schema.spec.namespace}
+          values:
+            aws:
+              accountID: ${schema.spec.values.aws.accountID}
+              region: ${schema.spec.values.aws.region}
+            deployment:
+              containerPort: ${schema.spec.values.deployment.containerPort}
+              replicas: ${schema.spec.values.deployment.replicas}
+            iamRole:
+              maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
+              oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
+              roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
+            iamPolicy:
+              description: ${schema.spec.values.iam.iamRole.roleDescription}
+            image:
+              deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
+              repository: ${schema.spec.values.ecr.repository}
+              tag: ${schema.spec.values.ecr.tag}
+              resources:
+                requests:
+                  memory: ${schema.spec.values.imageConfig.resources.requests.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
+                limits:
+                  memory: ${schema.spec.values.imageConfig.resources.limits.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
+            log:
+              enabled: ${schema.spec.values.log.enabled}
+              level: ${schema.spec.values.log.level}
+            serviceAccount:
+              name: ${schema.spec.values.ecr.serviceAccount.name}
+    - id: ecrPublicController
+      includeWhen:
+        - ${schema.spec.values.ecrpublic.enabled}
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: ECRPublicController
+        metadata:
+          name: ${schema.spec.name}-ecrpublic-controller
+          namespace: ${schema.spec.namespace}
+        spec:
+          name: ${schema.spec.name}-ecrpublic-controller
+          namespace: ${schema.spec.namespace}
+          values:
+            aws:
+              accountID: ${schema.spec.values.aws.accountID}
+              region: ${schema.spec.values.aws.region}
+            deployment:
+              containerPort: ${schema.spec.values.deployment.containerPort}
+              replicas: ${schema.spec.values.deployment.replicas}
+            iamRole:
+              maxSessionDuration: ${schema.spec.values.iam.iamRole.maxSessionDuration}
+              oidcProvider: ${schema.spec.values.iam.iamRole.oidcProvider}
+              roleDescription: ${schema.spec.values.iam.iamRole.roleDescription}
+            iamPolicy:
+              description: ${schema.spec.values.iam.iamRole.roleDescription}
+            image:
+              deletePolicy: ${schema.spec.values.imageConfig.deletePolicy}
+              repository: ${schema.spec.values.ecrpublic.repository}
+              tag: ${schema.spec.values.ecrpublic.tag}
+              resources:
+                requests:
+                  memory: ${schema.spec.values.imageConfig.resources.requests.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.requests.cpu}
+                limits:
+                  memory: ${schema.spec.values.imageConfig.resources.limits.memory}
+                  cpu: ${schema.spec.values.imageConfig.resources.limits.cpu}
+            log:
+              enabled: ${schema.spec.values.log.enabled}
+              level: ${schema.spec.values.log.level}
+            serviceAccount:
+              name: ${schema.spec.values.ecrpublic.serviceAccount.name}

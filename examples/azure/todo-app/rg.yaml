@@ -11,137 +11,138 @@ spec:
       namespace: string | default=default
       location: string | required=true
   resources:
-  # These are the resources in Azure needed to run the TODO app
-  - id: resourcegroup
-    template:
-      apiVersion: resources.azure.com/v1api20200601
-      kind: ResourceGroup
-      metadata:
-        name: ${schema.spec.name}-rg
-        namespace: ${schema.spec.namespace}
-      spec:
-        location: ${schema.spec.location}
-  - id: databaseAccount
-    template:
-      apiVersion: documentdb.azure.com/v1api20210515
-      kind: DatabaseAccount
-      metadata:
-        name: ${schema.spec.name}-sqldb
-        namespace: ${schema.spec.namespace}
-      spec:
-        location: ${schema.spec.location}
-        owner:
-          name: ${resourcegroup.metadata.name}
-        kind: GlobalDocumentDB
-        databaseAccountOfferType: Standard
-        locations:
-          - locationName: ${schema.spec.location}
-        operatorSpec:
-          secrets:
-            primaryMasterKey:
-              name: ${schema.spec.name}-sqldb-connection-settings
-              key: key
-            documentEndpoint:
-              name: ${schema.spec.name}-sqldb-connection-settings
-              key: documentEndpoint
-  - id: database
-    template:
-      apiVersion: documentdb.azure.com/v1api20210515
-      kind: SqlDatabase
-      metadata:
-        name: ${schema.spec.name}-sql-db
-        namespace: ${schema.spec.namespace}
-      spec:
-        location: ${schema.spec.location}
-        owner:
-          name: ${databaseAccount.metadata.name}
-        options:
-          autoscaleSettings:
-            maxThroughput: 4000
-        resource:
-          id: ${schema.spec.name}-sql-db
-  - id: container
-    template:
-      apiVersion: documentdb.azure.com/v1api20210515
-      kind: SqlDatabaseContainer
-      metadata:
-        name: ${schema.spec.name}-sql-container
-        namespace: ${schema.spec.namespace}
-      spec:
-        location: ${schema.spec.location}
-        owner:
-          name: ${database.metadata.name}
-        resource:
-          id: ${schema.spec.name}-sql-container
-          partitionKey:
-            kind: Hash
-            paths: ["/id"]
-  # These are the resources of the TODO app
-  - id: app
-    template:
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        labels:
-          app: ${schema.spec.name}
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
-      spec:
-        replicas: 1
-        selector:
-          matchLabels:
+    # These are the resources in Azure needed to run the TODO app
+    - id: resourcegroup
+      template:
+        apiVersion: resources.azure.com/v1api20200601
+        kind: ResourceGroup
+        metadata:
+          name: ${schema.spec.name}-rg
+          namespace: ${schema.spec.namespace}
+        spec:
+          location: ${schema.spec.location}
+    - id: databaseAccount
+      template:
+        apiVersion: documentdb.azure.com/v1api20210515
+        kind: DatabaseAccount
+        metadata:
+          name: ${schema.spec.name}-sqldb
+          namespace: ${schema.spec.namespace}
+        spec:
+          location: ${schema.spec.location}
+          owner:
+            name: ${resourcegroup.metadata.name}
+          kind: GlobalDocumentDB
+          databaseAccountOfferType: Standard
+          locations:
+            - locationName: ${schema.spec.location}
+          operatorSpec:
+            secrets:
+              primaryMasterKey:
+                name: ${schema.spec.name}-sqldb-connection-settings
+                key: key
+              documentEndpoint:
+                name: ${schema.spec.name}-sqldb-connection-settings
+                key: documentEndpoint
+    - id: database
+      template:
+        apiVersion: documentdb.azure.com/v1api20210515
+        kind: SqlDatabase
+        metadata:
+          name: ${schema.spec.name}-sql-db
+          namespace: ${schema.spec.namespace}
+        spec:
+          location: ${schema.spec.location}
+          owner:
+            name: ${databaseAccount.metadata.name}
+          options:
+            autoscaleSettings:
+              maxThroughput: 4000
+          resource:
+            id: ${schema.spec.name}-sql-db
+    - id: container
+      template:
+        apiVersion: documentdb.azure.com/v1api20210515
+        kind: SqlDatabaseContainer
+        metadata:
+          name: ${schema.spec.name}-sql-container
+          namespace: ${schema.spec.namespace}
+        spec:
+          location: ${schema.spec.location}
+          owner:
+            name: ${database.metadata.name}
+          resource:
+            id: ${schema.spec.name}-sql-container
+            partitionKey:
+              kind: Hash
+              paths:
+                - "/id"
+    # These are the resources of the TODO app
+    - id: app
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          labels:
             app: ${schema.spec.name}
-        template:
-          metadata:
-            labels:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
               app: ${schema.spec.name}
-          spec:
-            containers:
-            - name: app
-              image: mcr.microsoft.com/k8s/asodemos/cosmostodo:latest
-              env:
-                - name: CosmosDB__Account
-                  valueFrom:
-                    secretKeyRef:
-                      # This is the secret created by ASO associated with the CosmosDB Account.
-                      name: ${schema.spec.name}-sqldb-connection-settings
-                      # See https://azure.github.io/azure-service-operator/reference/documentdb/v1api20210515/#documentdb.azure.com/v1api20210515.DatabaseAccount for more details
-                      key: documentEndpoint
-                      optional: false
-                - name: CosmosDB__Key
-                  valueFrom:
-                    secretKeyRef:
-                      key: key
-                      # This is the secret created by ASO associated with the CosmosDB Account.
-                      name: ${schema.spec.name}-sqldb-connection-settings
-                      # See https://azure.github.io/azure-service-operator/reference/documentdb/v1api20210515/#documentdb.azure.com/v1api20210515.DatabaseAccount for more details
-                      optional: false
-                - name: CosmosDB__DatabaseName
-                  value: "${database.spec.azureName}"
-                - name: CosmosDB__ContainerName
-                  value: "${container.spec.azureName}"
-              ports:
-              - containerPort: 80
-                name: webserver
-                protocol: TCP
-              resources:
-                limits:
-                  cpu: 500m
-                  memory: 512Mi
-                requests:
-                  cpu: 200m
-                  memory: 256Mi
-            terminationGracePeriodSeconds: 10
-  - id: service
-    template:
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
-      spec:
-        ports:
-        - port: 80
-          targetPort: 80
-        selector:
-          app: ${schema.spec.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.spec.name}
+            spec:
+              containers:
+                - name: app
+                  image: mcr.microsoft.com/k8s/asodemos/cosmostodo:latest
+                  env:
+                    - name: CosmosDB__Account
+                      valueFrom:
+                        secretKeyRef:
+                          # This is the secret created by ASO associated with the CosmosDB Account.
+                          name: ${schema.spec.name}-sqldb-connection-settings
+                          # See https://azure.github.io/azure-service-operator/reference/documentdb/v1api20210515/#documentdb.azure.com/v1api20210515.DatabaseAccount for more details
+                          key: documentEndpoint
+                          optional: false
+                    - name: CosmosDB__Key
+                      valueFrom:
+                        secretKeyRef:
+                          key: key
+                          # This is the secret created by ASO associated with the CosmosDB Account.
+                          name: ${schema.spec.name}-sqldb-connection-settings
+                          # See https://azure.github.io/azure-service-operator/reference/documentdb/v1api20210515/#documentdb.azure.com/v1api20210515.DatabaseAccount for more details
+                          optional: false
+                    - name: CosmosDB__DatabaseName
+                      value: "${database.spec.azureName}"
+                    - name: CosmosDB__ContainerName
+                      value: "${container.spec.azureName}"
+                  ports:
+                    - containerPort: 80
+                      name: webserver
+                      protocol: TCP
+                  resources:
+                    limits:
+                      cpu: 500m
+                      memory: 512Mi
+                    requests:
+                      cpu: 200m
+                      memory: 256Mi
+              terminationGracePeriodSeconds: 10
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+        spec:
+          ports:
+            - port: 80
+              targetPort: 80
+          selector:
+            app: ${schema.spec.name}

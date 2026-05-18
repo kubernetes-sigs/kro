@@ -21,7 +21,7 @@ spec:
       script:
         bucket: string | required=true
         prefix: string | default="scripts"
-        name: string | default="process_data.py" 
+        name: string | default="process_data.py"
       lake:
         bucket: string | required=true
         prefix: string | default="lake"
@@ -30,14 +30,14 @@ spec:
       notifications:
         email: string | default="me@example.com"
   resources:
-  # Kubernetes namespace for the stack
+    # Kubernetes namespace for the stack
     - id: stackNamespace
       template:
         apiVersion: v1
         kind: Namespace
         metadata:
           name: ${schema.spec.namePrefix}
-  # Pod role setup for EMR on EKS job execution
+          # Pod role setup for EMR on EKS job execution
     - id: podRole
       template:
         apiVersion: iam.services.k8s.aws/v1alpha1
@@ -128,7 +128,7 @@ spec:
           namespace: ${stackNamespace.metadata.name}
           roleARN: ${podRole.status.ackResourceMetadata.arn}
           serviceAccount: ${schema.spec.namePrefix}-serviceaccount
-  # S3 bucket for data/script input for processing
+          # S3 bucket for data/script input for processing
     - id: inputBucket
       template:
         apiVersion: s3.services.k8s.aws/v1alpha1
@@ -138,7 +138,7 @@ spec:
           namespace: ${stackNamespace.metadata.name}
         spec:
           name: ${schema.spec.input.bucket}
-  # DynamoDB table to store processed data summaries
+          # DynamoDB table to store processed data summaries
     - id: dataProcessingResultsTable
       template:
         apiVersion: dynamodb.services.k8s.aws/v1alpha1
@@ -147,15 +147,15 @@ spec:
           name: ${schema.spec.namePrefix}-data-processing-results
           namespace: ${stackNamespace.metadata.name}
         spec:
-            keySchema:
-              - attributeName: id
-                keyType: HASH
-            attributeDefinitions:
-              - attributeName: id
-                attributeType: S
-            billingMode: PAY_PER_REQUEST
-            tableName: ${schema.spec.namePrefix}-data-processing-results
-  # EMR on EKS virtual cluster for data processing
+          keySchema:
+            - attributeName: id
+              keyType: HASH
+          attributeDefinitions:
+            - attributeName: id
+              attributeType: S
+          billingMode: PAY_PER_REQUEST
+          tableName: ${schema.spec.namePrefix}-data-processing-results
+          # EMR on EKS virtual cluster for data processing
     - id: emrRbacRole
       template:
         apiVersion: rbac.authorization.k8s.io/v1
@@ -164,30 +164,122 @@ spec:
           name: ${schema.spec.namePrefix}-emr-containers
           namespace: ${stackNamespace.metadata.name}
         rules:
-          - apiGroups: [""]
-            resources: ["namespaces"]
-            verbs: ["get"]
-          - apiGroups: [""]
-            resources: ["serviceaccounts", "services", "configmaps", "events", "pods", "pods/log"]
-            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete", "deletecollection", "annotate", "patch", "label"]
-          - apiGroups: [""]
-            resources: ["secrets"]
-            verbs: ["create", "patch", "delete", "watch"]
-          - apiGroups: ["apps"]
-            resources: ["statefulsets", "deployments"]
-            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete", "annotate", "patch", "label"]
-          - apiGroups: ["batch"]
-            resources: ["jobs"]
-            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete", "annotate", "patch", "label"]
-          - apiGroups: ["extensions", "networking.k8s.io"]
-            resources: ["ingresses"]
-            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete", "annotate", "patch", "label"]
-          - apiGroups: ["rbac.authorization.k8s.io"]
-            resources: ["roles", "rolebindings"]
-            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete", "deletecollection", "annotate", "patch", "label"]
-          - apiGroups: [""]
-            resources: ["persistentvolumeclaims"]
-            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete",  "deletecollection", "annotate", "patch", "label"]
+          - apiGroups:
+              - ""
+            resources:
+              - "namespaces"
+            verbs:
+              - "get"
+          - apiGroups:
+              - ""
+            resources:
+              - "serviceaccounts"
+              - "services"
+              - "configmaps"
+              - "events"
+              - "pods"
+              - "pods/log"
+            verbs:
+              - "get"
+              - "list"
+              - "watch"
+              - "describe"
+              - "create"
+              - "edit"
+              - "delete"
+              - "deletecollection"
+              - "annotate"
+              - "patch"
+              - "label"
+          - apiGroups:
+              - ""
+            resources:
+              - "secrets"
+            verbs:
+              - "create"
+              - "patch"
+              - "delete"
+              - "watch"
+          - apiGroups:
+              - "apps"
+            resources:
+              - "statefulsets"
+              - "deployments"
+            verbs:
+              - "get"
+              - "list"
+              - "watch"
+              - "describe"
+              - "create"
+              - "edit"
+              - "delete"
+              - "annotate"
+              - "patch"
+              - "label"
+          - apiGroups:
+              - "batch"
+            resources:
+              - "jobs"
+            verbs:
+              - "get"
+              - "list"
+              - "watch"
+              - "describe"
+              - "create"
+              - "edit"
+              - "delete"
+              - "annotate"
+              - "patch"
+              - "label"
+          - apiGroups:
+              - "extensions"
+              - "networking.k8s.io"
+            resources:
+              - "ingresses"
+            verbs:
+              - "get"
+              - "list"
+              - "watch"
+              - "describe"
+              - "create"
+              - "edit"
+              - "delete"
+              - "annotate"
+              - "patch"
+              - "label"
+          - apiGroups:
+              - "rbac.authorization.k8s.io"
+            resources:
+              - "roles"
+              - "rolebindings"
+            verbs:
+              - "get"
+              - "list"
+              - "watch"
+              - "describe"
+              - "create"
+              - "edit"
+              - "delete"
+              - "deletecollection"
+              - "annotate"
+              - "patch"
+              - "label"
+          - apiGroups:
+              - ""
+            resources:
+              - "persistentvolumeclaims"
+            verbs:
+              - "get"
+              - "list"
+              - "watch"
+              - "describe"
+              - "create"
+              - "edit"
+              - "delete"
+              - "deletecollection"
+              - "annotate"
+              - "patch"
+              - "label"
     - id: roleBinding
       template:
         apiVersion: rbac.authorization.k8s.io/v1
@@ -196,13 +288,13 @@ spec:
           name: emr-containers
           namespace: ${stackNamespace.metadata.name}
         subjects:
-        - kind: User
-          name: emr-containers
-          apiGroup: rbac.authorization.k8s.io
+          - kind: User
+            name: emr-containers
+            apiGroup: rbac.authorization.k8s.io
         roleRef:
           kind: Role
           name: ${schema.spec.namePrefix}-emr-containers
-          apiGroup: rbac.authorization.k8s.io    
+          apiGroup: rbac.authorization.k8s.io
     - id: dataProcessingVirtualCluster
       template:
         apiVersion: emrcontainers.services.k8s.aws/v1alpha1
@@ -218,7 +310,7 @@ spec:
             info:
               eksInfo:
                 namespace: ${stackNamespace.metadata.name}
-  # SNS topic for data processing notifications
+                # SNS topic for data processing notifications
     - id: dataProcessingNotificationsSNSTopic
       template:
         apiVersion: sns.services.k8s.aws/v1alpha1
@@ -266,7 +358,7 @@ spec:
                 }
             ]
             }
-  # SNS email subscription for status notifications
+          # SNS email subscription for status notifications
     - id: dataProcessingNotificationEmailSubscription
       template:
         apiVersion: sns.services.k8s.aws/v1alpha1
@@ -278,7 +370,7 @@ spec:
           topicARN: ${dataProcessingNotificationsSNSTopic.status.ackResourceMetadata.arn}
           protocol: email-json
           endpoint: ${schema.spec.notifications.email}
-  # EventBridge bus for data processing events
+          # EventBridge bus for data processing events
     - id: ebStatusBus
       template:
         apiVersion: eventbridge.services.k8s.aws/v1alpha1
@@ -288,7 +380,7 @@ spec:
           namespace: ${stackNamespace.metadata.name}
         spec:
           name: ${schema.spec.namePrefix}-eb-bus
-  # EventBridge permissions
+          # EventBridge permissions
     - id: ebIamRole
       template:
         apiVersion: iam.services.k8s.aws/v1alpha1
@@ -332,7 +424,7 @@ spec:
                       }
                   ]
                   }
-  # EventBridge rules
+            # EventBridge rules
     - id: ebS3ObjectRule
       template:
         apiVersion: eventbridge.services.k8s.aws/v1alpha1
@@ -343,21 +435,7 @@ spec:
         spec:
           name: ${schema.spec.namePrefix}-eb-rule-input
           description: "EventBridge rule to start Step Functions execution when data comes in"
-          eventPattern: |    
-            {
-              "source": ["aws.s3"],
-              "detail-type": ["Object Created"],
-              "detail": {
-                "bucket": {
-                  "name": ["${schema.spec.input.bucket}"]    
-                },
-                "object": {
-                  "key": [{
-                    "prefix": "${schema.spec.input.prefix}/"
-                  }]
-                }
-              }
-            }
+          eventPattern: "{\n  \"source\": [\"aws.s3\"],\n  \"detail-type\": [\"Object Created\"],\n  \"detail\": {\n    \"bucket\": {\n      \"name\": [\"${schema.spec.input.bucket}\"]    \n    },\n    \"object\": {\n      \"key\": [{\n        \"prefix\": \"${schema.spec.input.prefix}/\"\n      }]\n    }\n  }\n}\n"
           targets:
             - arn: ${stepFunctionsWorkflow.status.ackResourceMetadata.arn}
               id: ${schema.spec.namePrefix}-sfn-data-processing
@@ -373,7 +451,7 @@ spec:
           name: ${schema.spec.namePrefix}-eb-rule-finished
           eventBusName: ${ebStatusBus.spec.name}
           description: "Notify subscribers once input data processing finishes"
-          eventPattern: |    
+          eventPattern: |
             {
               "source": ["${schema.spec.namePrefix}"],
               "detail-type": ["InputDataProcessed"]
@@ -381,7 +459,7 @@ spec:
           targets:
             - arn: ${dataProcessingNotificationsSNSTopic.status.ackResourceMetadata.arn}
               id: ${schema.spec.namePrefix}-sfn-data-processed
-  # StepFunctions permissions
+              # StepFunctions permissions
     - id: stepFunctionsRole
       template:
         apiVersion: iam.services.k8s.aws/v1alpha1
@@ -486,14 +564,14 @@ spec:
                   }
                   ]
                   }
-  # StepFunctions workflow
+            # StepFunctions workflow
     - id: stepFunctionsWorkflow
       template:
         apiVersion: sfn.services.k8s.aws/v1alpha1
         kind: StateMachine
         metadata:
-            name: ${schema.spec.namePrefix}-sfn
-            namespace: ${stackNamespace.metadata.name}
+          name: ${schema.spec.namePrefix}-sfn
+          namespace: ${stackNamespace.metadata.name}
         spec:
           name: ${schema.spec.namePrefix}-sfn
           roleARN: "${stepFunctionsRole.status.ackResourceMetadata.arn}"
@@ -675,4 +753,3 @@ spec:
                 }
               }
             }
-

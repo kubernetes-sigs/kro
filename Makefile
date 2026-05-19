@@ -122,6 +122,11 @@ verify-codegen: ## Verify generated code is up-to-date.
 fmt: go-generate ## Run go fmt against code and add licenses.
 	go fmt ./...
 
+.PHONY: fmt-examples
+fmt-examples: ## Format all YAML files in examples directory with kro fmt
+	@cd cmd/kro && go build -o ../../bin/kro .
+	@find examples -name "*.yaml" -o -name "*.yml" | grep -v "/templates/" | xargs -I {} bin/kro fmt -f {} || true
+
 .PHONY: go-generate
 go-generate: ## Run go generate against code.
 	go generate

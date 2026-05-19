@@ -6,9 +6,9 @@ metadata:
 spec:
   gatewayClassName: amazon-vpc-lattice
   listeners:
-  - allowedRoutes:
-      namespaces:
-        from: Same
-    name: http
-    port: 80
-    protocol: HTTP
+    - allowedRoutes:
+        namespaces:
+          from: Same
+      name: http
+      port: 80
+      protocol: HTTP

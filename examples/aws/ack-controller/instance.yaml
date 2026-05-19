@@ -13,9 +13,9 @@ spec:
     iam:
       enabled: false
       iamRole:
-        oidcProvider: ......
+        oidcProvider: '......'
       serviceAccount:
-        roleArn: ......
+        roleArn: '......'
     ec2:
       serviceAccount: {}
     eks:

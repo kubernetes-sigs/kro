@@ -11,7 +11,7 @@ syncPolicy:
       maxDuration: 10m # the maximum amount of time allowed for the backoff strategy
   syncOptions:
     - CreateNamespace=true
-    - ServerSideApply=true  # Big CRDs.
+    - ServerSideApply=true # Big CRDs.
 syncPolicyAppSet:
   preserveResourcesOnDeletion: false # to be able to cleanup
 useSelectors: true
@@ -33,7 +33,7 @@ external-secrets:
   enabled: false
   enableACK: false
   annotationsAppSet:
-    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD  
+    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD
   namespace: external-secrets
   chartName: external-secrets
   defaultVersion: "0.10.3"
@@ -52,7 +52,7 @@ kro-eks-rgs:
   type: manifest
   namespace: kro
   annotationsAppSet:
-    argocd.argoproj.io/sync-wave: "-2" # Needs to be before resources that needs PodIdentity 
+    argocd.argoproj.io/sync-wave: "-2" # Needs to be before resources that needs PodIdentity
   path: 'charts/kro/resource-groups/eks'
   chartRepository: '{{.metadata.annotations.addons_repo_url}}'
   targetRevision: '{{.metadata.annotations.addons_repo_revision}}'
@@ -66,7 +66,7 @@ multi-acct:
   enabled: false
   namespace: kro
   annotationsAppSet:
-    argocd.argoproj.io/sync-wave: "-5" # Needs to be before KRO RGD  
+    argocd.argoproj.io/sync-wave: "-5" # Needs to be before KRO RGD
   defaultVersion: "0.1.0"
   path: charts/multi-acct
   selector:

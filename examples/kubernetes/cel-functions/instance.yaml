@@ -2,7 +2,7 @@ apiVersion: kro.run/v1alpha1
 kind: Something
 metadata:
   name: my-instance-will-cel-functions
-  annotations: 
+  annotations:
     test: annotation-value
 spec:
   name: app

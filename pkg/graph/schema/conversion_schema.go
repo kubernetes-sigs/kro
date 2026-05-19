@@ -34,8 +34,9 @@ func ConvertJSONSchemaPropsToSpecSchema(props *extv1.JSONSchemaProps) (*spec.Sch
 		return nil, nil
 	}
 
-	var externalDocs *spec.ExternalDocumentation = nil
+	var externalDocs *spec.ExternalDocumentation
 	if props.ExternalDocs != nil {
+		externalDocs = &spec.ExternalDocumentation{}
 		if props.ExternalDocs.URL != "" {
 			externalDocs.URL = props.ExternalDocs.URL
 		}

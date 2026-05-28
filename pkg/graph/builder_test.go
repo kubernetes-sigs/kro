@@ -620,6 +620,53 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "failed to create instance node",
 		},
 		{
+			name: "status expression can reference schema field",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"host": "string",
+					},
+					map[string]interface{}{
+						"url": "${vpc.status.vpcID + '/' + schema.spec.host}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "status expression referencing only schema (no resource)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"host": "string",
+					},
+					map[string]interface{}{
+						"echoHost": "${schema.spec.host}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
 			name: "invalid field type in resource spec",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(

@@ -712,10 +712,17 @@ func buildInstanceNode(
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract dependencies from expression %q: %w", statusVariable.Expression, err)
 		}
-		if len(deps) == 0 {
-			return nil, fmt.Errorf("instance status field must refer to a resource: %s", statusVariable.Path)
+		// Status fields may reference resources, schema, or both.
+		referencesSchema := slices.Contains(statusVariable.Expression.References, SchemaVarName)
+		if len(deps) == 0 && !referencesSchema {
+			return nil, fmt.Errorf("instance status field must refer to a resource or schema: %s", statusVariable.Path)
 		}
 		instanceDeps = append(instanceDeps, deps...)
+		// If this expression references schema, include the instance node itself as a dep
+		// so the runtime wires it into instNode.deps for context building.
+		if referencesSchema && !slices.Contains(instanceDeps, InstanceNodeID) {
+			instanceDeps = append(instanceDeps, InstanceNodeID)
+		}
 
 		instanceStatusVariables = append(instanceStatusVariables, &variable.ResourceField{
 			FieldDescriptor: statusVariable,
@@ -805,13 +812,11 @@ func buildStatusSchema(
 		return nil, nil, nil, fmt.Errorf("status fields without expressions are not supported: %v", noExpressionFields)
 	}
 
-	// Instance status expressions can ONLY reference resources, not schema.
-	// At runtime, status is populated after resources are created.
-
-	// Verify status expressions don't reference schema and populate References
+	// Verify status expressions only reference known resources or schema, and populate References.
+	allowedStatusVars := append(nodeNames, SchemaVarName)
 	for _, fieldDescriptor := range fieldDescriptors {
 		expression := fieldDescriptor.Expression
-		result, err := inspectExpressionRestricted(inspector, expression.Original, nodeNames)
+		result, err := inspectExpressionRestricted(inspector, expression.Original, allowedStatusVars)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, expression.UserExpression(), err)
 		}

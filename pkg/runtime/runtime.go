@@ -125,7 +125,10 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 
 	// Wire up instance node dependencies.
 	for _, depID := range instNode.Spec.Meta.Dependencies {
-		if dep, ok := rt.nodes[depID]; ok {
+		if depID == graph.InstanceNodeID {
+			// Status expressions referencing schema need the instance node itself as a dep.
+			instNode.deps[graph.InstanceNodeID] = instNode
+		} else if dep, ok := rt.nodes[depID]; ok {
 			instNode.deps[depID] = dep
 		}
 	}

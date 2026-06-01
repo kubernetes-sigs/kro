@@ -36,6 +36,7 @@ import (
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
@@ -4001,6 +4002,7 @@ func TestBuildInstanceNode(t *testing.T) {
 				true, // namespaced (default)
 				tt.variables,
 				tt.template,
+				nil, // conditions: none in these tests
 				inspector,
 			)
 			if tt.wantErr != "" {
@@ -4074,7 +4076,7 @@ func TestBuildStatusSchema(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			statusSchema, fieldDescriptors, _, err := buildStatusSchema(statusBc, &krov1alpha1.Schema{
+			statusSchema, fieldDescriptors, _, _, err := buildStatusSchema(statusBc, &krov1alpha1.Schema{
 				Status: rawExt(tt.statusRaw),
 			}, []string{"resource"}, inspector)
 			if tt.wantErr != "" {
@@ -4451,4 +4453,237 @@ func TestBuilderHelperCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, tt.run)
 	}
+}
+
+// newConditionsBuildContext sets up the typed environment and inspector
+// fixtures used by the conditions-related tests. The "resource" identifier
+// is registered as a known node, mirroring how a single-resource RGD would
+// look at compile time.
+func newConditionsBuildContext(t *testing.T) (*buildContext, *cel.Env, *ast.Inspector) {
+	t.Helper()
+
+	resourceSchema := objectSchema(map[string]spec.Schema{
+		"status": *objectSchema(map[string]spec.Schema{
+			"phase": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+		}),
+	})
+	schemaSchema := objectSchema(map[string]spec.Schema{
+		"spec": *objectSchema(map[string]spec.Schema{
+			"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+		}),
+	})
+
+	env, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{
+		"resource":    resourceSchema,
+		SchemaVarName: schemaSchema,
+	})
+	bc := newTestBuildContext(t, env, provider)
+	identifiers := []string{"resource", SchemaVarName, library.RuntimeVarName}
+	inspector := newUnitInspector(t, identifiers...)
+	inspectorEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(identifiers))
+	require.NoError(t, err)
+
+	return bc, inspectorEnv, inspector
+}
+
+func TestExtractConditionExpressions(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       map[string]interface{}
+		want        []string
+		wantErr     string
+		wantRemoved bool
+	}{
+		{
+			name:        "no conditions key",
+			input:       map[string]interface{}{"foo": "bar"},
+			want:        nil,
+			wantRemoved: false,
+		},
+		{
+			name: "conditions present",
+			input: map[string]interface{}{
+				"foo": "bar",
+				"conditions": []interface{}{
+					"${runtime.newCondition({\"type\": 'X', \"status\": 'True', \"reason\": '', \"message\": ''})}",
+				},
+			},
+			want: []string{
+				"${runtime.newCondition({\"type\": 'X', \"status\": 'True', \"reason\": '', \"message\": ''})}",
+			},
+			wantRemoved: true,
+		},
+		{
+			name: "conditions must be a list",
+			input: map[string]interface{}{
+				"conditions": "not a list",
+			},
+			wantErr: "must be a list",
+		},
+		{
+			name: "elements must be strings",
+			input: map[string]interface{}{
+				"conditions": []interface{}{42},
+			},
+			wantErr: "must be a CEL expression string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := extractConditionExpressions(tt.input)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			_, stillPresent := tt.input["conditions"]
+			assert.Equal(t, tt.wantRemoved, !stillPresent && tt.want != nil)
+		})
+	}
+}
+
+func TestBuildConditionsEmpty(t *testing.T) {
+	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
+
+	got, err := buildConditions(bc, nil, inspector, inspectorEnv, []string{"resource"})
+	require.NoError(t, err)
+	assert.Nil(t, got)
+
+	got, err = buildConditions(bc, []string{}, inspector, inspectorEnv, []string{"resource"})
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestBuildConditionsHappyPath(t *testing.T) {
+	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
+
+	exprs := []string{
+		`${runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: 'OK', message: ''})}`,
+		`${runtime.newCondition({type: 'AppReady', status: resource.status.phase == 'Running' ? 'True' : 'False', reason: 'PhaseCheck', message: ''})}`,
+	}
+
+	got, err := buildConditions(bc, exprs, inspector, inspectorEnv, []string{"resource"})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+
+	for _, e := range got {
+		assert.NotNil(t, e.Program, "expression %q should have a compiled Program", e.Original)
+	}
+
+	// Both expressions reference `runtime` (the kro CEL library variable).
+	assert.Contains(t, got[0].References, "runtime")
+	assert.NotContains(t, got[0].References, "resource")
+	assert.Contains(t, got[1].References, "runtime")
+	assert.Contains(t, got[1].References, "resource")
+}
+
+func TestBuildConditionsRejectsInvalid(t *testing.T) {
+	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
+
+	tests := []struct {
+		name      string
+		expr      string
+		errSubstr string
+	}{
+		{
+			name:      "unknown bare-identifier key",
+			expr:      `${runtime.newCondition({type: 'X', status: 'True', reason: '', message: '', extra: 'foo'})}`,
+			errSubstr: `unknown key "extra"`,
+		},
+		{
+			name:      "invalid status literal",
+			expr:      `${runtime.newCondition({type: 'X', status: 'YES', reason: '', message: ''})}`,
+			errSubstr: "status must be one of",
+		},
+		{
+			name:      "expression must be wrapped in ${...}",
+			expr:      `runtime.newCondition({type: 'X', status: 'True', reason: '', message: ''})`,
+			errSubstr: "standalone expressions",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildConditions(bc, []string{tt.expr}, inspector, inspectorEnv, []string{"resource"})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errSubstr)
+		})
+	}
+}
+
+func TestBuildConditionsSelfReference(t *testing.T) {
+	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
+
+	// Defines PrimaryReady, then another condition tries to read it via
+	// runtime.condition(schema, 'PrimaryReady') — illegal.
+	exprs := []string{
+		`${runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: '', message: ''})}`,
+		`${runtime.newCondition({type: 'Ready', status: runtime.condition(schema, 'PrimaryReady').status, reason: '', message: ''})}`,
+	}
+
+	_, err := buildConditions(bc, exprs, inspector, inspectorEnv, []string{"resource"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "custom conditions cannot reference each other")
+}
+
+func TestBuildInstanceNodeFoldsConditionDeps(t *testing.T) {
+	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
+
+	// Compile a condition that references `resource`; instance node should
+	// list `resource` as a dependency.
+	exprs := []string{
+		`${runtime.newCondition({type: 'AppReady', status: resource.status.phase == 'Running' ? 'True' : 'False', reason: '', message: ''})}`,
+	}
+	conditions, err := buildConditions(bc, exprs, inspector, inspectorEnv, []string{"resource"})
+	require.NoError(t, err)
+	require.Len(t, conditions, 1)
+
+	node, err := buildInstanceNode(
+		"example.com",
+		"v1alpha1",
+		"Test",
+		true,
+		nil, // no plain status fields
+		map[string]interface{}{},
+		conditions,
+		inspector,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, node)
+	assert.Contains(t, node.Meta.Dependencies, "resource")
+	assert.Equal(t, conditions, node.Conditions)
+}
+
+func TestBuildInstanceNodeConditionDepsDedupedWithStatusVars(t *testing.T) {
+	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
+
+	// Status variable already references `resource`; condition also references
+	// `resource`. The instance node's Dependencies list should have `resource`
+	// exactly once.
+	exprs := []string{
+		`${runtime.newCondition({type: 'AppReady', status: resource.status.phase, reason: '', message: ''})}`,
+	}
+	conditions, err := buildConditions(bc, exprs, inspector, inspectorEnv, []string{"resource"})
+	require.NoError(t, err)
+
+	statusVars := []variable.FieldDescriptor{
+		{Path: "phase", Expression: expr("resource.status.phase")},
+	}
+
+	node, err := buildInstanceNode(
+		"example.com", "v1alpha1", "Test",
+		true, statusVars, map[string]interface{}{}, conditions, inspector,
+	)
+	require.NoError(t, err)
+
+	count := 0
+	for _, d := range node.Meta.Dependencies {
+		if d == "resource" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "resource should appear exactly once in Dependencies, got: %v", node.Meta.Dependencies)
 }

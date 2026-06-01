@@ -123,10 +123,24 @@ type Controller struct {
 	// feature gate flags, captured once at construction time.
 	eventsEnabled  bool
 	metricsEnabled bool
+
+	// hasAuthorConditions reports whether the RGD this controller serves
+	// declared an author `conditions:` block. When true, the early-exit
+	// path on graph-resolve failure (updateConditionsStatus) does not
+	// write kro's built-in conditions to the wire, so .status.conditions[]
+	// only ever contains author-declared conditions. The next successful
+	// reconcile through updateStatus will evaluate the author's CEL and
+	// repopulate the wire.
+	hasAuthorConditions bool
 }
 
 // NewController constructs a new controller that resolves the newest issued
 // graph revision for the RGD from a GraphRevisionResolver.
+//
+// hasAuthorConditions should be true when the RGD this controller serves
+// declared a `conditions:` block. It gates whether updateConditionsStatus
+// filters kro's built-in conditions from the wire on graph-resolve
+// failures (so authors keep ownership of .status.conditions[]).
 func NewController(
 	log logr.Logger,
 	reconcileConfig ReconcileConfig,
@@ -138,6 +152,7 @@ func NewController(
 	childResourceLabeler metadata.Labeler,
 	coord *dynamiccontroller.WatchCoordinator,
 	eventRecorder record.EventRecorder,
+	hasAuthorConditions bool,
 ) *Controller {
 	return &Controller{
 		log:                  log,
@@ -152,6 +167,7 @@ func NewController(
 		eventRecorder:        eventRecorder,
 		eventsEnabled:        features.FeatureGate.Enabled(features.InstanceConditionEvents),
 		metricsEnabled:       features.FeatureGate.Enabled(features.InstanceConditionMetrics),
+		hasAuthorConditions:  hasAuthorConditions,
 	}
 }
 

@@ -37,6 +37,7 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	"github.com/kubernetes-sigs/kro/pkg/cel/conversion"
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/crd"
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
@@ -250,7 +251,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// This uses a lightweight env that only declares identifier names (no full schemas) -
 	// sufficient for parsing and finding references, but NOT for type-checking or compilation.
 	nodeNames := maps.Keys(nodes)
-	allIdentifiers := append(nodeNames, SchemaVarName, EachVarName)
+	allIdentifiers := append(nodeNames, SchemaVarName, EachVarName, library.RuntimeVarName)
 	inspectorEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(allIdentifiers))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create inspector environment: %w", err)
@@ -326,7 +327,9 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// Build instance status schema.
 	// Status expressions reference resources (validated to not reference schema).
 	// We infer the status field types from the CEL expression output types.
-	statusSchema, statusVariables, statusTemplate, err := buildStatusSchema(
+	// conditionExprStrings holds raw expression strings from the optional
+	// `conditions:` block; they're processed separately below.
+	statusSchema, statusVariables, statusTemplate, conditionExprStrings, err := buildStatusSchema(
 		bc,
 		rgd.Spec.Schema,
 		nodeNames,
@@ -345,6 +348,15 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		}
 	}
 
+	// Process author-defined conditions (the optional `conditions:` block).
+	// Build-time validation enforces structural rules (literal-key check,
+	// literal status check, self-reference rule). Then parse, type-check,
+	// and compile each expression.
+	conditions, err := buildConditions(bc, conditionExprStrings, inspector, inspectorEnv, nodeNames)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build instance conditions: %w", err)
+	}
+
 	// Update the CRD with the inferred status schema.
 	crd.SetCRDStatus(instanceCRD, *statusSchema, true)
 
@@ -356,6 +368,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		instanceNamespaced,
 		statusVariables,
 		statusTemplate,
+		conditions,
 		inspector,
 	)
 	if err != nil {
@@ -712,11 +725,16 @@ func extractForEachDependencies(
 // buildInstanceNode creates the instance node from pre-computed status components.
 // This is called after spec schema, status schema, and CRD have been built separately.
 // Uses the shared inspectorEnv for AST inspection.
+//
+// conditions are pre-compiled author-defined condition expressions (the
+// optional `conditions:` block). Their dependencies are folded into the
+// instance node's Dependencies so the topological sort accounts for them.
 func buildInstanceNode(
 	group, apiVersion, kind string,
 	namespaced bool,
 	statusVariables []variable.FieldDescriptor,
 	statusTemplate map[string]interface{},
+	conditions []*krocel.Expression,
 	inspector *ast.Inspector,
 ) (*Node, error) {
 	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(group, apiVersion, kind)
@@ -745,6 +763,21 @@ func buildInstanceNode(
 		})
 	}
 
+	// Fold condition expression dependencies into instanceDeps so the DAG
+	// accounts for them. References were populated by buildConditions; we
+	// just need to dedupe against existing deps and skip the synthetic
+	// "schema" and "runtime" identifiers — neither is a real graph dep.
+	for _, expr := range conditions {
+		for _, ref := range expr.References {
+			if ref == SchemaVarName || ref == library.RuntimeVarName {
+				continue
+			}
+			if !slices.Contains(instanceDeps, ref) {
+				instanceDeps = append(instanceDeps, ref)
+			}
+		}
+	}
+
 	// Create the instance node.
 	// Instance doesn't have IncludeWhen, ReadyWhen, or ForEach.
 	instance := &Node{
@@ -760,7 +793,8 @@ func buildInstanceNode(
 				"status": statusTemplate,
 			},
 		},
-		Variables: instanceStatusVariables,
+		Variables:  instanceStatusVariables,
+		Conditions: conditions,
 	}
 
 	return instance, nil
@@ -797,8 +831,17 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 
 // buildStatusSchema builds the status schema for the instance resource.
 // The status schema is inferred from the CEL expressions in the status field
-// using CEL type checking. Uses the shared inspectorEnv for validation and typed env for compilation.
-// Returns: (schema, fieldDescriptors, statusTemplate, error)
+// using CEL type checking. Uses the shared inspectorEnv for validation and
+// typed env for compilation.
+//
+// If the status block contains a `conditions:` key, its raw expression
+// strings are returned separately (and the key is removed from the inferred
+// status template). Author conditions don't participate in CEL output-type
+// inference; their schema is the standard []metav1.Condition shape, which
+// kro injects via crd.SetCRDStatus' default-conditions behavior when the
+// inferred status has no `conditions` field.
+//
+// Returns: (schema, fieldDescriptors, statusTemplate, conditionExprs, error)
 func buildStatusSchema(
 	bc *buildContext,
 	rgSchema *v1alpha1.Schema,
@@ -808,23 +851,36 @@ func buildStatusSchema(
 	*extv1.JSONSchemaProps,
 	[]variable.FieldDescriptor,
 	map[string]interface{},
+	[]string,
 	error,
 ) {
 	// The instance resource has a schema defined using the "SimpleSchema" format.
 	unstructuredStatus := map[string]interface{}{}
 	err := yaml.UnmarshalStrict(rgSchema.Status.Raw, &unstructuredStatus)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
+	}
+
+	// Extract author-defined conditions BEFORE running CEL inference on the
+	// remaining status fields. The `conditions:` key holds CEL expressions
+	// that return Condition (or list(Condition)) values; type inference on
+	// those would produce a wrong CRD schema. Removing the key here lets
+	// the existing inference path handle other status fields unchanged, and
+	// crd.SetCRDStatus injects the standard []metav1.Condition schema when
+	// the inferred status doesn't declare `conditions`.
+	conditionExprs, err := extractConditionExpressions(unstructuredStatus)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("failed to extract conditions block: %w", err)
 	}
 
 	// Extract CEL expressions from the status field.
 	fieldDescriptors, noExpressionFields, err := parser.ParseSchemalessResource(unstructuredStatus)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to extract CEL expressions from status: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to extract CEL expressions from status: %w", err)
 	}
 
 	if len(noExpressionFields) > 0 {
-		return nil, nil, nil, fmt.Errorf("status fields without expressions are not supported: %v", noExpressionFields)
+		return nil, nil, nil, nil, fmt.Errorf("status fields without expressions are not supported: %v", noExpressionFields)
 	}
 
 	// Instance status expressions can ONLY reference resources, not schema.
@@ -835,7 +891,7 @@ func buildStatusSchema(
 		expression := fieldDescriptor.Expression
 		result, err := inspectExpressionRestricted(inspector, expression.Original, nodeNames)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, expression.UserExpression(), err)
+			return nil, nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, expression.UserExpression(), err)
 		}
 		// Populate expression.References for restricted environment compilation
 		for _, dep := range result.ResourceDependencies {
@@ -854,7 +910,7 @@ func buildStatusSchema(
 
 		checkedAST, err := bc.parseAndCheck(bc.env, expression)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression.UserExpression(), fieldDescriptor.Path, err)
+			return nil, nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression.UserExpression(), fieldDescriptor.Path, err)
 		}
 
 		statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
@@ -863,10 +919,115 @@ func buildStatusSchema(
 	// convert the CEL types to OpenAPI schema - best effort.
 	statusSchema, err := schema.GenerateSchemaFromCELTypes(statusTypeMap, bc.typeProvider)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to generate status schema from CEL types: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to generate status schema from CEL types: %w", err)
 	}
 
-	return statusSchema, fieldDescriptors, unstructuredStatus, nil
+	return statusSchema, fieldDescriptors, unstructuredStatus, conditionExprs, nil
+}
+
+// extractConditionExpressions removes the `conditions:` key from the raw
+// status YAML map and returns its values as expression strings.
+//
+// The `conditions:` block must be a list whose elements are CEL expression
+// strings (each wrapped in `${...}`). Anything else is rejected.
+//
+// If the key is absent, returns (nil, nil) — no conditions block defined.
+func extractConditionExpressions(unstructuredStatus map[string]interface{}) ([]string, error) {
+	const conditionsKey = "conditions"
+
+	raw, ok := unstructuredStatus[conditionsKey]
+	if !ok {
+		return nil, nil
+	}
+	delete(unstructuredStatus, conditionsKey)
+
+	rawList, ok := raw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("status.conditions must be a list, got %T", raw)
+	}
+
+	exprs := make([]string, 0, len(rawList))
+	for i, elem := range rawList {
+		s, ok := elem.(string)
+		if !ok {
+			return nil, fmt.Errorf("status.conditions[%d] must be a CEL expression string, got %T", i, elem)
+		}
+		exprs = append(exprs, s)
+	}
+	return exprs, nil
+}
+
+// buildConditions parses, validates, type-checks, and compiles the author's
+// condition expressions. The returned slice is in the same order as the
+// input. References (the deps each expression touches) are populated on
+// each Expression for use by buildInstanceNode.
+//
+// Returns nil if conditionExprStrings is empty.
+func buildConditions(
+	bc *buildContext,
+	conditionExprStrings []string,
+	inspector *ast.Inspector,
+	inspectorEnv *cel.Env,
+	nodeNames []string,
+) ([]*krocel.Expression, error) {
+	if len(conditionExprStrings) == 0 {
+		return nil, nil
+	}
+
+	// Strip ${...} wrappers and produce *krocel.Expression values with
+	// Original set; References and Program are populated below.
+	conditions, err := parser.ParseConditionExpressions(conditionExprStrings)
+	if err != nil {
+		return nil, fmt.Errorf("invalid conditions block: %w", err)
+	}
+
+	// Build-time AST validation: enforces the self-reference rule —
+	// runtime.condition(_, 'X') cannot read another author-defined
+	// condition's type X. Structural rules for runtime.newCondition
+	// (allowed keys, valid status literals, required fields) are
+	// enforced earlier by the parse-time macro in pkg/cel/library
+	// (which fires during env.Parse below).
+	stripped := make([]string, len(conditions))
+	for i, c := range conditions {
+		stripped[i] = c.Original
+	}
+	if err := library.ValidateConditionExpressions(inspectorEnv, stripped); err != nil {
+		return nil, err
+	}
+
+	// Populate References by AST inspection. Conditions can reference
+	// resource nodes, `schema` (the instance), and `runtime` (the kro CEL
+	// library variable). All three are kept in expr.References so the
+	// runtime's filterContext doesn't drop them from the eval activation.
+	// The graph DAG dep wiring (in buildInstanceNode) separately filters
+	// runtime/schema out — they aren't real graph deps.
+	allowedRefs := append(slices.Clone(nodeNames), SchemaVarName, library.RuntimeVarName)
+	for _, expr := range conditions {
+		result, err := inspectExpressionRestricted(inspector, expr.Original, allowedRefs)
+		if err != nil {
+			return nil, fmt.Errorf("condition %q: %w", expr.UserExpression(), err)
+		}
+		for _, dep := range result.ResourceDependencies {
+			if !slices.Contains(expr.References, dep.ID) {
+				expr.References = append(expr.References, dep.ID)
+			}
+		}
+	}
+
+	// Type-check + compile each expression against the typed environment.
+	// Conditions return either Condition or list(Condition); the runtime
+	// library exposes both as cel.DynType today, so the type-checker
+	// accepts any expression that compiles.
+	for _, expr := range conditions {
+		if _, err := bc.parseAndCheck(bc.env, expr); err != nil {
+			return nil, fmt.Errorf("failed to type-check condition %q: %w", expr.UserExpression(), err)
+		}
+		if _, err := bc.compile(bc.env, expr); err != nil {
+			return nil, fmt.Errorf("failed to compile condition %q: %w", expr.UserExpression(), err)
+		}
+	}
+
+	return conditions, nil
 }
 
 // inspectExpressionRestricted uses the shared inspector to parse an expression,

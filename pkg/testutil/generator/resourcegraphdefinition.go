@@ -158,6 +158,49 @@ func WithScope(scope krov1alpha1.ResourceScope) SchemaOption {
 	}
 }
 
+// WithStatusConditions adds a `conditions:` list to the schema's status block.
+// Each element must be a CEL expression string of the form `${...}` returning
+// a Condition (or list(Condition) for collection expansion).
+//
+// Must be applied AFTER WithSchema, since it mutates the same Status raw
+// extension. Caller responsibility: ensure WithSchema appears earlier in the
+// option list.
+//
+// This is a ResourceGraphDefinitionOption (not a SchemaOption) so it can
+// re-encode the Status raw extension after merging the new key in.
+func WithStatusConditions(conditions ...string) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		if rgd.Spec.Schema == nil {
+			panic("WithStatusConditions requires WithSchema to be applied first")
+		}
+
+		// Reconstruct the Go-shape status map from the existing raw bytes,
+		// merge in conditions, then re-marshal. This keeps the Object and
+		// Raw fields in lockstep.
+		status := map[string]interface{}{}
+		if len(rgd.Spec.Schema.Status.Raw) > 0 {
+			if err := json.Unmarshal(rgd.Spec.Schema.Status.Raw, &status); err != nil {
+				panic(err)
+			}
+		}
+
+		conditionsList := make([]interface{}, len(conditions))
+		for i, c := range conditions {
+			conditionsList[i] = c
+		}
+		status["conditions"] = conditionsList
+
+		raw, err := json.Marshal(status)
+		if err != nil {
+			panic(err)
+		}
+		rgd.Spec.Schema.Status = runtime.RawExtension{
+			Object: &unstructured.Unstructured{Object: status},
+			Raw:    raw,
+		}
+	}
+}
+
 // WithResourceCollection adds a collection resource with forEach iterators to the ResourceGraphDefinition.
 func WithResourceCollection(
 	id string,

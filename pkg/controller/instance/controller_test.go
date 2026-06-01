@@ -248,6 +248,7 @@ func TestReconcileGraphResolutionFailureMarksCondition(t *testing.T) {
 				metadata.NewKROMetaLabeler(),
 				newControllerTestCoordinator(t),
 				record.NewFakeRecorder(100),
+				false, // hasAuthorConditions: this test is for RGDs with no author conditions
 			)
 
 			err := controller.Reconcile(context.Background(), ctrl.Request{
@@ -278,6 +279,81 @@ func TestReconcileGraphResolutionFailureMarksCondition(t *testing.T) {
 			assert.Equal(t, string(v1alpha1.InstanceStateError), state)
 		})
 	}
+}
+
+// TestReconcileGraphResolveFailureKeepsOnlyAuthorConditionsOnWire
+// verifies the visibility-rule: when the RGD declared an author
+// `conditions:` block, a graph-resolve failure must not push kro's four
+// built-in conditions (InstanceManaged, GraphResolved, ResourcesReady,
+// Ready) onto the instance's wire. The author's existing conditions
+// stay; state=Error is set. The next successful reconcile through
+// updateStatus repopulates the wire with the author's freshly-evaluated
+// conditions.
+func TestReconcileGraphResolveFailureKeepsOnlyAuthorConditionsOnWire(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+
+	authorCond := map[string]interface{}{
+		"type":               "AuthorHealthy",
+		"status":             "True",
+		"reason":             "AuthorSaysHealthy",
+		"message":            "author-written condition",
+		"observedGeneration": int64(1),
+		"lastTransitionTime": "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, unstructured.SetNestedField(instance.Object, "ACTIVE", "status", "state"))
+	require.NoError(t, unstructured.SetNestedSlice(instance.Object, []interface{}{authorCond}, "status", "conditions"))
+
+	raw := newControllerTestDynamicClient(t, instance.DeepCopy())
+	clientSet := clientfake.NewFakeSet(raw)
+	clientSet.SetRESTMapper(buildControllerTestRESTMapper())
+
+	controller := NewController(
+		zap.New(zap.UseDevMode(true)),
+		ReconcileConfig{DefaultRequeueDuration: 2 * time.Second},
+		controllerTestParentGVR,
+		testRevisionResolver{
+			getLatestRevision: func() (revisions.Entry, bool) {
+				return revisions.Entry{}, false
+			},
+			getGraphRevision: func(int64) (revisions.Entry, bool) {
+				return revisions.Entry{}, false
+			},
+		},
+		true,
+		clientSet,
+		metadata.NewKROMetaLabeler(),
+		metadata.NewKROMetaLabeler(),
+		newControllerTestCoordinator(t),
+		record.NewFakeRecorder(100),
+		true, // hasAuthorConditions
+	)
+
+	err := controller.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "demo", Namespace: "default"},
+	})
+	require.Error(t, err)
+
+	stored := getStoredParentObject(t, raw)
+	conds, found, _ := unstructured.NestedSlice(stored.Object, "status", "conditions")
+	require.True(t, found, "author's pre-existing condition must be preserved")
+
+	types := map[string]bool{}
+	for _, c := range conds {
+		m := c.(map[string]interface{})
+		types[m["type"].(string)] = true
+	}
+
+	assert.True(t, types["AuthorHealthy"], "author's AuthorHealthy must remain on the wire")
+
+	assert.False(t, types["InstanceManaged"], "kro InstanceManaged must not appear on wire")
+	assert.False(t, types["GraphResolved"], "kro GraphResolved must not appear on wire")
+	assert.False(t, types["ResourcesReady"], "kro ResourcesReady must not appear on wire")
+	assert.False(t, types["Ready"], "kro Ready must not appear on wire")
+
+	assert.Equal(t, 1, len(conds), "wire holds only author conditions")
+
+	state, _, _ := unstructured.NestedString(stored.Object, "status", "state")
+	assert.Equal(t, "ERROR", state, "state flips to ERROR during graph-resolve failure")
 }
 
 func TestReconcileDeletionRemovesFinalizer(t *testing.T) {

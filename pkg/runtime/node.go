@@ -49,6 +49,11 @@ type Node struct {
 	templateExprs    []*expressionEvaluationState
 	templateVars     []*variable.ResourceField
 
+	// conditionExprs are the per-reconcile evaluation states for the
+	// instance's author-defined `conditions:` expressions. Only the
+	// instance node populates this; resource nodes leave it nil.
+	conditionExprs []*expressionEvaluationState
+
 	rgdConfig graph.RGDConfig
 
 	// resourceSchema is the OpenAPI schema for this node's resource type.

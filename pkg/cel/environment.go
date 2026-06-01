@@ -129,6 +129,11 @@ func BaseDeclarations() []cel.EnvOption {
 			// (includeWhen, readyWhen, forEach) via inspectExpressionRestricted
 			// and validateAndCompileForEach.
 			library.Omit(),
+			// Runtime() registers the `runtime` CEL variable used to author
+			// custom status conditions. The graph builder restricts where
+			// runtime.newCondition / runtime.condition are valid (only inside
+			// the schema.status.conditions block) via build-time validation.
+			library.Runtime(),
 		}
 	})
 	return cachedBaseDeclarations

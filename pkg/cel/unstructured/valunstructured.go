@@ -21,6 +21,7 @@ package unstructured
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"sync"
 	"time"
@@ -180,6 +181,14 @@ func UnstructuredToVal(unstructured interface{}, schema common.Schema) ref.Val {
 			return types.Int(v)
 		case int64:
 			return types.Int(v)
+		case float64:
+			// encoding/json decodes every JSON number as float64; accept whole
+			// values that fit in int64 so integer-typed CRD fields work end-to-end.
+			// Reject non-integer floats explicitly rather than silently truncating.
+			if !math.IsNaN(v) && !math.IsInf(v, 0) && v == math.Trunc(v) && v >= math.MinInt64 && v <= math.MaxInt64 {
+				return types.Int(int64(v))
+			}
+			return types.NewErr("invalid data, expected int, got non-integer float %v", v)
 		default:
 			return types.NewErr("invalid data, expected int, got %T", unstructured)
 		}

@@ -6,11 +6,12 @@ Graph is a new `kro.run/v1alpha1` Kind — the atomic runtime primitive for comp
 resources. A Graph is a set of nodes evaluated in topological order. Create it and its resources
 converge; delete it and they cascade away. It is the simplest possible unit of composition in kro.
 
-ResourceGraphDefinition is a molecule built from this atom. RGD bundles together Kind definition,
-instance management, and resource composition into a single convenient abstraction. Graph separates
-these concerns, making each independently usable and enabling patterns that RGD cannot express:
-static resource bundles (no CRD needed), singletons (multiple contributors, one resource), and
-decorators (react to existing resources without defining a new Kind).
+RGD today conflates Kind definition, instance management, and resource composition into one object.
+Graph separates these — providing resource composition alone — making each concern independently
+usable. This enables patterns RGD cannot express: static resource bundles (no CRD needed),
+singletons (multiple contributors, one resource), and decorators (react to existing resources without
+defining a new Kind). Higher-level abstractions like RGD are built _from_ Graph, not alongside it;
+every feature added to Graph automatically benefits every abstraction layered on top.
 
 Graph was validated by building the full RGD system from it. A single Graph implements the RGD
 controller — creating CRDs, watching instances, managing resources, writing status — all through
@@ -18,22 +19,28 @@ composition rather than imperative Go code. This implementation passes 23 of 36 
 compatibility test files, with remaining gaps due to prototype immaturity rather than structural
 limitations (see [examples/graph/rgd.yaml](../../../examples/graph/rgd.yaml)).
 
-## Motivation
+## Motivation: Graph as Scope
 
-RGD conflates three concerns:
+A Graph is an **isolated scope**. Its nodes form a flat namespace — private, visible only within the
+Graph — with spec as input and status as output. Nothing inside a Graph is reachable from outside
+except through the Kubernetes resource boundary: the Graph object's own spec and status fields.
 
-1. **Kind definition** — creating a CRD with a schema
-2. **Instance management** — watching instances and reconciling them
-3. **Resource composition** — evaluating templates, managing dependencies
+This isolation is load-bearing in three ways:
 
-These are separable. An operator may want to compose resources without defining a new Kind (a static
-bundle, like a Helm release). A platform may want to watch existing resources and react to them
-without owning a CRD (a decorator). A system may want multiple actors to coordinate ownership of a
-single resource (a singleton).
+1. **Concurrency is a consequence of scope boundaries.** A `forEach` over 1000 instances stamps 1000
+   independent Graphs, each with its own scope and lifecycle, each reconciled independently.
+   Parallelism isn't a feature of the evaluation loop — it emerges from the isolation. Within a
+   single scope, serial evaluation is correct and sufficient: CEL evaluates in microseconds, each
+   node is one API call, and the API server — not the graph — is the throughput constraint.
 
-Graph provides (3) alone. Higher-level abstractions like RGD combine Graph with (1) and (2) — but
-they are built _from_ Graph, not alongside it. This means every feature added to Graph automatically
-benefits every abstraction layered on top.
+2. **Propagation is scope-local.** A `propagateWhen` gate within a child Graph is invisible to the
+   parent. The parent sees only the child's `Ready` condition. Rollout control composes without
+   leaking — a canary strategy inside one instance doesn't slow or block sibling instances.
+
+3. **Communication is explicit.** Graphs talk to each other only through the resources that bind
+   them: the spec of a child Graph stamped by a parent, a `ref` to a resource managed by another
+   Graph, or a `watch` on a Kind whose instances are managed elsewhere. There is no shared memory, no
+   implicit coupling, no cross-scope references.
 
 ## Proposed API
 

@@ -1,0 +1,185 @@
+# KREP-024 Example: Singleton
+#
+# Demonstrates Graph's flexibility beyond the RGD pattern. A Singleton
+# declares a resource that should exist exactly once, with priority-based
+# resolution when multiple actors claim the same target.
+#
+# This is not an RGD — there is no schema, no CRD, no instances. It is
+# two Graphs that each want to own the same ConfigMap. The Singleton
+# controller (itself a Graph) resolves which one wins based on priority.
+#
+# When multiple Singletons target the same resource (same GVK + namespace
+# + name), the highest priority wins. Ties broken by name (lowest wins).
+# If the winner is deleted, the next-highest claimant takes over with zero
+# downtime — the resource UID never changes.
+# ---------------------------------------------------------------------------
+
+# Team A claims webapp-dashboard with priority 100
+---
+apiVersion: kro.run/v1alpha1
+kind: Singleton
+metadata:
+  name: team-a-dashboard
+spec:
+  priority: 100
+  template:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: webapp-dashboard
+      namespace: monitoring
+    data:
+      dashboard.json: '{ "title": "Team A Dashboard" }'
+
+# Team B claims the same resource with priority 200 — wins
+---
+apiVersion: kro.run/v1alpha1
+kind: Singleton
+metadata:
+  name: team-b-dashboard
+spec:
+  priority: 200
+  template:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: webapp-dashboard
+      namespace: monitoring
+    data:
+      dashboard.json: '{ "title": "Team B Dashboard" }'
+
+# Result:
+#   ConfigMap/monitoring/webapp-dashboard exists with Team B's content.
+#   If team-b-dashboard is deleted, Team A immediately becomes the winner.
+#   The ConfigMap is force-applied with Team A's template. No delete/recreate.
+#
+# Why this requires Graph (not RGD):
+#   RGD creates one Graph per instance — each Singleton would own its target
+#   independently, racing on delete. The Singleton controller is a fan-in
+#   Graph: all claimants are watched in a single Graph, which picks one
+#   winner and applies the target. Handoff is atomic.
+
+# ---------------------------------------------------------------------------
+# Singleton Controller — the Graph that implements the Singleton Kind.
+#
+# Fan-in pattern: a single long-lived Graph watches all Singleton CRs,
+# groups them by target identity (GVK + namespace + name), picks one
+# winner per identity by priority, and owns the target resource directly
+# via a forEach template. Status is written back to each Singleton CR.
+# ---------------------------------------------------------------------------
+---
+apiVersion: kro.run/v1alpha1
+kind: Graph
+metadata:
+  name: singleton
+  namespace: kro-system
+spec:
+  nodes:
+    # The Singleton CRD — created by this Graph using simpleSchema.
+    - id: crd
+      template:
+        apiVersion: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        metadata:
+          name: singletons.kro.run
+        spec:
+          group: kro.run
+          names:
+            plural: singletons
+            singular: singleton
+            kind: Singleton
+            listKind: SingletonList
+          scope: Namespaced
+          versions:
+            - name: v1alpha1
+              served: true
+              storage: true
+              subresources:
+                status: {}
+              schema:
+                openAPIV3Schema: >-
+                  ${simpleSchema.toOpenAPI({
+                    "apiVersion": "kro.run/v1alpha1",
+                    "kind": "Singleton",
+                    "spec": {
+                      "priority": "integer | default=0",
+                      "template": "object"
+                    },
+                    "status": {
+                      "active": "boolean",
+                      "claim": "string"
+                    }
+                  }, [])}
+              additionalPrinterColumns:
+                - name: Claim
+                  type: string
+                  jsonPath: .status.claim
+                - name: Priority
+                  type: integer
+                  jsonPath: .spec.priority
+                - name: Active
+                  type: boolean
+                  jsonPath: .status.active
+                - name: Age
+                  type: date
+                  jsonPath: .metadata.creationTimestamp
+
+    # Watch all Singleton CRs.
+    - id: singletons
+      includeWhen:
+        - ${has(crd.status) && has(crd.status.conditions) && crd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
+      watch:
+        apiVersion: kro.run/v1alpha1
+        kind: Singleton
+        selector: {}
+
+    # Flatten each singleton into {key, name, namespace, priority, creationTimestamp, identity, template}.
+    # key = namespace/name composite for cross-namespace uniqueness.
+    - id: claims
+      forEach:
+        - s: ${singletons}
+      def:
+        key: ${s.metadata.namespace + "/" + s.metadata.name}
+        name: ${s.metadata.name}
+        namespace: ${s.metadata.namespace}
+        priority: ${s.spec.priority}
+        creationTimestamp: ${s.metadata.creationTimestamp}
+        template: ${s.spec.template}
+        identity: >-
+          ${s.spec.template.apiVersion
+            + (has(s.spec.template.metadata.namespace)
+               ? "/namespaces/" + s.spec.template.metadata.namespace
+               : "")
+            + "/" + s.spec.template.kind
+            + "/" + s.spec.template.metadata.name}
+
+    # Apply one target resource per unique identity, using the winner's template.
+    # A claim is the winner if its key matches the first entry after sorting
+    # by priority desc, creationTimestamp asc.
+    - id: targets
+      forEach:
+        - c: >-
+            ${claims.filter(c,
+              c.key == claims.filter(x, x.identity == c.identity)
+                .sortBy(x, x.creationTimestamp)
+                .sortBy(x, -x.priority)[0].key)}
+      lifecycle:
+        apply: Force
+      template: "${c.template}"
+
+    # Status writeback — patch each Singleton CR with active + claim.
+    - id: status
+      forEach:
+        - c: ${claims}
+      patch:
+        apiVersion: kro.run/v1alpha1
+        kind: Singleton
+        metadata:
+          name: ${c.name}
+          namespace: ${c.namespace}
+        status:
+          active: >-
+            ${c.key == claims.filter(x, x.identity == c.identity)
+              .sortBy(x, x.creationTimestamp)
+              .sortBy(x, -x.priority)[0].key}
+          claim: "${c.identity}"

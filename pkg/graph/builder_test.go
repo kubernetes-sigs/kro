@@ -2235,20 +2235,57 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 }
 
 func TestNewBuilder(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	fakeRESTMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+
 	tests := []struct {
 		name    string
 		config  *rest.Config
 		client  *http.Client
+		opts    []BuilderOption
 		wantErr string
 	}{
-		{name: "success", config: &rest.Config{}, client: &http.Client{}},
-		{name: "schema resolver creation failure", config: &rest.Config{Host: "://bad"}, client: &http.Client{}, wantErr: "failed to create schema resolver"},
-		{name: "rest mapper creation failure", config: &rest.Config{}, client: nil, wantErr: "failed to create dynamic REST mapper"},
+		{
+			name:   "success with defaults",
+			config: &rest.Config{},
+			client: &http.Client{},
+		},
+		{
+			name:   "success with WithSchemaResolver",
+			config: &rest.Config{},
+			client: &http.Client{},
+			opts:   []BuilderOption{WithSchemaResolver(fakeResolver)},
+		},
+		{
+			name:   "success with WithRESTMapper",
+			config: &rest.Config{},
+			client: &http.Client{},
+			opts:   []BuilderOption{WithRESTMapper(fakeRESTMapper)},
+		},
+		{
+			name:   "success with both options overridden skips defaults",
+			config: &rest.Config{Host: "://bad"}, // would fail default resolver creation
+			client: nil,                          // would fail default REST mapper creation
+			opts:   []BuilderOption{WithSchemaResolver(fakeResolver), WithRESTMapper(fakeRESTMapper)},
+		},
+		{
+			name:    "schema resolver creation failure",
+			config:  &rest.Config{Host: "://bad"},
+			client:  &http.Client{},
+			wantErr: "failed to create schema resolver",
+		},
+		{
+			name:    "rest mapper creation failure",
+			config:  &rest.Config{},
+			client:  nil,
+			opts:    []BuilderOption{WithSchemaResolver(fakeResolver)},
+			wantErr: "failed to create dynamic REST mapper",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder, err := NewBuilder(tt.config, tt.client)
+			builder, err := NewBuilder(tt.config, tt.client, tt.opts...)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)

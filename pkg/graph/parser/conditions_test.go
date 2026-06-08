@@ -53,7 +53,7 @@ func TestParseReadyWhen(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseConditionExpressions(tc.expression)
+			_, err := UnwrapExpressions(tc.expression)
 
 			if tc.expectedError == "" {
 				if err != nil {

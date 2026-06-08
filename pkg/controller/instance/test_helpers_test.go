@@ -239,7 +239,7 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 		metadata.NewKROMetaLabeler(),
 		newControllerTestCoordinator(t),
 		record.NewFakeRecorder(100),
-		false, // hasAuthorConditions: default false for the generic helper
+		false,
 	)
 
 	return controller, clientSet

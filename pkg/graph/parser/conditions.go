@@ -21,10 +21,16 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 
-// ParseConditionExpressions parses resource condition expressions (readyWhen, includeWhen).
-// These must be standalone expressions (${...}). Returns Expression objects with
-// Original set; References and Program are populated later by builder.
-func ParseConditionExpressions(conditions []string) ([]*krocel.Expression, error) {
+// UnwrapExpressions takes a list of CEL expressions wrapped in ${...} (e.g.
+// readyWhen entries, includeWhen entries, or author condition entries) and
+// returns Expression objects with Original set to the unwrapped inner text.
+// References and Program are populated later by the builder.
+//
+// Each input must be exactly one standalone ${...} — interpolation forms
+// like "prefix-${expr}-suffix" or concatenations like "${a}${b}" are
+// rejected. For interpolation-style strings, see ExtractExpressions in
+// cel.go.
+func UnwrapExpressions(conditions []string) ([]*krocel.Expression, error) {
 	expressions := make([]*krocel.Expression, 0, len(conditions))
 
 	for _, e := range conditions {

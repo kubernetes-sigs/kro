@@ -248,7 +248,7 @@ func TestReconcileGraphResolutionFailureMarksCondition(t *testing.T) {
 				metadata.NewKROMetaLabeler(),
 				newControllerTestCoordinator(t),
 				record.NewFakeRecorder(100),
-				false, // hasAuthorConditions: this test is for RGDs with no author conditions
+				false,
 			)
 
 			err := controller.Reconcile(context.Background(), ctrl.Request{

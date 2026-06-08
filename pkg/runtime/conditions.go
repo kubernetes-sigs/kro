@@ -17,6 +17,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -237,18 +238,8 @@ func dedupConditionTypes(conds []library.Condition) ([]library.Condition, []stri
 		dups = append(dups, t)
 	}
 	// Sort so log output and error messages are deterministic.
-	sortStrings(dups)
+	sort.Strings(dups)
 	return kept, dups
-}
-
-// sortStrings sorts in-place. Inlined to avoid adding a sort import for
-// a single use; the slice is always small (≤ #author conditions).
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j-1] > s[j]; j-- {
-			s[j-1], s[j] = s[j], s[j-1]
-		}
-	}
 }
 
 // flattenCelConditionValue extracts Condition values from a CEL ref.Val.
@@ -281,13 +272,4 @@ func flattenCelConditionValue(val ref.Val, exprText string) ([]library.Condition
 	}
 
 	return nil, fmt.Errorf("condition %q must return a Condition or list(Condition), got %v", exprText, val.Type().TypeName())
-}
-
-// setKeys returns the keys of a string-keyed set as a slice.
-func setKeys(s map[string]struct{}) []string {
-	out := make([]string, 0, len(s))
-	for k := range s {
-		out = append(out, k)
-	}
-	return out
 }

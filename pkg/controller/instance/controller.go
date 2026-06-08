@@ -136,11 +136,6 @@ type Controller struct {
 
 // NewController constructs a new controller that resolves the newest issued
 // graph revision for the RGD from a GraphRevisionResolver.
-//
-// hasAuthorConditions should be true when the RGD this controller serves
-// declared a `conditions:` block. It gates whether updateConditionsStatus
-// filters kro's built-in conditions from the wire on graph-resolve
-// failures (so authors keep ownership of .status.conditions[]).
 func NewController(
 	log logr.Logger,
 	reconcileConfig ReconcileConfig,

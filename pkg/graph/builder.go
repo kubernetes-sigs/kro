@@ -505,13 +505,13 @@ func (b *Builder) buildRGResource(
 	}
 
 	// 7. Parse ReadyWhen expressions
-	readyWhen, err := parser.ParseConditionExpressions(rgResource.ReadyWhen)
+	readyWhen, err := parser.UnwrapExpressions(rgResource.ReadyWhen)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
 	}
 
 	// 8. Parse condition expressions
-	includeWhen, err := parser.ParseConditionExpressions(rgResource.IncludeWhen)
+	includeWhen, err := parser.UnwrapExpressions(rgResource.IncludeWhen)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
 	}
@@ -725,10 +725,6 @@ func extractForEachDependencies(
 // buildInstanceNode creates the instance node from pre-computed status components.
 // This is called after spec schema, status schema, and CRD have been built separately.
 // Uses the shared inspectorEnv for AST inspection.
-//
-// conditions are pre-compiled author-defined condition expressions (the
-// optional `conditions:` block). Their dependencies are folded into the
-// instance node's Dependencies so the topological sort accounts for them.
 func buildInstanceNode(
 	group, apiVersion, kind string,
 	namespaced bool,
@@ -833,13 +829,6 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 // The status schema is inferred from the CEL expressions in the status field
 // using CEL type checking. Uses the shared inspectorEnv for validation and
 // typed env for compilation.
-//
-// If the status block contains a `conditions:` key, its raw expression
-// strings are returned separately (and the key is removed from the inferred
-// status template). Author conditions don't participate in CEL output-type
-// inference; their schema is the standard []metav1.Condition shape, which
-// kro injects via crd.SetCRDStatus' default-conditions behavior when the
-// inferred status has no `conditions` field.
 //
 // Returns: (schema, fieldDescriptors, statusTemplate, conditionExprs, error)
 func buildStatusSchema(
@@ -976,7 +965,7 @@ func buildConditions(
 
 	// Strip ${...} wrappers and produce *krocel.Expression values with
 	// Original set; References and Program are populated below.
-	conditions, err := parser.ParseConditionExpressions(conditionExprStrings)
+	conditions, err := parser.UnwrapExpressions(conditionExprStrings)
 	if err != nil {
 		return nil, fmt.Errorf("invalid conditions block: %w", err)
 	}
@@ -1179,7 +1168,7 @@ func parseForEachDimensions(apiDimensions []v1alpha1.ForEachDimension) ([]ForEac
 		// Each dimension is a map with exactly one entry
 		for name, expression := range dimensionMap {
 			// Parse the expression to extract the raw CEL (strip ${...} wrapper if present)
-			parsedExprs, err := parser.ParseConditionExpressions([]string{expression})
+			parsedExprs, err := parser.UnwrapExpressions([]string{expression})
 			if err != nil {
 				return nil, fmt.Errorf("invalid forEach expression for dimension %q: %w", name, err)
 			}

@@ -1,0 +1,47 @@
+# KREP-024 Example: Ingress Fan-In
+#
+# Watch all Services labeled "expose: true" in a namespace and aggregate them
+# into a single Ingress resource with one rule per Service. Add a Service with
+# the label and a route appears; remove it and the route disappears.
+#
+# This is the aggregated-resource pattern from KREP-003: multiple independent
+# actors contribute to a shared resource without coordinating with each other.
+# ---------------------------------------------------------------------------
+apiVersion: kro.run/v1alpha1
+kind: Graph
+metadata:
+  name: ingress-fanin
+  namespace: default
+spec:
+  nodes:
+    - id: services
+      watch:
+        apiVersion: v1
+        kind: Service
+        selector:
+          matchLabels:
+            expose: "true"
+
+    - id: ingress
+      template:
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: shared-ingress
+        spec:
+          rules: >-
+            ${services.map(svc, {
+              "host": svc.metadata.name + ".example.com",
+              "http": {
+                "paths": [{
+                  "path": "/",
+                  "pathType": "Prefix",
+                  "backend": {
+                    "service": {
+                      "name": svc.metadata.name,
+                      "port": {"number": svc.spec.ports[0].port}
+                    }
+                  }
+                }]
+              }
+            })}

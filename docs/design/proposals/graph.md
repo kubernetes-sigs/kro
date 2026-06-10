@@ -19,6 +19,49 @@ composition rather than imperative Go code. This implementation passes 23 of 36 
 compatibility test files, with remaining gaps due to prototype immaturity rather than structural
 limitations (see [examples/graph/rgd.yaml](../../../examples/graph/rgd.yaml)).
 
+Beyond the RGD proof, Graph enables patterns that are simpler than what RGD can express today:
+- [Namespace decorator](../../../examples/graph/namespace-decorator.yaml) — watch namespaces, create
+  NetworkPolicies. No CRD, no schema, no instance. (The decorator pattern from KREP-003.)
+- [Ingress fan-in](../../../examples/graph/ingress-fanin.yaml) — aggregate Services into a single
+  Ingress with dynamic routes. (The aggregated-resource pattern from KREP-003.)
+- [KRO installation](../../../examples/graph/kro-install.yaml) — install kro itself as a Graph.
+  The static-bundle pattern: dependency-ordered, health-aware, one object replaces a Helm chart.
+- [Singleton](../../../examples/graph/singleton.yaml) — fan-in with priority-based resolution
+  when multiple actors claim the same resource.
+
+### What this KREP covers
+
+**Proposed:** The Graph Kind — node types (`template`, `patch`, `ref`, `watch`, `def`), dependency
+inference from CEL expressions, status conditions (`Compiled`, `Ready`), self-references, and nested
+composition. These are new primitives that do not exist in KRO today.
+
+**Inherited unchanged from RGD:** `includeWhen`, `forEach`, and CEL expression syntax. These
+mechanisms carry forward with the same semantics and are not redefined by this KREP.
+
+**Directional (defers to respective KREPs):** `propagateWhen` semantics (KREP-006), collection-level
+rollout budgets (KREP-006), and `readyWhen` behavioral differences from the current RGD
+implementation. Sections in this document illustrate how these features compose with Graph's
+recursive structure, but their final API and semantics are defined by their respective KREPs.
+
+**Relationship to RGD:** Graph is proposed as a sibling primitive. RGD continues to work unchanged.
+We have the option to implement RGD's internals on top of Graph in the future, but for the immediate
+term both implementations live as siblings sharing significant code in the underlying graph engine.
+Graph is additive — it does not replace or deprecate RGD.
+
+**Security posture:** Creating a Graph gives its author full control over everything KRO can do —
+creating, patching, deleting, and watching arbitrary Kubernetes resources within the permissions
+granted to the KRO controller's service account. A Graph author operates at the same privilege level
+as today's RGD author: the "infrastructure author" persona who defines what resources exist and how
+they relate.
+
+KRO's dual-persona model is preserved at higher layers. Authors (broad permissions) write
+RGDs/Graphs; consumers (narrow permissions scoped to the CRD the author created) interact only with
+the Kinds those Graphs implement, never with Graph objects directly. Graph is author-facing — end
+users never create or modify Graphs. Future work on credential scoping — short-lived tokens, caller
+credentials (analogous to how CloudFormation uses the caller's IAM role rather than the service's),
+or per-Graph service accounts — applies uniformly to all KRO primitives and is out of scope for this
+KREP.
+
 ## Motivation: Graph as Scope
 
 A Graph is an **isolated scope**. Its nodes form a flat namespace — private, visible only within the
@@ -230,6 +273,10 @@ available). `readyWhen` determines:
 
 ### propagateWhen
 
+> *This section defines `propagateWhen`'s core gating semantics within Graph. Rate-limited rollouts,
+> reactive controls, and manual approval gates are proposed separately in KREP-006. The examples
+> here illustrate composability but do not prescribe the final rollout API.*
+
 `propagateWhen` is the complement to `readyWhen`. Where `readyWhen` signals when a node is healthy,
 `propagateWhen` gates when a node may be evaluated at all. Together they bookend a node's lifecycle:
 `propagateWhen` controls when mutation _can start_; `readyWhen` signals when it is _complete_.
@@ -299,6 +346,9 @@ the effects of items earlier — this is how propagation budgets tighten within 
 pass.
 
 This makes collection-level propagation budgets expressible:
+
+> *The budget pattern below illustrates how `propagateWhen` composes with `forEach`. The rollout
+> API — including built-in strategies and budget syntax — is defined by KREP-006.*
 
 ```yaml
 # Exponential rollout — budget doubles each wave

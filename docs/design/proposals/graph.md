@@ -10,8 +10,8 @@ RGD today conflates Kind definition, instance management, and resource compositi
 Graph separates these — providing resource composition alone — making each concern independently
 usable. This enables patterns RGD cannot express: static resource bundles (no CRD needed),
 singletons (multiple contributors, one resource), and decorators (react to existing resources
-without defining a new Kind). Higher-level abstractions like RGD are built _from_ Graph, not
-alongside it; every feature added to Graph automatically benefits every abstraction layered on top.
+without defining a new Kind). Higher-level abstractions like RGD can be built _from_ Graph; every
+feature added to Graph automatically benefits every abstraction layered on top.
 
 Graph was validated by building the full RGD system from it. A single Graph implements the RGD
 controller — creating CRDs, watching instances, managing resources, writing status — all through
@@ -24,7 +24,7 @@ Beyond the RGD proof, Graph enables patterns that are simpler than what RGD can 
   NetworkPolicies. No CRD, no schema, no instance. (The decorator pattern from KREP-003.)
 - [Ingress fan-in](../../../examples/graph/ingress-fanin.yaml) — aggregate Services into a single
   Ingress with dynamic routes. (The aggregated-resource pattern from KREP-003.)
-- [KRO installation](../../../examples/graph/kro-install.yaml) — install kro itself as a Graph.
+- [CoreDNS installation](../../../examples/graph/coredns.yaml) — install CoreDNS as a Graph.
   The static-bundle pattern: dependency-ordered, health-aware, one object replaces a Helm chart.
 - [Singleton](../../../examples/graph/singleton.yaml) — fan-in with priority-based resolution
   when multiple actors claim the same resource.
@@ -215,12 +215,12 @@ computation. The result enters scope under the node's `id` like any other node.
 at scale — like the RGD implementation — require named intermediate computations to remain
 maintainable; `def:` provides them without creating cluster resources.
 
-#### `includeWhen` and `forEach`
+### Node Modifiers
 
-Graph retains `includeWhen` and `forEach` as node-level modifiers with the same semantics as in
-today's RGD. `includeWhen` conditionally excludes a node (making it a prune candidate when false).
-`forEach` stamps a node once per item in a collection. These are not redefined here — see KREP-008
-and KREP-002 respectively.
+`includeWhen` and `forEach` are node-level modifiers — they can be applied to any node type.
+`includeWhen` conditionally excludes a node (making it a prune candidate when false). `forEach`
+stamps a node once per item in a collection. Both retain the same semantics as in today's RGD and
+are not redefined here — see KREP-008 and KREP-002 respectively.
 
 #### Why ref and watch replace externalRef
 
@@ -245,6 +245,41 @@ When the compiler encounters a dynamic GVK, it uses a deferred-type path: the no
 permissively (untyped) until the first reconcile resolves the concrete GVK. This is what makes the
 RGD-from-Graph pattern possible — the user's Kind isn't known at compile time.
 
+### Dependencies
+
+Dependencies are inferred from CEL expressions. If node B's template contains `${A.field}`, B
+depends on A. The compiler builds a DAG from these references and computes topological order. Cycles
+are compile-time errors.
+
+#### Hard Dependencies
+
+A bare field reference creates a hard dependency:
+
+```cel
+${deployment.status.availableReplicas}
+```
+
+Node B cannot evaluate until node A has been applied and its observed state is in scope. This is the
+standard behavior — identical to today's RGD.
+
+#### Soft Dependencies
+
+Optional chaining creates a soft dependency:
+
+```cel
+${deployment.?status.?loadBalancer.orValue("pending")}
+```
+
+A soft dependency is _never_ gated. If the dependency hasn't been evaluated yet, the expression
+resolves to `optional.none()` — the field is omitted from the apply, not set to a zero value.
+`.orValue()` provides an explicit fallback when absence isn't acceptable. If the dependency has been
+evaluated, the full observed state is available.
+
+**Why soft dependencies exist:** Status writeback creates a dependency cycle: the `patch:` node
+references all managed resources, but can't hard-depend on all of them without blocking itself.
+Optional chaining breaks the cycle — the status node runs on every pass, filling in whatever is
+available, progressively transitioning from `IN_PROGRESS` to `ACTIVE`.
+
 ### readyWhen
 
 `readyWhen` is a list of CEL boolean expressions evaluated against the node's live state in the
@@ -262,10 +297,15 @@ cluster. When all are true, the node is considered _ready_.
 
 **readyWhen is a health signal. It does not gate downstream nodes.**
 
-This is an important behavioral difference from today's RGD. In the current implementation, a
-downstream node cannot evaluate until all its dependencies pass `readyWhen`. In Graph, evaluation
-proceeds as soon as dependencies are _in scope_ (have been applied and their observed state is
-available). `readyWhen` determines:
+This is a behavioral difference from today's RGD. In the current implementation, a downstream node
+cannot evaluate until all its dependencies pass `readyWhen`. In Graph, evaluation proceeds as soon as
+dependencies are _in scope_ (have been applied and their observed state is available). This means
+resources that don't need to wait — like a Service referencing a Deployment's labels — can apply
+immediately rather than blocking until the Deployment is fully rolled out. When you do want ordering,
+`propagateWhen` provides explicit gating (see below). The separation gives authors control over what
+waits and what doesn't, rather than coupling all ordering to health checks.
+
+`readyWhen` determines:
 
 1. Whether `.ready()` returns true for this node in CEL expressions
 2. Whether the **Graph itself** is Ready — the Graph's Ready condition is the conjunction of all
@@ -370,48 +410,14 @@ gate propagation to child Graphs, and each child Graph can independently gate pr
 resources — all from the same mechanism, no special-casing per layer. See KREP-006 for the broader
 motivation and design discussion.
 
-### Dependencies
-
-Dependencies are inferred from CEL expressions. If node B's template contains `${A.field}`, B
-depends on A. The compiler builds a DAG from these references and computes topological order. Cycles
-are compile-time errors.
-
-#### Hard Dependencies
-
-A bare field reference creates a hard dependency:
-
-```cel
-${deployment.status.availableReplicas}
-```
-
-Node B cannot evaluate until node A has been applied and its observed state is in scope. This is the
-standard behavior — identical to today's RGD.
-
-#### Soft Dependencies
-
-Optional chaining creates a soft dependency:
-
-```cel
-${deployment.?status.?loadBalancer.orValue("pending")}
-```
-
-A soft dependency is _never_ gated. If the dependency hasn't been evaluated yet, the expression
-resolves to `optional.none()` — the field is omitted from the apply, not set to a zero value.
-`.orValue()` provides an explicit fallback when absence isn't acceptable. If the dependency has been
-evaluated, the full observed state is available.
-
-**Why soft dependencies exist:** Status writeback creates a dependency cycle: the `patch:` node
-references all managed resources, but can't hard-depend on all of them without blocking itself.
-Optional chaining breaks the cycle — the status node runs on every pass, filling in whatever is
-available, progressively transitioning from `IN_PROGRESS` to `ACTIVE`.
-
 ### Nested Graphs
 
 When a node's template is itself a Graph, you get nested composition: a parent Graph that stamps a
 child Graph. You don't strictly need `forEach` for this — a single template node can create one
 child Graph — but the combination of `forEach` + template:{kind: Graph} is the powerful pattern. It
-stamps one child Graph per item in the collection. This is how RGD emerges — a per-RGD Graph stamps
-a per-instance Graph, each with its own scope, its own revisions, and its own lifecycle.
+stamps one child Graph per item in the collection. This is how an RGD-equivalent is expressed — a
+per-RGD Graph stamps a per-instance Graph, each with its own scope, its own revisions, and its own
+lifecycle.
 
 #### Deferral Boundaries
 
@@ -440,7 +446,7 @@ and runs the full compilation pipeline on it. A typo in a child expression, a ty
 child template, or a cycle in a child's dependency graph are all reported on the parent at compile
 time — not deferred until the child CR is created.
 
-## How RGD Emerges from Graph
+## Expressing RGD as Graph
 
 The RGD system is three levels of nested Graphs:
 
@@ -520,7 +526,8 @@ primitive extends. Beyond the core API proposed here, the prototype implements:
 - **`Kind` — a simplified RGD with graph-like semantics.** Defines a new Kubernetes Kind (CRD +
   per-instance Graphs) in a single object. Unlike RGD, Kind uses `readyWhen` and `propagateWhen`
   directly at the spec level, giving instance-level rollout control with no additional machinery.
-  Kind is the intended successor to RGD; the RGD compatibility layer is built on top of Kind.
+  Kind demonstrates how a higher-level abstraction composes Graph primitives; the RGD compatibility
+  layer in the prototype is built on top of Kind.
 - **Propagation control** — rate-limited rollouts, time-based gates, reactive controls (KREP-006
   covers the design; the prototype validates it composes with nested Graphs)
 - **Prometheus metric emission** (`metric:`) — emit gauges driven by CEL expressions

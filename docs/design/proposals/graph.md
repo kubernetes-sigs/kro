@@ -6,7 +6,7 @@ Graph is a new `kro.run/v1alpha1` Kind — the atomic runtime primitive for comp
 resources. A Graph is a set of nodes evaluated in topological order. Create it and its resources
 converge; delete it and they cascade away. It is the simplest possible unit of composition in kro.
 
-RGD today conflates Kind definition, instance management, and resource composition into one object.
+RGD today combines Kind definition, instance management, and resource composition into one object.
 Graph separates these — providing resource composition alone — making each concern independently
 usable. This enables patterns RGD cannot express: static resource bundles (no CRD needed),
 singletons (multiple contributors, one resource), and decorators (react to existing resources
@@ -32,16 +32,18 @@ Beyond the RGD proof, Graph enables patterns that are simpler than what RGD can 
 ### What this KREP covers
 
 **Proposed:** The Graph Kind — node types (`template`, `patch`, `ref`, `watch`, `def`), dependency
-inference from CEL expressions, status conditions (`Compiled`, `Ready`), self-references, and nested
-composition. These are new primitives that do not exist in KRO today.
+inference from CEL expressions, status conditions (`Compiled`, `Ready`), self-references, nested
+composition, and the decoupling of `readyWhen` from dependency gating (consistent with KREP-006's
+design discussion). In Graph, `readyWhen` is a health signal — it does not block downstream nodes.
+RGD's existing gating-on-readiness behavior is unchanged.
 
 **Inherited unchanged from RGD:** `includeWhen`, `forEach`, and CEL expression syntax. These
 mechanisms carry forward with the same semantics and are not redefined by this KREP.
 
-**Directional (defers to respective KREPs):** `propagateWhen` semantics (KREP-006), collection-level
-rollout budgets (KREP-006), and `readyWhen` behavioral differences from the current RGD
-implementation. Sections in this document illustrate how these features compose with Graph's
-recursive structure, but their final API and semantics are defined by their respective KREPs.
+**Adopted from KREP-006:** The `.ready()` and `.updated()` lifecycle signals, and the core semantics
+of `propagateWhen` as an explicit evaluation gate. Sections in this document define how these compose
+with Graph's recursive structure. Rollout strategies (`exponentiallyUpdated`, `linearlyUpdated`),
+collection-level defaults, and budget syntax are KREP-006's to define.
 
 **Relationship to RGD:** Graph is proposed as a sibling primitive. RGD continues to work unchanged.
 We have the option to implement RGD's internals on top of Graph in the future, but for the immediate
@@ -128,10 +130,10 @@ spec:
             - port: 80
 ```
 
-A Graph is namespaced. Its `spec.nodes` is an ordered list where each node has an `id` and exactly
-one type keyword. The `${deployment.metadata.name}` expression in the Service creates a dependency
-edge: the Service cannot evaluate until the Deployment has been applied and its observed state is
-available.
+A Graph is namespaced. Its `spec.nodes` is a list where each node has an `id` and exactly one type
+keyword. Evaluation order is derived from dependencies, not list position. The
+`${deployment.metadata.name}` expression in the Service creates a dependency edge: the Service
+cannot evaluate until the Deployment has been applied and its observed state is available.
 
 ### Node Types
 
@@ -192,7 +194,8 @@ no ownership, no cleanup.
     apiVersion: v1
     kind: Pod
     selector:
-      app: my-app
+      matchLabels:
+        app: my-app
 ```
 
 Downstream nodes use standard CEL list operations:
@@ -215,13 +218,6 @@ computation. The result enters scope under the node's `id` like any other node.
 at scale — like the RGD implementation — require named intermediate computations to remain
 maintainable; `def:` provides them without creating cluster resources.
 
-### Node Modifiers
-
-`includeWhen` and `forEach` are node-level modifiers — they can be applied to any node type.
-`includeWhen` conditionally excludes a node (making it a prune candidate when false). `forEach`
-stamps a node once per item in a collection. Both retain the same semantics as in today's RGD and
-are not redefined here — see KREP-008 and KREP-002 respectively.
-
 #### Why ref and watch replace externalRef
 
 `externalRef` in today's RGD overloads a single field to mean "read one named resource" and "watch a
@@ -236,14 +232,22 @@ values — can be a CEL expression. This enables dynamic GVKs:
 ```yaml
 - id: watchInstances
   watch:
-    apiVersion: ${${schema.spec.schema.group}}/${${schema.spec.schema.apiVersion}}
-    kind: ${${schema.spec.schema.kind}}
-    selector: {}
+    apiVersion: ${'${schema.spec.schema.group}'}/${'${schema.spec.schema.apiVersion}'}
+    kind: ${'${schema.spec.schema.kind}'}
+    selector:
+      matchLabels: {}
 ```
 
 When the compiler encounters a dynamic GVK, it uses a deferred-type path: the node compiles
 permissively (untyped) until the first reconcile resolves the concrete GVK. This is what makes the
 RGD-from-Graph pattern possible — the user's Kind isn't known at compile time.
+
+### Node Modifiers
+
+`includeWhen` and `forEach` are node-level modifiers — they can be applied to any node type.
+`includeWhen` conditionally excludes a node (making it a prune candidate when false). `forEach`
+stamps a node once per item in a collection. Both retain the same semantics as in today's RGD and
+are not redefined here — see KREP-008 and KREP-002 respectively.
 
 ### Dependencies
 
@@ -280,63 +284,6 @@ references all managed resources, but can't hard-depend on all of them without b
 Optional chaining breaks the cycle — the status node runs on every pass, filling in whatever is
 available, progressively transitioning from `IN_PROGRESS` to `ACTIVE`.
 
-### readyWhen
-
-`readyWhen` is a list of CEL boolean expressions evaluated against the node's live state in the
-cluster. When all are true, the node is considered _ready_.
-
-```yaml
-- id: deployment
-  readyWhen:
-    - ${deployment.status.availableReplicas == deployment.spec.replicas}
-  template:
-    apiVersion: apps/v1
-    kind: Deployment
-    ...
-```
-
-**readyWhen is a health signal. It does not gate downstream nodes.**
-
-This is a behavioral difference from today's RGD. In the current implementation, a downstream node
-cannot evaluate until all its dependencies pass `readyWhen`. In Graph, evaluation proceeds as soon as
-dependencies are _in scope_ (have been applied and their observed state is available). This means
-resources that don't need to wait — like a Service referencing a Deployment's labels — can apply
-immediately rather than blocking until the Deployment is fully rolled out. When you do want ordering,
-`propagateWhen` provides explicit gating (see below). The separation gives authors control over what
-waits and what doesn't, rather than coupling all ordering to health checks.
-
-`readyWhen` determines:
-
-1. Whether `.ready()` returns true for this node in CEL expressions
-2. Whether the **Graph itself** is Ready — the Graph's Ready condition is the conjunction of all
-   nodes' `readyWhen` results
-
-### propagateWhen
-
-> *This section defines `propagateWhen`'s core gating semantics within Graph. Rate-limited rollouts,
-> reactive controls, and manual approval gates are proposed separately in KREP-006. The examples
-> here illustrate composability but do not prescribe the final rollout API.*
-
-`propagateWhen` is the complement to `readyWhen`. Where `readyWhen` signals when a node is healthy,
-`propagateWhen` gates when a node may be evaluated at all. Together they bookend a node's lifecycle:
-`propagateWhen` controls when mutation _can start_; `readyWhen` signals when it is _complete_.
-
-```yaml
-- id: service
-  propagateWhen:
-    - ${deployment.ready()}
-  template:
-    apiVersion: v1
-    kind: Service
-    ...
-```
-
-When any `propagateWhen` expression evaluates to false, the node and all its dependents are not
-re-evaluated — they remain in their previous state. When all expressions are true, evaluation
-proceeds normally. The default is `[]` (no gate — evaluate immediately). Where `includeWhen: false`
-prunes a node (deleting its resource), `propagateWhen: false` freezes it — the resource persists in
-its last-applied state.
-
 ### Self-References
 
 Before evaluating a node's expressions, kro GETs the target resource from the API server. The live
@@ -356,7 +303,7 @@ its current state. This enables patterns that require continuity across reconcil
 - **Generation awareness** — compare `metadata.generation` against `status.observedGeneration` to
   detect whether a resource has processed its latest spec
 
-Two derived signals expose node state for use in CEL expressions:
+Two derived signals expose node state for use in CEL expressions (adopted from KREP-006):
 
 ```cel
 deployment.ready()    // true when readyWhen conditions are satisfied
@@ -367,6 +314,71 @@ deployment.updated()  // true when evaluated against the current graph.metadata.
 observed state. `.updated()` reflects whether the node has been applied in the current generation
 (`graph.metadata.generation`, which increments on spec changes): its value is persisted as an
 annotation on the managed resource, so it survives controller restarts and is visible on GET.
+
+### Propagation
+
+Today's RGD gates downstream nodes on upstream readiness — a node cannot evaluate until its
+dependencies pass `readyWhen`. This is implicit propagation control: readiness and ordering are
+coupled. KREP-006 argues these should be separate concerns: `readyWhen` signals when a node is
+_healthy_; `propagateWhen` gates when a node may _mutate_. Graph implements this decoupling.
+
+#### `readyWhen`
+
+`readyWhen` is a list of CEL boolean expressions evaluated against the node's live state. When all
+are true, the node is considered _ready_.
+
+```yaml
+- id: deployment
+  readyWhen:
+    - ${deployment.status.availableReplicas == deployment.spec.replicas}
+  template:
+    apiVersion: apps/v1
+    kind: Deployment
+    ...
+```
+
+In Graph, `readyWhen` is purely a health signal. Downstream nodes proceed as soon as their
+dependencies are _in scope_ (applied, observed state available) — they do not wait for readiness.
+This means resources that don't need to wait — like a Service referencing a Deployment's labels —
+can apply immediately rather than blocking until the Deployment is fully rolled out.
+
+`readyWhen` determines:
+
+1. Whether `.ready()` returns true for this node in CEL expressions
+2. Whether the **Graph itself** is Ready — the Graph's Ready condition is the conjunction of all
+   nodes' `readyWhen` results
+
+#### `propagateWhen`
+
+When you _do_ want to gate on readiness (or any other condition), `propagateWhen` makes the ordering
+explicit and author-controlled:
+
+```yaml
+- id: migration
+  propagateWhen:
+    - ${database.ready()}
+  template:
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: schema-migration
+    spec:
+      template:
+        spec:
+          containers:
+            - name: migrate
+              image: myapp/migrate:latest
+          restartPolicy: Never
+```
+
+When any `propagateWhen` expression evaluates to false, the node retains its last-applied state —
+it is not re-evaluated. When all expressions are true, evaluation proceeds normally. The default is
+`[]` (no gate — evaluate immediately). Where `includeWhen: false` prunes a node (deleting its
+resource), `propagateWhen: false` freezes it — the resource persists in its last-applied state.
+
+The separation gives authors control over what waits and what doesn't, rather than coupling all
+ordering to health checks. Most nodes need no gate at all — they apply as soon as their
+dependencies are in scope. The few that need sequencing declare it explicitly.
 
 #### Collections
 
@@ -388,7 +400,8 @@ pass.
 This makes collection-level propagation budgets expressible:
 
 > *The budget pattern below illustrates how `propagateWhen` composes with `forEach`. The rollout
-> API — including built-in strategies and budget syntax — is defined by KREP-006.*
+> API — including built-in strategies, budget syntax, and collection defaults — is defined by
+> KREP-006.*
 
 ```yaml
 # Exponential rollout — budget doubles each wave
@@ -413,38 +426,41 @@ motivation and design discussion.
 ### Nested Graphs
 
 When a node's template is itself a Graph, you get nested composition: a parent Graph that stamps a
-child Graph. You don't strictly need `forEach` for this — a single template node can create one
-child Graph — but the combination of `forEach` + template:{kind: Graph} is the powerful pattern. It
-stamps one child Graph per item in the collection. This is how an RGD-equivalent is expressed — a
-per-RGD Graph stamps a per-instance Graph, each with its own scope, its own revisions, and its own
-lifecycle.
+child Graph as a real cluster object. The child Graph is persisted, reconciled independently, and
+carries its own conditions and revision history — providing full debuggability via `kubectl get
+graph`. You don't strictly need `forEach` for this — a single template node can create one child
+Graph — but the combination of `forEach` + template:{kind: Graph} is the powerful pattern. It stamps
+one child Graph per item in the collection. This is how an RGD-equivalent is expressed — a per-RGD
+Graph stamps a per-instance Graph, each with its own scope, its own revisions, and its own lifecycle.
 
 #### Deferral Boundaries
 
-Child Graph CEL expressions live as literal strings inside the parent's template. The parent
-compiler sees them as opaque data, not as CEL. The evaluation model uses a nesting convention to
-manage this:
+Child Graph CEL expressions live as literal strings inside the parent's template. Deferral is not a
+special syntax or preprocessing step — it falls out of CEL string semantics. To produce a literal
+`${expr}` in the child's spec, the parent writes a CEL string expression whose value is that
+literal:
 
-- `${...}` — evaluated at the current level
-- `${${...}}` — the outer `${}` is stripped (producing a literal `${...}` string), evaluated one
-  level down by the child's controller
+- `${...}` — evaluated by the current Graph
+- `${'${...}'}` — a CEL string literal; the parent evaluates it to produce the text `${...}`, which
+  the child Graph then evaluates at its own scope
 
 ```yaml
 # Parent Graph (L0) evaluates this — bakes the RGD name into the child spec:
 name: ${rgd.metadata.name}
 
-# Parent strips outer ${}, child Graph (L1) evaluates the inner expression:
-group: ${${rgd.spec.schema.group}}
+# Parent produces literal "${rgd.spec.schema.group}" — child Graph (L1) evaluates it:
+group: ${'${rgd.spec.schema.group}'}
 ```
 
-This composes to arbitrary depth. `${${${...}}}` defers two levels.
+This composes to arbitrary depth. `${'${"${...}"}'}` defers two levels — each layer evaluates one
+string literal, peeling off one level of quoting.
 
 #### Recursive Compilation
 
-When the child template is a Graph, the compiler extracts the child spec, strips one deferral level,
-and runs the full compilation pipeline on it. A typo in a child expression, a type mismatch in a
-child template, or a cycle in a child's dependency graph are all reported on the parent at compile
-time — not deferred until the child CR is created.
+When the child template is a Graph, the compiler extracts the child spec, resolves the parent-level
+string literals to recover the child's expressions, and runs the full compilation pipeline on it. A
+typo in a child expression, a type mismatch in a child template, or a cycle in a child's dependency
+graph are all reported on the parent at compile time — not deferred until the child CR is created.
 
 ## Expressing RGD as Graph
 
@@ -510,7 +526,7 @@ like `Compiled` never appear on user resources.
 | KREP-001 (Status Conditions)               | Graph changes where conditions live. System conditions (`Compiled`, `Ready`) exist on Graph objects — never on user resources. Users define their own status via `patch:` nodes. This separates system health (observable on Graph objects) from user-facing status (controlled by the graph author).                                                                                      |
 | KREP-002 (Collections)                     | Adopted unchanged. Graph extends it: when a forEach node's template is a Graph, you get recursive composition.                                                                                                                                                                                                                                                                             |
 | KREP-003 (Decorators)                      | A Decorator is naturally a Graph with `watch:` + `forEach`. No special runtime support needed. Graph also resolves the Singleton problem KREP-003 identified — a Graph needs no schema or CRD to self-instantiate.                                                                                                                                                                         |
-| KREP-006 (Propagation Control)             | This KREP defines `propagateWhen`'s core semantics. KREP-006 provides the broader motivation (rate controls, reactive controls, manual controls) and design discussion. Because Graph is recursive, propagateWhen composes at every level of nesting — an RGD gets propagation control over instances, and each instance gets propagation control over resources, from a single mechanism. |
+| KREP-006 (Propagation Control)             | Graph adopts KREP-006's lifecycle signals (`.ready()`, `.updated()`) and core `propagateWhen` gating semantics. KREP-006 provides the broader motivation (rate controls, reactive controls, manual controls), rollout strategies, and collection defaults. Because Graph is recursive, propagateWhen composes at every level of nesting — an RGD gets propagation control over instances, and each instance gets propagation control over resources, from a single mechanism. |
 | KREP-008 (includeWhen Resource References) | Graph implements `includeWhen` as a first-class modifier — when false, the node is excluded and becomes a prune candidate. This is distinct from `propagateWhen` (which freezes in place). In RGD, KREP-008 added complexity to make includeWhen reference upstream resources; in Graph, that works naturally because all modifiers participate in dependency inference.                   |
 | KREP-011 (Variables)                       | `def:` is Graph's implementation. Same semantics.                                                                                                                                                                                                                                                                                                                                          |
 | KREP-013 (Graph Revisions)                 | Applies to Graph unchanged. Because Graph is recursive, each nested Graph gets independent revisions. An RGD spec change revisions the L1 Graph; an instance spec change revisions L2. These are distinct — rolling back an RGD change does not require rolling back every instance.                                                                                                       |

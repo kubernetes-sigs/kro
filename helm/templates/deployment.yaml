@@ -1,5 +1,6 @@
 {{- $pprofEnabled := .Values.debug.pprof.enabled }}
 {{- $pprofPort := .Values.debug.pprof.port }}
+{{- $healthProbePort := regexFind "[0-9]+$" .Values.config.healthProbeBindAddress | default "8079" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -29,8 +30,21 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "kro.serviceAccountName" . }}
+      {{- if .Values.deployment.hostNetwork }}
+      hostNetwork: true
+      {{- end }}
+      {{- with .Values.deployment.dnsPolicy }}
+      dnsPolicy: {{ . }}
+      {{- end }}
+      {{- with .Values.deployment.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.deployment.podSecurityContext | nindent 8 }}
+      {{- with .Values.deployment.extraVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -177,16 +191,20 @@ spec:
             - --pprof-bind-address
             - ":{{ $pprofPort }}"
             {{- end }}
+          {{- with .Values.deployment.extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
-              port: 8079
+              port: {{ $healthProbePort }}
             initialDelaySeconds: 15
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /readyz
-              port: 8079
+              port: {{ $healthProbePort }}
             initialDelaySeconds: 10
             periodSeconds: 10
       {{- with .Values.deployment.nodeSelector }}

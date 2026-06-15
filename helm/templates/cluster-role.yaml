@@ -3,7 +3,7 @@ kind: ClusterRole
 metadata:
   annotations:
     kubernetes.io/description: |
-{{- if .Values.rbac.legacy }}
+{{- if eq .Values.rbac.mode "unrestricted" }}
       This ClusterRole grants cluster-wide admin access for the kro controller.
 {{- else }}
       This ClusterRole grants access for the kro controller.

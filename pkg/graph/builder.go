@@ -835,7 +835,15 @@ func buildStatusSchema(
 			return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression.UserExpression(), fieldDescriptor.Path, err)
 		}
 
-		statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
+		outputType := checkedAST.OutputType()
+		if conversion.IsBytesOrOptionalBytes(outputType) {
+			return nil, nil, nil, fmt.Errorf(
+				"status expression %q at path %q returns type %q, which cannot be represented in a Kubernetes object; wrap it in base64.encode(...) or string(...)",
+				expression.UserExpression(), fieldDescriptor.Path, outputType.String(),
+			)
+		}
+
+		statusTypeMap[fieldDescriptor.Path] = outputType
 	}
 
 	// convert the CEL types to OpenAPI schema - best effort.
@@ -1227,6 +1235,17 @@ func validateAndCompileTemplates(
 // validateExpressionType verifies that the CEL expression output type matches
 // the expected type. Returns an error if there is a type mismatch.
 func validateExpressionType(outputType, expectedType *cel.Type, expression, resourceID, path string, typeProvider *krocel.DeclTypeProvider) error {
+	// CEL `bytes` cannot be represented in a Kubernetes object: it resolves to a
+	// Go []byte and panics ("cannot deep copy []uint8") in apimachinery's
+	// DeepCopyJSONValue when the resolved object is deep-copied or persisted.
+	// Reject it here rather than letting it crash the controller at runtime.
+	if conversion.IsBytesOrOptionalBytes(outputType) {
+		return fmt.Errorf(
+			"expression %q at path %q in resource %q returns type %q, which cannot be represented in a Kubernetes object; wrap it in base64.encode(...) or string(...)",
+			expression, path, resourceID, outputType.String(),
+		)
+	}
+
 	// Try CEL's built-in nominal type checking first
 	if expectedType.IsAssignableType(outputType) {
 		return nil

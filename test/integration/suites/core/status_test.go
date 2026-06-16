@@ -136,6 +136,62 @@ var _ = Describe("Status", func() {
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
+	It("should reject a status field whose expression returns bytes", func(ctx SpecContext) {
+		// Regression test for the "cannot deep copy []uint8" controller panic:
+		// a status field returning CEL bytes (e.g. hash.sha256) resolves to a Go
+		// []byte, which is not representable in a Kubernetes object. Such RGDs
+		// must be rejected at build time so they never reach the instance
+		// controller and crash it.
+		rgd := generator.NewResourceGraphDefinition("test-status-bytes",
+			generator.WithSchema(
+				"StatusBytes", "v1alpha1",
+				map[string]interface{}{
+					"name": "string",
+				},
+				map[string]interface{}{
+					"digest": "${hash.sha256(configmap.metadata.name)}",
+				},
+			),
+			generator.WithResource("configmap", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}",
+				},
+				"data": map[string]interface{}{
+					"key": "value",
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		//nolint:dupl // we have many test cases checking for inactivity but with different conditions
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name: rgd.Name,
+			}, rgd)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
+
+			var crdCondition *krov1alpha1.Condition
+			for _, cond := range rgd.Status.Conditions {
+				if cond.Type == resourcegraphdefinition.Ready {
+					crdCondition = &cond
+					break
+				}
+			}
+
+			g.Expect(crdCondition).ToNot(BeNil())
+			g.Expect(crdCondition.Status).To(Equal(metav1.ConditionFalse))
+			g.Expect(*crdCondition.Message).To(ContainSubstring("cannot be represented in a Kubernetes object"))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	})
+
 	It("should interpolate string templates in instance status", func(ctx SpecContext) {
 		// This test verifies that status fields with string templates like
 		// "${configmap.metadata.name}-${configmap.metadata.namespace}" are properly

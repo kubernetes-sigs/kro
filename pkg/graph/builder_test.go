@@ -2217,6 +2217,81 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			wantErr: true,
 			errMsg:  "type mismatch",
 		},
+		{
+			name: "status field returning bytes is rejected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"digest": "${hash.sha256(configmap.metadata.name)}",
+					},
+				),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}",
+					},
+					"data": map[string]interface{}{
+						"key": "value",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "cannot be represented in a Kubernetes object",
+		},
+		{
+			name: "resource field returning bytes is rejected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "test-config",
+					},
+					"data": map[string]interface{}{
+						"digest": "${hash.sha256(schema.spec.name)}",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "cannot be represented in a Kubernetes object",
+		},
+		{
+			name: "status field with base64-encoded hash is accepted",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"digest": "${base64.encode(hash.sha256(configmap.metadata.name))}",
+					},
+				),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}",
+					},
+					"data": map[string]interface{}{
+						"key": "value",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

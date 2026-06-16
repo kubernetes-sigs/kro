@@ -225,3 +225,25 @@ func TestGoNativeType_Timestamp(t *testing.T) {
 	assert.NoError(t, err, "Should be JSON marshallable")
 	assert.NotEmpty(t, marshalled)
 }
+
+func TestIsBytesOrOptionalBytes(t *testing.T) {
+	tests := []struct {
+		name string
+		t    *cel.Type
+		want bool
+	}{
+		{name: "bytes", t: cel.BytesType, want: true},
+		{name: "optional bytes", t: cel.OptionalType(cel.BytesType), want: true},
+		{name: "string", t: cel.StringType, want: false},
+		{name: "optional string", t: cel.OptionalType(cel.StringType), want: false},
+		{name: "int", t: cel.IntType, want: false},
+		{name: "bool", t: cel.BoolType, want: false},
+		{name: "list of bytes", t: cel.ListType(cel.BytesType), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsBytesOrOptionalBytes(tt.t))
+		})
+	}
+}

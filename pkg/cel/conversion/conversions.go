@@ -176,3 +176,21 @@ func IsBoolOrOptionalBool(t *cel.Type) bool {
 	optionalBool := cel.OptionalType(cel.BoolType)
 	return optionalBool.IsAssignableType(t)
 }
+
+// IsBytesOrOptionalBytes checks if a CEL type is bytes or optional_type(bytes).
+// CEL `bytes` (e.g. the result of hash.sha256/hash.md5/hash.fnv64a) cannot be
+// represented in a Kubernetes unstructured object: it resolves to a Go []byte,
+// which is not a valid JSON value and panics ("cannot deep copy []uint8") in
+// apimachinery's runtime.DeepCopyJSONValue when the object is deep-copied or
+// persisted. kro therefore rejects bytes-typed field/status expressions at RGD
+// compile time instead of letting them crash the controller at runtime.
+func IsBytesOrOptionalBytes(t *cel.Type) bool {
+	// Note: A.IsAssignableType(B) means "A accepts B", so we check if bytes accepts t.
+	if cel.BytesType.IsAssignableType(t) {
+		return true
+	}
+
+	// Check if it's optional_type(bytes)
+	optionalBytes := cel.OptionalType(cel.BytesType)
+	return optionalBytes.IsAssignableType(t)
+}

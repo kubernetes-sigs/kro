@@ -49,6 +49,7 @@ func Register(registry prometheus.Registerer) {
 		DynHandlerAttachTotal,
 		DynHandlerDetachTotal,
 		DynHandlerErrorsTotal,
+		DynReconcilePanicsTotal,
 		DynInformerSyncDuration,
 		DynInformerEventsTotal,
 		DynWatchCount,

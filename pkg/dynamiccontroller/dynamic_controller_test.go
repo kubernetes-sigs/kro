@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -37,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
@@ -476,6 +478,51 @@ func TestProcessNextWorkItem_RequeueBehaviors(t *testing.T) {
 		result := dc.processNextWorkItem(t.Context())
 		assert.False(t, result)
 	})
+}
+
+// TestProcessNextWorkItem_RecoversPanic verifies a panicking handler is
+// recovered per item and rate-limit requeued instead of crashing the process.
+func TestProcessNextWorkItem_RecoversPanic(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	oi := ObjectIdentifiers{
+		NamespacedName: types.NamespacedName{Name: "test", Namespace: "default"},
+		GVR:            parentGVR,
+	}
+
+	cfg := testConfig()
+	cfg.MinRetryDelay = 1 * time.Millisecond
+	cfg.MaxRetryDelay = 5 * time.Millisecond
+	cfg.RateLimit = 1000
+	dc := NewDynamicController(noopLogger(), cfg, client, mapper)
+	dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		panic("boom")
+	}))
+
+	// DynReconcilePanicsTotal is a never-reset global, so assert on the delta.
+	// Relies on parentGVR being unique here; do not run with t.Parallel().
+	gvrKey := keyFromGVR(parentGVR)
+	before := testutil.ToFloat64(metrics.DynReconcilePanicsTotal.WithLabelValues(gvrKey))
+
+	dc.queue.Add(oi)
+
+	// The panic must be recovered: processNextWorkItem returns normally (true)
+	// instead of crashing the process.
+	result := dc.processNextWorkItem(t.Context())
+	assert.True(t, result)
+
+	// The recovered panic is treated as a generic error and rate-limit requeued.
+	require.Eventually(t, func() bool {
+		return dc.queue.Len() == 1
+	}, 100*time.Millisecond, 1*time.Millisecond, "item should be requeued after a recovered panic")
+
+	// The panic counter for this GVR was incremented.
+	after := testutil.ToFloat64(metrics.DynReconcilePanicsTotal.WithLabelValues(gvrKey))
+	assert.Equal(t, before+1, after, "reconcile panic metric should increment")
 }
 
 func TestGracefulShutdown_Timeout(t *testing.T) {

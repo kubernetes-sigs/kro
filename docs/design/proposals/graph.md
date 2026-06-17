@@ -2,11 +2,11 @@
 
 ## Summary
 
-Graph is a new `kro.run/v1alpha1` Kind — the atomic runtime primitive for composing Kubernetes
-resources. A Graph is a set of nodes evaluated in topological order. Create it and its resources
-converge; delete it and they cascade away. It is the simplest possible unit of composition in kro.
+Graph is a new `kro.run/v1alpha1` Kind — the atomic primitive for composing Kubernetes resources. A
+Graph is a set of nodes evaluated in topological order. Create it and its resources converge; delete
+it and they cascade away. It is the simplest possible unit of composition in kro.
 
-RGD today combines Kind definition, instance management, and resource composition into one object.
+RGD today combines CRD management, instance management, and resource composition into one object.
 Graph separates these — providing resource composition alone — making each concern independently
 usable. This enables patterns RGD cannot express: static resource bundles (no CRD needed),
 singletons (multiple contributors, one resource), and decorators (react to existing resources
@@ -60,26 +60,15 @@ the Kinds those Graphs implement, never with Graph objects directly. Future work
 scoping (short-lived tokens, caller credentials, per-Graph service accounts) applies uniformly to
 all KRO primitives and is out of scope for this KREP.
 
-## Motivation: Graph as Scope
+## Graph as a Scope
 
-A Graph is an **isolated scope**. Its nodes form a flat namespace — private, visible only within the
-Graph — with spec as input and status as output. Nothing inside a Graph is reachable from outside
-except through the Kubernetes resource boundary: the Graph object's own spec and status fields.
-
-This isolation has three structural effects:
-
-1. **Concurrency is a consequence of scope boundaries.** A `forEach` over 1000 instances stamps 1000
-   independent Graphs, each with its own scope and lifecycle, each reconciled independently.
-   Parallelism isn't a feature of the evaluation loop — it emerges from the isolation.
-
-2. **Propagation is scope-local.** A `propagateWhen` gate within a child Graph is invisible to the
-   parent. The parent sees only the child's `Ready` condition. Rollout control composes without
-   leaking — a canary strategy inside one instance doesn't slow or block sibling instances.
-
-3. **Communication is explicit.** Graphs talk to each other only through the resources that bind
-   them: the spec of a child Graph stamped by a parent, a `ref` to a resource managed by another
-   Graph, or a `watch` on a Kind whose instances are managed elsewhere. There is no shared memory,
-   no implicit coupling, no cross-scope references.
+A Graph is analogous to a **scope** in traditional programming languages. Its nodes form a flat
+namespace — private, visible only within the Graph — with spec as input and status as output.
+Nothing inside a Graph is reachable from outside except through the Kubernetes resource boundary:
+the Graph object's own spec and status fields. Concurrency is a structural consequence of this
+isolation: a `forEach` over 1000 instances stamps 1000 independent Graphs, each reconciled
+independently. Parallelism isn't a feature of the evaluation loop — it emerges from the scope
+boundary.
 
 ## Proposed API
 
@@ -203,14 +192,11 @@ Pure computation — no Kubernetes resource created or read. The result enters s
       app: ${deployment.metadata.labels['app']}
 ```
 
-#### Everything is a CEL expression
+#### Dynamic GVKs
 
-Every string field in a node body — including `apiVersion`, `kind`, `metadata.name`, and selector
-values — can be a CEL expression. Dynamic evaluation is the general case; statically-known GVKs are
-an optimization that enables compile-time type checking. When the compiler encounters a dynamic GVK,
-it uses a deferred-type path: the node compiles permissively (untyped) until the first reconcile
-resolves the concrete GVK. This is what makes the RGD-from-Graph pattern possible — the user's Kind
-isn't known at compile time.
+A node's `apiVersion`, `kind`, and `metadata.name` can be CEL expressions. This enables patterns
+where the target resource type isn't known at author time — for example, watching instances of a
+Kind defined by an RGD whose schema is only known at runtime:
 
 ```yaml
 - id: watchInstances
@@ -228,11 +214,11 @@ isn't known at compile time.
 stamps a node once per item in a collection. Both retain the same semantics as in today's RGD and
 are not redefined here — see KREP-008 and KREP-002 respectively.
 
-| Modifier | Question it answers | When false | Defined in |
-| --- | --- | --- | --- |
-| `includeWhen` | Should this node exist? | Prune — resource deleted | KREP-008 |
-| `propagateWhen` | May this node mutate now? | Freeze — last-applied state persists | KREP-006 |
-| `readyWhen` | Is this node healthy? | Signal only — Graph not Ready | (inherited from RGD) |
+| Modifier        | Question it answers       | When false                           | Defined in           |
+| --------------- | ------------------------- | ------------------------------------ | -------------------- |
+| `includeWhen`   | Should this node exist?   | Prune — resource deleted             | KREP-008             |
+| `propagateWhen` | May this node mutate now? | Freeze — last-applied state persists | KREP-006             |
+| `readyWhen`     | Is this node healthy?     | Signal only — Graph not Ready        | (inherited from RGD) |
 
 ### Dependencies
 
@@ -287,12 +273,11 @@ KREP-006 for semantics, strategies, and collection-level defaults.
 ### Nested Graphs
 
 A `template:` node can contain any Kind — including Graph itself. Nesting isn't an opt-in feature;
-it emerges from the Kubernetes API. This KREP defines deferral and recursive-compilation semantics
-because nesting cannot be prevented, only left undefined.
+it emerges from the Kubernetes API and Graph semantics.
 
 When a node's template is a Graph, you get nested composition: a parent Graph that stamps a child
-Graph as a real cluster object. The child is persisted, reconciled independently, and carries its own
-conditions and revision history — providing full debuggability via `kubectl get graph`. The
+Graph as a real cluster object. The child is persisted, reconciled independently, and carries its
+own conditions and revision history — providing full debuggability via `kubectl get graph`. The
 combination of `forEach` + template:{kind: Graph} stamps one child Graph per item in a collection.
 This is how an RGD-equivalent is expressed — a per-RGD Graph stamps a per-instance Graph, each with
 its own scope, its own revisions, and its own lifecycle.
@@ -366,33 +351,33 @@ intervention.
 If compilation fails, Ready is False with reason NotCompiled. A single alarm on Ready covers both
 compilation failures and runtime issues.
 
-| Ready Reason | Status  | Meaning                           |
-| ------------ | ------- | --------------------------------- |
-| Ready        | True    | All nodes applied and ready       |
-| NotReady     | Unknown | readyWhen not yet met             |
-| Pending      | Unknown | Waiting for upstream data         |
-| NotCompiled  | False   | Spec is invalid                   |
-| Conflict     | False   | SSA field ownership contested     |
-| Error        | False   | Client request failed (4xx)       |
-| SystemError  | False   | Infrastructure failure (5xx)      |
+| Ready Reason | Status  | Meaning                       |
+| ------------ | ------- | ----------------------------- |
+| Ready        | True    | All nodes applied and ready   |
+| NotReady     | Unknown | readyWhen not yet met         |
+| Pending      | Unknown | Waiting for upstream data     |
+| NotCompiled  | False   | Spec is invalid               |
+| Conflict     | False   | SSA field ownership contested |
+| Error        | False   | Client request failed (4xx)   |
+| SystemError  | False   | Infrastructure failure (5xx)  |
 
 User-defined status does not live on the Graph object. It lives on custom resources and is written
 via `patch:` nodes. The Graph's status contains only controller-managed conditions.
 
 ## Relationship to Existing KREPs
 
-| KREP | Relationship |
-| --- | --- |
-| KREP-001 (Status Conditions) | System conditions (`Compiled`, `Ready`) exist on Graph objects — never on user resources. Users define their own status via `patch:` nodes. |
-| KREP-002 (Collections) | Adopted unchanged. Graph extends it: when a forEach node's template is a Graph, you get recursive composition. |
-| KREP-003 (Decorators) | A Decorator is naturally a Graph with `watch:` + `forEach`. No special runtime support needed. |
-| KREP-006 (Propagation Control) | Graph adopts KREP-006's lifecycle signals and `propagateWhen` gating. Because Graph is recursive, propagation composes at every nesting level. KREP-006 defines the API. |
-| KREP-008 (includeWhen) | Graph implements `includeWhen` as a first-class modifier. Dependency inference works naturally — no special handling needed. |
-| KREP-011 (Variables) | `def:` is Graph's implementation. Same semantics. |
-| KREP-013 (Graph Revisions) | Applies unchanged. Each nested Graph gets independent revisions. |
-| KREP-014 (Resource Lifecycles) | Graph's node types implicitly define lifecycle: `template:` = delete-on-prune, `patch:` = release-fields-on-prune. Per-node lifecycle policies are a natural follow-on. |
-| KREP-018 (Partial Dependencies) | Soft dependencies (`?.`) address the taken-branch problem — the untaken branch uses optional chaining rather than creating a hard gate. |
-| KREP-019 (Deferred Fields) | Graph's `?.` optional chaining is the implementation of this KREP. |
+| KREP                            | Relationship                                                                                                                                                             |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| KREP-001 (Status Conditions)    | System conditions (`Compiled`, `Ready`) exist on Graph objects — never on user resources. Users define their own status via `patch:` nodes.                              |
+| KREP-002 (Collections)          | Adopted unchanged. Graph extends it: when a forEach node's template is a Graph, you get recursive composition.                                                           |
+| KREP-003 (Decorators)           | A Decorator is naturally a Graph with `watch:` + `forEach`. No special runtime support needed.                                                                           |
+| KREP-006 (Propagation Control)  | Graph adopts KREP-006's lifecycle signals and `propagateWhen` gating. Because Graph is recursive, propagation composes at every nesting level. KREP-006 defines the API. |
+| KREP-008 (includeWhen)          | Graph implements `includeWhen` as a first-class modifier. Dependency inference works naturally — no special handling needed.                                             |
+| KREP-011 (Variables)            | `def:` is Graph's implementation. Same semantics.                                                                                                                        |
+| KREP-013 (Graph Revisions)      | Applies unchanged. Each nested Graph gets independent revisions.                                                                                                         |
+| KREP-014 (Resource Lifecycles)  | Graph's node types implicitly define lifecycle: `template:` = delete-on-prune, `patch:` = release-fields-on-prune. Per-node lifecycle policies are a natural follow-on.  |
+| KREP-018 (Partial Dependencies) | Soft dependencies (`?.`) address the taken-branch problem — the untaken branch uses optional chaining rather than creating a hard gate.                                  |
+| KREP-019 (Deferred Fields)      | Graph's `?.` optional chaining is the implementation of this KREP.                                                                                                       |
 
 ## Future Work
 

@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
@@ -49,7 +50,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
 )
 
-// NewBuilder creates a new GraphBuilder instance.
+// NewBuilder creates a new GraphBuilder instance from cluster configuration.
 func NewBuilder(clientConfig *rest.Config, httpClient *http.Client) (*Builder, error) {
 	schemaResolver, err := schemaresolver.NewCombinedResolver(clientConfig, httpClient)
 	if err != nil {
@@ -66,6 +67,21 @@ func NewBuilder(clientConfig *rest.Config, httpClient *http.Client) (*Builder, e
 		restMapper:     rm,
 	}
 	return rgBuilder, nil
+}
+
+// ScopeResolver provides resource scope information needed during graph building.
+// This is a minimal interface extracted from k8s RESTMapper for offline validation.
+type ScopeResolver interface {
+	RESTMapping(gk runtimeschema.GroupKind, versions ...string) (*meta.RESTMapping, error)
+}
+
+// NewBuilderWithResolver creates a new GraphBuilder with custom schema resolver and scope resolver.
+// This allows offline validation using embedded schemas or file-based CRD resolution.
+func NewBuilderWithResolver(schemaResolver resolver.SchemaResolver, restMapper ScopeResolver) *Builder {
+	return &Builder{
+		schemaResolver: schemaResolver,
+		restMapper:     restMapper,
+	}
 }
 
 // Builder is an object that is responsible for constructing and managing
@@ -94,7 +110,7 @@ func NewBuilder(clientConfig *rest.Config, httpClient *http.Client) (*Builder, e
 type Builder struct {
 	// schemaResolver is used to resolve the OpenAPI schema for the resources.
 	schemaResolver resolver.SchemaResolver
-	restMapper     meta.RESTMapper
+	restMapper     ScopeResolver
 }
 
 // RGDConfig holds RGD runtime configuration parameters.

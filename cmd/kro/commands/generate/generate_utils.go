@@ -25,6 +25,12 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+// defaultRGDConfig is the default RGD configuration for CLI operations
+var defaultRGDConfig = graph.RGDConfig{
+	MaxCollectionSize:          1000,
+	MaxCollectionDimensionSize: 10,
+}
+
 func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, error) {
 	set, err := kroclient.NewSet(kroclient.Config{})
 	if err != nil {
@@ -38,7 +44,7 @@ func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, er
 		return nil, fmt.Errorf("failed to create graph builder: %w", err)
 	}
 
-	rgdGraph, err := builder.NewResourceGraphDefinition(rgd)
+	rgdGraph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create resource graph definition: %w", err)
 	}

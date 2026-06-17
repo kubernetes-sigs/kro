@@ -6,6 +6,11 @@ Graph is a new `kro.run/v1alpha1` Kind — the atomic primitive for composing Ku
 Graph is a set of nodes evaluated in topological order. Create it and its resources converge; delete
 it and they cascade away. It is the simplest possible unit of composition in kro.
 
+A Graph is analogous to a **scope** in traditional programming languages. Its nodes form a flat
+namespace — private, visible only within the Graph — with spec as input and status as output.
+Nothing inside a Graph is reachable from outside except through the Kubernetes resource boundary:
+the Graph object's own spec and status fields. Graphs are reconciled independently and in parallel.
+
 RGD today combines CRD management, instance management, and resource composition into one object.
 Graph separates these — providing resource composition alone — making each concern independently
 usable. This enables patterns RGD cannot express: static resource bundles (no CRD needed),
@@ -59,16 +64,6 @@ RGDs/Graphs; consumers (narrow permissions scoped to the CRD the author created)
 the Kinds those Graphs implement, never with Graph objects directly. Future work on credential
 scoping (short-lived tokens, caller credentials, per-Graph service accounts) applies uniformly to
 all KRO primitives and is out of scope for this KREP.
-
-## Graph as a Scope
-
-A Graph is analogous to a **scope** in traditional programming languages. Its nodes form a flat
-namespace — private, visible only within the Graph — with spec as input and status as output.
-Nothing inside a Graph is reachable from outside except through the Kubernetes resource boundary:
-the Graph object's own spec and status fields. Concurrency is a structural consequence of this
-isolation: a `forEach` over 1000 instances stamps 1000 independent Graphs, each reconciled
-independently. Parallelism isn't a feature of the evaluation loop — it emerges from the scope
-boundary.
 
 ## Proposed API
 
@@ -210,9 +205,9 @@ Kind defined by an RGD whose schema is only known at runtime:
 ### Node Modifiers
 
 `includeWhen` and `forEach` are node-level modifiers — they can be applied to any node type.
-`includeWhen` conditionally excludes a node (making it a prune candidate when false). `forEach`
-stamps a node once per item in a collection. Both retain the same semantics as in today's RGD and
-are not redefined here — see KREP-008 and KREP-002 respectively.
+`includeWhen` conditionally includes a node — when false, the node becomes a prune candidate.
+`forEach` stamps a node once per item in a collection. Both retain the same semantics as in today's
+RGD and are not redefined here — see KREP-008 and KREP-002 respectively.
 
 | Modifier        | Question it answers       | When false                           | Defined in           |
 | --------------- | ------------------------- | ------------------------------------ | -------------------- |
@@ -261,9 +256,20 @@ available.
 
 A node evaluates as soon as its hard dependencies are in scope — meaning they have been applied and
 their observed state is available from the cluster. Nodes do not wait for dependencies to pass
-`readyWhen`. This is what enables status writeback via soft dependencies: a `patch:` node can
-reference all managed resources and run on every reconcile pass, progressively filling in available
-fields without deadlocking on readiness.
+`readyWhen`.
+
+Consider a Deployment and a Service: the Service's selector references the Deployment's labels.
+Under ready-gating, the Service cannot be created until the Deployment's replicas are available —
+minutes of unnecessary waiting. Under scope-gating, the Service is created as soon as the Deployment
+exists and its labels are observable (seconds). The same pattern appears broadly: an EC2
+NetworkInterface can attach to an Instance as soon as the Instance ID is known, without waiting for
+the Instance to pass health checks. Ready-gating forces sequential convergence; scope-gating lets
+the graph flow as fast as data allows, with `propagateWhen` available for cases where explicit
+health gates are needed.
+
+This enables RGD-as-Graph's status writeback via soft dependencies: a `patch:` node can reference
+all managed resources and run on every reconcile pass, progressively filling in available fields
+without deadlocking on readiness.
 
 `propagateWhen` (KREP-006) provides explicit gating when authors need to sequence mutations on
 health or other conditions. `readyWhen` determines the Graph's overall Ready condition and powers
@@ -280,7 +286,10 @@ Graph as a real cluster object. The child is persisted, reconciled independently
 own conditions and revision history — providing full debuggability via `kubectl get graph`. The
 combination of `forEach` + template:{kind: Graph} stamps one child Graph per item in a collection.
 This is how an RGD-equivalent is expressed — a per-RGD Graph stamps a per-instance Graph, each with
-its own scope, its own revisions, and its own lifecycle.
+its own scope, its own revisions, and its own lifecycle. Within a single Graph, nodes evaluate
+serially in topological order — one API call per node per reconcile pass. Across Graphs,
+reconciliation is fully parallel: each Graph object is an independent work item in the controller's
+queue.
 
 #### Deferral Boundaries
 

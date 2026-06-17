@@ -54,17 +54,6 @@ We have the option to implement RGD's internals on top of Graph in the future, b
 term both implementations live as siblings sharing significant code in the underlying graph engine.
 Graph is additive — it does not replace or deprecate RGD.
 
-**Security posture:** A Graph author operates at the same privilege level as today's RGD author: the
-"infrastructure author" persona who defines what resources exist and how they relate. Graph authors
-have full control over everything KRO can do within the permissions granted to the KRO controller's
-service account.
-
-KRO's dual-persona model is preserved at higher layers. Authors (broad permissions) write
-RGDs/Graphs; consumers (narrow permissions scoped to the CRD the author created) interact only with
-the Kinds those Graphs implement, never with Graph objects directly. Future work on credential
-scoping (short-lived tokens, caller credentials, per-Graph service accounts) applies uniformly to
-all KRO primitives and is out of scope for this KREP.
-
 ## Proposed API
 
 ### The Graph Kind
@@ -115,10 +104,9 @@ cannot evaluate until the Deployment has been applied and its observed state is 
 
 ### Node Types
 
-Graph has five node types. Each is declared by a keyword on the node object. The types are split
-along two axes: **operation** (own, contribute, read, compute) and **scope shape** (single object
-vs. list). We choose explicit keywords over fewer types with strategy flags so that a reader knows
-what a node does — and what type it produces in scope — at a glance from the top-level keyword.
+Graph has five node types. Each is declared by a keyword on the node object. We choose explicit
+keywords over fewer types with strategy flags so that a reader knows what a node does — and what
+type it produces in scope — at a glance from the top-level keyword.
 
 #### `template:`
 
@@ -190,14 +178,13 @@ Pure computation — no Kubernetes resource created or read. The result enters s
 #### Dynamic GVKs
 
 A node's `apiVersion`, `kind`, and `metadata.name` can be CEL expressions. This enables patterns
-where the target resource type isn't known at author time — for example, watching instances of a
-Kind defined by an RGD whose schema is only known at runtime:
+where the target resource type isn't known at author time:
 
 ```yaml
 - id: watchInstances
   watch:
-    apiVersion: ${'${schema.spec.schema.group}'}/${'${schema.spec.schema.apiVersion}'}
-    kind: ${'${schema.spec.schema.kind}'}
+    apiVersion: ${crd.spec.group}/${crd.spec.versions[0].name}
+    kind: ${crd.spec.names.kind}
     selector:
       matchLabels: {}
 ```
@@ -221,8 +208,8 @@ Dependencies are inferred from CEL expressions. If node B's template contains `$
 depends on A. The compiler builds a DAG from these references and computes topological order. Cycles
 are compile-time errors.
 
-Before evaluating a node, kro reads its current state from the API server. This observed state
-enters scope under the node's `id`, making upstream fields available to downstream expressions.
+Each node's observed state (from a GET before apply) enters scope under its `id`. Downstream nodes
+reference these scope entries via CEL.
 
 #### Hard Dependencies
 
@@ -267,10 +254,12 @@ the Instance to pass health checks. Ready-gating forces sequential convergence; 
 the graph flow as fast as data allows, with `propagateWhen` available for cases where explicit
 health gates are needed.
 
-This enables RGD-as-Graph's status writeback via soft dependencies: a `patch:` node can reference
-all managed resources and run on every reconcile pass, progressively filling in available fields
-without deadlocking on readiness.
+This is what enables status writeback in the RGD-as-Graph implementation: a `patch:` node can
+reference all managed resources and run on every reconcile pass, progressively filling in available
+fields without deadlocking on readiness.
 
+Within a single Graph, nodes evaluate serially in topological order. Across Graphs, reconciliation
+is fully parallel: each Graph object is an independent work item in the controller's queue.
 `propagateWhen` (KREP-006) provides explicit gating when authors need to sequence mutations on
 health or other conditions. `readyWhen` determines the Graph's overall Ready condition and powers
 the `.ready()` lifecycle signal (also KREP-006). Both compose with Graph's recursive structure — see
@@ -286,10 +275,7 @@ Graph as a real cluster object. The child is persisted, reconciled independently
 own conditions and revision history — providing full debuggability via `kubectl get graph`. The
 combination of `forEach` + template:{kind: Graph} stamps one child Graph per item in a collection.
 This is how an RGD-equivalent is expressed — a per-RGD Graph stamps a per-instance Graph, each with
-its own scope, its own revisions, and its own lifecycle. Within a single Graph, nodes evaluate
-serially in topological order — one API call per node per reconcile pass. Across Graphs,
-reconciliation is fully parallel: each Graph object is an independent work item in the controller's
-queue.
+its own scope, its own revisions, and its own lifecycle.
 
 #### Deferral Boundaries
 
@@ -372,6 +358,19 @@ compilation failures and runtime issues.
 
 User-defined status does not live on the Graph object. It lives on custom resources and is written
 via `patch:` nodes. The Graph's status contains only controller-managed conditions.
+
+## Security Posture
+
+Graph does not introduce new privilege boundaries. A Graph author operates at the same privilege
+level as today's RGD author: the "infrastructure author" persona who defines what resources exist
+and how they relate. Graph authors have full control over everything KRO can do within the
+permissions granted to the KRO controller's service account.
+
+KRO's dual-persona model is preserved at higher layers. Authors (broad permissions) write
+RGDs/Graphs; consumers (narrow permissions scoped to the CRD the author created) interact only with
+the Kinds those Graphs implement, never with Graph objects directly. Future work on credential
+scoping (short-lived tokens, caller credentials, per-Graph service accounts) applies uniformly to
+all KRO primitives and is out of scope for this KREP.
 
 ## Relationship to Existing KREPs
 

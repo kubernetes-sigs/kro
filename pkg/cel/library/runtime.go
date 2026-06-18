@@ -63,21 +63,38 @@ const RuntimeTypeName = "kro.run.Runtime"
 // context for the runtime variable.
 const RuntimeVarName = "runtime"
 
-// validConditionStatuses lists the only string literals allowed for a
-// Condition's status field. Matches metav1.Condition status values.
+// Condition field keys: the only keys allowed in runtime.newCondition's input
+// and the only fields exposed on a Condition value.
+const (
+	conditionKeyType    = "type"
+	conditionKeyStatus  = "status"
+	conditionKeyReason  = "reason"
+	conditionKeyMessage = "message"
+)
+
+// Condition status values: the only literals allowed for a Condition's status
+// field. Match metav1.Condition status values.
+const (
+	conditionStatusTrue    = "True"
+	conditionStatusFalse   = "False"
+	conditionStatusUnknown = "Unknown"
+)
+
+// validConditionStatuses is the set form of the conditionStatus* constants,
+// for membership checks.
 var validConditionStatuses = map[string]struct{}{
-	"True":    {},
-	"False":   {},
-	"Unknown": {},
+	conditionStatusTrue:    {},
+	conditionStatusFalse:   {},
+	conditionStatusUnknown: {},
 }
 
-// expectedConditionKeys are the only keys allowed in the input to
-// runtime.newCondition.
+// expectedConditionKeys is the set form of the conditionKey* constants, for
+// membership checks.
 var expectedConditionKeys = map[string]struct{}{
-	"type":    {},
-	"status":  {},
-	"reason":  {},
-	"message": {},
+	conditionKeyType:    {},
+	conditionKeyStatus:  {},
+	conditionKeyReason:  {},
+	conditionKeyMessage: {},
 }
 
 // conditionType is the type descriptor for Condition values. It declares
@@ -108,41 +125,35 @@ func (l *runtimeLibrary) CompileOptions() []cel.EnvOption {
 	mapType := cel.MapType(cel.StringType, cel.StringType)
 
 	return []cel.EnvOption{
-		// Register the Runtime singleton type so type-checking can resolve
-		// `runtime.newCondition` and `runtime.condition` calls.
 		cel.Types(runtimeType),
-
-		// Declare `runtime` as a variable of the singleton runtime type.
 		cel.Variable(RuntimeVarName, runtimeType),
 
-		// runtime.newCondition({type: ..., status: ..., reason: ..., message: ...}) -> dyn
+		// runtime.newCondition({type: ..., status: ..., reason: ..., message: ...}) -> Condition
 		//
 		// Authors write the input as a struct-style map literal with bare
 		// identifier keys. A parse-time macro (registered below) rewrites
 		// identifier keys into string literals before type-checking sees
 		// them, so the function's declared signature can stay
 		// map(string, string). The macro also rejects unknown keys,
-		// duplicate keys, missing required keys (type, status), and invalid
-		// literal status values — collapsing what used to be three separate
-		// validation layers into one parse-time pass.
+		// duplicate keys, and missing required keys (type, status).
 		//
-		// The return type is dyn (rather than the typed Condition) because
-		// the *Condition runtime value already implements traits.Indexer
-		// for .type/.status/.reason/.message field access; declaring a
-		// full struct type would not add expressiveness.
+		// The return type is the typed Condition. Field access (cond.status,
+		// cond.type, ...) resolves through ConditionTypeProvider, which
+		// declares Condition's four string fields, so a misspelled field is
+		// rejected at type-check time rather than at runtime.
 		cel.Function("newCondition",
 			cel.MemberOverload("runtime_newCondition_map",
 				[]*cel.Type{runtimeType, mapType},
-				cel.DynType,
+				conditionType,
 				cel.BinaryBinding(newConditionImpl),
 			),
 		),
 
-		// runtime.condition(obj, type) -> dyn (see comment above)
+		// runtime.condition(obj, type) -> Condition (see comment above)
 		cel.Function("condition",
 			cel.MemberOverload("runtime_condition_dyn_string",
 				[]*cel.Type{runtimeType, cel.DynType, cel.StringType},
-				cel.DynType,
+				conditionType,
 				cel.FunctionBinding(conditionImpl),
 			),
 		),
@@ -155,12 +166,13 @@ func (l *runtimeLibrary) CompileOptions() []cel.EnvOption {
 }
 
 // newConditionMacro is the parse-time rewriter for runtime.newCondition's
-// argument map. It enforces the four allowed-key rule, the literal-status
-// rule, the required-keys rule, and prohibits quoted/computed keys — all
-// at parse time, with errors reported at the source position of the
-// offending node. After validation, identifier keys are rewritten as
-// string literals so the downstream type-checker sees a plain
-// map(string, string).
+// argument map. It enforces the four allowed-key rule, the required-keys
+// rule, and prohibits quoted/computed keys, with errors reported at the
+// source position of the offending node. After validation, identifier keys
+// are rewritten as string literals so the downstream type-checker sees a
+// plain map(string, string). Status-value validation is handled separately:
+// literal values at build time by ValidateConditionExpressions, and all
+// values (literal or computed) at runtime by newConditionImpl.
 func newConditionMacro(eh parser.ExprHelper, target ast.Expr, args []ast.Expr) (ast.Expr, *common.Error) {
 	// cel-go's macro matching is keyed only on (function name, arg count,
 	// isReceiverStyle). Any `x.newCondition(arg)` call would land here. We
@@ -199,23 +211,14 @@ func newConditionMacro(eh parser.ExprHelper, target ast.Expr, args []ast.Expr) (
 		}
 		seen[name] = struct{}{}
 
-		if name == "status" && val.Kind() == ast.LiteralKind {
-			if s, ok := val.AsLiteral().Value().(string); ok {
-				if _, valid := validConditionStatuses[s]; !valid {
-					return nil, eh.NewError(val.ID(),
-						fmt.Sprintf("runtime.newCondition: status must be one of True, False, Unknown (got %q)", s))
-				}
-			}
-		}
-
 		newKey := eh.NewLiteral(types.String(name))
 		newEntries = append(newEntries, eh.NewMapEntry(newKey, val, false))
 	}
 
-	if _, ok := seen["type"]; !ok {
+	if _, ok := seen[conditionKeyType]; !ok {
 		return nil, eh.NewError(mapArg.ID(), "runtime.newCondition: 'type' is required")
 	}
-	if _, ok := seen["status"]; !ok {
+	if _, ok := seen[conditionKeyStatus]; !ok {
 		return nil, eh.NewError(mapArg.ID(), "runtime.newCondition: 'status' is required")
 	}
 
@@ -281,7 +284,6 @@ type Condition struct {
 	Message       string
 }
 
-// Compile-time assertion that Condition implements the interfaces CEL needs.
 var (
 	_ ref.Val        = (*Condition)(nil)
 	_ traits.Indexer = (*Condition)(nil)
@@ -290,10 +292,10 @@ var (
 func (c *Condition) ConvertToNative(typeDesc reflect.Type) (any, error) {
 	if typeDesc.Kind() == reflect.Map {
 		return map[string]any{
-			"type":    c.ConditionType,
-			"status":  c.Status,
-			"reason":  c.Reason,
-			"message": c.Message,
+			conditionKeyType:    c.ConditionType,
+			conditionKeyStatus:  c.Status,
+			conditionKeyReason:  c.Reason,
+			conditionKeyMessage: c.Message,
 		}, nil
 	}
 	if typeDesc == reflect.TypeOf((*Condition)(nil)) {
@@ -338,13 +340,13 @@ func (c *Condition) Get(key ref.Val) ref.Val {
 		return types.NewErr("Condition: field key must be a string, got %v", key.Type().TypeName())
 	}
 	switch string(keyStr) {
-	case "type":
+	case conditionKeyType:
 		return types.String(c.ConditionType)
-	case "status":
+	case conditionKeyStatus:
 		return types.String(c.Status)
-	case "reason":
+	case conditionKeyReason:
 		return types.String(c.Reason)
-	case "message":
+	case conditionKeyMessage:
 		return types.String(c.Message)
 	}
 	return types.NewErr("Condition: no such field %q", string(keyStr))
@@ -354,16 +356,12 @@ func (c *Condition) Get(key ref.Val) ref.Val {
 // runtime.newCondition implementation
 // -------------------------------------------------------------------------
 
-// newConditionImpl is the runtime binding for runtime.newCondition. By
-// the time it executes, the parse-time macro (newConditionMacro) has
-// already enforced the structural rules — only the four allowed keys,
-// type and status present, no duplicates, literal-status values valid.
-//
-// What still has to be checked at runtime: dynamic status values (e.g.
-// status: schema.spec.healthy ? 'True' : 'False'), which the macro
-// can't validate because it sees an arbitrary expression rather than a
-// literal. Everything else here is straightforward map → struct
-// construction.
+// newConditionImpl is the runtime binding for runtime.newCondition. By the
+// time it executes, the parse-time macro has enforced the key rules (allowed
+// keys, no duplicates, type and status present) and ValidateConditionExpressions
+// has checked any literal status. The status check here is the catch-all for
+// computed values (e.g. status: schema.spec.healthy ? 'True' : 'False') that
+// aren't literals; everything else is straightforward map -> struct construction.
 func newConditionImpl(receiver, arg ref.Val) ref.Val {
 	mapper, ok := arg.(traits.Mapper)
 	if !ok {
@@ -386,17 +384,17 @@ func newConditionImpl(receiver, arg ref.Val) ref.Val {
 		}
 
 		switch key {
-		case "type":
+		case conditionKeyType:
 			cond.ConditionType = string(valStr)
-		case "status":
+		case conditionKeyStatus:
 			s := string(valStr)
 			if _, ok := validConditionStatuses[s]; !ok {
 				return types.NewErr("runtime.newCondition: status must be one of True, False, Unknown (got %q)", s)
 			}
 			cond.Status = s
-		case "reason":
+		case conditionKeyReason:
 			cond.Reason = string(valStr)
-		case "message":
+		case conditionKeyMessage:
 			cond.Message = string(valStr)
 		}
 	}
@@ -498,9 +496,287 @@ func conditionFromMap(m traits.Mapper) *Condition {
 		return string(s)
 	}
 	return &Condition{
-		ConditionType: read("type"),
-		Status:        read("status"),
-		Reason:        read("reason"),
-		Message:       read("message"),
+		ConditionType: read(conditionKeyType),
+		Status:        read(conditionKeyStatus),
+		Reason:        read(conditionKeyReason),
+		Message:       read(conditionKeyMessage),
 	}
+}
+
+// -------------------------------------------------------------------------
+// Condition type provider
+// -------------------------------------------------------------------------
+
+// ConditionTypeProvider wraps a base types.Provider so the CEL type-checker
+// can resolve the kro.run.Condition type and its four string fields
+// (type, status, reason, message). Everything else delegates to base.
+//
+// This is what lets runtime.newCondition / runtime.condition declare a typed
+// Condition return (instead of dyn) while still allowing cond.status-style
+// field access to type-check. A misspelled field is rejected at check time
+// rather than silently passing as it would under dyn.
+//
+// CEL's cel.CustomTypeProvider replaces the environment's provider outright,
+// so the condition-aware provider must be the outermost wrapper and delegate
+// unhandled lookups to the provider it wraps (e.g. kro's schema-derived
+// DeclTypeProvider).
+func ConditionTypeProvider(base types.Provider) types.Provider {
+	return &conditionTypeProvider{Provider: base}
+}
+
+type conditionTypeProvider struct {
+	// Embedding the interface delegates EnumValue, FindIdent, and NewValue
+	// to the wrapped provider; only the struct-resolution methods below are
+	// overridden.
+	types.Provider
+}
+
+func (p *conditionTypeProvider) FindStructType(name string) (*types.Type, bool) {
+	if name == ConditionTypeName {
+		return types.NewTypeTypeWithParam(conditionType), true
+	}
+	return p.Provider.FindStructType(name)
+}
+
+func (p *conditionTypeProvider) FindStructFieldNames(name string) ([]string, bool) {
+	if name == ConditionTypeName {
+		return []string{conditionKeyType, conditionKeyStatus, conditionKeyReason, conditionKeyMessage}, true
+	}
+	return p.Provider.FindStructFieldNames(name)
+}
+
+func (p *conditionTypeProvider) FindStructFieldType(name, field string) (*types.FieldType, bool) {
+	if name == ConditionTypeName {
+		if _, ok := expectedConditionKeys[field]; ok {
+			return &types.FieldType{Type: types.StringType}, true
+		}
+		return nil, false
+	}
+	return p.Provider.FindStructFieldType(name, field)
+}
+
+// -------------------------------------------------------------------------
+// Build-time condition validation
+// -------------------------------------------------------------------------
+
+// ValidateConditionExpressions performs build-time AST inspection on a
+// list of author-defined condition expressions. It enforces two rules:
+//
+//   - The self-reference rule: runtime.condition(_, 'X') where X is a
+//     literal matching a custom-defined type from runtime.newCondition is
+//     rejected, since custom conditions cannot reference each other.
+//   - The literal-status rule: runtime.newCondition({status: 'X'}) where X
+//     is a literal must be one of True, False, Unknown. Computed status
+//     values are checked at runtime by newConditionImpl instead.
+//
+// Key/required-field rules for runtime.newCondition are enforced earlier
+// by the parse-time macro above. By the time expressions reach this
+// validator the macro has already rewritten identifier-keyed map literals
+// to string-keyed ones, so the helpers below find entries via
+// literal-string keys.
+//
+// Returns the first error encountered, or nil if all expressions pass.
+func ValidateConditionExpressions(env *cel.Env, expressions []string) error {
+	// First pass: collect literal type values from all newCondition calls
+	// so the second pass can detect self-references.
+	customTypes := map[string]struct{}{}
+	for _, expr := range expressions {
+		parsed, iss := env.Parse(expr)
+		if iss.Err() != nil {
+			// Parse errors aren't this validator's responsibility; let the
+			// regular CEL parse step surface them.
+			continue
+		}
+		collectCustomTypes(parsed.NativeRep().Expr(), customTypes)
+	}
+
+	for _, expr := range expressions {
+		parsed, iss := env.Parse(expr)
+		if iss.Err() != nil {
+			continue
+		}
+		if err := validateExpressionAST(parsed.NativeRep().Expr(), customTypes, expr); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// collectCustomTypes walks the AST looking for runtime.newCondition({type: 'X'})
+// calls with literal-string type values, and adds the type names to out.
+func collectCustomTypes(expr ast.Expr, out map[string]struct{}) {
+	walk(expr, nil, func(e ast.Expr) {
+		if !isRuntimeCall(e, "newCondition") {
+			return
+		}
+		args := e.AsCall().Args()
+		if len(args) != 1 {
+			return
+		}
+		typeVal, ok := mapLiteralEntryStringValue(args[0], conditionKeyType)
+		if !ok {
+			return
+		}
+		out[typeVal] = struct{}{}
+	})
+}
+
+// validateExpressionAST walks expr applying the self-reference rule and the
+// literal-status rule. Returns the first error found.
+func validateExpressionAST(expr ast.Expr, customTypes map[string]struct{}, exprText string) error {
+	var firstErr error
+	walk(expr, &firstErr, func(e ast.Expr) {
+		switch {
+		case isRuntimeCall(e, "condition"):
+			if err := validateCondition(e, customTypes, exprText); err != nil {
+				firstErr = err
+			}
+		case isRuntimeCall(e, "newCondition"):
+			if err := validateNewConditionStatus(e, exprText); err != nil {
+				firstErr = err
+			}
+		}
+	})
+	return firstErr
+}
+
+// validateNewConditionStatus enforces the literal-status rule: when
+// runtime.newCondition's status entry is a literal string it must be one of
+// True, False, Unknown. Non-literal status values are left for the runtime
+// check in newConditionImpl.
+func validateNewConditionStatus(call ast.Expr, exprText string) error {
+	args := call.AsCall().Args()
+	if len(args) != 1 {
+		return nil // Wrong arity is a CEL type-checker concern.
+	}
+	status, ok := mapLiteralEntryStringValue(args[0], conditionKeyStatus)
+	if !ok {
+		return nil // Missing or non-literal status; checked elsewhere.
+	}
+	if _, valid := validConditionStatuses[status]; !valid {
+		return fmt.Errorf(
+			"runtime.newCondition: status must be one of True, False, Unknown (got %q) in expression %q",
+			status, exprText,
+		)
+	}
+	return nil
+}
+
+// validateCondition enforces the self-reference rule: runtime.condition(_, 'X')
+// where X is a literal that matches a custom-defined type is rejected.
+func validateCondition(call ast.Expr, customTypes map[string]struct{}, exprText string) error {
+	args := call.AsCall().Args()
+	if len(args) != 2 {
+		return nil // Wrong arity is a CEL type-checker concern.
+	}
+
+	typeArg := args[1]
+	typeName, ok := literalString(typeArg)
+	if !ok {
+		return nil // Dynamic type; runtime check.
+	}
+
+	if _, isCustom := customTypes[typeName]; isCustom {
+		return fmt.Errorf(
+			"runtime.condition(_, %q): custom conditions cannot reference each other in expression %q",
+			typeName, exprText,
+		)
+	}
+
+	return nil
+}
+
+// walk recursively visits expr and every sub-expression, calling visit for
+// each. Order is pre-order: parent visited before children.
+//
+// If errPtr is non-nil, traversal aborts as soon as *errPtr becomes non-nil.
+// Pass nil for exhaustive traversal (e.g., when the visitor cannot fail).
+func walk(expr ast.Expr, errPtr *error, visit func(ast.Expr)) {
+	if expr == nil || (errPtr != nil && *errPtr != nil) {
+		return
+	}
+	visit(expr)
+
+	switch expr.Kind() {
+	case ast.CallKind:
+		call := expr.AsCall()
+		if call.Target() != nil {
+			walk(call.Target(), errPtr, visit)
+		}
+		for _, arg := range call.Args() {
+			walk(arg, errPtr, visit)
+		}
+	case ast.SelectKind:
+		walk(expr.AsSelect().Operand(), errPtr, visit)
+	case ast.ListKind:
+		for _, elem := range expr.AsList().Elements() {
+			walk(elem, errPtr, visit)
+		}
+	case ast.MapKind:
+		for _, entry := range expr.AsMap().Entries() {
+			me := entry.AsMapEntry()
+			walk(me.Key(), errPtr, visit)
+			walk(me.Value(), errPtr, visit)
+		}
+	case ast.StructKind:
+		for _, field := range expr.AsStruct().Fields() {
+			sf := field.AsStructField()
+			walk(sf.Value(), errPtr, visit)
+		}
+	case ast.ComprehensionKind:
+		comp := expr.AsComprehension()
+		walk(comp.IterRange(), errPtr, visit)
+		walk(comp.AccuInit(), errPtr, visit)
+		walk(comp.LoopCondition(), errPtr, visit)
+		walk(comp.LoopStep(), errPtr, visit)
+		walk(comp.Result(), errPtr, visit)
+	}
+}
+
+// isRuntimeCall reports whether expr is a call of the form
+// runtime.<methodName>(...).
+func isRuntimeCall(expr ast.Expr, methodName string) bool {
+	if expr.Kind() != ast.CallKind {
+		return false
+	}
+	call := expr.AsCall()
+	if !call.IsMemberFunction() || call.FunctionName() != methodName {
+		return false
+	}
+	target := call.Target()
+	if target == nil || target.Kind() != ast.IdentKind {
+		return false
+	}
+	return target.AsIdent() == RuntimeVarName
+}
+
+// literalString returns the string value of a literal-string AST node, or
+// ("", false) if the node isn't a literal string.
+func literalString(expr ast.Expr) (string, bool) {
+	if expr.Kind() != ast.LiteralKind {
+		return "", false
+	}
+	val := expr.AsLiteral().Value()
+	s, ok := val.(string)
+	return s, ok
+}
+
+// mapLiteralEntryStringValue looks up key in a map literal's entries and
+// returns the entry's value if it's a literal string. Returns ("", false)
+// if expr isn't a map literal, the key isn't present, or the value isn't a
+// literal string.
+func mapLiteralEntryStringValue(expr ast.Expr, key string) (string, bool) {
+	if expr.Kind() != ast.MapKind {
+		return "", false
+	}
+	for _, entry := range expr.AsMap().Entries() {
+		me := entry.AsMapEntry()
+		k, ok := literalString(me.Key())
+		if !ok || k != key {
+			continue
+		}
+		return literalString(me.Value())
+	}
+	return "", false
 }

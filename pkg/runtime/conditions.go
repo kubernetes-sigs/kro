@@ -59,27 +59,18 @@ func (n *Node) HasConditions() bool {
 //
 // Failure handling is per-condition, not per-reconcile:
 //
-//   - DataPending failures (e.g. "no such key") are silent — matching the
-//     existing softResolve behavior for status fields. The condition
-//     disappears for this reconcile and will reappear once the missing
-//     data becomes available.
+//   - DataPending failures (e.g. "no such key") are silent, matching
+//     softResolve for status fields. The condition reappears once the
+//     missing data becomes available.
+//   - Fatal CEL errors drop just that expression's output and surface
+//     ErrConditionEvaluationDegraded; other expressions still produce
+//     conditions normally.
+//   - Duplicate condition types are dropped (every occurrence, since there
+//     is no principled tiebreaker) and ErrConditionEvaluationDegraded is
+//     surfaced.
 //
-//   - Fatal CEL errors (type mismatch, "no such overload" on a member of
-//     the result, list element wasn't a Condition, etc.) drop just that
-//     expression's output and surface ErrConditionEvaluationDegraded.
-//     Other expressions still produce conditions normally.
-//
-//   - Duplicate condition types across the result set are dropped (every
-//     occurrence of the duplicated type is removed; the author can't
-//     pick a winner non-arbitrarily) and ErrConditionEvaluationDegraded
-//     is surfaced.
-//
-// In every degraded case the caller (controller) is expected to set
-// state: Error on the wire and persist whatever surviving conditions
-// were returned. The reconcile itself is not failed.
-//
-// logger is used to record skipped expressions and dropped duplicates;
-// pass logr.Discard() in unit tests where logging is irrelevant.
+// In every degraded case the caller sets state: Error on the wire and
+// persists the surviving conditions; the reconcile itself is not failed.
 func (n *Node) EvaluateConditions(logger logr.Logger, kroBuiltins []v1alpha1.Condition) ([]library.Condition, error) {
 	if len(n.conditionExprs) == 0 {
 		return nil, nil
@@ -110,14 +101,8 @@ func (n *Node) EvaluateConditions(logger logr.Logger, kroBuiltins []v1alpha1.Con
 		raw, _, err := expr.Expression.Program.Eval(filteredCtx)
 		if err != nil {
 			if isCELDataPending(err) {
-				// DataPending: silent omit. The condition disappears from
-				// the wire on this reconcile and reappears once the
-				// dependency becomes available.
-				continue
+				continue // silent omit; see failure-handling note above
 			}
-			// Fatal CEL error in this expression. Skip just this one and
-			// keep going so the rest of the author's conditions still
-			// surface.
 			logger.Error(err, "skipping author condition expression with fatal evaluation error",
 				"expression", expr.Expression.UserExpression())
 			failures = append(failures, fmt.Sprintf("%q: %v", expr.Expression.UserExpression(), err))
@@ -154,8 +139,8 @@ func (n *Node) EvaluateConditions(logger logr.Logger, kroBuiltins []v1alpha1.Con
 // containing kro's internal built-in conditions so author expressions
 // can read them via runtime.condition(schema, 'X').
 //
-// The synthetic conditions are written as plain map[string]interface{}
-// so they hit conditionFromMap in extractConditions — keeping the
+// The synthetic conditions are written as plain map[string]interface{} so
+// they hit conditionFromMap in extractConditions, keeping the
 // runtime.condition implementation single-source.
 func (n *Node) schemaForConditions(kroBuiltins []v1alpha1.Condition) any {
 	if len(n.observed) == 0 {
@@ -207,15 +192,13 @@ func kroBuiltinsAsList(conds []v1alpha1.Condition) []any {
 	return out
 }
 
-// dedupConditionTypes removes every occurrence of any condition type
-// that appears more than once and returns the kept conditions plus a
-// sorted, unique list of dropped types. Type uniqueness is enforced at
-// runtime rather than build time because collection-expansion
-// expressions (e.g. servers.map(s, runtime.newCondition({type: 'X' + s
-// .name + 'Ready', ...}))) produce condition types that aren't known
-// until evaluation. Both copies of a duplicated type are dropped
-// rather than keeping a winner because there is no principled
-// tiebreaker between them.
+// dedupConditionTypes removes every occurrence of any condition type that
+// appears more than once and returns the kept conditions plus a sorted list
+// of dropped types. Uniqueness is enforced at runtime rather than build time
+// because collection-expansion expressions (e.g. servers.map(s,
+// runtime.newCondition({type: 'X' + s.name + 'Ready', ...}))) produce types
+// that aren't known until evaluation. Both copies are dropped because there
+// is no principled tiebreaker.
 func dedupConditionTypes(conds []library.Condition) ([]library.Condition, []string) {
 	counts := make(map[string]int, len(conds))
 	for _, c := range conds {
@@ -251,12 +234,10 @@ func flattenCelConditionValue(val ref.Val, exprText string) ([]library.Condition
 		return nil, fmt.Errorf("condition %q returned null", exprText)
 	}
 
-	// Direct Condition value.
 	if cond, ok := val.Value().(*library.Condition); ok {
 		return []library.Condition{*cond}, nil
 	}
 
-	// CEL list of Conditions.
 	if lister, ok := val.(traits.Lister); ok {
 		var out []library.Condition
 		it := lister.Iterator()

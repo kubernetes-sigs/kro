@@ -26,7 +26,7 @@ import (
 // returns Expression objects with Original set to the unwrapped inner text.
 // References and Program are populated later by the builder.
 //
-// Each input must be exactly one standalone ${...} — interpolation forms
+// Each input must be exactly one standalone ${...}. Interpolation forms
 // like "prefix-${expr}-suffix" or concatenations like "${a}${b}" are
 // rejected. For interpolation-style strings, see ExtractExpressions in
 // cel.go.

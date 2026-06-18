@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
-	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,15 +29,9 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 )
 
-// compileConditionExpr compiles a single CEL condition expression against
-// an env that has the runtime library and a `schema` variable. Mirrors what
-// the builder does at RGD compile time.
 func compileConditionExpr(t *testing.T, expr string) *krocel.Expression {
 	t.Helper()
-	env, err := cel.NewEnv(
-		cel.Variable("schema", cel.AnyType),
-		library.Runtime(),
-	)
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"schema"}))
 	require.NoError(t, err)
 
 	ast, iss := env.Compile(expr)
@@ -54,9 +47,6 @@ func compileConditionExpr(t *testing.T, expr string) *krocel.Expression {
 	}
 }
 
-// graphWithConditions builds a minimal *graph.Graph whose instance node
-// carries the supplied condition expressions. No resource nodes; `schema`
-// is the only dep.
 func graphWithConditions(conditions []*krocel.Expression) *graph.Graph {
 	return &graph.Graph{
 		TopologicalOrder: []string{},
@@ -102,7 +92,6 @@ func TestEvaluateConditions_HappyPath(t *testing.T) {
 }
 
 func TestEvaluateConditions_ReadsSchema(t *testing.T) {
-	// Author condition reads schema.spec.healthy to derive its status.
 	exprs := []*krocel.Expression{
 		compileConditionExpr(t, `runtime.newCondition({type: 'AppReady', status: schema.spec.healthy ? 'True' : 'False', reason: 'check', message: ''})`),
 	}
@@ -125,9 +114,6 @@ func TestEvaluateConditions_ReadsSchema(t *testing.T) {
 }
 
 func TestEvaluateConditions_DataPendingOmittedSilently(t *testing.T) {
-	// schema.spec.missing isn't populated; CEL surfaces "no such key",
-	// which kro classifies as DataPending. The offending condition
-	// is silently omitted; the reconcile is not failed.
 	exprs := []*krocel.Expression{
 		compileConditionExpr(t, `runtime.newCondition({type: 'OK', status: 'True', reason: '', message: ''})`),
 		compileConditionExpr(t, `runtime.newCondition({type: 'Pending', status: schema.spec.missing.value == 'X' ? 'True' : 'False', reason: '', message: ''})`),
@@ -149,13 +135,6 @@ func TestEvaluateConditions_DataPendingOmittedSilently(t *testing.T) {
 	assert.Equal(t, "OK", conds[0].ConditionType)
 }
 
-// TestEvaluateConditions_CollectionExpansion verifies that a single
-// author entry whose CEL expression returns list(Condition) (rather
-// than a single Condition) gets flattened into multiple status
-// conditions on the instance.
-//
-// Example: schema.spec.regions.map(r, runtime.newCondition({...}))
-// produces one Condition per region; all of them appear on the wire.
 func TestEvaluateConditions_CollectionExpansion(t *testing.T) {
 	expr := compileConditionExpr(t, `schema.spec.regions.map(r, runtime.newCondition({
 		type: 'Region-' + r + '-Ready',
@@ -181,12 +160,10 @@ func TestEvaluateConditions_CollectionExpansion(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, conds, 3, "single map() expression should flatten to 3 conditions, one per region")
 
-	// Order matches input; type names are dynamically built from each region.
 	assert.Equal(t, "Region-us-east-1-Ready", conds[0].ConditionType)
 	assert.Equal(t, "Region-eu-west-1-Ready", conds[1].ConditionType)
 	assert.Equal(t, "Region-ap-south-1-Ready", conds[2].ConditionType)
 
-	// Sanity check on field propagation.
 	for _, c := range conds {
 		assert.Equal(t, "True", c.Status)
 		assert.Equal(t, "Running", c.Reason)
@@ -194,18 +171,12 @@ func TestEvaluateConditions_CollectionExpansion(t *testing.T) {
 	}
 }
 
-// TestEvaluateConditions_CollectionExpansionMixedWithSingle verifies that
-// when one expression returns Condition and another returns list(Condition),
-// kro flattens correctly and preserves declaration order.
 func TestEvaluateConditions_CollectionExpansionMixedWithSingle(t *testing.T) {
 	exprs := []*krocel.Expression{
-		// Single Condition.
 		compileConditionExpr(t, `runtime.newCondition({type: 'Overall', status: 'True', reason: 'OK', message: ''})`),
-		// list(Condition) via map().
 		compileConditionExpr(t, `schema.spec.regions.map(r, runtime.newCondition({
 			type: 'Region' + r + 'Ready', status: 'True', reason: '', message: '',
 		}))`),
-		// Another single Condition.
 		compileConditionExpr(t, `runtime.newCondition({type: 'Final', status: 'True', reason: '', message: ''})`),
 	}
 
@@ -230,9 +201,6 @@ func TestEvaluateConditions_CollectionExpansionMixedWithSingle(t *testing.T) {
 	assert.Equal(t, "Final", conds[3].ConditionType)
 }
 
-// TestEvaluateConditions_CollectionExpansionEmpty handles the edge case
-// where the iteration source is an empty list. Should produce zero
-// conditions from that expression with no error.
 func TestEvaluateConditions_CollectionExpansionEmpty(t *testing.T) {
 	expr := compileConditionExpr(t, `schema.spec.regions.map(r, runtime.newCondition({
 		type: 'X' + r, status: 'True', reason: '', message: '',
@@ -271,12 +239,6 @@ func TestEvaluateConditions_OrderPreserved(t *testing.T) {
 	assert.Equal(t, "C", conds[2].ConditionType)
 }
 
-// TestEvaluateConditions_RuntimeConditionReadsKroBuiltins verifies
-// runtime.condition(schema, 'X') for the four reserved kro types
-// returns kro's INTERNAL value, not whatever happens to be on the
-// instance's wire conditions. This is what makes patterns like
-// runtime.condition(schema, 'ResourcesReady').status == 'True' && ...
-// actually work.
 func TestEvaluateConditions_RuntimeConditionReadsKroBuiltins(t *testing.T) {
 	expr := compileConditionExpr(t, `runtime.newCondition({
 		type: 'Ready',
@@ -303,7 +265,6 @@ func TestEvaluateConditions_RuntimeConditionReadsKroBuiltins(t *testing.T) {
 	assert.Equal(t, "AllHealthy", conds[0].Reason)
 }
 
-// Lookup of an unknown type returns an empty Condition
 func TestEvaluateConditions_RuntimeConditionUnknownTypeReturnsEmpty(t *testing.T) {
 	expr := compileConditionExpr(t, `runtime.newCondition({
 		type: 'Marker',
@@ -321,20 +282,13 @@ func TestEvaluateConditions_RuntimeConditionUnknownTypeReturnsEmpty(t *testing.T
 	assert.Equal(t, "True", conds[0].Status)
 }
 
-// Author declares a condition whose type matches one of kro's reserved
-// names (e.g. 'ResourcesReady') AND a separate condition that reads kro's
-// internal value via runtime.condition(schema, 'ResourcesReady'). The
-// lookup must reflect kroBuiltins, NOT the author's overriding declaration
 func TestEvaluateConditions_AuthorOverrideDoesNotShadowKroBuiltinLookup(t *testing.T) {
-	// Author claims ResourcesReady=True...
 	override := compileConditionExpr(t, `runtime.newCondition({
 		type: 'ResourcesReady',
 		status: 'True',
 		reason: 'AuthorOverride',
 		message: '',
 	})`)
-	// ...but a sibling condition that reads kro's internal value should
-	// see kroBuiltins (False), not the author's override.
 	derived := compileConditionExpr(t, `runtime.newCondition({
 		type: 'DerivedReady',
 		status: runtime.condition(schema, 'ResourcesReady').status,
@@ -370,9 +324,6 @@ func TestEvaluateConditions_AuthorOverrideDoesNotShadowKroBuiltinLookup(t *testi
 			"not the author's overriding 'True' declaration")
 }
 
-// Duplicate condition types are dropped from the result and the
-// degraded-evaluation sentinel error is returned. Surviving conditions
-// (those with no duplication) are kept so the wire still carries them.
 func TestEvaluateConditions_DuplicateTypeDroppedAndDegraded(t *testing.T) {
 	exprs := []*krocel.Expression{
 		compileConditionExpr(t, `runtime.newCondition({type: 'A', status: 'True', reason: '', message: ''})`),
@@ -389,15 +340,11 @@ func TestEvaluateConditions_DuplicateTypeDroppedAndDegraded(t *testing.T) {
 	assert.Contains(t, err.Error(), "duplicate condition type")
 	assert.Contains(t, err.Error(), "X")
 
-	// Both copies of X are dropped (no principled tiebreaker between them).
-	// A and B survive and surface to the caller in their original order.
 	require.Len(t, conds, 2)
 	assert.Equal(t, "A", conds[0].ConditionType)
 	assert.Equal(t, "B", conds[1].ConditionType)
 }
 
-// Collection expansion can also produce duplicates dynamically. Those are
-// dropped at runtime in the same manner as static dups.
 func TestEvaluateConditions_DuplicateTypeFromCollectionExpansionDropped(t *testing.T) {
 	exprs := []*krocel.Expression{
 		compileConditionExpr(t, `runtime.newCondition({type: 'Survivor', status: 'True', reason: '', message: ''})`),
@@ -423,9 +370,6 @@ func TestEvaluateConditions_DuplicateTypeFromCollectionExpansionDropped(t *testi
 	assert.Equal(t, "Survivor", conds[0].ConditionType)
 }
 
-// Fatal CEL errors in one expression must not abort the entire result —
-// the failing expression is dropped, ErrConditionEvaluationDegraded is
-// returned, and the other expressions still produce conditions.
 func TestEvaluateConditions_FatalErrorInOneExpressionSkippedNotAborted(t *testing.T) {
 	bad := compileConditionExpr(t, `'not a condition'`)
 	bad.References = []string{library.RuntimeVarName, "schema"}

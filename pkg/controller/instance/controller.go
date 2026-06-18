@@ -125,12 +125,9 @@ type Controller struct {
 	metricsEnabled bool
 
 	// hasAuthorConditions reports whether the RGD this controller serves
-	// declared an author `conditions:` block. When true, the early-exit
-	// path on graph-resolve failure (updateConditionsStatus) does not
-	// write kro's built-in conditions to the wire, so .status.conditions[]
-	// only ever contains author-declared conditions. The next successful
-	// reconcile through updateStatus will evaluate the author's CEL and
-	// repopulate the wire.
+	// declared an author `conditions:` block. When true, the graph-resolve
+	// failure early-exit (updateConditionsStatus) suppresses kro's built-in
+	// conditions so .status.conditions[] only contains author conditions.
 	hasAuthorConditions bool
 }
 

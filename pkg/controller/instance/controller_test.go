@@ -281,14 +281,6 @@ func TestReconcileGraphResolutionFailureMarksCondition(t *testing.T) {
 	}
 }
 
-// TestReconcileGraphResolveFailureKeepsOnlyAuthorConditionsOnWire
-// verifies the visibility-rule: when the RGD declared an author
-// `conditions:` block, a graph-resolve failure must not push kro's four
-// built-in conditions (InstanceManaged, GraphResolved, ResourcesReady,
-// Ready) onto the instance's wire. The author's existing conditions
-// stay; state=Error is set. The next successful reconcile through
-// updateStatus repopulates the wire with the author's freshly-evaluated
-// conditions.
 func TestReconcileGraphResolveFailureKeepsOnlyAuthorConditionsOnWire(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 
@@ -325,7 +317,7 @@ func TestReconcileGraphResolveFailureKeepsOnlyAuthorConditionsOnWire(t *testing.
 		metadata.NewKROMetaLabeler(),
 		newControllerTestCoordinator(t),
 		record.NewFakeRecorder(100),
-		true, // hasAuthorConditions
+		true,
 	)
 
 	err := controller.Reconcile(context.Background(), ctrl.Request{

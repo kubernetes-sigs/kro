@@ -142,11 +142,8 @@ type Node struct {
 
 	// Conditions holds compiled CEL expressions for the author-defined
 	// `conditions:` block on the instance (NodeTypeInstance only). Each
-	// expression is expected to return a Condition (or list(Condition)
-	// for collection expansion) at evaluation time.
-	//
-	// Set only on the instance node when the RGD's status block contains
-	// a `conditions:` list. Resource nodes leave this nil.
+	// expression returns a Condition (or list(Condition) for collection
+	// expansion) at evaluation time. Resource nodes leave this nil.
 	Conditions []*krocel.Expression
 }
 

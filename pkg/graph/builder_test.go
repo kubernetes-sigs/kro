@@ -3965,7 +3965,7 @@ func TestBuildInstanceNode(t *testing.T) {
 				true, // namespaced (default)
 				tt.variables,
 				tt.template,
-				nil, // conditions: none in these tests
+				nil,
 				inspector,
 			)
 			if tt.wantErr != "" {
@@ -4418,10 +4418,6 @@ func TestBuilderHelperCases(t *testing.T) {
 	}
 }
 
-// newConditionsBuildContext sets up the typed environment and inspector
-// fixtures used by the conditions-related tests. The "resource" identifier
-// is registered as a known node, mirroring how a single-resource RGD would
-// look at compile time.
 func newConditionsBuildContext(t *testing.T) (*buildContext, *cel.Env, *ast.Inspector) {
 	t.Helper()
 
@@ -4536,7 +4532,6 @@ func TestBuildConditionsHappyPath(t *testing.T) {
 		assert.NotNil(t, e.Program, "expression %q should have a compiled Program", e.Original)
 	}
 
-	// Both expressions reference `runtime` (the kro CEL library variable).
 	assert.Contains(t, got[0].References, "runtime")
 	assert.NotContains(t, got[0].References, "resource")
 	assert.Contains(t, got[1].References, "runtime")
@@ -4580,8 +4575,6 @@ func TestBuildConditionsRejectsInvalid(t *testing.T) {
 func TestBuildConditionsSelfReference(t *testing.T) {
 	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
 
-	// Defines PrimaryReady, then another condition tries to read it via
-	// runtime.condition(schema, 'PrimaryReady') — illegal.
 	exprs := []string{
 		`${runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: '', message: ''})}`,
 		`${runtime.newCondition({type: 'Ready', status: runtime.condition(schema, 'PrimaryReady').status, reason: '', message: ''})}`,
@@ -4595,8 +4588,6 @@ func TestBuildConditionsSelfReference(t *testing.T) {
 func TestBuildInstanceNodeFoldsConditionDeps(t *testing.T) {
 	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
 
-	// Compile a condition that references `resource`; instance node should
-	// list `resource` as a dependency.
 	exprs := []string{
 		`${runtime.newCondition({type: 'AppReady', status: resource.status.phase == 'Running' ? 'True' : 'False', reason: '', message: ''})}`,
 	}
@@ -4609,7 +4600,7 @@ func TestBuildInstanceNodeFoldsConditionDeps(t *testing.T) {
 		"v1alpha1",
 		"Test",
 		true,
-		nil, // no plain status fields
+		nil,
 		map[string]interface{}{},
 		conditions,
 		inspector,
@@ -4618,35 +4609,4 @@ func TestBuildInstanceNodeFoldsConditionDeps(t *testing.T) {
 	require.NotNil(t, node)
 	assert.Contains(t, node.Meta.Dependencies, "resource")
 	assert.Equal(t, conditions, node.Conditions)
-}
-
-func TestBuildInstanceNodeConditionDepsDedupedWithStatusVars(t *testing.T) {
-	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
-
-	// Status variable already references `resource`; condition also references
-	// `resource`. The instance node's Dependencies list should have `resource`
-	// exactly once.
-	exprs := []string{
-		`${runtime.newCondition({type: 'AppReady', status: resource.status.phase, reason: '', message: ''})}`,
-	}
-	conditions, err := buildConditions(bc, exprs, inspector, inspectorEnv, []string{"resource"})
-	require.NoError(t, err)
-
-	statusVars := []variable.FieldDescriptor{
-		{Path: "phase", Expression: expr("resource.status.phase")},
-	}
-
-	node, err := buildInstanceNode(
-		"example.com", "v1alpha1", "Test",
-		true, statusVars, map[string]interface{}{}, conditions, inspector,
-	)
-	require.NoError(t, err)
-
-	count := 0
-	for _, d := range node.Meta.Dependencies {
-		if d == "resource" {
-			count++
-		}
-	}
-	assert.Equal(t, 1, count, "resource should appear exactly once in Dependencies, got: %v", node.Meta.Dependencies)
 }

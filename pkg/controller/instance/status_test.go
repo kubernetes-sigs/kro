@@ -178,7 +178,7 @@ func TestStampAuthorConditionsNewWire(t *testing.T) {
 }
 
 func TestStampAuthorConditionsPreservesLastTransitionTimeWhenStatusUnchanged(t *testing.T) {
-	earlier := metav1.NewTime(metav1.Now().Add(-1 * 60 * 60 * 1e9)) // ~1h ago
+	earlier := metav1.NewTime(metav1.Now().Add(-1 * 60 * 60 * 1e9))
 	previous := []v1alpha1.Condition{
 		{
 			Type:               "PrimaryReady",

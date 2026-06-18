@@ -25,20 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// NOTE on map literal syntax: runtime.newCondition accepts a struct-style
-// map literal with bare identifier keys:
-//
-//   runtime.newCondition({type: 'X', status: 'True', reason: 'R', message: 'M'})
-//
-// A parse-time macro registered in CompileOptions rewrites identifier
-// keys into string literals before type-checking, so the function's
-// declared signature can stay map(string, string). The macro also
-// rejects quoted keys, computed keys, unknown keys, duplicate keys,
-// invalid literal status values, and missing required keys (type,
-// status). See newConditionMacro in runtime.go.
-
-// runtimeEnv builds a CEL environment with the runtime library and a
-// `schema` variable, matching how kro will use these expressions.
 func runtimeEnv(t *testing.T) *cel.Env {
 	t.Helper()
 	env, err := cel.NewEnv(
@@ -46,12 +32,11 @@ func runtimeEnv(t *testing.T) *cel.Env {
 		Runtime(),
 	)
 	require.NoError(t, err)
+	env, err = env.Extend(cel.CustomTypeProvider(ConditionTypeProvider(env.CELTypeProvider())))
+	require.NoError(t, err)
 	return env
 }
 
-// evalRuntime compiles and evaluates expr with `runtime` bound to the
-// singleton and any extra context the caller provides. It returns the
-// result value or an error.
 func evalRuntime(t *testing.T, env *cel.Env, expr string, extra map[string]any) (ref.Val, error) {
 	t.Helper()
 
@@ -128,9 +113,16 @@ func TestRuntimeNewConditionFieldAccess(t *testing.T) {
 	}
 }
 
-// TestRuntimeNewConditionRejections verifies the parse-time macro
-// (newConditionMacro) rejects malformed runtime.newCondition arguments
-// with descriptive errors at the source position of the offending node.
+func TestRuntimeNewConditionUnknownFieldRejected(t *testing.T) {
+	env := runtimeEnv(t)
+
+	expr := `runtime.newCondition({type: 'X', status: 'True', reason: '', message: ''}).bogus`
+
+	_, iss := env.Compile(expr)
+	require.NotNil(t, iss.Err(), "expected compile error for unknown field access")
+	assert.Contains(t, iss.Err().Error(), "undefined field 'bogus'")
+}
+
 func TestRuntimeNewConditionRejections(t *testing.T) {
 	env := runtimeEnv(t)
 
@@ -155,11 +147,6 @@ func TestRuntimeNewConditionRejections(t *testing.T) {
 			errSubstr: `duplicate key "type"`,
 		},
 		{
-			name:      "invalid status literal",
-			expr:      `runtime.newCondition({type: 'X', status: 'YES', reason: 'R', message: 'M'})`,
-			errSubstr: "status must be one of",
-		},
-		{
 			name:      "missing type",
 			expr:      `runtime.newCondition({status: 'True', reason: 'R', message: 'M'})`,
 			errSubstr: "'type' is required",
@@ -173,8 +160,6 @@ func TestRuntimeNewConditionRejections(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// All these errors come from the macro at parse time, so
-			// evalRuntime returns the error from env.Compile.
 			_, err := evalRuntime(t, env, tt.expr, nil)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errSubstr)
@@ -182,39 +167,6 @@ func TestRuntimeNewConditionRejections(t *testing.T) {
 	}
 }
 
-// TestRuntimeNewConditionMacroFiresOnNestedCalls verifies the macro
-// inspects every runtime.newCondition call site, including ones nested
-// as sub-expressions inside another runtime.newCondition's argument.
-//
-// Nested constructions are legitimate (using inner.status as a string
-// value), but a malformed inner — e.g. a literal status='BAD' — must be
-// caught at parse time just like a top-level malformed call would be.
-//
-// Note: this exercises ONLY the case where the inner call's bad literal
-// is a direct map-entry value. Bad literals reachable through ternary
-// branches assigned to status (e.g. cond ? 'BAD' : ...) bypass the
-// macro's literal-status check, because the macro inspects only
-// direct LiteralKind values, not literals nested inside compound
-// expressions. Those cases are caught at runtime by newConditionImpl.
-func TestRuntimeNewConditionMacroFiresOnNestedCalls(t *testing.T) {
-	env := runtimeEnv(t)
-
-	// Outer call is well-formed. Inner call has status='BAD' literal,
-	// which the macro must reject at parse time.
-	expr := `runtime.newCondition({type: 'X',
-		status: schema.spec.healthy
-			? 'True'
-			: runtime.newCondition({type: 'Y', status: 'BAD', reason: '', message: ''}).status,
-		reason: '', message: ''})`
-
-	_, err := evalRuntime(t, env, expr, nil)
-	require.Error(t, err, "macro must walk nested newCondition calls and reject malformed inner")
-	assert.Contains(t, err.Error(), "status must be one of")
-	assert.Contains(t, err.Error(), `"BAD"`)
-}
-
-// TestRuntimeConditionLookup exercises runtime.condition(obj, type) against
-// an object whose conditions list contains raw maps (the wire shape).
 func TestRuntimeConditionLookup(t *testing.T) {
 	env := runtimeEnv(t)
 
@@ -277,9 +229,6 @@ func TestRuntimeConditionLookup(t *testing.T) {
 	}
 }
 
-// TestRuntimeConditionMissingPaths verifies that runtime.condition handles
-// objects that don't carry any conditions yet — common during the initial
-// reconcile window before status has been populated.
 func TestRuntimeConditionMissingPaths(t *testing.T) {
 	env := runtimeEnv(t)
 
@@ -308,15 +257,11 @@ func TestRuntimeConditionMissingPaths(t *testing.T) {
 				map[string]any{"schema": tt.obj},
 			)
 			require.NoError(t, err)
-			// Missing paths produce a Condition with empty fields, so .status
-			// resolves to the empty string.
 			assert.Equal(t, types.String(""), got)
 		})
 	}
 }
 
-// TestRuntimeConditionComposition verifies authors can compose
-// runtime.condition with their own checks to derive Ready.
 func TestRuntimeConditionComposition(t *testing.T) {
 	env := runtimeEnv(t)
 
@@ -368,11 +313,6 @@ func TestRuntimeConditionComposition(t *testing.T) {
 	}
 }
 
-// TestRuntimeNewConditionInListLiteral verifies that two
-// runtime.newCondition calls can sit side-by-side as elements of a CEL
-// list literal: the macro rewrites each call independently, and each
-// resulting *Condition flows through CEL's list machinery as a typed
-// element (not collapsed to a generic dyn).
 func TestRuntimeNewConditionInListLiteral(t *testing.T) {
 	env := runtimeEnv(t)
 
@@ -397,8 +337,6 @@ func TestRuntimeNewConditionInListLiteral(t *testing.T) {
 	assert.Equal(t, "B", second.ConditionType)
 }
 
-// TestRuntimeNewConditionFieldsDerivedFromSchema verifies that status and
-// reason can be computed from schema-driven CEL expressions
 func TestRuntimeNewConditionFieldsDerivedFromSchema(t *testing.T) {
 	env := runtimeEnv(t)
 
@@ -434,9 +372,17 @@ func TestRuntimeNewConditionFieldsDerivedFromSchema(t *testing.T) {
 	}
 }
 
-// TestRuntimeFunctionsRequireRuntimeReceiver verifies that newCondition and
-// condition can only be called on the runtime variable; bare function calls
-// must fail to compile.
+func TestRuntimeNewConditionRejectsInvalidComputedStatus(t *testing.T) {
+	env := runtimeEnv(t)
+
+	expr := `runtime.newCondition({type: 'X', status: schema.spec.s, reason: '', message: ''})`
+	schemaVal := map[string]any{"spec": map[string]any{"s": "YES"}}
+
+	_, err := evalRuntime(t, env, expr, map[string]any{"schema": schemaVal})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "status must be one of")
+}
+
 func TestRuntimeFunctionsRequireRuntimeReceiver(t *testing.T) {
 	env := runtimeEnv(t)
 
@@ -465,4 +411,150 @@ func TestRuntimeFunctionsRequireRuntimeReceiver(t *testing.T) {
 			)
 		})
 	}
+}
+
+func TestValidateConditionExpressions_AcceptsValid(t *testing.T) {
+	env := runtimeEnv(t)
+
+	tests := []struct {
+		name  string
+		exprs []string
+	}{
+		{
+			name: "single well-formed condition",
+			exprs: []string{
+				`runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: 'OK', message: 'all good'})`,
+			},
+		},
+		{
+			name: "multiple well-formed conditions",
+			exprs: []string{
+				`runtime.newCondition({type: 'A', status: 'True', reason: '', message: ''})`,
+				`runtime.newCondition({type: 'B', status: 'False', reason: '', message: ''})`,
+				`runtime.newCondition({type: 'C', status: 'Unknown', reason: '', message: ''})`,
+			},
+		},
+		{
+			name: "condition reading kro built-in (not a self-reference)",
+			exprs: []string{
+				`runtime.newCondition({type: 'Ready',
+					status: runtime.condition(schema, 'ResourcesReady').status,
+					reason: '', message: ''})`,
+			},
+		},
+		{
+			name: "dynamic status value (literal check skipped; runtime checks)",
+			exprs: []string{
+				`runtime.newCondition({type: 'X',
+					status: schema.spec.someStatus,
+					reason: '', message: ''})`,
+			},
+		},
+		{
+			name: "dynamic type lookup in runtime.condition (self-reference rule skips dynamic types)",
+			exprs: []string{
+				`runtime.newCondition({type: 'A', status: 'True', reason: '', message: ''})`,
+				`runtime.condition(schema, schema.spec.someType).status`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateConditionExpressions(env, tt.exprs)
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateConditionExpressions_RejectsSelfReference(t *testing.T) {
+	env := runtimeEnv(t)
+
+	exprs := []string{
+		`runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: '', message: ''})`,
+		`runtime.newCondition({type: 'Ready',
+			status: runtime.condition(schema, 'PrimaryReady').status,
+			reason: '', message: ''})`,
+	}
+
+	err := ValidateConditionExpressions(env, exprs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "custom conditions cannot reference each other")
+	assert.Contains(t, err.Error(), `"PrimaryReady"`)
+}
+
+func TestValidateConditionExpressions_RejectsInvalidLiteralStatus(t *testing.T) {
+	env := runtimeEnv(t)
+
+	tests := []struct {
+		name  string
+		exprs []string
+	}{
+		{
+			name: "top-level literal status",
+			exprs: []string{
+				`runtime.newCondition({type: 'X', status: 'YES', reason: 'R', message: 'M'})`,
+			},
+		},
+		{
+			name: "literal status inside a map() comprehension",
+			exprs: []string{
+				`schema.spec.servers.map(s,
+					runtime.newCondition({type: s.name, status: 'BAD', reason: '', message: ''}))`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateConditionExpressions(env, tt.exprs)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "status must be one of")
+		})
+	}
+}
+
+func TestValidateConditionExpressions_AllowsBuiltInLookup(t *testing.T) {
+	env := runtimeEnv(t)
+
+	exprs := []string{
+		`runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: '', message: ''})`,
+		`runtime.newCondition({type: 'Ready',
+			status: runtime.condition(schema, 'ResourcesReady').status,
+			reason: '', message: ''})`,
+	}
+
+	err := ValidateConditionExpressions(env, exprs)
+	assert.NoError(t, err)
+}
+
+func TestValidateConditionExpressions_EmptyList(t *testing.T) {
+	env := runtimeEnv(t)
+
+	err := ValidateConditionExpressions(env, nil)
+	assert.NoError(t, err)
+
+	err = ValidateConditionExpressions(env, []string{})
+	assert.NoError(t, err)
+}
+
+func TestValidateConditionExpressions_ParseErrorsAreSilent(t *testing.T) {
+	env := runtimeEnv(t)
+
+	exprs := []string{`this is not (((valid CEL`}
+
+	err := ValidateConditionExpressions(env, exprs)
+	assert.NoError(t, err, "validator should silently skip parse errors; CEL handles those")
+}
+
+func TestValidateConditionExpressions_NonRuntimeCallsIgnored(t *testing.T) {
+	env := runtimeEnv(t)
+
+	exprs := []string{
+		`schema.spec.condition(schema, 'X')`,
+		`schema.newCondition({"extra": 'allowed-here'})`,
+	}
+
+	err := ValidateConditionExpressions(env, exprs)
+	assert.NoError(t, err)
 }

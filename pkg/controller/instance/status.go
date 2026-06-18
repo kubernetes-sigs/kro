@@ -132,14 +132,9 @@ func (m *ConditionsMarker) ResourcesUnderDeletion(msg string, args ...any) {
 // instance object. Used on early-exit paths (e.g. graph resolution failure)
 // where a full ReconcileContext is not available.
 //
-// When the RGD declared an author `conditions:` block (c.hasAuthorConditions
-// is true), kro's four built-in conditions are filtered out before the
-// write — honoring the visibility-rule contract that says only author
-// conditions appear on .status.conditions[]. The author's existing wire
-// conditions (if any) are preserved as-is; state=Error is set.
-//
-// When the RGD has no author conditions block, the four built-ins are
-// written to the wire as before.
+// When the RGD declared an author `conditions:` block, kro's four built-in
+// conditions are filtered out before the write, honoring the visibility rule
+// that only author conditions appear on .status.conditions[].
 func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructured.Unstructured) error {
 	ri := c.client.Dynamic().Resource(c.gvr)
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -215,35 +210,20 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 		}
 	}
 
-	// If the RGD declared author conditions, evaluate them and replace
-	// the wire conditions slice. Expressions that fail with DataPending
-	// are silently omitted from the result. Per the visibility rule,
-	// only the author's conditions appear on the wire when `conditions:`
-	// is present.
-	//
-	// kroBuiltins are kro's currently-computed built-in conditions
-	// (InstanceManaged, GraphResolved, ResourcesReady, Ready). They are
-	// passed into EvaluateConditions so runtime.condition(schema, 'X')
-	// resolves to kro's internal value for the four reserved names
+	// When the RGD declares conditions, only the author's conditions appear
+	// on the wire. kroBuiltins lets runtime.condition(schema, 'X') resolve
+	// kro's internal value for the four reserved condition types.
 	instanceNode := rcx.Runtime.Instance()
 	if instanceNode.HasConditions() {
 		kroBuiltins := condSet.For(&unstructuredWrapper{rcx.Instance}).List()
 		authored, evalErr := instanceNode.EvaluateConditions(rcx.Log, kroBuiltins)
-		// Author conditions that survived evaluation always go on the
-		// wire — even when the result is degraded (some expressions
-		// failed or were dropped due to duplicate types). The author
-		// observes the missing condition + state=Error on the wire,
-		// matching the model where SSA-style apply replaces the
-		// conditions slice and missing entries simply disappear.
 		previous := getPreviousConditions(rcx.Instance)
 		stamped := stampAuthorConditions(authored, previous, rcx.Instance.GetGeneration())
 		status["conditions"] = conditionsToInterfaceSlice(stamped)
 
+		// A degraded result still surfaces its surviving conditions; set
+		// state=Error rather than failing the reconcile.
 		if evalErr != nil {
-			// Surface degraded evaluation by forcing state=Error. The
-			// reconcile is not failed — the workqueue will pick up the
-			// next change normally rather than thrashing on a deterministic
-			// author bug.
 			rcx.Log.Error(evalErr, "author conditions degraded; setting state=Error")
 			status["state"] = string(v1alpha1.InstanceStateError)
 		}

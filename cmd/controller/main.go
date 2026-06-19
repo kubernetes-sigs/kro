@@ -295,6 +295,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Graph controller (kro.run/v1alpha1) runs
+	// alongside the ResourceGraphDefinition stack in the same manager.
+	if err := setupGraphController(mgr, restConfig, set.HTTPClient(), set.Metadata(), rootLogger); err != nil {
+		setupLog.Error(err, "unable to set up Graph controller")
+		os.Exit(1)
+	}
+
 	if err := mgr.Add(dc); err != nil {
 		setupLog.Error(err, "unable to add dynamic controller to manager")
 		os.Exit(1)

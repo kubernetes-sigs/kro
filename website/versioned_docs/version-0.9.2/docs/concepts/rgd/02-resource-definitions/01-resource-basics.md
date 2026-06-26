@@ -90,7 +90,7 @@ CEL expressions in resource templates can reference three things:
 3. **Other resources** - Any field from other resources in your RGD, including their `spec`, `metadata`, and `status`
 
 :::important
-When you reference another resource in a CEL expression, it automatically creates a dependency. This is an implicit way of declaring that one resource depends on another. kro uses these references to determine the correct creation order - ensuring the referenced resource exists before the one referencing it. Learn more about [Dependencies and Ordering](../dependencies-ordering).
+When you reference another resource in a CEL expression, it automatically creates a dependency. This is an implicit way of declaring that one resource depends on another. kro uses these references to determine the correct creation order - ensuring the referenced resource exists before the one referencing it. Learn more about [Dependencies and Ordering](../04-dependencies-ordering.md).
 :::
 :::important
 If a resource references a field, like `schema.spec.myfield` or `resourceid.spec.field`, or `resourceid.status.field`, it creates a hard dependency on the field being present in the instance. You are declaring that the field must exist. Any instance that does not specify that field will fail reconciliation. However, fields that have schema defaults can be safely omitted. Alternatively, you can declare a soft dependency by using the `?` operator, or using the `.orValue("value")` expression. Some examples would be `${resour.status.?vpcID}` or `${vpc.status.?vpcID.orValue("fallback")}`. For more information, see [The Optional Operator](./03-readiness.md#the-optional-operator-)
@@ -151,7 +151,7 @@ In this example:
 - `deployment` references `schema.spec` (name, replicas, image), `schema.metadata.namespace`, `database.metadata.annotations`, `database.spec.version`, and `database.status.endpoint`
 
 :::important
-kro automatically determines that `database` must be created before `deployment`. The deployment waits for the database's endpoint to be available before it can be created. Learn more about [Dependencies and Ordering](../dependencies-ordering).
+kro automatically determines that `database` must be created before `deployment`. The deployment waits for the database's endpoint to be available before it can be created. Learn more about [Dependencies and Ordering](../04-dependencies-ordering.md).
 :::
 
 ## CEL Property Verification
@@ -307,7 +307,7 @@ resources:
 </Tabs>
 </div>
 
-For more details, see [Static Type Checking](../static-type-checking).
+For more details, see [Static Type Checking](../05-static-type-checking.md).
 
 ## How kro Processes Templates
 
@@ -412,7 +412,7 @@ resources:
 </Tabs>
 </div>
 
-For more details, see [Static Type Checking](../static-type-checking).
+For more details, see [Static Type Checking](../05-static-type-checking.md).
 
 ## Validation Errors
 
@@ -510,7 +510,7 @@ status:
       message: "type mismatch in resource \"deployment\" at path \"spec.replicas\": expression \"schema.spec.name\" returns type \"string\" but expected \"integer\""
 ```
 
-For more information about validation errors and type checking, see [Static Type Checking](../static-type-checking).
+For more information about validation errors and type checking, see [Static Type Checking](../05-static-type-checking.md).
 
 ## Next Steps
 

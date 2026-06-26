@@ -27,6 +27,8 @@ import (
 func TestDefaultFeatureGatesAreDisabled(t *testing.T) {
 	assert.False(t, FeatureGate.Enabled(InstanceConditionEvents),
 		"InstanceConditionEvents should be disabled by default (Alpha)")
+	assert.False(t, FeatureGate.Enabled(InstanceConditionMetrics),
+		"InstanceConditionMetrics should be disabled by default (Alpha)")
 	assert.False(t, FeatureGate.Enabled(CELOmitFunction),
 		"CELOmitFunction should be disabled by default (Alpha)")
 }
@@ -49,6 +51,12 @@ func TestDisableFeatureViaSet(t *testing.T) {
 
 	require.NoError(t, gate.Set("InstanceConditionEvents=false"))
 	assert.False(t, gate.Enabled(InstanceConditionEvents))
+
+	require.NoError(t, gate.Set("InstanceConditionMetrics=true"))
+	assert.True(t, gate.Enabled(InstanceConditionMetrics))
+
+	require.NoError(t, gate.Set("InstanceConditionMetrics=false"))
+	assert.False(t, gate.Enabled(InstanceConditionMetrics))
 }
 
 // TestSetUnknownFeatureReturnsError verifies that specifying an unknown
@@ -66,5 +74,6 @@ func TestKnownFeaturesContainsAllRegistered(t *testing.T) {
 	knownStr := strings.Join(known, " ")
 
 	assert.Contains(t, knownStr, string(InstanceConditionEvents))
+	assert.Contains(t, knownStr, string(InstanceConditionMetrics))
 	assert.Contains(t, knownStr, string(CELOmitFunction))
 }

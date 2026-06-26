@@ -24,10 +24,10 @@ runtime failures.
 
 ## How it works
 
-A ResourceGraphDefinition has two parts: a [**schema**](./concepts/rgd/schema) that defines your API
-surface (the fields users fill in), and [**resource templates**](./concepts/rgd/resource-definitions/resource-basics) that reference
-those fields with [CEL expressions](./concepts/rgd/cel-expressions). kro parses the expressions, infers the
-[dependency graph](./concepts/rgd/dependencies-ordering), generates a CRD, and stands up a controller - all at runtime.
+A ResourceGraphDefinition has two parts: a [**schema**](./concepts/rgd/01-schema.md) that defines your API
+surface (the fields users fill in), and [**resource templates**](./concepts/rgd/02-resource-definitions/01-resource-basics.md) that reference
+those fields with [CEL expressions](./concepts/rgd/03-cel-expressions.md). kro parses the expressions, infers the
+[dependency graph](./concepts/rgd/04-dependencies-ordering.md), generates a CRD, and stands up a controller - all at runtime.
 
 <IntroFlow />
 
@@ -71,7 +71,7 @@ object.
 
 ### The definition behind it
 
-A **ResourceGraphDefinition** defines the API under `spec.schema` (see [Simple Schema](./concepts/rgd/schema)) and the
+A **ResourceGraphDefinition** defines the API under `spec.schema` (see [Simple Schema](./concepts/rgd/01-schema.md)) and the
 backing resources under `spec.resources`. CEL expressions (`${}`) are what tie
 those two parts together (this example uses S3 via
 [ACK](https://aws-controllers-k8s.github.io/docs/), but kro works with any
@@ -162,8 +162,8 @@ in custom controller code.
 
 ## Get started
 
-- [Install kro](./getting-started/Installation) to run the controller in your cluster
-- [Deploy your first RGD](./getting-started/deploy-a-resource-graph-definition) to create a new API end to end
-- [Browse examples](../../examples/) to see more patterns
+- [Install kro](./getting-started/01-Installation.md) to run the controller in your cluster
+- [Deploy your first RGD](./getting-started/02-deploy-a-resource-graph-definition.md) to create a new API end to end
+- [Browse examples](../examples/examples.md) to see more patterns
 
 Need help or want to contribute? Join [#kro on Kubernetes Slack](https://kubernetes.slack.com/archives/C081TMY9D6Y), browse [GitHub](https://github.com/kubernetes-sigs/kro), or read [Contributing](https://github.com/kubernetes-sigs/kro/blob/main/CONTRIBUTING.md).

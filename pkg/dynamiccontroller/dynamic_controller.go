@@ -59,6 +59,7 @@ package dynamiccontroller
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -288,7 +289,7 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 	return true
 }
 
-func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers, handler Handler) error {
+func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers, handler Handler) (err error) {
 	gvrKey := keyFromGVR(oi.GVR)
 	dc.log.V(1).Info("Syncing object", "gvr", gvrKey, "key", oi.NamespacedName)
 
@@ -301,7 +302,22 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers,
 			"gvr", gvrKey, "key", oi.NamespacedName, "duration", duration)
 	}()
 
-	err := handler(ctx, ctrl.Request{NamespacedName: oi.NamespacedName})
+	// Recover handler panics so one bad instance can't crash the worker; convert
+	// to an error for the normal requeue path. Also count as a handler error.
+	defer func() {
+		if r := recover(); r != nil {
+			metrics.DynReconcilePanicsTotal.WithLabelValues(gvrKey).Inc()
+			metrics.DynHandlerErrorsTotal.WithLabelValues(gvrKey).Inc()
+			err = fmt.Errorf("recovered from panic in reconcile: %v", r)
+			dc.log.Error(err, "Recovered from panic in instance reconcile",
+				"gvr", gvrKey, "key", oi.NamespacedName)
+			// Stack at V(1) to avoid log spam when a panic repeats every requeue.
+			dc.log.V(1).Info("Panic stack trace",
+				"gvr", gvrKey, "key", oi.NamespacedName, "stack", string(debug.Stack()))
+		}
+	}()
+
+	err = handler(ctx, ctrl.Request{NamespacedName: oi.NamespacedName})
 	// Do not count expected outcomes as handler errors: instance deleted (NotFound)
 	// and requeue signals (RequeueNeeded/RequeueNeededAfter) are normal control flow.
 	if err != nil && !apierrors.IsNotFound(err) && !requeue.IsRequeueError(err) {

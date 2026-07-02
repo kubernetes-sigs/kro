@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
@@ -28,187 +29,114 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
+// liveResource pairs a cluster object with its GVR so deletion can issue
+// the DELETE call without CEL-based identity resolution.
+type liveResource struct {
+	Object *unstructured.Unstructured
+	GVR    schema.GroupVersionResource
+}
+
 // reconcileDeletion drives deletion workflow for an instance.
+//
+// Instead of resolving resource identities via CEL (which fails when the
+// identity depends on another resource that might already be gone), it
+// discovers managed resources by their kro ownership labels and deletes
+// them directly.
 func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
 	rcx.StateManager.State = v1alpha1.InstanceStateDeleting
 	rcx.Mark.ResourcesUnderDeletion("deleting resources")
 
-	deletionNode, err := c.planNodesForDeletion(rcx)
+	live, err := c.discoverLiveResources(rcx)
 	if err != nil {
 		return err
 	}
 
-	if deletionNode != nil {
-		state := rcx.StateManager.NodeStates[deletionNode.Spec.Meta.ID]
-		if err := c.deleteTarget(rcx, deletionNode, state); err != nil {
-			return err
-		}
-		// Deletion is in progress; requeue.
-		return rcx.delayedRequeue(fmt.Errorf("deleting resource %s", deletionNode.Spec.Meta.ID))
+	if len(live) == 0 {
+		return c.removeFinalizer(rcx)
 	}
 
-	return c.removeFinalizer(rcx)
-}
+	// nodesDeleting tracks which nodes had at least one resource deleted or
+	// already terminating. Absent means no live resources found for that node.
+	// Delete errors set state inline and return early, so this set only
+	// contains successful outcomes.
+	nodesDeleting := map[string]struct{}{}
 
-// planNodesForDeletion resolves identities and observes existing objects to
-// select the last deletable node (topologically).
-func (c *Controller) planNodesForDeletion(
-	rcx *ReconcileContext,
-) (*runtime.Node, error) {
-	var deletionNode *runtime.Node
+	for _, res := range live {
+		nodeID := res.Object.GetLabels()[metadata.NodeIDLabel]
 
-	// Loop through nodes in topological order and try to observe their state.
-	// stop at the first node that can't be observed (e.g. due to pending data).
-	for _, node := range rcx.Runtime.Nodes() {
-		rid := node.Spec.Meta.ID
-		nodeMeta := node.Spec.Meta
-
-		state := rcx.StateManager.NewNodeState(rid)
-
-		// 1/ check if the node is ignored.
-		ignored, err := node.IsIgnored()
-		if err != nil {
-			state.SetError(err)
-			return nil, err
-		}
-		if ignored {
-			state.SetSkipped()
+		if res.Object.GetDeletionTimestamp() != nil {
+			nodesDeleting[nodeID] = struct{}{}
 			continue
 		}
 
-		isExternal := nodeMeta.Type == graph.NodeTypeExternal || nodeMeta.Type == graph.NodeTypeExternalCollection
-
-		// Resolve identity without readiness gating. External nodes use this to
-		// locate the resource for observation; managed nodes use it as the deletion target.
-		desired, err := node.GetDesiredIdentity()
-		if err != nil {
-			if !isExternal && runtime.IsDataPending(err) {
-				// Identity depends on a resource that lost its data. Treat as deleted —
-				// there is no better mechanism today for tracking identity across data loss.
-				state.SetDeleted()
-				continue
-			}
-			state.SetError(err)
-			return nil, err
+		var rc dynamic.ResourceInterface = rcx.Client.Resource(res.GVR)
+		if ns := res.Object.GetNamespace(); ns != "" {
+			rc = rcx.Client.Resource(res.GVR).Namespace(ns)
 		}
-
-		// External nodes are never deleted by the controller. Observe them so
-		// downstream managed nodes can resolve their identity from the CEL context.
-		if isExternal {
-			if len(desired) > 0 {
-				if err := c.observeExternal(rcx, node, desired[0]); err != nil {
-					state.SetError(err)
-					return nil, err
-				}
-			}
-			state.SetSkipped()
-			continue
-		}
-
-		if len(desired) == 0 {
-			state.SetDeleted()
-			continue
-		}
-
-		// At this point, identity is resolvable and we can safely observe (GET/LIST)
-		// to find the next deletable node.
-		switch nodeMeta.Type {
-
-		case graph.NodeTypeInstance:
-			panic(fmt.Sprintf("unexpected instance node in deletion: %s", rid))
-
-		case graph.NodeTypeCollection:
-			// Collections are label-selected and can span namespaces; LIST once and
-			// set observed so runtime can compute delete targets in desired order.
-			//
-			// Differently from single resources, we do not do GETs per-item here because
-			// that would be inefficient and cause many API calls during deletion.
-			items, err := c.listCollectionItems(rcx, nodeMeta.GVR, rid)
-			if err != nil {
-				state.SetError(err)
-				return nil, fmt.Errorf("failed to list collection items for %s: %w", rid, err)
-			}
-			if len(items) == 0 {
-				state.SetDeleted()
-				continue
-			}
-			node.SetObserved(items)
-			state.SetInProgress()
-			deletionNode = node
-
-		case graph.NodeTypeResource:
-			// Single resources delete by identity; GET the object to mark observed and
-			// allow DeleteTargets to return the correct target.
-			obj := desired[0]
-			rc := resourceClientFor(rcx, nodeMeta, obj.GetNamespace())
-			observed, err := rc.Get(rcx.Ctx, obj.GetName(), metav1.GetOptions{})
-			if err != nil {
-				if apierrors.IsNotFound(err) {
-					state.SetDeleted()
-					continue
-				}
-				state.SetError(err)
-				return nil, err
-			}
-			node.SetObserved([]*unstructured.Unstructured{observed})
-			state.SetInProgress()
-			deletionNode = node
-
-		default:
-			panic(fmt.Sprintf("unknown node type: %v", nodeMeta.Type))
-		}
-	}
-
-	return deletionNode, nil
-}
-
-// deleteTarget issues delete requests for the node's delete targets and updates state.
-func (c *Controller) deleteTarget(
-	rcx *ReconcileContext,
-	node *runtime.Node,
-	state *NodeState,
-) error {
-	targets, err := node.DeleteTargets()
-	if err != nil {
-		state.SetError(err)
-		return err
-	}
-	if len(targets) == 0 {
-		state.SetDeleted()
-		return nil
-	}
-
-	// Track whether any delete request was accepted. a successful Delete does NOT
-	// mean the object is gone yet, just that deletion is in progress.
-	anyDeleted := false
-	for _, target := range targets {
-		rc := resourceClientFor(rcx, node.Spec.Meta, target.GetNamespace())
-		err := rc.Delete(rcx.Ctx, target.GetName(), metav1.DeleteOptions{})
+		err := rc.Delete(rcx.Ctx, res.Object.GetName(), metav1.DeleteOptions{})
 		if apierrors.IsNotFound(err) {
-			// Already gone: leave anyDeleted as is and keep checking others.
 			continue
 		}
 		if err != nil {
-			state.SetError(err)
+			if nodeID != "" {
+				rcx.StateManager.SetNodeState(nodeID, errorState(err))
+			}
 			return err
 		}
-
-		// at least one delete call was accepted by the API server.
-		anyDeleted = true
+		nodesDeleting[nodeID] = struct{}{}
 	}
 
-	if !anyDeleted {
-		// All targets were NotFound, so the node is fully deleted.
-		state.SetDeleted()
-		return nil
+	for _, node := range rcx.Runtime.Nodes() {
+		id := node.Spec.Meta.ID
+		t := node.Spec.Meta.Type
+		if t == graph.NodeTypeExternal || t == graph.NodeTypeExternalCollection {
+			rcx.StateManager.SetNodeState(id, skippedState())
+		} else if _, deleting := nodesDeleting[id]; deleting {
+			rcx.StateManager.SetNodeState(id, deletingState())
+		} else {
+			rcx.StateManager.SetNodeState(id, deletedState())
+		}
 	}
 
-	// At least one delete call succeeded; resources may still be terminating.
-	state.SetDeleting()
-	return nil
+	return rcx.delayedRequeue(fmt.Errorf("deleting resources"))
+}
+
+// discoverLiveResources finds all managed resources owned by this instance
+// using label selectors. One LIST call per unique GVR, across all namespaces.
+func (c *Controller) discoverLiveResources(
+	rcx *ReconcileContext,
+) ([]liveResource, error) {
+	gvrs := map[schema.GroupVersionResource]struct{}{}
+	for _, node := range rcx.Runtime.Nodes() {
+		switch node.Spec.Meta.Type {
+		case graph.NodeTypeExternal, graph.NodeTypeExternalCollection, graph.NodeTypeInstance:
+			continue
+		}
+		gvrs[node.Spec.Meta.GVR] = struct{}{}
+	}
+
+	instanceUID := string(rcx.Instance.GetUID())
+	selector := fmt.Sprintf("%s=%s", metadata.InstanceIDLabel, instanceUID)
+
+	var result []liveResource
+	for gvr := range gvrs {
+		list, err := rcx.Client.Resource(gvr).List(rcx.Ctx, metav1.ListOptions{
+			LabelSelector: selector,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to list %s for deletion: %w", gvr.Resource, err)
+		}
+		for i := range list.Items {
+			result = append(result, liveResource{
+				Object: &list.Items[i],
+				GVR:    gvr,
+			})
+		}
+	}
+
+	return result, nil
 }
 
 // removeFinalizer clears managed state on the instance after deletions complete.

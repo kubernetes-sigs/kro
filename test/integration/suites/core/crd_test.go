@@ -768,11 +768,12 @@ var _ = Describe("CRD", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, recreatedCRD)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				if recreatedCRD.UID == originalUID {
-					g.Expect(recreatedCRD.DeletionTimestamp).ToNot(BeNil(),
-						"old CRD still exists without deletionTimestamp")
-					g.Expect(false).To(BeTrue(), "old CRD still terminating")
-				}
+				g.Expect(
+					recreatedCRD.UID != originalUID ||
+						recreatedCRD.DeletionTimestamp != nil,
+				).To(BeTrue(), "old CRD still present without deletionTimestamp — waiting for new CRD")
+				g.Expect(recreatedCRD.UID).ToNot(Equal(originalUID),
+					"old CRD still terminating (customresourcecleanup finalizer)")
 
 				g.Expect(metadata.IsKROOwned(&recreatedCRD.ObjectMeta)).To(BeTrue())
 				g.Expect(recreatedCRD.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal(rgdName))

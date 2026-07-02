@@ -44,6 +44,10 @@ func readyState() NodeState {
 	return NodeState{State: v1alpha1.NodeStateSynced}
 }
 
+func deletedState() NodeState {
+	return NodeState{State: v1alpha1.NodeStateDeleted}
+}
+
 func deletingState() NodeState {
 	return NodeState{State: v1alpha1.NodeStateDeleting}
 }

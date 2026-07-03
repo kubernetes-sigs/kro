@@ -46,6 +46,7 @@ import (
 	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	runtimeresolver "github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
 )
 
@@ -637,7 +638,7 @@ func extractTemplateDependencies(
 
 	for _, templateVariable := range node.Variables {
 		expression := templateVariable.Expression
-		nodeDeps, iteratorRefs, err := extractDependencies(inspector, expression, iteratorNames)
+		nodeDeps, iteratorRefs, callsAtLeastOneFunction, err := extractDependencies(inspector, expression, iteratorNames)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to extract dependencies: %w", err)
 		}
@@ -650,6 +651,8 @@ func extractTemplateDependencies(
 			templateVariable.Kind = variable.ResourceVariableKindIteration
 		} else if len(nodeDeps) > 0 && templateVariable.Kind == variable.ResourceVariableKindStatic {
 			templateVariable.Kind = variable.ResourceVariableKindDynamic
+		} else if len(expression.References) == 0 && !callsAtLeastOneFunction {
+			templateVariable.Kind = variable.ResourceVariableKindConstant
 		}
 
 		// Dependencies are tracked in Expression.References
@@ -692,7 +695,7 @@ func extractForEachDependencies(
 	for _, iter := range node.ForEach {
 		// Only pass iteratorNames - we want to detect iterator cross-references.
 		// schema references in forEach are valid (e.g schema.spec.regions).
-		nodeDeps, iteratorRefs, err := extractDependencies(inspector, iter.Expression, iteratorNames)
+		nodeDeps, iteratorRefs, _, err := extractDependencies(inspector, iter.Expression, iteratorNames)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract dependencies from forEach iterator %q: %w", iter.Name, err)
 		}
@@ -730,7 +733,7 @@ func buildInstanceNode(
 		statusVariable.Path = path
 
 		// Extract dependencies from the expression
-		deps, _, err := extractDependencies(inspector, statusVariable.Expression, nil)
+		deps, _, _, err := extractDependencies(inspector, statusVariable.Expression, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract dependencies from expression %q: %w", statusVariable.Expression, err)
 		}
@@ -915,15 +918,16 @@ func inspectExpressionRestricted(inspector *ast.Inspector, expr string, allowedI
 func extractDependencies(inspector *ast.Inspector, expr *krocel.Expression, iteratorVars []string) (
 	resourceDeps []string,
 	iteratorRefs []string,
+	callsAtLeastOneFunction bool,
 	err error,
 ) {
 	inspectionResult, err := inspector.Inspect(expr.Original)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to inspect expression: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to inspect expression: %w", err)
 	}
 
 	if !features.FeatureGate.Enabled(features.CELOmitFunction) && inspectionResult.UsesOmit() {
-		return nil, nil, fmt.Errorf("omit() requires the CELOmitFunction feature gate to be enabled")
+		return nil, nil, false, fmt.Errorf("omit() requires the CELOmitFunction feature gate to be enabled")
 	}
 
 	// Populate expression references
@@ -957,14 +961,15 @@ func extractDependencies(inspector *ast.Inspector, expr *krocel.Expression, iter
 			}
 		} else {
 			// Truly unknown resource
-			return nil, nil, fmt.Errorf("references unknown identifiers: [%s]", unknown.ID)
+			return nil, nil, false, fmt.Errorf("references unknown identifiers: [%s]", unknown.ID)
 		}
 	}
 
 	if len(inspectionResult.UnknownFunctions) > 0 {
-		return nil, nil, fmt.Errorf("uses unknown functions: %v", inspectionResult.UnknownFunctions)
+		return nil, nil, false, fmt.Errorf("uses unknown functions: %v", inspectionResult.UnknownFunctions)
 	}
-	return resourceDeps, iteratorRefs, nil
+
+	return resourceDeps, iteratorRefs, inspectionResult.HasNonOperatorCall(), nil
 }
 
 // extractConditionDependencies extracts resource dependencies from condition
@@ -977,7 +982,7 @@ func extractConditionDependencies(
 	var allDeps []string
 
 	for _, expression := range expressions {
-		nodeDeps, _, err := extractDependencies(inspector, expression, nil)
+		nodeDeps, _, _, err := extractDependencies(inspector, expression, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1202,6 +1207,7 @@ func validateAndCompileNode(bc *buildContext, node *Node, inspector *ast.Inspect
 
 // validateAndCompileTemplates validates and compiles CEL template expressions for a single node.
 // For collections with forEach, the env is extended with iterator variable declarations.
+// Constants are evaluated immediately and replaced in the template.
 func validateAndCompileTemplates(
 	bc *buildContext,
 	node *Node,
@@ -1226,6 +1232,8 @@ func validateAndCompileTemplates(
 		}
 	}
 
+	var constantDescriptors []variable.FieldDescriptor
+	values := make(map[string]any)
 	for _, templateVariable := range node.Variables {
 		// Compute expected type for this field
 		expectedType := expectedTypeForField(bc, &templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID)
@@ -1242,7 +1250,44 @@ func validateAndCompileTemplates(
 		if err := validateExpressionType(outputType, expectedType, displayExpr, node.Meta.ID, templateVariable.Path, bc.typeProvider); err != nil {
 			return err
 		}
+
+		// Evaluate constant expressions immediately
+		if templateVariable.Kind.IsConstant() {
+			out, _, err := expression.Program.Eval(map[string]any{})
+			if err != nil {
+				return fmt.Errorf("constant at %q: %w", templateVariable.Path, err)
+			}
+
+			native, err := conversion.GoNativeType(out)
+			if err != nil {
+				return fmt.Errorf("convert constant at %q: %w", templateVariable.Path, err)
+			}
+
+			values[expression.Original] = native
+			constantDescriptors = append(constantDescriptors, variable.FieldDescriptor{
+				Path:       templateVariable.Path,
+				Expression: expression,
+			})
+		}
 	}
+
+	// Update node and template with value of constant expressions
+	if len(constantDescriptors) > 0 {
+		res := runtimeresolver.NewResolver(node.Template.Object, values)
+		summary := res.Resolve(constantDescriptors)
+		if len(summary.Errors) > 0 {
+			return fmt.Errorf("resolve constants: %v", summary.Errors)
+		}
+
+		filtered := make([]*variable.ResourceField, 0, len(node.Variables))
+		for _, v := range node.Variables {
+			if !v.Kind.IsConstant() {
+				filtered = append(filtered, v)
+			}
+		}
+		node.Variables = filtered
+	}
+
 	return nil
 }
 

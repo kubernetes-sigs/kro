@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	celast "github.com/google/cel-go/common/ast"
+	"github.com/google/cel-go/common/operators"
 	"github.com/google/cel-go/common/types"
 )
 
@@ -87,6 +88,19 @@ type ExpressionInspection struct {
 func (e *ExpressionInspection) UsesOmit() bool {
 	for _, fc := range e.FunctionCalls {
 		if fc.Name == "omit" {
+			return true
+		}
+	}
+	return false
+}
+
+// HasNonOperatorCall reports whether the inspected expression contains any
+// non-operator function calls. CEL represents operators (like +, -, /, etc.)
+// as function calls, but they're pure and safe to evaluate at build time.
+// This method distinguishes actual function calls from operators.
+func (e *ExpressionInspection) HasNonOperatorCall() bool {
+	for _, fc := range e.FunctionCalls {
+		if _, isOperator := operators.FindReverse(fc.Name); !isOperator {
 			return true
 		}
 	}

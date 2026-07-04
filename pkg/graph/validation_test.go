@@ -733,7 +733,7 @@ func TestValidateCombinableResourceFields(t *testing.T) {
 		{
 			name:    "missing both template and external ref",
 			res:     &v1alpha1.Resource{ID: "res"},
-			wantErr: "exactly one of template or externalRef must be provided",
+			wantErr: "exactly one of template, externalRef, or variable must be provided",
 		},
 		{
 			name: "template and external ref together",
@@ -742,7 +742,16 @@ func TestValidateCombinableResourceFields(t *testing.T) {
 				Template:    runtime.RawExtension{Raw: []byte("kind: ConfigMap")},
 				ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap"},
 			},
-			wantErr: "cannot use externalRef with template",
+			wantErr: "exactly one of template, externalRef, or variable must be provided",
+		},
+		{
+			name: "template, externalRef, and variable together",
+			res: &v1alpha1.Resource{
+				ID:          "res",
+				Template:    runtime.RawExtension{Raw: []byte("kind: ConfigMap")},
+				ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap"},
+			},
+			wantErr: "exactly one of template, externalRef, or variable must be provided",
 		},
 		{
 			name: "external ref and foreach together",
@@ -765,6 +774,13 @@ func TestValidateCombinableResourceFields(t *testing.T) {
 			res: &v1alpha1.Resource{
 				ID:          "res",
 				ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap"},
+			},
+		},
+		{
+			name: "variable only is valid",
+			res: &v1alpha1.Resource{
+				ID:       "res",
+				Variable: runtime.RawExtension{Raw: []byte("var: a")},
 			},
 		},
 	}

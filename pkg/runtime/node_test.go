@@ -1835,7 +1835,7 @@ var testEnv = func() *cel.Env {
 		"child", "parent", "grandparent", "ignoredParent", "missing",
 		"source", "middle",
 		"buckets", "external", "a", "b", "policy", "configs", "results",
-		"optional", "subnets",
+		"optional", "subnets", "labels",
 	}))
 	if err != nil {
 		panic(err)
@@ -3096,6 +3096,74 @@ func TestNode_GetDesired(t *testing.T) {
 			},
 		},
 		{
+			name: "variable node with forEach expands into multiple results",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{
+							"app":     "myapp",
+							"regions": []any{"east", "west", "central"},
+						},
+					}).build()
+
+				node := newTestNode("labels", graph.NodeTypeVariableCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					withTemplateVar("label", "schema.spec.app + '-' + region").
+					withTemplateExpr("schema.spec.app", variable.ResourceVariableKindStatic).
+					withTemplateExpr("schema.spec.app + '-' + region", variable.ResourceVariableKindIteration).
+					withTemplate(map[string]any{
+						"label": "${schema.spec.app + '-' + region}",
+					}).
+					build()
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				return node
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				require.Len(t, result, 3)
+				labels := make([]string, 3)
+				for i, r := range result {
+					val, _, _ := unstructured.NestedString(r.Object, "label")
+					labels[i] = val
+				}
+				assert.Equal(t, []string{"myapp-east", "myapp-west", "myapp-central"}, labels)
+			},
+		},
+		{
+			name: "collection identity collisions are rejected",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"metadata": map[string]any{"namespace": "tenant-a"},
+						"spec":     map[string]any{"regions": []any{"dup", "dup"}},
+					}).build()
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${region}"},
+					}).
+					withTemplateVar("metadata.name", "region").
+					withTemplateExpr("region", variable.ResourceVariableKindIteration).
+					build()
+				node.Spec.Meta.Namespaced = true
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				node.forEachExprs[0].Expression.References = []string{"schema"}
+				return node
+			},
+			validate: func(t *testing.T, _ []*unstructured.Unstructured, err error) {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "identity collision")
+			},
+		},
+		{
 			name: "unknown node types panic",
 			node: func() *Node {
 				return newTestNode("mystery", graph.NodeType(99)).build()
@@ -3440,34 +3508,6 @@ func TestNode_HardResolveCollection_Errors(t *testing.T) {
 				return node
 			},
 			wantErrContain: "collection resolve: resolve errors",
-		},
-		{
-			name: "identity collisions are rejected",
-			node: func() *Node {
-				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
-					withObserved(map[string]any{
-						"metadata": map[string]any{"namespace": "tenant-a"},
-						"spec":     map[string]any{"regions": []any{"dup", "dup"}},
-					}).build()
-				node := newTestNode("configs", graph.NodeTypeCollection).
-					withDep(schema).
-					withForEach("schema.spec.regions").
-					withTemplate(map[string]any{
-						"apiVersion": "v1",
-						"kind":       "ConfigMap",
-						"metadata":   map[string]any{"name": "${region}"},
-					}).
-					withTemplateVar("metadata.name", "region").
-					withTemplateExpr("region", variable.ResourceVariableKindIteration).
-					build()
-				node.Spec.Meta.Namespaced = true
-				node.Spec.ForEach = []graph.ForEachDimension{
-					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
-				}
-				node.forEachExprs[0].Expression.References = []string{"schema"}
-				return node
-			},
-			wantErrContain: "identity collision",
 		},
 	}
 

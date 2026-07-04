@@ -122,10 +122,6 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 		expanded = append(expanded, desired)
 	}
 
-	if err := validateUniqueIdentities(expanded); err != nil {
-		return nil, fmt.Errorf("node %q identity collision: %w", n.Spec.Meta.ID, err)
-	}
-
 	return expanded, nil
 }
 

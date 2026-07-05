@@ -15,6 +15,7 @@
 package runtime
 
 import (
+	"fmt"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -113,10 +114,13 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 	rt.instance = instNode
 
 	// Phase 2: Wire up dependencies for each node.
-	// Inject instance node as "schema" dep for static expression evaluation.
+	instanceData := withStatusOmitted(instanceObj.Object)
 	for _, id := range rt.order {
 		node := rt.nodes[id]
 		node.deps[graph.InstanceNodeID] = instNode
+		if err := preprocessNodeDependencies(g, node.Spec, instanceData); err != nil {
+			return nil, fmt.Errorf("failed to filter dependencies for node %q: %w", id, err)
+		}
 		for _, depID := range node.Spec.Meta.Dependencies {
 			if dep, ok := rt.nodes[depID]; ok {
 				node.deps[depID] = dep
@@ -125,6 +129,9 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 	}
 
 	// Wire up instance node dependencies.
+	if err := preprocessNodeDependencies(g, instNode.Spec, instanceData); err != nil {
+		return nil, fmt.Errorf("failed to filter dependencies for instance node: %w", err)
+	}
 	for _, depID := range instNode.Spec.Meta.Dependencies {
 		if dep, ok := rt.nodes[depID]; ok {
 			instNode.deps[depID] = dep

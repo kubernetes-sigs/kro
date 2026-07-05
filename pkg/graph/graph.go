@@ -15,6 +15,8 @@
 package graph
 
 import (
+	"sync"
+
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
@@ -47,4 +49,9 @@ type Graph struct {
 	// Includes resource schemas (keyed by resource ID) and the instance schema
 	// (keyed by InstanceNodeID). Used at runtime for schema-aware CEL value conversion.
 	ResourceSchemas map[string]*spec.Schema
+
+	// SchemaHashToProcessedDeps caches dependency filtering results.
+	// Key: "specHash:nodeID"
+	// Value: []string (filtered dependencies for that node with that spec)
+	SchemaHashToProcessedDeps sync.Map
 }

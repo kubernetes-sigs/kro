@@ -117,6 +117,22 @@ type ForEachDimension struct {
 // It contains the template, variables, and conditions for a resource.
 // No CRD/schema references are kept here - schemas are only used
 // during build for CEL type-checking.
+//
+// EXPRESSION TYPES: Node contains 4 types of CEL expressions:
+//   - Variables: Template fields (e.g., ${db.host})
+//   - IncludeWhen: Conditions for whether to create resource
+//   - ReadyWhen: Conditions for resource readiness
+//   - ForEach: Iterator expressions for collections
+//
+// When adding new expression types, update these locations:
+//  1. pkg/graph/builder.go: extractTemplateDependencies, extractForEachDependencies, extractConditionDependencies
+//  2. pkg/graph/builder.go: compileNode (expression compilation)
+//  3. pkg/runtime/filter_dependency.go: filterDependencies (runtime dep filtering)
+//  4. pkg/runtime/runtime.go: Phase 3 of FromGraph (expression wiring)
+//  5. pkg/runtime/node_resolve.go: ExpandCollection (if relevant to collections)
+//
+// Note: The need to update expressions across multiple fields is becoming repetitive.
+// Future refactor could consolidate into a single Expressions list that each field references.
 type Node struct {
 	// Meta contains identification metadata (ID, Type, GVR, etc.)
 	Meta NodeMeta
@@ -141,6 +157,46 @@ type Node struct {
 	ForEach []ForEachDimension
 }
 
+// cloneExpression creates a deep copy of an Expression.
+func cloneExpression(expr *krocel.Expression) *krocel.Expression {
+	if expr == nil {
+		return nil
+	}
+	return &krocel.Expression{
+		Original:         expr.Original,
+		OriginalTemplate: expr.OriginalTemplate,
+		References:       slices.Clone(expr.References),
+		Program:          expr.Program,
+	}
+}
+
+// cloneExpressionSlice creates a deep copy of an expression slice.
+func cloneExpressionSlice(exprs []*krocel.Expression) []*krocel.Expression {
+	if exprs == nil {
+		return nil
+	}
+	result := make([]*krocel.Expression, len(exprs))
+	for i, expr := range exprs {
+		result[i] = cloneExpression(expr)
+	}
+	return result
+}
+
+// cloneForEachDimensions creates a deep copy of forEach dimensions.
+func cloneForEachDimensions(dims []ForEachDimension) []ForEachDimension {
+	if dims == nil {
+		return nil
+	}
+	result := make([]ForEachDimension, len(dims))
+	for i, dim := range dims {
+		result[i] = ForEachDimension{
+			Name:       dim.Name,
+			Expression: cloneExpression(dim.Expression),
+		}
+	}
+	return result
+}
+
 // DeepCopy creates a deep copy of the Node.
 // Use this when runtime needs a per-runtime clone to avoid shared slices/maps.
 func (n *Node) DeepCopy() *Node {
@@ -157,9 +213,9 @@ func (n *Node) DeepCopy() *Node {
 			Namespaced:   n.Meta.Namespaced,
 			Dependencies: slices.Clone(n.Meta.Dependencies),
 		},
-		IncludeWhen: slices.Clone(n.IncludeWhen),
-		ReadyWhen:   slices.Clone(n.ReadyWhen),
-		ForEach:     slices.Clone(n.ForEach),
+		IncludeWhen: cloneExpressionSlice(n.IncludeWhen),
+		ReadyWhen:   cloneExpressionSlice(n.ReadyWhen),
+		ForEach:     cloneForEachDimensions(n.ForEach),
 	}
 
 	if n.Template != nil {
@@ -170,7 +226,7 @@ func (n *Node) DeepCopy() *Node {
 		cp.Variables = make([]*variable.ResourceField, len(n.Variables))
 		for i, v := range n.Variables {
 			copyVar := *v
-			copyVar.Expression = new(*v.Expression)
+			copyVar.Expression = cloneExpression(v.Expression)
 			cp.Variables[i] = &copyVar
 		}
 	}

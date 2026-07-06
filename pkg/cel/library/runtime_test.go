@@ -528,6 +528,20 @@ func TestValidateConditionExpressions_AllowsBuiltInLookup(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestValidateConditionExpressions_AllowsBuiltInLookupWhenAuthorOverridesIt(t *testing.T) {
+	env := runtimeEnv(t)
+
+	exprs := []string{
+		`runtime.newCondition({type: 'ResourcesReady', status: 'True', reason: '', message: ''})`,
+		`runtime.newCondition({type: 'DerivedReady',
+			status: runtime.condition(schema, 'ResourcesReady').status,
+			reason: '', message: ''})`,
+	}
+
+	err := ValidateConditionExpressions(env, exprs)
+	assert.NoError(t, err)
+}
+
 func TestValidateConditionExpressions_EmptyList(t *testing.T) {
 	env := runtimeEnv(t)
 

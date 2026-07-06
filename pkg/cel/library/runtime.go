@@ -25,6 +25,8 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
 	"github.com/google/cel-go/parser"
+
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 // Runtime returns a CEL library that provides the `runtime` variable used
@@ -675,6 +677,10 @@ func validateCondition(call ast.Expr, customTypes map[string]struct{}, exprText 
 	typeName, ok := literalString(typeArg)
 	if !ok {
 		return nil // Dynamic type; runtime check.
+	}
+
+	if _, isBuiltin := v1alpha1.KROBuiltinConditionTypes[typeName]; isBuiltin {
+		return nil
 	}
 
 	if _, isCustom := customTypes[typeName]; isCustom {

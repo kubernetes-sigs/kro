@@ -92,7 +92,8 @@ var _ = Describe("Instance Custom Conditions", func() {
 				map[string]interface{}{"name": "string"},
 				map[string]interface{}{
 					"conditions": []interface{}{
-						`${runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: 'OK', message: 'always healthy in this test'})}`,
+						`${runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: 'OK',
+							message: 'always healthy in this test'})}`,
 						`${runtime.newCondition({type: 'AppReady', status: 'False', reason: 'Init', message: ''})}`,
 					},
 				},
@@ -278,7 +279,7 @@ var _ = Describe("Instance Custom Conditions", func() {
 
 			var ready *krov1alpha1.Condition
 			for _, c := range rgd.Status.Conditions {
-				if c.Type == ctrlinstance.Ready {
+				if string(c.Type) == ctrlinstance.Ready {
 					ready = &c
 					break
 				}
@@ -322,7 +323,8 @@ var _ = Describe("Instance Custom Conditions", func() {
 				map[string]interface{}{
 					"conditions": []interface{}{
 						`${runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: '', message: ''})}`,
-						`${runtime.newCondition({type: 'Ready', status: runtime.condition(schema, 'PrimaryReady').status, reason: '', message: ''})}`,
+						`${runtime.newCondition({type: 'Ready',
+							status: runtime.condition(schema, 'PrimaryReady').status, reason: '', message: ''})}`,
 					},
 				},
 			),
@@ -397,7 +399,8 @@ var _ = Describe("Instance Custom Conditions", func() {
 				},
 				map[string]interface{}{
 					"conditions": []interface{}{
-						`${runtime.newCondition({type: 'AppReady', status: schema.spec.healthy ? 'True' : 'False', reason: 'CheckedSpec', message: ''})}`,
+						`${runtime.newCondition({type: 'AppReady', status: schema.spec.healthy ? 'True' : 'False',
+							reason: 'CheckedSpec', message: ''})}`,
 					},
 				},
 			),
@@ -472,7 +475,7 @@ var _ = Describe("Instance Custom Conditions", func() {
 				"kind":       "ConfigMap",
 				"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
 				"data":       map[string]interface{}{"foo": "${schema.spec.name}"},
-			}, []string{`configmap.data["ready"] == "true"`}, nil),
+			}, []string{`${configmap.data["ready"] == "true"}`}, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega) {

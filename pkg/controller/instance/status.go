@@ -32,10 +32,10 @@ import (
 )
 
 const (
-	Ready           = "Ready"
-	InstanceManaged = "InstanceManaged"
-	GraphResolved   = "GraphResolved"
-	ResourcesReady  = "ResourcesReady"
+	Ready           = string(v1alpha1.InstanceConditionTypeReady)
+	InstanceManaged = string(v1alpha1.InstanceConditionTypeInstanceManaged)
+	GraphResolved   = string(v1alpha1.InstanceConditionTypeGraphResolved)
+	ResourcesReady  = string(v1alpha1.InstanceConditionTypeResourcesReady)
 )
 
 var condSet = apis.NewReadyConditions(InstanceManaged, GraphResolved, ResourcesReady)

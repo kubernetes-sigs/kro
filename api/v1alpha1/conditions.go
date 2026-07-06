@@ -54,6 +54,24 @@ const (
 	RGDConditionTypeControllerReady ConditionType = "ControllerReady"
 )
 
+// Instance built-in condition types. kro computes these on every managed
+// instance and injects their internal values into author CEL evaluation, so
+// runtime.condition(schema, 'X') can read them even when an author emits a
+// condition with the same type.
+const (
+	InstanceConditionTypeReady           ConditionType = "Ready"
+	InstanceConditionTypeInstanceManaged ConditionType = "InstanceManaged"
+	InstanceConditionTypeGraphResolved   ConditionType = "GraphResolved"
+	InstanceConditionTypeResourcesReady  ConditionType = "ResourcesReady"
+)
+
+var KROBuiltinConditionTypes = map[string]struct{}{
+	string(InstanceConditionTypeReady):           {},
+	string(InstanceConditionTypeInstanceManaged): {},
+	string(InstanceConditionTypeGraphResolved):   {},
+	string(InstanceConditionTypeResourcesReady):  {},
+}
+
 // Condition is the common struct used by all CRDs managed by ACK service
 // controllers to indicate terminal states  of the CR and its backend AWS
 // service API resource

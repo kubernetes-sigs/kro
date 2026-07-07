@@ -271,8 +271,11 @@ status:
   state: ACTIVE  # ACTIVE | IN_PROGRESS | FAILED | DELETING | ERROR
 ```
 
+You can define your own `conditions` to publish domain-specific conditions
+instead of kro's built-ins. See [Custom Status Conditions](./06-status-conditions.md).
+
 :::warning
-`conditions` and `state` are reserved fields. kro will override them if you define them in your schema.
+`state` is a reserved field. kro will override it if you define it in your schema.
 :::
 
 ## How kro Uses the Schema

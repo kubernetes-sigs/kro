@@ -70,6 +70,13 @@ var (
 		},
 		[]string{"gvr"},
 	)
+	DynReconcilePanicsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "dynamic_controller_reconcile_panics_total",
+			Help: "Total number of panics recovered during reconciliation per GVR",
+		},
+		[]string{"gvr"},
+	)
 	DynInformerSyncDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "dynamic_controller_informer_sync_duration_seconds",

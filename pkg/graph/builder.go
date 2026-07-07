@@ -50,23 +50,32 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
 )
 
-// NewBuilder creates a new GraphBuilder instance.
-func NewBuilder(clientConfig *rest.Config, httpClient *http.Client) (*Builder, error) {
-	schemaResolver, err := schemaresolver.NewCombinedResolver(clientConfig, httpClient)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create schema resolver: %w", err)
+// NewBuilder creates a new Builder. By default it uses CombinedResolver for
+// schema resolution and DynamicRESTMapper for resource discovery. Both can be
+// overridden with BuilderOptions.
+func NewBuilder(clientConfig *rest.Config, httpClient *http.Client, opts ...BuilderOption) (*Builder, error) {
+	b := &Builder{}
+	for _, opt := range opts {
+		opt(b)
 	}
 
-	rm, err := apiutil.NewDynamicRESTMapper(clientConfig, httpClient)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create dynamic REST mapper: %w", err)
+	if b.schemaResolver == nil {
+		sr, err := schemaresolver.NewCombinedResolver(clientConfig, httpClient)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create schema resolver: %w", err)
+		}
+		b.schemaResolver = sr
 	}
 
-	rgBuilder := &Builder{
-		schemaResolver: schemaResolver,
-		restMapper:     rm,
+	if b.restMapper == nil {
+		rm, err := apiutil.NewDynamicRESTMapper(clientConfig, httpClient)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create dynamic REST mapper: %w", err)
+		}
+		b.restMapper = rm
 	}
-	return rgBuilder, nil
+
+	return b, nil
 }
 
 // Builder is an object that is responsible for constructing and managing
@@ -96,6 +105,19 @@ type Builder struct {
 	// schemaResolver is used to resolve the OpenAPI schema for the resources.
 	schemaResolver resolver.SchemaResolver
 	restMapper     meta.RESTMapper
+}
+
+// BuilderOption is an option for configuring a Builder.
+type BuilderOption func(*Builder)
+
+// WithSchemaResolver allows configuring a custom SchemaResolver for a Builder.
+func WithSchemaResolver(r resolver.SchemaResolver) BuilderOption {
+	return func(b *Builder) { b.schemaResolver = r }
+}
+
+// WithRESTMapper allows configuring a custom RESTMapper for a Builder.
+func WithRESTMapper(rm meta.RESTMapper) BuilderOption {
+	return func(b *Builder) { b.restMapper = rm }
 }
 
 // RGDConfig holds RGD runtime configuration parameters.

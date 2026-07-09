@@ -115,3 +115,17 @@ helm template kro ./helm \
    ```shell
    kubectl get noops -oyaml
    ```
+
+## Testing
+
+Run tests with `make test WHAT=unit` or `make test WHAT=integration`.
+
+You can pass additional test flags after `--`:
+
+```bash
+# Run specific integration tests by pattern
+make test WHAT=integration -- --focus 'GraphRevision Integration'
+
+# Run specific unit test
+make test WHAT=unit -- -v -run TestBuilder
+```

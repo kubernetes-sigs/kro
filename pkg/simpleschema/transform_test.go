@@ -163,7 +163,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 							Schema: &extv1.JSONSchemaProps{
 								Type: "array",
 								Items: &extv1.JSONSchemaPropsOrArray{
-									Schema: &extv1.JSONSchemaProps{Type: "float"},
+									Schema: &extv1.JSONSchemaProps{Type: "number"},
 								},
 							},
 						},

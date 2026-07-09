@@ -18,6 +18,7 @@ package unstructured
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -202,11 +203,32 @@ func TestUnstructuredToVal_Integer(t *testing.T) {
 		{"int", int(42)},
 		{"int32", int32(42)},
 		{"int64", int64(42)},
+		{"float64 whole", float64(42)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			val := UnstructuredToVal(tt.input, schema("integer"))
 			assert.Equal(t, types.Int(42), val)
+		})
+	}
+}
+
+func TestUnstructuredToVal_Integer_RejectsNonInteger(t *testing.T) {
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"float64 fractional", float64(1.5)},
+		{"float64 NaN", math.NaN()},
+		{"float64 +Inf", math.Inf(1)},
+		{"float64 -Inf", math.Inf(-1)},
+		{"string", "1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val := UnstructuredToVal(tt.input, schema("integer"))
+			_, isErr := val.(*types.Err)
+			assert.True(t, isErr, "expected *types.Err for input %v, got %T", tt.input, val)
 		})
 	}
 }

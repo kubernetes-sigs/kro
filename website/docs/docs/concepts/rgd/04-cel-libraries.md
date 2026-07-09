@@ -158,6 +158,28 @@ nodeSelector: ${schema.spec.pinToNode ? {"kubernetes.io/hostname": schema.spec.n
 `omit()` is only allowed in resource template fields. It is rejected in `includeWhen`, `readyWhen`, and `forEach` expressions.
 :::
 
+### Runtime
+
+The `runtime` variable builds and reads instance status conditions. It is only
+available in the schema's `status.conditions` block.
+
+| Function | Returns | Description |
+|---|---|---|
+| `runtime.newCondition({type, status, reason, message})` | `Condition` | Builds a condition. `type` and `status` are required; `status` must be `True`, `False`, or `Unknown`. |
+| `runtime.condition(schema, type)` | `Condition` | Reads kro's internal value for a built-in condition type (`Ready`, `InstanceManaged`, `GraphResolved`, `ResourcesReady`). |
+
+**Examples:**
+
+```kro
+# Publish an application-level condition
+- ${runtime.newCondition({type: 'AppReady', status: deployment.status.readyReplicas > 0 ? 'True' : 'False', reason: 'ReplicaCount', message: ''})}
+
+# Compose kro's lifecycle signal with a domain check
+- ${runtime.newCondition({type: 'Ready', status: runtime.condition(schema, 'ResourcesReady').status == 'True' && deployment.status.readyReplicas > 0 ? 'True' : 'False', reason: 'Health', message: ''})}
+```
+
+See [Custom Status Conditions](./06-status-conditions.md) for details.
+
 
 ## cel-go Libraries
 

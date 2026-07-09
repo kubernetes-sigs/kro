@@ -31,7 +31,14 @@ const (
 func (a Atomic) Deps() []string { return nil }
 
 func (a Atomic) Schema(_ Resolver) (*extv1.JSONSchemaProps, error) {
-	return &extv1.JSONSchemaProps{Type: string(a)}, nil
+	t := string(a)
+	if a == Float {
+		// OpenAPI schema does not have a "float" type.
+		// CEL only recognises "number", so using "float" here causes fields
+		// to appear as undefined in CEL expression compilation.
+		t = "number"
+	}
+	return &extv1.JSONSchemaProps{Type: t}, nil
 }
 
 // IsAtomic returns true if s is an atomic type name.

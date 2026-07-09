@@ -2448,7 +2448,7 @@ func TestNode_TemplateVarsForPaths(t *testing.T) {
 		},
 		{
 			name:      "filters to identity paths",
-			paths:     identityPaths[graph.NodeTypeResource],
+			paths:     identityPathsForNodeType(graph.NodeTypeResource),
 			wantPaths: []string{"metadata.name", "metadata.namespace"},
 		},
 		{
@@ -2736,6 +2736,59 @@ func TestNode_GetDesiredIdentity(t *testing.T) {
 			validate: func(t *testing.T, _ []*unstructured.Unstructured, err error) {
 				require.Error(t, err)
 				assert.ErrorIs(t, err, ErrDataPending)
+			},
+		},
+		{
+			name: "collection identity ignores annotations with dependencies",
+			node: func() *Node {
+				// Create a dependency node that is NOT observed (simulates empty forEach)
+				depNode := newTestNode("a", graph.NodeTypeCollection).build()
+				// depNode has no observed state, so size(a) would fail
+
+				// Create instance with items for forEach
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{
+							"items": []any{
+								map[string]any{"id": "x"},
+							},
+						},
+					}).
+					build()
+
+				// Collection B has annotation that references depNode via size(a)
+				// But identity (metadata.name) only depends on the forEach item
+				node := newTestNode("b", graph.NodeTypeCollection).
+					withDep(schema).
+					withDep(depNode).
+					withForEach("schema.spec.items").
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata": map[string]any{
+							"name": "${item.id}",
+							"annotations": map[string]any{
+								"dep": "${string(size(a))}",
+							},
+						},
+					}).
+					withTemplateVar("metadata.name", "item.id").
+					withTemplateVar("metadata.annotations.dep", "string(size(a))").
+					withTemplateExpr("item.id", variable.ResourceVariableKindIteration).
+					withTemplateExpr("string(size(a))", variable.ResourceVariableKindStatic).
+					build()
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "item", Expression: krocel.NewUncompiled("schema.spec.items")},
+				}
+				node.forEachExprs[0].Expression.References = []string{"schema"}
+				node.templateExprs[1].Expression.References = []string{"a"}
+				return node
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				// Should succeed - annotations should NOT be evaluated for identity
+				require.NoError(t, err, "GetDesiredIdentity should ignore annotations")
+				require.Len(t, result, 1)
+				assert.Equal(t, "x", result[0].GetName())
 			},
 		},
 		{

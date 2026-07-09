@@ -34,6 +34,7 @@ metrics:
 | `dynamic_controller_reconcile_duration_seconds` | Histogram | Duration of reconciliations per GVR in seconds | ALPHA |
 | `dynamic_controller_requeue_total` | Counter | Total number of requeues per GVR and requeue type | ALPHA |
 | `dynamic_controller_handler_errors_total` | Counter | Total number of handler errors per GVR | ALPHA |
+| `dynamic_controller_reconcile_panics_total` | Counter | Total number of panics recovered during reconciliation per GVR | ALPHA |
 | `dynamic_controller_queue_length` | Gauge | Current length of the workqueue | ALPHA |
 | `dynamic_controller_gvr_count` | Gauge | Number of instance GVRs currently managed by the controller | ALPHA |
 | `dynamic_controller_handler_count_total` | Gauge | Number of active handlers by type (parent or child) | ALPHA |

@@ -702,3 +702,247 @@ func TestCompareArrayItems(t *testing.T) {
 		})
 	}
 }
+
+func TestCompareConstraints(t *testing.T) {
+	floatPtr := func(f float64) *float64 { return &f }
+	intPtr := func(i int64) *int64 { return &i }
+
+	tests := []struct {
+		name               string
+		oldSchema          *v1.JSONSchemaProps
+		newSchema          *v1.JSONSchemaProps
+		breakingCount      int
+		nonBreakingCount   int
+		expectedChangeType ChangeType
+	}{
+		// Minimum
+		{
+			name:      "minimum unchanged",
+			oldSchema: &v1.JSONSchemaProps{Type: "integer", Minimum: floatPtr(5)},
+			newSchema: &v1.JSONSchemaProps{Type: "integer", Minimum: floatPtr(5)},
+		},
+		{
+			name:               "minimum added - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "integer"},
+			newSchema:          &v1.JSONSchemaProps{Type: "integer", Minimum: floatPtr(5)},
+			breakingCount:      1,
+			expectedChangeType: MinimumAdded,
+		},
+		{
+			name:             "minimum removed - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "integer", Minimum: floatPtr(5)},
+			newSchema:        &v1.JSONSchemaProps{Type: "integer"},
+			nonBreakingCount: 1,
+		},
+		{
+			name:               "minimum increased - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "integer", Minimum: floatPtr(1)},
+			newSchema:          &v1.JSONSchemaProps{Type: "integer", Minimum: floatPtr(5)},
+			breakingCount:      1,
+			expectedChangeType: MinimumIncreased,
+		},
+		{
+			name:             "minimum decreased - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "integer", Minimum: floatPtr(5)},
+			newSchema:        &v1.JSONSchemaProps{Type: "integer", Minimum: floatPtr(1)},
+			nonBreakingCount: 1,
+		},
+		// Maximum
+		{
+			name:      "maximum unchanged",
+			oldSchema: &v1.JSONSchemaProps{Type: "integer", Maximum: floatPtr(100)},
+			newSchema: &v1.JSONSchemaProps{Type: "integer", Maximum: floatPtr(100)},
+		},
+		{
+			name:               "maximum added - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "integer"},
+			newSchema:          &v1.JSONSchemaProps{Type: "integer", Maximum: floatPtr(100)},
+			breakingCount:      1,
+			expectedChangeType: MaximumAdded,
+		},
+		{
+			name:             "maximum removed - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "integer", Maximum: floatPtr(100)},
+			newSchema:        &v1.JSONSchemaProps{Type: "integer"},
+			nonBreakingCount: 1,
+		},
+		{
+			name:               "maximum decreased - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "integer", Maximum: floatPtr(100)},
+			newSchema:          &v1.JSONSchemaProps{Type: "integer", Maximum: floatPtr(50)},
+			breakingCount:      1,
+			expectedChangeType: MaximumDecreased,
+		},
+		{
+			name:             "maximum increased - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "integer", Maximum: floatPtr(50)},
+			newSchema:        &v1.JSONSchemaProps{Type: "integer", Maximum: floatPtr(100)},
+			nonBreakingCount: 1,
+		},
+		// MinLength
+		{
+			name:      "minLength unchanged",
+			oldSchema: &v1.JSONSchemaProps{Type: "string", MinLength: intPtr(3)},
+			newSchema: &v1.JSONSchemaProps{Type: "string", MinLength: intPtr(3)},
+		},
+		{
+			name:               "minLength added - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "string"},
+			newSchema:          &v1.JSONSchemaProps{Type: "string", MinLength: intPtr(3)},
+			breakingCount:      1,
+			expectedChangeType: MinLengthAdded,
+		},
+		{
+			name:             "minLength removed - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "string", MinLength: intPtr(3)},
+			newSchema:        &v1.JSONSchemaProps{Type: "string"},
+			nonBreakingCount: 1,
+		},
+		{
+			name:               "minLength increased - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "string", MinLength: intPtr(3)},
+			newSchema:          &v1.JSONSchemaProps{Type: "string", MinLength: intPtr(5)},
+			breakingCount:      1,
+			expectedChangeType: MinLengthIncreased,
+		},
+		{
+			name:             "minLength decreased - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "string", MinLength: intPtr(5)},
+			newSchema:        &v1.JSONSchemaProps{Type: "string", MinLength: intPtr(3)},
+			nonBreakingCount: 1,
+		},
+		// MaxLength
+		{
+			name:      "maxLength unchanged",
+			oldSchema: &v1.JSONSchemaProps{Type: "string", MaxLength: intPtr(100)},
+			newSchema: &v1.JSONSchemaProps{Type: "string", MaxLength: intPtr(100)},
+		},
+		{
+			name:               "maxLength added - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "string"},
+			newSchema:          &v1.JSONSchemaProps{Type: "string", MaxLength: intPtr(100)},
+			breakingCount:      1,
+			expectedChangeType: MaxLengthAdded,
+		},
+		{
+			name:             "maxLength removed - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "string", MaxLength: intPtr(100)},
+			newSchema:        &v1.JSONSchemaProps{Type: "string"},
+			nonBreakingCount: 1,
+		},
+		{
+			name:               "maxLength decreased - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "string", MaxLength: intPtr(100)},
+			newSchema:          &v1.JSONSchemaProps{Type: "string", MaxLength: intPtr(50)},
+			breakingCount:      1,
+			expectedChangeType: MaxLengthDecreased,
+		},
+		{
+			name:             "maxLength increased - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "string", MaxLength: intPtr(50)},
+			newSchema:        &v1.JSONSchemaProps{Type: "string", MaxLength: intPtr(100)},
+			nonBreakingCount: 1,
+		},
+		// MinItems
+		{
+			name:      "minItems unchanged",
+			oldSchema: &v1.JSONSchemaProps{Type: "array", MinItems: intPtr(1)},
+			newSchema: &v1.JSONSchemaProps{Type: "array", MinItems: intPtr(1)},
+		},
+		{
+			name:               "minItems added - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "array"},
+			newSchema:          &v1.JSONSchemaProps{Type: "array", MinItems: intPtr(1)},
+			breakingCount:      1,
+			expectedChangeType: MinItemsAdded,
+		},
+		{
+			name:             "minItems removed - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "array", MinItems: intPtr(1)},
+			newSchema:        &v1.JSONSchemaProps{Type: "array"},
+			nonBreakingCount: 1,
+		},
+		{
+			name:               "minItems increased - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "array", MinItems: intPtr(1)},
+			newSchema:          &v1.JSONSchemaProps{Type: "array", MinItems: intPtr(3)},
+			breakingCount:      1,
+			expectedChangeType: MinItemsIncreased,
+		},
+		{
+			name:             "minItems decreased - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "array", MinItems: intPtr(3)},
+			newSchema:        &v1.JSONSchemaProps{Type: "array", MinItems: intPtr(1)},
+			nonBreakingCount: 1,
+		},
+		// MaxItems
+		{
+			name:      "maxItems unchanged",
+			oldSchema: &v1.JSONSchemaProps{Type: "array", MaxItems: intPtr(10)},
+			newSchema: &v1.JSONSchemaProps{Type: "array", MaxItems: intPtr(10)},
+		},
+		{
+			name:               "maxItems added - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "array"},
+			newSchema:          &v1.JSONSchemaProps{Type: "array", MaxItems: intPtr(10)},
+			breakingCount:      1,
+			expectedChangeType: MaxItemsAdded,
+		},
+		{
+			name:             "maxItems removed - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "array", MaxItems: intPtr(10)},
+			newSchema:        &v1.JSONSchemaProps{Type: "array"},
+			nonBreakingCount: 1,
+		},
+		{
+			name:               "maxItems decreased - breaking",
+			oldSchema:          &v1.JSONSchemaProps{Type: "array", MaxItems: intPtr(10)},
+			newSchema:          &v1.JSONSchemaProps{Type: "array", MaxItems: intPtr(5)},
+			breakingCount:      1,
+			expectedChangeType: MaxItemsDecreased,
+		},
+		{
+			name:             "maxItems increased - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "array", MaxItems: intPtr(5)},
+			newSchema:        &v1.JSONSchemaProps{Type: "array", MaxItems: intPtr(10)},
+			nonBreakingCount: 1,
+		},
+		// Combined
+		{
+			name:             "both minimum and maximum removed - non-breaking",
+			oldSchema:        &v1.JSONSchemaProps{Type: "integer", Minimum: floatPtr(1), Maximum: floatPtr(100)},
+			newSchema:        &v1.JSONSchemaProps{Type: "integer"},
+			nonBreakingCount: 2,
+		},
+		{
+			name:          "both minimum and maximum added - breaking",
+			oldSchema:     &v1.JSONSchemaProps{Type: "integer"},
+			newSchema:     &v1.JSONSchemaProps{Type: "integer", Minimum: floatPtr(1), Maximum: floatPtr(100)},
+			breakingCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Compare(tt.oldSchema, tt.newSchema)
+
+			if tt.breakingCount > 0 {
+				assert.False(t, result.IsCompatible(), "Expected incompatible")
+				assert.Equal(t, tt.breakingCount, len(result.BreakingChanges),
+					"Unexpected number of breaking changes: %v", result.BreakingChanges)
+
+				if tt.expectedChangeType != "" && len(result.BreakingChanges) > 0 {
+					assert.Equal(t, tt.expectedChangeType, result.BreakingChanges[0].ChangeType,
+						"Unexpected change type")
+				}
+			} else {
+				assert.True(t, result.IsCompatible(), "Expected compatible but got: %v", result.BreakingChanges)
+			}
+
+			if tt.nonBreakingCount > 0 {
+				assert.Equal(t, tt.nonBreakingCount, len(result.NonBreakingChanges),
+					"Unexpected number of non-breaking changes: %v", result.NonBreakingChanges)
+			}
+		})
+	}
+}

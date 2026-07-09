@@ -164,6 +164,12 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 		instNode.templateExprs = append(instNode.templateExprs, state)
 	}
 
+	// Each condition Expression carries its own References, populated by the builder.
+	for _, expr := range instNode.Spec.Conditions {
+		state := getOrCreateExpr(expr, variable.ResourceVariableKindDynamic, expr.References)
+		instNode.conditionExprs = append(instNode.conditionExprs, state)
+	}
+
 	return rt, nil
 }
 

@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
@@ -154,4 +155,77 @@ func TestUpdateStatusPaths(t *testing.T) {
 			assert.NotEqual(t, []interface{}{"bad"}, conditions)
 		})
 	}
+}
+
+func TestStampAuthorConditionsNewWire(t *testing.T) {
+	authored := []library.Condition{
+		{ConditionType: "PrimaryReady", Status: "True", Reason: "Healthy", Message: "all good"},
+		{ConditionType: "AppReady", Status: "False", Reason: "Init", Message: "starting"},
+	}
+	const generation int64 = 7
+
+	stamped := stampAuthorConditions(authored, nil, generation)
+	require.Len(t, stamped, 2)
+
+	for _, c := range stamped {
+		assert.Equal(t, generation, c.ObservedGeneration, "%s should have ObservedGeneration set", c.Type)
+		require.NotNil(t, c.LastTransitionTime, "%s should have LastTransitionTime set on first appearance", c.Type)
+	}
+	assert.Equal(t, v1alpha1.ConditionType("PrimaryReady"), stamped[0].Type)
+	assert.Equal(t, metav1.ConditionTrue, stamped[0].Status)
+	require.NotNil(t, stamped[0].Reason)
+	assert.Equal(t, "Healthy", *stamped[0].Reason)
+}
+
+func TestStampAuthorConditionsPreservesLastTransitionTimeWhenStatusUnchanged(t *testing.T) {
+	earlier := metav1.NewTime(metav1.Now().Add(-1 * 60 * 60 * 1e9))
+	previous := []v1alpha1.Condition{
+		{
+			Type:               "PrimaryReady",
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: &earlier,
+			ObservedGeneration: 1,
+		},
+	}
+	authored := []library.Condition{
+		{ConditionType: "PrimaryReady", Status: "True", Reason: "still healthy"},
+	}
+
+	stamped := stampAuthorConditions(authored, previous, 2)
+	require.Len(t, stamped, 1)
+	require.NotNil(t, stamped[0].LastTransitionTime)
+	assert.Equal(t, earlier, *stamped[0].LastTransitionTime,
+		"LastTransitionTime should be preserved when status is unchanged")
+	assert.Equal(t, int64(2), stamped[0].ObservedGeneration,
+		"ObservedGeneration should reflect the current generation even when status is unchanged")
+}
+
+func TestStampAuthorConditionsAdvancesLastTransitionTimeOnStatusChange(t *testing.T) {
+	earlier := metav1.NewTime(metav1.Now().Add(-1 * 60 * 60 * 1e9))
+	previous := []v1alpha1.Condition{
+		{
+			Type:               "PrimaryReady",
+			Status:             metav1.ConditionFalse,
+			LastTransitionTime: &earlier,
+		},
+	}
+	authored := []library.Condition{
+		{ConditionType: "PrimaryReady", Status: "True"},
+	}
+
+	stamped := stampAuthorConditions(authored, previous, 1)
+	require.Len(t, stamped, 1)
+	require.NotNil(t, stamped[0].LastTransitionTime)
+	assert.True(t, stamped[0].LastTransitionTime.Time.After(earlier.Time),
+		"LastTransitionTime should advance when status flipped from False to True")
+}
+
+func TestStampAuthorConditionsEmptyReasonAndMessage(t *testing.T) {
+	authored := []library.Condition{
+		{ConditionType: "T", Status: "True"},
+	}
+	stamped := stampAuthorConditions(authored, nil, 1)
+	require.Len(t, stamped, 1)
+	assert.Nil(t, stamped[0].Reason, "empty reason should serialize as nil pointer")
+	assert.Nil(t, stamped[0].Message, "empty message should serialize as nil pointer")
 }

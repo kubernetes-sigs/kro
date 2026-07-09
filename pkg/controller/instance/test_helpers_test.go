@@ -239,6 +239,7 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 		metadata.NewKROMetaLabeler(),
 		newControllerTestCoordinator(t),
 		record.NewFakeRecorder(100),
+		false,
 	)
 
 	return controller, clientSet
@@ -335,6 +336,7 @@ func newConfigMapObject(name, namespace string) *unstructured.Unstructured {
 	return obj
 }
 
+//nolint:unparam // namespace is always "default" in current tests but kept for flexibility
 func newApplysetManagedConfigMap(instance *unstructured.Unstructured, name, namespace string) *unstructured.Unstructured {
 	obj := newConfigMapObject(name, namespace)
 	obj.SetUID(types.UID(name + "-uid"))

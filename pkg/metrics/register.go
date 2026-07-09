@@ -49,6 +49,7 @@ func Register(registry prometheus.Registerer) {
 		DynHandlerAttachTotal,
 		DynHandlerDetachTotal,
 		DynHandlerErrorsTotal,
+		DynReconcilePanicsTotal,
 		DynInformerSyncDuration,
 		DynInformerEventsTotal,
 		DynWatchCount,
@@ -65,6 +66,7 @@ func Register(registry prometheus.Registerer) {
 		InstanceGraphResolutionSuccessTotal,
 		InstanceGraphResolutionFailuresTotal,
 		InstanceGraphResolutionPendingTotal,
+		InstanceConditionCurrentStatusSeconds,
 
 		// RGD controller
 		RGDGraphBuildTotal,

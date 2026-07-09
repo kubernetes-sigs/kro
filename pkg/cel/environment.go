@@ -129,6 +129,11 @@ func BaseDeclarations() []cel.EnvOption {
 			// (includeWhen, readyWhen, forEach) via inspectExpressionRestricted
 			// and validateAndCompileForEach.
 			library.Omit(),
+			// Runtime() registers the `runtime` CEL variable used to author
+			// custom status conditions. The graph builder restricts where
+			// runtime.newCondition / runtime.condition are valid (only inside
+			// the schema.status.conditions block) via build-time validation.
+			library.Runtime(),
 		}
 	})
 	return cachedBaseDeclarations
@@ -220,6 +225,16 @@ func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, erro
 	}
 
 	env, err := base.Extend(declarations...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Wrap the resolved type provider so the type-checker can resolve the
+	// kro.run.Condition type returned by runtime.newCondition / condition and
+	// its fields. This must run after the typed-resource provider above is
+	// installed, since cel.CustomTypeProvider replaces (not layers) the
+	// provider; ConditionTypeProvider delegates everything else back to it.
+	env, err = env.Extend(cel.CustomTypeProvider(library.ConditionTypeProvider(env.CELTypeProvider())))
 	return env, provider, err
 }
 

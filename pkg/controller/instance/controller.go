@@ -119,6 +119,16 @@ type Controller struct {
 
 	// eventRecorder emits K8s Events on condition transitions.
 	eventRecorder record.EventRecorder
+
+	// feature gate flags, captured once at construction time.
+	eventsEnabled  bool
+	metricsEnabled bool
+
+	// hasAuthorConditions reports whether the RGD this controller serves
+	// declared an author `conditions:` block. When true, the graph-resolve
+	// failure early-exit (updateConditionsStatus) suppresses kro's built-in
+	// conditions so .status.conditions[] only contains author conditions.
+	hasAuthorConditions bool
 }
 
 // NewController constructs a new controller that resolves the newest issued
@@ -134,6 +144,7 @@ func NewController(
 	childResourceLabeler metadata.Labeler,
 	coord *dynamiccontroller.WatchCoordinator,
 	eventRecorder record.EventRecorder,
+	hasAuthorConditions bool,
 ) *Controller {
 	return &Controller{
 		log:                  log,
@@ -146,6 +157,9 @@ func NewController(
 		reconcileConfig:      reconcileConfig,
 		coordinator:          coord,
 		eventRecorder:        eventRecorder,
+		eventsEnabled:        features.FeatureGate.Enabled(features.InstanceConditionEvents),
+		metricsEnabled:       features.FeatureGate.Enabled(features.InstanceConditionMetrics),
+		hasAuthorConditions:  hasAuthorConditions,
 	}
 }
 
@@ -180,6 +194,9 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 	if apierrors.IsNotFound(err) {
 		log.Info("instance not found (likely deleted)")
+		if c.metricsEnabled {
+			metrics.DeleteInstanceMetrics(c.gvr, req.Namespace, req.Name)
+		}
 		return nil
 	}
 	if err != nil {
@@ -187,9 +204,11 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		return err
 	}
 
-	// Emit condition events on every return path (behind feature gate).
+	// Snapshot initial conditions and emit telemetry on every return path.
+	// Events and metrics are gated behind separate feature flags so operators
+	// can enable them independently.
 	var rcx *ReconcileContext
-	if features.FeatureGate.Enabled(features.InstanceConditionEvents) {
+	if c.eventsEnabled || c.metricsEnabled {
 		initialConditions := conditionsFromInstance(inst)
 		defer func() {
 			obj := inst
@@ -197,7 +216,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 				obj = rcx.Instance
 			}
 			finalConditions := conditionsFromInstance(obj)
-			emitConditionEvents(c.eventRecorder, obj, initialConditions, finalConditions)
+			if c.eventsEnabled {
+				emitConditionEvents(c.eventRecorder, obj, initialConditions, finalConditions)
+			}
+			if c.metricsEnabled {
+				metrics.EmitConditionMetrics(log, c.gvr, obj, initialConditions, finalConditions)
+			}
 		}()
 	}
 

@@ -75,7 +75,8 @@ type Schema struct {
 	// Spec defines the schema for the instance's spec section using SimpleSchema syntax.
 	// This becomes the OpenAPI schema for instances of the generated CRD.
 	// Use SimpleSchema's concise syntax to define fields, types, defaults, and validations.
-	// Example: {"replicas": "integer | default=1 | min=1 | max=10"}
+	// Markers are space-separated after a single "|" separator.
+	// Example: {"replicas": "integer | default=1 minimum=1 maximum=10"}
 	Spec runtime.RawExtension `json:"spec,omitempty"`
 
 	// Types is a map of custom type definitions that can be referenced in the Spec.
@@ -216,9 +217,10 @@ type Resource struct {
 	// ReadyWhen is a list of CEL expressions that determine when this resource is considered ready.
 	// All expressions must evaluate to true for the resource to be ready.
 	// If not specified, the resource is considered ready when it exists.
+	// Each entry must be a single standalone CEL expression wrapped in ${...}.
 	// Examples:
-	// - Single resource: ["database.status.phase == 'Running'", "database.status.readyReplicas > 0"]
-	// - Collection: ["each.status.phase == 'Running'"]
+	// - Single resource: ["${database.status.phase == 'Running'}", "${database.status.readyReplicas > 0}"]
+	// - Collection: ["${each.status.phase == 'Running'}"]
 	//
 	// +kubebuilder:validation:Optional
 	ReadyWhen []string `json:"readyWhen,omitempty"`
@@ -228,7 +230,8 @@ type Resource struct {
 	// Expressions may reference schema fields and/or fields in other resources in the RGD. They are
 	// re-evaluated during reconciliation, so resources may be created later or
 	// pruned later as conditions change.
-	// Example: ["schema.spec.enableMonitoring == true", "network.status.ready == true"]
+	// Each entry must be a single standalone CEL expression wrapped in ${...}.
+	// Example: ["${schema.spec.enableMonitoring == true}", "${network.status.ready == true}"]
 	//
 	// +kubebuilder:validation:Optional
 	IncludeWhen []string `json:"includeWhen,omitempty"`

@@ -86,10 +86,13 @@ Please join our community meeting.
 
 
 [tz-help]: http://www.thetimezoneconverter.com/?t=9%3A00&tz=PT%20%28Pacific%20Time%29
-[gcal-add]: https://calendar.google.com/calendar/render?action=TEMPLATE&text=Kro+Community+Meeting&details=Join+us+for+the+Kro+community+meeting.%0A%0AZoom:+https://us06web.zoom.us/j/85388697226?pwd=9Xxz1F0FcNUq8zFGrsRqkHMhFZTpuj.1%0AAgenda:+https://docs.google.com/document/d/1GqeHcBlOw6ozo-qS4TLdXSi5qUn88QU6dwdq0GvxRz4&location=https://us06web.zoom.us/j/85388697226?pwd=9Xxz1F0FcNUq8zFGrsRqkHMhFZTpuj.1&dates=20260204T090000/20260204T100000&recur=RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=WE&ctz=America/Los_Angeles
+[gcal-add]: https://calendar.google.com/calendar/render?action=TEMPLATE&text=Kro+Community+Meeting&details=Join+us+for+the+Kro+community+meeting.%0A%0AZoom%3A+https%3A%2F%2Fzoom.us%2Fj%2F508079177%3Fpwd%3DZmEvMksxdTFTc0N1eXFLRm91QUlyUT09%0AAgenda%3A+https%3A%2F%2Fdocs.google.com%2Fdocument%2Fd%2F1GqeHcBlOw6ozo-qS4TLdXSi5qUn88QU6dwdq0GvxRz4&location=https%3A%2F%2Fzoom.us%2Fj%2F508079177%3Fpwd%3DZmEvMksxdTFTc0N1eXFLRm91QUlyUT09&dates=20260204T090000%2F20260204T100000&recur=RRULE%3AFREQ%3DWEEKLY%3BINTERVAL%3D2%3BBYDAY%3DWE&ctz=America%2FLos_Angeles
 [agenda]: https://docs.google.com/document/d/1GqeHcBlOw6ozo-qS4TLdXSi5qUn88QU6dwdq0GvxRz4/edit?tab=t.0
-[zoom]: https://us06web.zoom.us/j/85388697226?pwd=9Xxz1F0FcNUq8zFGrsRqkHMhFZTpuj.1
+[zoom]: https://zoom.us/j/508079177?pwd=ZmEvMksxdTFTc0N1eXFLRm91QUlyUT09
 [youtube]: https://www.youtube.com/channel/UCUlcI3NYq9ehl5wsdfbJzSA
+
+
+
 
 ### Code of conduct
 

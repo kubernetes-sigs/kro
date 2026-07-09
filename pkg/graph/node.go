@@ -139,6 +139,12 @@ type Node struct {
 	// ForEach holds the forEach dimensions for collection resources.
 	// nil or empty means this is not a collection.
 	ForEach []ForEachDimension
+
+	// Conditions holds compiled CEL expressions for the author-defined
+	// `conditions:` block on the instance (NodeTypeInstance only). Each
+	// expression returns a Condition (or list(Condition) for collection
+	// expansion) at evaluation time. Resource nodes leave this nil.
+	Conditions []*krocel.Expression
 }
 
 // DeepCopy creates a deep copy of the Node.
@@ -160,6 +166,7 @@ func (n *Node) DeepCopy() *Node {
 		IncludeWhen: slices.Clone(n.IncludeWhen),
 		ReadyWhen:   slices.Clone(n.ReadyWhen),
 		ForEach:     slices.Clone(n.ForEach),
+		Conditions:  slices.Clone(n.Conditions),
 	}
 
 	if n.Template != nil {

@@ -54,6 +54,8 @@ var _ = Describe("Structural Type Compatibility", func() {
 						"containers": "[]containerConfig",
 						"ports":      "[]portConfig",
 						"labels":     "map[string]string",
+						"threshold":  "float",
+						"limits":     "[]float",
 					},
 					nil,
 					generator.WithTypes(map[string]interface{}{
@@ -99,6 +101,12 @@ var _ = Describe("Structural Type Compatibility", func() {
 					"metadata": map[string]interface{}{
 						"name":      "${schema.spec.appName}-ports",
 						"namespace": namespace,
+						"annotations": map[string]interface{}{
+							"threshold":   "${string(schema.spec.threshold)}",
+							"doubleValue": "${string(schema.spec.threshold * 2.0)}",
+							"firstLimit":  "${string(schema.spec.limits[0])}",
+							"limitsCount": "${string(size(schema.spec.limits))}",
+						},
 					},
 					"spec": map[string]interface{}{
 						"containers": []interface{}{

@@ -62,7 +62,8 @@ var _ = Describe("Labels and Annotations", func() {
 			generator.WithSchema(
 				"TestApply", "v1alpha1",
 				map[string]interface{}{
-					"field1": "string",
+					"field1":    "string",
+					"threshold": "float",
 				},
 				nil,
 			),
@@ -71,6 +72,9 @@ var _ = Describe("Labels and Annotations", func() {
 				"kind":       "ConfigMap",
 				"metadata": map[string]interface{}{
 					"name": "${schema.spec.field1}",
+				},
+				"data": map[string]interface{}{
+					"threshold": "${string(schema.spec.threshold)}",
 				},
 			}, nil, nil),
 		)
@@ -104,7 +108,8 @@ var _ = Describe("Labels and Annotations", func() {
 					"namespace": namespace,
 				},
 				"spec": map[string]interface{}{
-					"field1": "foobar",
+					"field1":    "foobar",
+					"threshold": 3.14,
 				},
 			},
 		}
@@ -151,6 +156,7 @@ var _ = Describe("Labels and Annotations", func() {
 			Namespace: namespace,
 		}, cfgMap)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(cfgMap.Data).To(HaveKeyWithValue("threshold", "3.14"))
 		Expect(cfgMap.GetLabels()).To(SatisfyAll(
 			HaveKeyWithValue(applyset.ApplysetPartOfLabel, applyset.ID(instance)),
 			HaveKeyWithValue(metadata.InstanceNamespaceLabel, instance.GetNamespace()),

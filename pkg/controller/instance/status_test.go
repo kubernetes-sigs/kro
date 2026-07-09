@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -155,6 +156,88 @@ func TestUpdateStatusPaths(t *testing.T) {
 			assert.NotEqual(t, []interface{}{"bad"}, conditions)
 		})
 	}
+}
+
+func TestUpdateStatusMirrorsPersistedConditionsOntoInstance(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+
+	instanceNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         graph.InstanceNodeID,
+			Type:       graph.NodeTypeInstance,
+			GVR:        controllerTestParentGVR,
+			Namespaced: true,
+		},
+		Template: &unstructured.Unstructured{
+			Object: map[string]interface{}{"status": map[string]interface{}{}},
+		},
+		Conditions: []*krocel.Expression{
+			mustCompileControllerExpr(t,
+				`runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: 'Healthy', message: 'all good'})`,
+				library.RuntimeVarName,
+			),
+		},
+	}
+
+	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraphWithInstance(instanceNode))
+	rcx.StateManager.State = v1alpha1.InstanceStateActive
+
+	rcx.Mark.InstanceManaged()
+	rcx.Mark.GraphResolved()
+	rcx.Mark.ResourcesReady()
+
+	require.NoError(t, controller.updateStatus(rcx))
+
+	instanceConditions := conditionsFromInstance(rcx.Instance)
+	require.Len(t, instanceConditions, 1,
+		"only the author condition should be on rcx.Instance; built-ins are suppressed from the wire")
+	assert.Equal(t, v1alpha1.ConditionType("PrimaryReady"), instanceConditions[0].Type,
+		"rcx.Instance must carry the author condition the emitter reports")
+	assert.Equal(t, metav1.ConditionTrue, instanceConditions[0].Status)
+
+	stored := getStoredParentObject(t, raw)
+	assert.Equal(t,
+		conditionsFromInstance(stored),
+		instanceConditions,
+		"rcx.Instance conditions must match the persisted wire conditions")
+}
+
+func TestUpdateStatusKeepsBuiltinConditionsWhenNoAuthorConditions(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+
+	instanceNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         graph.InstanceNodeID,
+			Type:       graph.NodeTypeInstance,
+			GVR:        controllerTestParentGVR,
+			Namespaced: true,
+		},
+		Template: &unstructured.Unstructured{
+			Object: map[string]interface{}{"status": map[string]interface{}{}},
+		},
+	}
+
+	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraphWithInstance(instanceNode))
+	rcx.StateManager.State = v1alpha1.InstanceStateActive
+
+	rcx.Mark.InstanceManaged()
+	rcx.Mark.GraphResolved()
+	rcx.Mark.ResourcesReady()
+
+	require.NoError(t, controller.updateStatus(rcx))
+
+	instanceConditions := conditionsFromInstance(rcx.Instance)
+	types := make(map[v1alpha1.ConditionType]struct{}, len(instanceConditions))
+	for _, c := range instanceConditions {
+		types[c.Type] = struct{}{}
+	}
+	for _, builtin := range []string{InstanceManaged, GraphResolved, ResourcesReady, Ready} {
+		assert.Contains(t, types, v1alpha1.ConditionType(builtin),
+			"built-in %q should remain on rcx.Instance when no author conditions are declared", builtin)
+	}
+
+	assert.Equal(t, conditionsFromInstance(getStoredParentObject(t, raw)), instanceConditions,
+		"rcx.Instance conditions must match the persisted wire conditions")
 }
 
 func TestStampAuthorConditionsNewWire(t *testing.T) {

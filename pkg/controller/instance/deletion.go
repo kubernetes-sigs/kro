@@ -17,6 +17,8 @@ package instance
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -80,6 +82,26 @@ func (c *Controller) planNodesForDeletion(
 		}
 
 		isExternal := nodeMeta.Type == graph.NodeTypeExternal || nodeMeta.Type == graph.NodeTypeExternalCollection
+		isManagedCollection := nodeMeta.Type == graph.NodeTypeCollection
+
+		// Managed collections during deletion: skip identity resolution, LIST by labels.
+		// This avoids CEL evaluation failures in forEach identity paths.
+		if isManagedCollection {
+			items, err := c.listCollectionItems(rcx, nodeMeta.GVR, rid)
+			if err != nil {
+				state.SetError(err)
+				return nil, fmt.Errorf("failed to list collection items for %s: %w", rid, err)
+			}
+			if len(items) == 0 {
+				state.SetDeleted()
+				continue
+			}
+			sortByCollectionIndex(items)
+			node.SetObserved(items)
+			state.SetInProgress()
+			deletionNode = node
+			continue
+		}
 
 		// Resolve identity without readiness gating. External nodes use this to
 		// locate the resource for observation; managed nodes use it as the deletion target.
@@ -121,23 +143,7 @@ func (c *Controller) planNodesForDeletion(
 			panic(fmt.Sprintf("unexpected instance node in deletion: %s", rid))
 
 		case graph.NodeTypeCollection:
-			// Collections are label-selected and can span namespaces; LIST once and
-			// set observed so runtime can compute delete targets in desired order.
-			//
-			// Differently from single resources, we do not do GETs per-item here because
-			// that would be inefficient and cause many API calls during deletion.
-			items, err := c.listCollectionItems(rcx, nodeMeta.GVR, rid)
-			if err != nil {
-				state.SetError(err)
-				return nil, fmt.Errorf("failed to list collection items for %s: %w", rid, err)
-			}
-			if len(items) == 0 {
-				state.SetDeleted()
-				continue
-			}
-			node.SetObserved(items)
-			state.SetInProgress()
-			deletionNode = node
+			panic(fmt.Sprintf("collection node should have been handled earlier: %s", rid))
 
 		case graph.NodeTypeResource:
 			// Single resources delete by identity; GET the object to mark observed and
@@ -291,4 +297,27 @@ func (c *Controller) setUnmanaged(rcx *ReconcileContext, obj *unstructured.Unstr
 		return nil, fmt.Errorf("failed to update unmanaged state: %w", err)
 	}
 	return updated, nil
+}
+
+// sortByCollectionIndex sorts collection items by their kro.run/collection-index label.
+// This preserves forEach iteration order during deletion without requiring forEach expansion.
+// Items without a valid index label are placed at the end in undefined order.
+func sortByCollectionIndex(items []*unstructured.Unstructured) {
+	slices.SortStableFunc(items, func(a, b *unstructured.Unstructured) int {
+		aIdx, aErr := strconv.Atoi(a.GetLabels()[metadata.CollectionIndexLabel])
+		bIdx, bErr := strconv.Atoi(b.GetLabels()[metadata.CollectionIndexLabel])
+
+		// Items without valid index labels sort to the end
+		if aErr != nil && bErr != nil {
+			return 0
+		}
+		if aErr != nil {
+			return 1
+		}
+		if bErr != nil {
+			return -1
+		}
+
+		return aIdx - bIdx
+	})
 }

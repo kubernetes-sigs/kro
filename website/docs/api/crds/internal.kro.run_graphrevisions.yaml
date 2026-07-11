@@ -325,6 +325,14 @@ spec:
                             x-kubernetes-validations:
                             - message: apiVersion is immutable
                               rule: self == oldSelf
+                          categories:
+                            description: |-
+                              Categories is a list of grouped resources this custom resource belongs to.
+                              Resources in a category can be retrieved together with `kubectl get <category>`.
+                              Example: ["all"] makes instances appear in `kubectl get all`.
+                            items:
+                              type: string
+                            type: array
                           group:
                             default: kro.run
                             description: |-
@@ -374,6 +382,13 @@ spec:
                             x-kubernetes-validations:
                             - message: scope is immutable
                               rule: self == oldSelf
+                          shortNames:
+                            description: |-
+                              ShortNames are short names for the generated CRD that can be used with kubectl.
+                              Example: ["wa", "webapp"] allows `kubectl get wa` instead of `kubectl get webapplication`.
+                            items:
+                              type: string
+                            type: array
                           spec:
                             description: |-
                               Spec defines the schema for the instance's spec section using SimpleSchema syntax.

@@ -296,7 +296,7 @@ func TestNewCRD(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			schema := &extv1.JSONSchemaProps{Type: "object"}
-			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.scope, tt.printerColumns, nil)
+			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.scope, tt.printerColumns, nil, nil, nil)
 
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.group, crd.Spec.Group)

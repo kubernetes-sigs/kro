@@ -302,7 +302,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	}
 
 	// Build instance status schema.
-	// Status expressions reference resources (validated to not reference schema).
+	// Status expressions reference resources and/or the instance's own schema.
 	// We infer the status field types from the CEL expression output types.
 	statusSchema, statusVariables, statusTemplate, err := buildStatusSchema(
 		bc,
@@ -813,7 +813,7 @@ func buildStatusSchema(
 	}
 
 	// Verify status expressions only reference known resources or schema, and populate References.
-	allowedStatusVars := append(nodeNames, SchemaVarName)
+	allowedStatusVars := slices.Concat(nodeNames, []string{SchemaVarName})
 	for _, fieldDescriptor := range fieldDescriptors {
 		expression := fieldDescriptor.Expression
 		result, err := inspectExpressionRestricted(inspector, expression.Original, allowedStatusVars)

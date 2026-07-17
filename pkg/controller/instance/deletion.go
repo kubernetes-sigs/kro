@@ -17,126 +17,151 @@ package instance
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
-// liveResource pairs a cluster object with its GVR so deletion can issue
-// the DELETE call without CEL-based identity resolution.
-type liveResource struct {
-	Object *unstructured.Unstructured
-	GVR    schema.GroupVersionResource
-}
-
 // reconcileDeletion drives deletion workflow for an instance.
-//
-// Instead of resolving resource identities via CEL (which fails when the
-// identity depends on another resource that might already be gone), it
-// discovers managed resources by their kro ownership labels and deletes
-// them directly.
 func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
 	rcx.StateManager.State = v1alpha1.InstanceStateDeleting
 	rcx.Mark.ResourcesUnderDeletion("deleting resources")
 
-	live, err := c.discoverLiveResources(rcx)
+	candidates, applier, err := c.discoverDeletionInventory(rcx)
 	if err != nil {
 		return err
 	}
 
-	if len(live) == 0 {
+	if len(candidates) == 0 {
 		return c.removeFinalizer(rcx)
 	}
 
-	// nodesDeleting tracks which nodes had at least one resource deleted or
-	// already terminating. Absent means no live resources found for that node.
-	// Delete errors set state inline and return early, so this set only
-	// contains successful outcomes.
-	nodesDeleting := map[string]struct{}{}
+	orders, highest, orderErr := parseDeletionOrders(candidates)
+	if orderErr != nil {
+		if nodeID := orderErr.nodeID; nodeID != "" {
+			rcx.StateManager.SetNodeState(nodeID, errorState(orderErr))
+		}
+		return orderErr
+	}
 
-	for _, res := range live {
-		nodeID := res.Object.GetLabels()[metadata.NodeIDLabel]
+	c.updateDeletionNodeStates(rcx, candidates)
 
-		if res.Object.GetDeletionTimestamp() != nil {
-			nodesDeleting[nodeID] = struct{}{}
+	conflict := false
+	for i, candidate := range candidates {
+		if orders[i] != highest || candidate.Object.GetDeletionTimestamp() != nil {
 			continue
 		}
 
-		var rc dynamic.ResourceInterface = rcx.Client.Resource(res.GVR)
-		if ns := res.Object.GetNamespace(); ns != "" {
-			rc = rcx.Client.Resource(res.GVR).Namespace(ns)
-		}
-		err := rc.Delete(rcx.Ctx, res.Object.GetName(), metav1.DeleteOptions{})
-		if apierrors.IsNotFound(err) {
-			continue
-		}
+		result, err := applier.DeleteOrphan(rcx.Ctx, candidate)
 		if err != nil {
-			if nodeID != "" {
+			if nodeID := candidate.Object.GetLabels()[metadata.NodeIDLabel]; nodeID != "" {
 				rcx.StateManager.SetNodeState(nodeID, errorState(err))
 			}
 			return err
 		}
-		nodesDeleting[nodeID] = struct{}{}
+		conflict = conflict || result.Conflict
 	}
 
-	for _, node := range rcx.Runtime.Nodes() {
-		id := node.Spec.Meta.ID
-		t := node.Spec.Meta.Type
-		if t == graph.NodeTypeExternal || t == graph.NodeTypeExternalCollection {
-			rcx.StateManager.SetNodeState(id, skippedState())
-		} else if _, deleting := nodesDeleting[id]; deleting {
-			rcx.StateManager.SetNodeState(id, deletingState())
-		} else {
-			rcx.StateManager.SetNodeState(id, deletedState())
-		}
+	if conflict {
+		return rcx.delayedRequeue(fmt.Errorf("deletion encountered UID conflicts; retrying"))
 	}
-
-	return rcx.delayedRequeue(fmt.Errorf("deleting resources"))
+	return rcx.delayedRequeue(fmt.Errorf("deleting apply-order wave %d", highest))
 }
 
-// discoverLiveResources finds all managed resources owned by this instance
-// using label selectors. One LIST call per unique GVR, across all namespaces.
-func (c *Controller) discoverLiveResources(
+// discoverDeletionInventory reconstructs the deletion search scope solely from
+// the parent ApplySet metadata. It does not evaluate the current graph or CEL.
+func (c *Controller) discoverDeletionInventory(
 	rcx *ReconcileContext,
-) ([]liveResource, error) {
-	gvrs := map[schema.GroupVersionResource]struct{}{}
+) ([]applyset.OrphanCandidate, *applyset.ApplySet, error) {
+	applier := c.createApplySet(rcx)
+	inventory, err := applier.Project(nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("project deletion inventory: %w", err)
+	}
+	candidates, err := applier.ListOrphans(rcx.Ctx, applyset.PruneOptions{
+		KeepUIDs: sets.New[types.UID](),
+		Scope:    inventory.PruneScope(),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("list deletion inventory: %w", err)
+	}
+	return candidates, applier, nil
+}
+
+type deletionOrderError struct {
+	nodeID string
+	err    error
+}
+
+func (e *deletionOrderError) Error() string { return e.err.Error() }
+func (e *deletionOrderError) Unwrap() error { return e.err }
+
+// parseDeletionOrders validates the complete inventory before any mutation.
+func parseDeletionOrders(candidates []applyset.OrphanCandidate) ([]int, int, *deletionOrderError) {
+	orders := make([]int, len(candidates))
+	highest := 0
+	for i, candidate := range candidates {
+		obj := candidate.Object
+		raw := obj.GetLabels()[metadata.ApplyOrderLabel]
+		validDigits := raw != ""
+		for _, digit := range raw {
+			validDigits = validDigits && digit >= '0' && digit <= '9'
+		}
+		order, err := strconv.Atoi(raw)
+		if !validDigits || err != nil || order <= 0 {
+			gvk := obj.GroupVersionKind().String()
+			if obj.GroupVersionKind().Empty() {
+				gvk = candidate.GVR.String()
+			}
+			return nil, 0, &deletionOrderError{
+				nodeID: obj.GetLabels()[metadata.NodeIDLabel],
+				err: fmt.Errorf(
+					"resource %s %s has invalid %s label %q: expected a positive base-10 integer",
+					gvk, resourceRef(obj), metadata.ApplyOrderLabel, raw,
+				),
+			}
+		}
+		orders[i] = order
+		if order > highest {
+			highest = order
+		}
+	}
+	return orders, highest, nil
+}
+
+func (c *Controller) updateDeletionNodeStates(rcx *ReconcileContext, candidates []applyset.OrphanCandidate) {
+	if rcx.Runtime == nil {
+		return
+	}
+	liveNodes := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if nodeID := candidate.Object.GetLabels()[metadata.NodeIDLabel]; nodeID != "" {
+			liveNodes[nodeID] = struct{}{}
+		}
+	}
 	for _, node := range rcx.Runtime.Nodes() {
+		id := node.Spec.Meta.ID
 		switch node.Spec.Meta.Type {
-		case graph.NodeTypeExternal, graph.NodeTypeExternalCollection, graph.NodeTypeInstance:
-			continue
-		}
-		gvrs[node.Spec.Meta.GVR] = struct{}{}
-	}
-
-	instanceUID := string(rcx.Instance.GetUID())
-	selector := fmt.Sprintf("%s=%s", metadata.InstanceIDLabel, instanceUID)
-
-	var result []liveResource
-	for gvr := range gvrs {
-		list, err := rcx.Client.Resource(gvr).List(rcx.Ctx, metav1.ListOptions{
-			LabelSelector: selector,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to list %s for deletion: %w", gvr.Resource, err)
-		}
-		for i := range list.Items {
-			result = append(result, liveResource{
-				Object: &list.Items[i],
-				GVR:    gvr,
-			})
+		case graph.NodeTypeExternal, graph.NodeTypeExternalCollection:
+			rcx.StateManager.SetNodeState(id, skippedState())
+		default:
+			if _, exists := liveNodes[id]; exists {
+				rcx.StateManager.SetNodeState(id, deletingState())
+			} else {
+				rcx.StateManager.SetNodeState(id, deletedState())
+			}
 		}
 	}
-
-	return result, nil
 }
 
 // removeFinalizer clears managed state on the instance after deletions complete.
@@ -153,7 +178,9 @@ func (c *Controller) removeFinalizer(rcx *ReconcileContext) error {
 		return err
 	}
 	rcx.Instance = patched
-	rcx.Runtime.Instance().SetObserved([]*unstructured.Unstructured{patched})
+	if rcx.Runtime != nil {
+		rcx.Runtime.Instance().SetObserved([]*unstructured.Unstructured{patched})
+	}
 	rcx.Mark = NewConditionsMarkerFor(rcx.Instance)
 	rcx.Mark.ResourcesUnderDeletion("deleting resources")
 	return nil

@@ -199,36 +199,42 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 	rcx.updateInstanceState()
 	status := rcx.initialStatus()
 
-	// instance desired is guaranteed to have one item.
-	desired, err := rcx.Runtime.Instance().GetDesired()
-	if err != nil {
-		return err
-	}
-	if resolved, found, _ := unstructured.NestedMap(desired[0].Object, "status"); found {
-		for k, v := range resolved {
-			if k == "conditions" || k == "state" {
-				continue
+	// During early deletion there may be no resolved runtime. In that case
+	// preserve the existing instance status fields and update only kro-owned
+	// deletion state and conditions.
+	if rcx.Runtime != nil {
+		desired, err := rcx.Runtime.Instance().GetDesired()
+		if err != nil {
+			return err
+		}
+		if resolved, found, _ := unstructured.NestedMap(desired[0].Object, "status"); found {
+			for k, v := range resolved {
+				if k == "conditions" || k == "state" {
+					continue
+				}
+				status[k] = v
 			}
-			status[k] = v
 		}
 	}
 
 	// When the RGD declares conditions, only the author's conditions appear
 	// on the wire. kroBuiltins lets runtime.condition(schema, 'X') resolve
 	// kro's internal value for the four reserved condition types.
-	instanceNode := rcx.Runtime.Instance()
-	if instanceNode.HasConditions() {
-		kroBuiltins := condSet.For(&unstructuredWrapper{rcx.Instance}).List()
-		authored, evalErr := instanceNode.EvaluateConditions(rcx.Log, kroBuiltins)
-		previous := getPreviousConditions(rcx.Instance)
-		stamped := stampAuthorConditions(authored, previous, rcx.Instance.GetGeneration())
-		status["conditions"] = conditionsToInterfaceSlice(stamped)
+	if rcx.Runtime != nil {
+		instanceNode := rcx.Runtime.Instance()
+		if instanceNode.HasConditions() {
+			kroBuiltins := condSet.For(&unstructuredWrapper{rcx.Instance}).List()
+			authored, evalErr := instanceNode.EvaluateConditions(rcx.Log, kroBuiltins)
+			previous := getPreviousConditions(rcx.Instance)
+			stamped := stampAuthorConditions(authored, previous, rcx.Instance.GetGeneration())
+			status["conditions"] = conditionsToInterfaceSlice(stamped)
 
-		// A degraded result still surfaces its surviving conditions; set
-		// state=Error rather than failing the reconcile.
-		if evalErr != nil {
-			rcx.Log.Error(evalErr, "author conditions degraded; setting state=Error")
-			status["state"] = string(v1alpha1.InstanceStateError)
+			// A degraded result still surfaces its surviving conditions; set
+			// state=Error rather than failing the reconcile.
+			if evalErr != nil {
+				rcx.Log.Error(evalErr, "author conditions degraded; setting state=Error")
+				status["state"] = string(v1alpha1.InstanceStateError)
+			}
 		}
 	}
 
@@ -246,7 +252,7 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 		return nil
 	}
 
-	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		cur, err := rcx.InstanceClient().Get(rcx.Ctx, rcx.Instance.GetName(), metav1.GetOptions{})
 		if err != nil {
 			return err

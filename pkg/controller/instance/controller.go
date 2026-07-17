@@ -225,6 +225,18 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		}()
 	}
 
+	// Deletion must not depend on resolving the current GraphRevision or CEL.
+	// Build a context without a runtime and use persisted ApplySet inventory.
+	if inst.GetDeletionTimestamp() != nil {
+		rcx = NewReconcileContext(ctx, log, c.gvr, c.namespaced, c.client.Dynamic(), c.client.RESTMapper(), c.childResourceLabeler, nil, c.reconcileConfig, inst)
+		rcx.Watcher = watcher
+		if err := c.reconcileDeletion(rcx); err != nil {
+			_ = c.updateStatus(rcx)
+			return err
+		}
+		return c.updateStatus(rcx)
+	}
+
 	//--------------------------------------------------------------
 	// 2. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
@@ -258,17 +270,6 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		inst,
 	)
 	rcx.Watcher = watcher
-
-	//--------------------------------------------------------------
-	// 4. Handle deletion: clean up children and status
-	//--------------------------------------------------------------
-	if inst.GetDeletionTimestamp() != nil {
-		if err := c.reconcileDeletion(rcx); err != nil {
-			_ = c.updateStatus(rcx)
-			return err
-		}
-		return c.updateStatus(rcx)
-	}
 
 	//--------------------------------------------------------------
 	// 5. Ensure finalizer + management labels before mutating children

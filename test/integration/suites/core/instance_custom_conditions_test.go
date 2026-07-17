@@ -272,6 +272,9 @@ var _ = Describe("Instance Custom Conditions", func() {
 			}, nil, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			_ = env.Client.Delete(ctx, rgd)
+		})
 
 		Eventually(func(g Gomega) {
 			g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
@@ -308,6 +311,9 @@ var _ = Describe("Instance Custom Conditions", func() {
 			}, nil, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			_ = env.Client.Delete(ctx, rgd)
+		})
 
 		Eventually(func(g Gomega) {
 			g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())

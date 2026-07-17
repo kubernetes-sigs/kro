@@ -239,7 +239,9 @@ var _ = Describe("ExternalRef Deletion", func() {
 		Eventually(func(g Gomega, ctx SpecContext) {
 			g.Expect(env.Client.Get(ctx, bKey, &corev1.ConfigMap{})).To(MatchError(errors.IsNotFound))
 			g.Expect(env.Client.Get(ctx, aKey, &corev1.ConfigMap{})).To(MatchError(errors.IsNotFound))
-			g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: ns.Name}, instance)).To(MatchError(errors.IsNotFound))
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name: instanceName, Namespace: ns.Name,
+			}, instance)).To(MatchError(errors.IsNotFound))
 		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 })

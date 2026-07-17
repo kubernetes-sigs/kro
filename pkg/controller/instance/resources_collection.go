@@ -39,6 +39,7 @@ func (c *Controller) processCollectionNode(
 	rcx *ReconcileContext,
 	node *runtime.Node,
 	expandedResources []*unstructured.Unstructured,
+	applyOrder int,
 ) ([]applyset.Resource, NodeState, error) {
 	id := node.Spec.Meta.ID
 	nodeMeta := node.Spec.Meta
@@ -97,7 +98,7 @@ func (c *Controller) processCollectionNode(
 	for i, expandedResource := range expandedResources {
 		// Apply decorator labels with collection info
 		collectionInfo := &CollectionInfo{Index: i, Size: collectionSize}
-		c.applyDecoratorLabels(rcx, expandedResource, id, collectionInfo)
+		c.applyDecoratorLabels(rcx, expandedResource, id, applyOrder, collectionInfo)
 
 		// Look up current revision from LIST results
 		key := expandedResource.GetNamespace() + "/" + expandedResource.GetName()

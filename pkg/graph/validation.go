@@ -349,8 +349,8 @@ func isRequiredIdentityField(path string, resourceNamespaced, instanceNamespaced
 	}
 }
 
-// validateNoKROOwnedLabels enforces that the resource template doesn't define any label with
-// LabelKROPrefix (kro.run/). These labels are reserved for internal use ONLY.
+// validateNoKROOwnedLabels enforces that resource templates do not define
+// labels in either controller-owned namespace.
 func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]interface{}) error {
 	labelsRaw, found, err := unstructured.NestedFieldCopy(resourceObject, "metadata", "labels")
 	if err != nil || !found {
@@ -363,8 +363,10 @@ func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]inter
 	}
 
 	for key := range labelsMap {
-		if strings.HasPrefix(key, metadata.LabelKROPrefix) {
-			return fmt.Errorf("invalid label for resource %q. labels with prefix %q are reserved for internal use", resourceID, metadata.LabelKROPrefix)
+		for _, prefix := range []string{metadata.LabelKROPrefix, metadata.InternalLabelKROPrefix} {
+			if strings.HasPrefix(key, prefix) {
+				return fmt.Errorf("invalid label for resource %q. labels with prefix %q are reserved for internal use", resourceID, prefix)
+			}
 		}
 	}
 

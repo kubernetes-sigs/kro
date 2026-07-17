@@ -187,44 +187,64 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 	rcx.updateInstanceState()
 	status := rcx.initialStatus()
 
-	// instance desired is guaranteed to have one item.
-	desired, err := rcx.Runtime.Instance().GetDesired()
-	if err != nil {
-		return err
-	}
-	if resolved, found, _ := unstructured.NestedMap(desired[0].Object, "status"); found {
-		for k, v := range resolved {
-			if k == "conditions" || k == "state" {
-				continue
+	if rcx.Runtime == nil {
+		// Early deletion deliberately bypasses graph resolution. Keep status
+		// projections that cannot be recomputed without a runtime.
+		for k, v := range rcx.WireStatus {
+			if k != "conditions" && k != "state" {
+				status[k] = v
 			}
-			status[k] = v
 		}
-	}
-
-	// When the RGD declares author conditions, only those appear on the
-	// wire. kro's built-ins stay readable from author CEL through
-	// runtime.condition(schema, 'X').
-	instanceNode := rcx.Runtime.Instance()
-	if instanceNode.HasConditions() {
-		authored, incomplete, evalErr := instanceNode.EvaluateConditions(rcx.Log, builtinConditions(rcx.Instance))
-
-		// Read previous conditions from the wire snapshot, not rcx.Instance:
-		// the markers have already overwritten any built-in-typed override.
-		conds, _ := rcx.WireStatus["conditions"].([]interface{})
-		previous := decodeConditions(conds)
-		stamped := stampAuthorConditions(authored, previous, rcx.Instance.GetGeneration())
-		if incomplete {
-			// Keep the previously persisted conditions for the types that
-			// produced no output this reconcile.
-			stamped = mergeWithPrevious(stamped, previous)
+		// Author conditions cannot be evaluated without a runtime. Preserve
+		// them exactly as fetched instead of replacing them with kro built-ins.
+		if c.reconcileConfig.HasAuthorConditions {
+			if conditions, found := rcx.WireStatus["conditions"]; found {
+				status["conditions"] = conditions
+			} else {
+				delete(status, "conditions")
+			}
 		}
-		status["conditions"] = conditionsToInterfaceSlice(stamped)
+	} else {
+		desired, err := rcx.Runtime.Instance().GetDesired()
+		if err != nil {
+			return err
+		}
+		if resolved, found, _ := unstructured.NestedMap(desired[0].Object, "status"); found {
+			for k, v := range resolved {
+				if k == "conditions" || k == "state" {
+					continue
+				}
+				status[k] = v
+			}
+		}
 
-		// A degraded result still surfaces its surviving conditions; set
-		// state=Error rather than failing the reconcile.
-		if evalErr != nil {
-			rcx.Log.Error(evalErr, "author conditions degraded; setting state=Error")
-			status["state"] = string(v1alpha1.InstanceStateError)
+		// When the RGD declares author conditions, only those appear on the
+		// wire. kro's built-ins stay readable from author CEL through
+		// runtime.condition(schema, 'X').
+		instanceNode := rcx.Runtime.Instance()
+		if instanceNode.HasConditions() {
+			authored, incomplete, evalErr := instanceNode.EvaluateConditions(
+				rcx.Log, builtinConditions(rcx.Instance),
+			)
+
+			// Read previous conditions from the wire snapshot, not rcx.Instance:
+			// the markers have already overwritten any built-in-typed override.
+			conds, _ := rcx.WireStatus["conditions"].([]interface{})
+			previous := decodeConditions(conds)
+			stamped := stampAuthorConditions(authored, previous, rcx.Instance.GetGeneration())
+			if incomplete {
+				// Keep the previously persisted conditions for the types that
+				// produced no output this reconcile.
+				stamped = mergeWithPrevious(stamped, previous)
+			}
+			status["conditions"] = conditionsToInterfaceSlice(stamped)
+
+			// A degraded result still surfaces its surviving conditions; set
+			// state=Error rather than failing the reconcile.
+			if evalErr != nil {
+				rcx.Log.Error(evalErr, "author conditions degraded; setting state=Error")
+				status["state"] = string(v1alpha1.InstanceStateError)
+			}
 		}
 	}
 
@@ -240,7 +260,7 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 		return nil
 	}
 
-	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		cur, err := rcx.InstanceClient().Get(rcx.Ctx, rcx.Instance.GetName(), metav1.GetOptions{})
 		if err != nil {
 			return err

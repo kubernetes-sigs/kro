@@ -31,10 +31,14 @@ import (
 const (
 	// LabelKROPrefix is the label key prefix used to identify KRO owned resources.
 	LabelKROPrefix = v1alpha1.KRODomainName + "/"
+	// InternalLabelKROPrefix is reserved for controller-internal metadata.
+	InternalLabelKROPrefix = "internal.kro.run/"
 )
 
 const (
 	NodeIDLabel = LabelKROPrefix + "node-id"
+	// ApplyOrderLabel persists a managed resource's total topological position.
+	ApplyOrderLabel = InternalLabelKROPrefix + "apply-order"
 
 	// Collection labels for tracking collection membership and position.
 	// These enable querying collection resources and understanding their position.

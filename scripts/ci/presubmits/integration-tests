@@ -8,6 +8,6 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd ${REPO_ROOT}
 
 # Build
-go build cmd
+go build ./cmd/...
 
 make test WHAT=integration

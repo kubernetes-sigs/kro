@@ -13,6 +13,11 @@ kro provides the `includeWhen` field to make resources optional. When you add `i
 Here's a simple example where an Ingress resource is only created if the user enables it in their instance spec:
 
 ```kro
+spec:
+  name: string
+  ingress:
+    enabled: boolean | default=false
+# ... rest of spec configuration ...
 resources:
   - id: ingress
     includeWhen:

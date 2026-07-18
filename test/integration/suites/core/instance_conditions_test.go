@@ -305,7 +305,7 @@ var _ = Describe("Instance Conditions", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 			var ready *krov1alpha1.Condition
 			for _, c := range rgd.Status.Conditions {
-				if c.Type == ctrlinstance.Ready {
+				if string(c.Type) == ctrlinstance.Ready {
 					ready = &c
 					break
 				}

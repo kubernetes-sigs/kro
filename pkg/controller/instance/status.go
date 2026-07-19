@@ -160,6 +160,9 @@ func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructu
 		}
 		status["state"] = string(v1alpha1.InstanceStateError)
 		cur.Object["status"] = status
+		// Mirror persisted status onto the instance so the deferred
+		// emitters read what's on the wire, not the marker's built-ins.
+		inst.Object["status"] = status
 		if c.namespaced {
 			_, err = ri.Namespace(inst.GetNamespace()).UpdateStatus(ctx, cur, metav1.UpdateOptions{})
 		} else {
@@ -234,15 +237,17 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 	// resourceVersion, which triggers a watch event, which re-enqueues the
 	// instance, which reconciles again.
 	oldStatus, _, _ := unstructured.NestedMap(rcx.Instance.Object, "status")
+
+	// Mirror persisted status onto the instance so the deferred
+	// emitters read what's on the wire, not the marker's built-ins.
+	rcx.Instance.Object["status"] = status
+
 	if equality.Semantic.DeepEqual(oldStatus, status) {
 		return nil
 	}
 
-	inst := rcx.Instance.DeepCopy()
-	inst.Object["status"] = status
-
 	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cur, err := rcx.InstanceClient().Get(rcx.Ctx, inst.GetName(), metav1.GetOptions{})
+		cur, err := rcx.InstanceClient().Get(rcx.Ctx, rcx.Instance.GetName(), metav1.GetOptions{})
 		if err != nil {
 			return err
 		}

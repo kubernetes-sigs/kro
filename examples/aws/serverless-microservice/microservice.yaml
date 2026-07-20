@@ -23,360 +23,360 @@ spec:
         authorizerPasswordParameterARN: string | required=true
 
   resources:
-# Business logic data store (Amazon DynamoDB table) along with the permissions to access it (to be used by the AWS Lambda function that implements business logic)
-  - id: itemsTable
-    template:
-      apiVersion: dynamodb.services.k8s.aws/v1alpha1
-      kind: Table
-      metadata:
-        name: ${schema.spec.namePrefix}-items-table
-      spec:
-        keySchema:
-          - attributeName: id
-            keyType: HASH
-        attributeDefinitions:
-          - attributeName: id
-            attributeType: S
-        billingMode: PAY_PER_REQUEST
-        tableName: ${schema.spec.namePrefix}-items-table
-  - id: lambdaDDBAccessPolicy
-    template:
-      apiVersion: iam.services.k8s.aws/v1alpha1
-      kind: Policy
-      metadata:
+    # Business logic data store (Amazon DynamoDB table) along with the permissions to access it (to be used by the AWS Lambda function that implements business logic)
+    - id: itemsTable
+      template:
+        apiVersion: dynamodb.services.k8s.aws/v1alpha1
+        kind: Table
+        metadata:
+          name: ${schema.spec.namePrefix}-items-table
+        spec:
+          keySchema:
+            - attributeName: id
+              keyType: HASH
+          attributeDefinitions:
+            - attributeName: id
+              attributeType: S
+          billingMode: PAY_PER_REQUEST
+          tableName: ${schema.spec.namePrefix}-items-table
+    - id: lambdaDDBAccessPolicy
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Policy
+        metadata:
           name: ${schema.spec.namePrefix}-lambda-ddb-access-policy
-      spec:
-        name: ${schema.spec.namePrefix}-lambda-ddb-access-policy
-        policyDocument: |
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Effect": "Allow",
-                "Action": [
-                  "dynamodb:GetItem",
-                  "dynamodb:DeleteItem",
-                  "dynamodb:PutItem",
-                  "dynamodb:Scan",
-                  "dynamodb:Query",
-                  "dynamodb:UpdateItem",
-                  "dynamodb:BatchWriteItem",
-                  "dynamodb:BatchGetItem",
-                  "dynamodb:DescribeTable",
-                  "dynamodb:ConditionCheckItem"
-                ],
-                "Resource": [
-                  "${itemsTable.status.ackResourceMetadata.arn}",
-                  "${itemsTable.status.ackResourceMetadata.arn}/index/*"
-                ]
-              }
-            ]
-          }
-
-# Policy to be used by all AWS Lambda functions that allows publishing logs to Amazon CloudWatch
-  - id: lambdaBasicPolicy
-    template:
-      apiVersion: iam.services.k8s.aws/v1alpha1
-      kind: Policy
-      metadata:
-          name: ${schema.spec.namePrefix}-lambda-basic-policy
-      spec:
-        name: ${schema.spec.namePrefix}-lambda-basic-policy
-        policyDocument: |
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Action": [
-                  "logs:CreateLogGroup",
-                  "logs:CreateLogStream",
-                  "logs:PutLogEvents"
-                ],
-                "Resource": "*",
-                "Effect": "Allow"
-              }
-            ]
-          }
-
-# Business logics Lambda
-  - id: logicLambdaRole
-    template:
-      apiVersion: iam.services.k8s.aws/v1alpha1
-      kind: Role
-      metadata:
-        name: ${schema.spec.namePrefix}-logic-role
-      spec:
-        name: ${schema.spec.namePrefix}-logic-role
-        assumeRolePolicyDocument: |
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Effect": "Allow",
-                "Principal": {
-                  "Service": [
-                    "lambda.amazonaws.com"
-                  ]
-                },
-                "Action": "sts:AssumeRole"
-              }
-            ]
-          }
-        policies:
-          - ${lambdaBasicPolicy.status.ackResourceMetadata.arn}
-          - ${lambdaDDBAccessPolicy.status.ackResourceMetadata.arn}
-  - id: logicLambda
-    template:
-      apiVersion: lambda.services.k8s.aws/v1alpha1
-      kind: Function
-      metadata:
-        name: ${schema.spec.namePrefix}-logic
-      spec:
-        name: ${schema.spec.namePrefix}-logic
-        packageType: Zip
-        code:
-          s3Bucket: ${schema.spec.lambda.codeBucketName}
-          s3Key: ${schema.spec.lambda.logicLambdaCode}
-        environment:
-          variables: 
-            TABLE_NAME: ${itemsTable.spec.tableName}
-        handler: ${schema.spec.lambda.logicLambdaHandler}
-        runtime: ${schema.spec.lambda.logicLambdaRunTime}
-        role: ${logicLambdaRole.status.ackResourceMetadata.arn}
-
-# Lambda authorizer along with permissions required to retrieve password from AWS Secrets Manager
-  - id: lambdaSecretsAccessPolicy
-    template:
-      apiVersion: iam.services.k8s.aws/v1alpha1
-      kind: Policy
-      metadata:
-          name: ${schema.spec.namePrefix}-lambda-secrets-access-policy
-      spec:
-        name: ${schema.spec.namePrefix}-lambda-secrets-access-policy
-        policyDocument: |
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
+        spec:
+          name: ${schema.spec.namePrefix}-lambda-ddb-access-policy
+          policyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
                   "Effect": "Allow",
                   "Action": [
-                  "secretsmanager:GetSecretValue"
+                    "dynamodb:GetItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:Scan",
+                    "dynamodb:Query",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:BatchWriteItem",
+                    "dynamodb:BatchGetItem",
+                    "dynamodb:DescribeTable",
+                    "dynamodb:ConditionCheckItem"
                   ],
                   "Resource": [
-                      "${schema.spec.lambda.authorizerPasswordParameterARN}"
+                    "${itemsTable.status.ackResourceMetadata.arn}",
+                    "${itemsTable.status.ackResourceMetadata.arn}/index/*"
                   ]
-              }
-            ]
-          }
-  - id: authorizerLambdaRole
-    template:
-      apiVersion: iam.services.k8s.aws/v1alpha1
-      kind: Role
-      metadata:
-        name: ${schema.spec.namePrefix}-authorizer-role
-      spec:
-        name: ${schema.spec.namePrefix}-authorizer-role
-        assumeRolePolicyDocument: |
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Effect": "Allow",
-                "Principal": {
-                  "Service": [
-                    "lambda.amazonaws.com"
-                  ]
-                },
-                "Action": "sts:AssumeRole"
-              }
-            ]
-          }
-        policies:
-          - ${lambdaBasicPolicy.status.ackResourceMetadata.arn}
-          - ${lambdaSecretsAccessPolicy.status.ackResourceMetadata.arn}
-  - id: authorizerLambda
-    template:
-      apiVersion: lambda.services.k8s.aws/v1alpha1
-      kind: Function
-      metadata:
-        name: ${schema.spec.namePrefix}-authorizer
-      spec:
-        name: ${schema.spec.namePrefix}-authorizer
-        packageType: Zip
-        code:
-          s3Bucket: ${schema.spec.lambda.codeBucketName}
-          s3Key: ${schema.spec.lambda.authorizerLambdaCode}
-        environment:
-          variables: 
-            AUTHORIZER_PASSWORD_ARN: ${schema.spec.lambda.authorizerPasswordParameterARN}
-        handler: ${schema.spec.lambda.authorizerLambdaHandler}
-        runtime: ${schema.spec.lambda.authorizerLambdaRunTime}
-        role: ${authorizerLambdaRole.status.ackResourceMetadata.arn}
+                }
+              ]
+            }
 
-# ACK Lambda controller does not support Lambda resource policies typically used by API Gateway - https://github.com/aws-controllers-k8s/community/issues/1405
-# API Gateway has to use role based permissions instead
-  - id: apigwLogicLambdaExecutionPolicy
-    template:
-      apiVersion: iam.services.k8s.aws/v1alpha1
-      kind: Policy
-      metadata:
-        name: ${schema.spec.namePrefix}-api-logic-invoke-policy
-      spec:
-        name: ${schema.spec.namePrefix}-api-logic-invoke-policy
-        policyDocument: |
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Action": [
-                  "lambda:InvokeFunction"
-                ],
-                "Resource": "${logicLambda.status.ackResourceMetadata.arn}",
-                "Effect": "Allow"
-              }
-            ]
-          }
-  - id: apigwLogicLambdaExecutionRole
-    template:
-      apiVersion: iam.services.k8s.aws/v1alpha1
-      kind: Role
-      metadata:
-        name: ${schema.spec.namePrefix}-apigw-logic-execution-role
-      spec:
-        name: ${schema.spec.namePrefix}-apigw-logic-execution-role
-        assumeRolePolicyDocument: |
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Effect": "Allow",
-                "Principal": {
-                  "Service": [
-                    "apigateway.amazonaws.com"
-                  ]
-                },
-                "Action": "sts:AssumeRole"
-              }
-            ]
-          }
-        policies:
-          - ${apigwLogicLambdaExecutionPolicy.status.ackResourceMetadata.arn}
-  - id: apigwAuthorizerLambdaExecutionPolicy
-    template:
-      apiVersion: iam.services.k8s.aws/v1alpha1
-      kind: Policy
-      metadata:
-        name: ${schema.spec.namePrefix}-api-authorizer-invoke-policy
-      spec:
-        name: ${schema.spec.namePrefix}-api-authorizer-invoke-policy
-        policyDocument: |
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Action": [
-                  "lambda:InvokeFunction"
-                ],
-                "Resource": "${authorizerLambda.status.ackResourceMetadata.arn}",
-                "Effect": "Allow"
-              }
-            ]
-          }
-  - id: apigwAuthorizerLambdaExecutionRole
-    template:
-      apiVersion: iam.services.k8s.aws/v1alpha1
-      kind: Role
-      metadata:
-        name: ${schema.spec.namePrefix}-apigw-authorizer-execution-role
-      spec:
-        name: ${schema.spec.namePrefix}-apigw-authorizer-execution-role
-        assumeRolePolicyDocument: |
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Effect": "Allow",
-                "Principal": {
-                  "Service": [
-                    "apigateway.amazonaws.com"
-                  ]
-                },
-                "Action": "sts:AssumeRole"
-              }
-            ]
-          }
-        policies:
-          - ${apigwAuthorizerLambdaExecutionPolicy.status.ackResourceMetadata.arn}
+    # Policy to be used by all AWS Lambda functions that allows publishing logs to Amazon CloudWatch
+    - id: lambdaBasicPolicy
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Policy
+        metadata:
+          name: ${schema.spec.namePrefix}-lambda-basic-policy
+        spec:
+          name: ${schema.spec.namePrefix}-lambda-basic-policy
+          policyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": "*",
+                  "Effect": "Allow"
+                }
+              ]
+            }
 
-# Amazon API Gateway HTTP API and associated resources
-  - id: apigw
-    template:
-      apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
-      kind: API
-      metadata:
-        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}
-      spec:
-        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}
-        protocolType: HTTP
-  - id: apigwLambdaIntegration
-    template:
-      apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
-      kind: Integration
-      metadata:
-        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-integration
-      spec:
-        apiID: ${apigw.status.apiID}
-        credentialsARN: ${apigwLogicLambdaExecutionRole.status.ackResourceMetadata.arn}
-        integrationType: AWS_PROXY
-        integrationURI: "arn:aws:apigateway:${schema.spec.region}:lambda:path/2015-03-31/functions/${logicLambda.status.ackResourceMetadata.arn}/invocations"
-        integrationMethod: POST
-        payloadFormatVersion: "2.0"
-  - id: apigwItemsIdRoute
-    template:
-      apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
-      kind: Route
-      metadata:
-        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-route-item
-      spec:
-        apiID: ${apigw.status.apiID}
-        routeKey: "ANY /items/{id}"
-        target: integrations/${apigwLambdaIntegration.status.integrationID}
-        authorizationType: CUSTOM
-        authorizerID: ${apigwAuthorizer.status.authorizerID}
-  - id: apigwItemsRoute
-    template:
-      apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
-      kind: Route
-      metadata:
-        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-route-items
-      spec:
-        apiID: ${apigw.status.apiID}
-        routeKey: "ANY /items"
-        target: integrations/${apigwLambdaIntegration.status.integrationID}
-        authorizationType: CUSTOM
-        authorizerID: ${apigwAuthorizer.status.authorizerID}
-  - id: apigwDefaultStage
-    template:
-      apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
-      kind: Stage
-      metadata:
-        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-stage
-      spec:
-        apiID: ${apigw.status.apiID}
-        stageName: "$default"
-        autoDeploy: true
-  - id: apigwAuthorizer
-    template:
-      apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
-      kind: Authorizer
-      metadata:
-        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-authorizer
-      spec:
-        apiID: ${apigw.status.apiID}
-        authorizerCredentialsARN: ${apigwAuthorizerLambdaExecutionRole.status.ackResourceMetadata.arn}
-        authorizerPayloadFormatVersion: "1.0"
-        authorizerType: REQUEST
-        identitySource:
-          - $request.header.Authorization
-        authorizerURI: "arn:aws:apigateway:${schema.spec.region}:lambda:path/2015-03-31/functions/${authorizerLambda.status.ackResourceMetadata.arn}/invocations"
-        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-authorizer
+    # Business logics Lambda
+    - id: logicLambdaRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.namePrefix}-logic-role
+        spec:
+          name: ${schema.spec.namePrefix}-logic-role
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": [
+                      "lambda.amazonaws.com"
+                    ]
+                  },
+                  "Action": "sts:AssumeRole"
+                }
+              ]
+            }
+          policies:
+            - ${lambdaBasicPolicy.status.ackResourceMetadata.arn}
+            - ${lambdaDDBAccessPolicy.status.ackResourceMetadata.arn}
+    - id: logicLambda
+      template:
+        apiVersion: lambda.services.k8s.aws/v1alpha1
+        kind: Function
+        metadata:
+          name: ${schema.spec.namePrefix}-logic
+        spec:
+          name: ${schema.spec.namePrefix}-logic
+          packageType: Zip
+          code:
+            s3Bucket: ${schema.spec.lambda.codeBucketName}
+            s3Key: ${schema.spec.lambda.logicLambdaCode}
+          environment:
+            variables:
+              TABLE_NAME: ${itemsTable.spec.tableName}
+          handler: ${schema.spec.lambda.logicLambdaHandler}
+          runtime: ${schema.spec.lambda.logicLambdaRunTime}
+          role: ${logicLambdaRole.status.ackResourceMetadata.arn}
+
+    - id: lambdaSecretsAccessPolicy
+      # Lambda authorizer along with permissions required to retrieve password from AWS Secrets Manager
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Policy
+        metadata:
+          name: ${schema.spec.namePrefix}-lambda-secrets-access-policy
+        spec:
+          name: ${schema.spec.namePrefix}-lambda-secrets-access-policy
+          policyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                    "secretsmanager:GetSecretValue"
+                    ],
+                    "Resource": [
+                        "${schema.spec.lambda.authorizerPasswordParameterARN}"
+                    ]
+                }
+              ]
+            }
+    - id: authorizerLambdaRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.namePrefix}-authorizer-role
+        spec:
+          name: ${schema.spec.namePrefix}-authorizer-role
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": [
+                      "lambda.amazonaws.com"
+                    ]
+                  },
+                  "Action": "sts:AssumeRole"
+                }
+              ]
+            }
+          policies:
+            - ${lambdaBasicPolicy.status.ackResourceMetadata.arn}
+            - ${lambdaSecretsAccessPolicy.status.ackResourceMetadata.arn}
+    - id: authorizerLambda
+      template:
+        apiVersion: lambda.services.k8s.aws/v1alpha1
+        kind: Function
+        metadata:
+          name: ${schema.spec.namePrefix}-authorizer
+        spec:
+          name: ${schema.spec.namePrefix}-authorizer
+          packageType: Zip
+          code:
+            s3Bucket: ${schema.spec.lambda.codeBucketName}
+            s3Key: ${schema.spec.lambda.authorizerLambdaCode}
+          environment:
+            variables:
+              AUTHORIZER_PASSWORD_ARN: ${schema.spec.lambda.authorizerPasswordParameterARN}
+          handler: ${schema.spec.lambda.authorizerLambdaHandler}
+          runtime: ${schema.spec.lambda.authorizerLambdaRunTime}
+          role: ${authorizerLambdaRole.status.ackResourceMetadata.arn}
+
+    - id: apigwLogicLambdaExecutionPolicy
+      # ACK Lambda controller does not support Lambda resource policies typically used by API Gateway - https://github.com/aws-controllers-k8s/community/issues/1405
+      # API Gateway has to use role based permissions instead
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Policy
+        metadata:
+          name: ${schema.spec.namePrefix}-api-logic-invoke-policy
+        spec:
+          name: ${schema.spec.namePrefix}-api-logic-invoke-policy
+          policyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": [
+                    "lambda:InvokeFunction"
+                  ],
+                  "Resource": "${logicLambda.status.ackResourceMetadata.arn}",
+                  "Effect": "Allow"
+                }
+              ]
+            }
+    - id: apigwLogicLambdaExecutionRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.namePrefix}-apigw-logic-execution-role
+        spec:
+          name: ${schema.spec.namePrefix}-apigw-logic-execution-role
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": [
+                      "apigateway.amazonaws.com"
+                    ]
+                  },
+                  "Action": "sts:AssumeRole"
+                }
+              ]
+            }
+          policies:
+            - ${apigwLogicLambdaExecutionPolicy.status.ackResourceMetadata.arn}
+    - id: apigwAuthorizerLambdaExecutionPolicy
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Policy
+        metadata:
+          name: ${schema.spec.namePrefix}-api-authorizer-invoke-policy
+        spec:
+          name: ${schema.spec.namePrefix}-api-authorizer-invoke-policy
+          policyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": [
+                    "lambda:InvokeFunction"
+                  ],
+                  "Resource": "${authorizerLambda.status.ackResourceMetadata.arn}",
+                  "Effect": "Allow"
+                }
+              ]
+            }
+    - id: apigwAuthorizerLambdaExecutionRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.namePrefix}-apigw-authorizer-execution-role
+        spec:
+          name: ${schema.spec.namePrefix}-apigw-authorizer-execution-role
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": [
+                      "apigateway.amazonaws.com"
+                    ]
+                  },
+                  "Action": "sts:AssumeRole"
+                }
+              ]
+            }
+          policies:
+            - ${apigwAuthorizerLambdaExecutionPolicy.status.ackResourceMetadata.arn}
+
+    - id: apigw
+      # Amazon API Gateway HTTP API and associated resources
+      template:
+        apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+        kind: API
+        metadata:
+          name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}
+        spec:
+          name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}
+          protocolType: HTTP
+    - id: apigwLambdaIntegration
+      template:
+        apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+        kind: Integration
+        metadata:
+          name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-integration
+        spec:
+          apiID: ${apigw.status.apiID}
+          credentialsARN: ${apigwLogicLambdaExecutionRole.status.ackResourceMetadata.arn}
+          integrationType: AWS_PROXY
+          integrationURI: "arn:aws:apigateway:${schema.spec.region}:lambda:path/2015-03-31/functions/${logicLambda.status.ackResourceMetadata.arn}/invocations"
+          integrationMethod: POST
+          payloadFormatVersion: "2.0"
+    - id: apigwItemsIdRoute
+      template:
+        apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+        kind: Route
+        metadata:
+          name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-route-item
+        spec:
+          apiID: ${apigw.status.apiID}
+          routeKey: "ANY /items/{id}"
+          target: integrations/${apigwLambdaIntegration.status.integrationID}
+          authorizationType: CUSTOM
+          authorizerID: ${apigwAuthorizer.status.authorizerID}
+    - id: apigwItemsRoute
+      template:
+        apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+        kind: Route
+        metadata:
+          name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-route-items
+        spec:
+          apiID: ${apigw.status.apiID}
+          routeKey: "ANY /items"
+          target: integrations/${apigwLambdaIntegration.status.integrationID}
+          authorizationType: CUSTOM
+          authorizerID: ${apigwAuthorizer.status.authorizerID}
+    - id: apigwDefaultStage
+      template:
+        apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+        kind: Stage
+        metadata:
+          name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-stage
+        spec:
+          apiID: ${apigw.status.apiID}
+          stageName: "$default"
+          autoDeploy: true
+    - id: apigwAuthorizer
+      template:
+        apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+        kind: Authorizer
+        metadata:
+          name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-authorizer
+        spec:
+          apiID: ${apigw.status.apiID}
+          authorizerCredentialsARN: ${apigwAuthorizerLambdaExecutionRole.status.ackResourceMetadata.arn}
+          authorizerPayloadFormatVersion: "1.0"
+          authorizerType: REQUEST
+          identitySource:
+            - $request.header.Authorization
+          authorizerURI: "arn:aws:apigateway:${schema.spec.region}:lambda:path/2015-03-31/functions/${authorizerLambda.status.ackResourceMetadata.arn}/invocations"
+          name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-authorizer

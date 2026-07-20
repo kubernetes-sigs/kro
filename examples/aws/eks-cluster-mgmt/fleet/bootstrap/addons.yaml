@@ -12,31 +12,31 @@ spec:
   goTemplateOptions:
     - missingkey=error
   generators:
-  - clusters:
-      selector:
-        matchLabels:
-          fleet_member: control-plane          
-      values:
-        addonChart: application-sets
+    - clusters:
+        selector:
+          matchLabels:
+            fleet_member: control-plane
+        values:
+          addonChart: application-sets
   template:
     metadata:
       name: cluster-addons
     spec:
       project: default
       sources:
-      - ref: values
-        repoURL: '{{.metadata.annotations.addons_repo_url}}'
-        targetRevision: '{{.metadata.annotations.addons_repo_revision}}'
-      - repoURL: '{{.metadata.annotations.addons_repo_url}}'
-        path: 'charts/{{.values.addonChart}}'
-        targetRevision: '{{.metadata.annotations.addons_repo_revision}}'
-        helm:
-          ignoreMissingValueFiles: true
-          valueFiles:
-            - $values/{{.metadata.annotations.addons_repo_basepath}}bootstrap/default/addons.yaml
-            - $values/{{.metadata.annotations.addons_repo_basepath}}environments/{{ .metadata.labels.environment }}/addons.yaml
-            - $values/{{.metadata.annotations.addons_repo_basepath}}tenants/{{ .metadata.labels.tenant }}/default/{{ .values.addonChart }}/addons.yaml
-            - $values/{{.metadata.annotations.addons_repo_basepath}}tenants/{{ .metadata.labels.tenant }}/clusters/{{ .name }}/{{.values.addonChart}}/addons.yaml
+        - ref: values
+          repoURL: '{{.metadata.annotations.addons_repo_url}}'
+          targetRevision: '{{.metadata.annotations.addons_repo_revision}}'
+        - repoURL: '{{.metadata.annotations.addons_repo_url}}'
+          path: 'charts/{{.values.addonChart}}'
+          targetRevision: '{{.metadata.annotations.addons_repo_revision}}'
+          helm:
+            ignoreMissingValueFiles: true
+            valueFiles:
+              - $values/{{.metadata.annotations.addons_repo_basepath}}bootstrap/default/addons.yaml
+              - $values/{{.metadata.annotations.addons_repo_basepath}}environments/{{ .metadata.labels.environment }}/addons.yaml
+              - $values/{{.metadata.annotations.addons_repo_basepath}}tenants/{{ .metadata.labels.tenant }}/default/{{ .values.addonChart }}/addons.yaml
+              - $values/{{.metadata.annotations.addons_repo_basepath}}tenants/{{ .metadata.labels.tenant }}/clusters/{{ .name }}/{{.values.addonChart}}/addons.yaml
       destination:
         namespace: argocd
         name: '{{.name}}'
@@ -49,4 +49,4 @@ spec:
           limit: 100
         syncOptions:
           - CreateNamespace=true
-          - ServerSideApply=true  # Big CRDs.
+          - ServerSideApply=true # Big CRDs.

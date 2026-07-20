@@ -17,11 +17,13 @@ package commands
 import (
 	"github.com/spf13/cobra"
 
+	fmt "github.com/kubernetes-sigs/kro/cmd/kro/commands/fmt"
 	generate "github.com/kubernetes-sigs/kro/cmd/kro/commands/generate"
 	validate "github.com/kubernetes-sigs/kro/cmd/kro/commands/validate"
 )
 
 func AddCommands(root *cobra.Command) {
+	fmt.AddFmtCommands(root)
 	generate.AddGenerateCommands(root)
 	validate.AddValidateCommands(root)
 }

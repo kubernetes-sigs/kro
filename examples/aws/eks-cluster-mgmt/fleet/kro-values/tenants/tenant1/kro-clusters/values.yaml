@@ -1,41 +1,41 @@
 clusters:
-  # workload-cluster1:
-  #     managementAccountId: "XXXXXX"
-  #     accountId: "XXXXXX"
-  #     tenant: "tenant1"
-  #     k8sVersion: "1.34"
-  #     vpc:
-  #       create: true
-  #     gitops:
-  #       addonsRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
-  #       fleetRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+# workload-cluster1:
+#     managementAccountId: "XXXXXX"
+#     accountId: "XXXXXX"
+#     tenant: "tenant1"
+#     k8sVersion: "1.34"
+#     vpc:
+#       create: true
+#     gitops:
+#       addonsRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+#       fleetRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
 
-  # workload-cluster2:
-  #     managementAccountId: "XXXXXX"
-  #     accountId: "XXXXXX"
-  #     tenant: "tenant1"
-  #     k8sVersion: "1.34"
-  #     vpc:
-  #       create: true
-  #     gitops:
-  #       addonsRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
-  #       fleetRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
-  #   addons:
-  #     enable_external_secrets: "true"
+# workload-cluster2:
+#     managementAccountId: "XXXXXX"
+#     accountId: "XXXXXX"
+#     tenant: "tenant1"
+#     k8sVersion: "1.34"
+#     vpc:
+#       create: true
+#     gitops:
+#       addonsRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+#       fleetRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+#   addons:
+#     enable_external_secrets: "true"
 
-  # workload-cluster3:
-  #   managementAccountId: "XXXXXX"
-  #   accountId: "XXXXXX"
-  #   tenant: "tenant1"
-  #   k8sVersion: "1.34"
-  #   workloads: "true"
-  #   vpc:
-  #     create: false
-  #     vpcId: "vpc-XXXX"
-  #     publicSubnet1Id: "subnet-XXXX"
-  #     publicSubnet2Id: "subnet-XXXX"
-  #     privateSubnet1Id: "subnet-XXXX"
-  #     privateSubnet2Id: "subnet-XXXX"
-  #   gitops:
-  #       addonsRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
-  #       fleetRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+# workload-cluster3:
+#   managementAccountId: "XXXXXX"
+#   accountId: "XXXXXX"
+#   tenant: "tenant1"
+#   k8sVersion: "1.34"
+#   workloads: "true"
+#   vpc:
+#     create: false
+#     vpcId: "vpc-XXXX"
+#     publicSubnet1Id: "subnet-XXXX"
+#     publicSubnet2Id: "subnet-XXXX"
+#     privateSubnet1Id: "subnet-XXXX"
+#     privateSubnet2Id: "subnet-XXXX"
+#   gitops:
+#       addonsRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+#       fleetRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"

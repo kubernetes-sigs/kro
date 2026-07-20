@@ -1,5 +1,4 @@
 # yamllint disable rule:line-length
----
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -52,7 +51,6 @@ spec:
       cdata: ${ekscluster.status.certificateAuthority.data}
       endpoint: ${ekscluster.status.endpoint}
       clusterState: ${ekscluster.status.status}
-
 
   resources:
 
@@ -156,15 +154,15 @@ spec:
             ipFamily: ipv4
             elasticLoadBalancing:
               enabled: true
-          logging: 
+          logging:
             clusterLogging:
-            - enabled: true
-              types:
-              - api
-              - audit
-              - authenticator
-              - controllerManager
-              - scheduler
+              - enabled: true
+                types:
+                  - api
+                  - audit
+                  - authenticator
+                  - controllerManager
+                  - scheduler
           storageConfig:
             blockStorage:
               enabled: true
@@ -174,9 +172,9 @@ spec:
             subnetIDs:
               - ${schema.spec.network.subnets.controlplane.subnet1ID}
               - ${schema.spec.network.subnets.controlplane.subnet2ID}
-          zonalShiftConfig: 
+          zonalShiftConfig:
             enabled: true
-          tags: 
+          tags:
             kro-management: ${schema.spec.name}
             tenant: ${schema.spec.tenant}
             environment: ${schema.spec.environment}
@@ -224,7 +222,7 @@ spec:
             aws_account_id: "${schema.spec.accountId}"
             region: "${schema.spec.region}"
             aws_region: "${schema.spec.region}"
-            aws_central_region: "${schema.spec.region}"   # used in fleet-management gitops
+            aws_central_region: "${schema.spec.region}" # used in fleet-management gitops
             oidcProvider: "${ekscluster.status.identity.oidc.issuer}"
             aws_cluster_name: "${schema.spec.name}"
             aws_vpc_id: "${schema.spec.network.vpcID}"
@@ -250,7 +248,7 @@ spec:
           project: "default"
     - id: accessEntry
       readyWhen:
-      - ${accessEntry.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
+        - ${accessEntry.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: AccessEntry
@@ -265,7 +263,7 @@ spec:
             - accessScope:
                 type: "cluster"
               policyARN: "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-          principalARN: "arn:aws:iam::${schema.spec.managementAccountId}:role/hub-cluster-argocd-controller"          
+          principalARN: "arn:aws:iam::${schema.spec.managementAccountId}:role/hub-cluster-argocd-controller"
           type: STANDARD
 
     - id: accessEntryAdmin
@@ -285,7 +283,6 @@ spec:
               policyARN: "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
           principalARN: "arn:aws:iam::${schema.spec.accountId}:role/${schema.spec.adminRoleName}"
           type: STANDARD
-
 
     ###########################################################
     # External Secrets AddOn Pod Identity
@@ -321,7 +318,7 @@ spec:
             }
     - id: externalSecretsPodIdentityAssociation
       readyWhen:
-      - ${externalSecretsPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
+        - ${externalSecretsPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: PodIdentityAssociation

@@ -6,7 +6,7 @@ metadata:
 spec:
   name: ack-iam-controller
   namespace: kro
-  values: 
+  values:
     aws:
       region: us-west-2
     deployment: {}
@@ -20,4 +20,4 @@ spec:
     aws: {}
     serviceAccount:
       name: ack-iam-controller-sa
-      roleArn: ....
+      roleArn: '....'

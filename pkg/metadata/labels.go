@@ -17,6 +17,7 @@ package metadata
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strconv"
 	"strings"
 
@@ -31,10 +32,14 @@ import (
 const (
 	// LabelKROPrefix is the label key prefix used to identify KRO owned resources.
 	LabelKROPrefix = v1alpha1.KRODomainName + "/"
+	// InternalLabelKROPrefix is the prefix for internal-only metadata that
+	// should not be treated as part of kro's public API surface.
+	InternalLabelKROPrefix = "internal.kro.run/"
 )
 
 const (
-	NodeIDLabel = LabelKROPrefix + "node-id"
+	NodeIDLabel    = LabelKROPrefix + "node-id"
+	NodeAnnotation = InternalLabelKROPrefix + "node"
 
 	// Collection labels for tracking collection membership and position.
 	// These enable querying collection resources and understanding their position.
@@ -213,10 +218,18 @@ func NewKROMetaLabeler() GenericLabeler {
 // - collection-size: the total number of items in the collection (e.g "3")
 func NewCollectionItemLabeler(nodeID string, index, size int) GenericLabeler {
 	return map[string]string{
-		NodeIDLabel:          nodeID,
+		NodeIDLabel:          SafeNodeID(nodeID),
 		CollectionIndexLabel: strconv.Itoa(index),
 		CollectionSizeLabel:  strconv.Itoa(size),
 	}
+}
+
+// SafeNodeID returns a deterministic fixed-length (16 chars) nodeId
+// using FNV-64a, safe for K8s label values due to the 63-char limit.
+func SafeNodeID(nodeID string) string {
+	h := fnv.New64a()
+	h.Write([]byte(nodeID))
+	return fmt.Sprintf("%016x", h.Sum64())
 }
 
 func safeVersion(version string) string {

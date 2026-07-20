@@ -26,6 +26,9 @@ metrics:
     interval: 1m
 ```
 
+A prebuilt Grafana dashboard for these metrics is available at
+[`config/grafana/dashboard.json`](https://raw.githubusercontent.com/kubernetes-sigs/kro/refs/heads/main/config/grafana/dashboard.json).
+
 ## Dynamic Controller Metrics
 
 | Metric | Type | Description | Stability |

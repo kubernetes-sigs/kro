@@ -62,7 +62,7 @@ func TestEvaluateConditions_NoConditions(t *testing.T) {
 	rt, err := FromGraph(graphWithConditions(nil), testInstance("demo"), graph.RGDConfig{})
 	require.NoError(t, err)
 
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, conds)
 	assert.False(t, rt.Instance().HasConditions())
@@ -77,7 +77,7 @@ func TestEvaluateConditions_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	require.True(t, rt.Instance().HasConditions())
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.NoError(t, err)
 	require.Len(t, conds, 2)
 
@@ -107,7 +107,7 @@ func TestEvaluateConditions_ReadsSchema(t *testing.T) {
 	rt, err := FromGraph(graphWithConditions(exprs), inst, graph.RGDConfig{})
 	require.NoError(t, err)
 
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.NoError(t, err)
 	require.Len(t, conds, 1)
 	assert.Equal(t, "True", conds[0].Status)
@@ -129,10 +129,11 @@ func TestEvaluateConditions_DataPendingOmittedSilently(t *testing.T) {
 	rt, err := FromGraph(graphWithConditions(exprs), inst, graph.RGDConfig{})
 	require.NoError(t, err)
 
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, incomplete, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.NoError(t, err, "Should silently omit DataPending failures, not fail the reconcile")
 	require.Len(t, conds, 1, "the OK condition should be present; Pending should be omitted")
 	assert.Equal(t, "OK", conds[0].ConditionType)
+	assert.True(t, incomplete, "the skipped expression must be reported as incomplete")
 }
 
 func TestEvaluateConditions_CollectionExpansion(t *testing.T) {
@@ -156,7 +157,7 @@ func TestEvaluateConditions_CollectionExpansion(t *testing.T) {
 	rt, err := FromGraph(graphWithConditions([]*krocel.Expression{expr}), inst, graph.RGDConfig{})
 	require.NoError(t, err)
 
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.NoError(t, err)
 	require.Len(t, conds, 3, "single map() expression should flatten to 3 conditions, one per region")
 
@@ -191,7 +192,7 @@ func TestEvaluateConditions_CollectionExpansionMixedWithSingle(t *testing.T) {
 	rt, err := FromGraph(graphWithConditions(exprs), inst, graph.RGDConfig{})
 	require.NoError(t, err)
 
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.NoError(t, err)
 	require.Len(t, conds, 4, "Overall + 2 from map() + Final = 4")
 
@@ -217,7 +218,7 @@ func TestEvaluateConditions_CollectionExpansionEmpty(t *testing.T) {
 	rt, err := FromGraph(graphWithConditions([]*krocel.Expression{expr}), inst, graph.RGDConfig{})
 	require.NoError(t, err)
 
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, conds, "empty map() should produce zero conditions, not an error")
 }
@@ -231,7 +232,7 @@ func TestEvaluateConditions_OrderPreserved(t *testing.T) {
 	rt, err := FromGraph(graphWithConditions(exprs), testInstance("demo"), graph.RGDConfig{})
 	require.NoError(t, err)
 
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.NoError(t, err)
 	require.Len(t, conds, 3)
 	assert.Equal(t, "A", conds[0].ConditionType)
@@ -257,7 +258,7 @@ func TestEvaluateConditions_RuntimeConditionReadsKroBuiltins(t *testing.T) {
 		{Type: "ResourcesReady", Status: metav1.ConditionTrue},
 		{Type: "Ready", Status: metav1.ConditionTrue},
 	}
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), kroBuiltins)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), kroBuiltins)
 	require.NoError(t, err)
 	require.Len(t, conds, 1)
 	assert.Equal(t, "Ready", conds[0].ConditionType)
@@ -276,7 +277,7 @@ func TestEvaluateConditions_RuntimeConditionUnknownTypeReturnsEmpty(t *testing.T
 	rt, err := FromGraph(graphWithConditions([]*krocel.Expression{expr}), testInstance("demo"), graph.RGDConfig{})
 	require.NoError(t, err)
 
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.NoError(t, err)
 	require.Len(t, conds, 1)
 	assert.Equal(t, "True", conds[0].Status)
@@ -306,7 +307,7 @@ func TestEvaluateConditions_AuthorOverrideDoesNotShadowKroBuiltinLookup(t *testi
 	kroBuiltins := []v1alpha1.Condition{
 		{Type: "ResourcesReady", Status: metav1.ConditionFalse},
 	}
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), kroBuiltins)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), kroBuiltins)
 	require.NoError(t, err)
 	require.Len(t, conds, 2)
 
@@ -334,7 +335,7 @@ func TestEvaluateConditions_DuplicateTypeDroppedAndDegraded(t *testing.T) {
 	rt, err := FromGraph(graphWithConditions(exprs), testInstance("demo"), graph.RGDConfig{})
 	require.NoError(t, err)
 
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, incomplete, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrConditionEvaluationDegraded)
 	assert.Contains(t, err.Error(), "duplicate condition type")
@@ -343,6 +344,7 @@ func TestEvaluateConditions_DuplicateTypeDroppedAndDegraded(t *testing.T) {
 	require.Len(t, conds, 2)
 	assert.Equal(t, "A", conds[0].ConditionType)
 	assert.Equal(t, "B", conds[1].ConditionType)
+	assert.True(t, incomplete, "dropped duplicates must be reported as incomplete")
 }
 
 func TestEvaluateConditions_DuplicateTypeFromCollectionExpansionDropped(t *testing.T) {
@@ -363,7 +365,7 @@ func TestEvaluateConditions_DuplicateTypeFromCollectionExpansionDropped(t *testi
 	rt, err := FromGraph(graphWithConditions(exprs), inst, graph.RGDConfig{})
 	require.NoError(t, err)
 
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrConditionEvaluationDegraded)
 	require.Len(t, conds, 1)
@@ -379,7 +381,7 @@ func TestEvaluateConditions_FatalErrorInOneExpressionSkippedNotAborted(t *testin
 	rt, err := FromGraph(graphWithConditions([]*krocel.Expression{bad, good}), testInstance("demo"), graph.RGDConfig{})
 	require.NoError(t, err)
 
-	conds, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrConditionEvaluationDegraded)
 	require.Len(t, conds, 1)

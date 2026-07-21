@@ -4647,3 +4647,142 @@ func TestBuildInstanceNodeFoldsConditionDeps(t *testing.T) {
 	assert.Contains(t, node.Meta.Dependencies, "resource")
 	assert.Equal(t, conditions, node.Conditions)
 }
+
+func TestBuildConditionsOutputType(t *testing.T) {
+	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
+
+	tests := []struct {
+		name      string
+		expr      string
+		errSubstr string
+	}{
+		{
+			name: "single condition accepted",
+			expr: `${runtime.newCondition({type: 'X', status: 'True', reason: '', message: ''})}`,
+		},
+		{
+			name: "list of conditions accepted",
+			expr: `${[1, 2].map(i, runtime.newCondition({type: 'T' + string(i), status: 'True', reason: '', message: ''}))}`,
+		},
+		{
+			name:      "non-condition output rejected",
+			expr:      `${schema.spec.name}`,
+			errSubstr: "must return runtime.newCondition",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildConditions(bc, []string{tt.expr}, inspector, inspectorEnv, []string{"resource"})
+			if tt.errSubstr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errSubstr)
+		})
+	}
+}
+
+func TestValidateConditionOutputType(t *testing.T) {
+	conditionType := cel.ObjectType(library.ConditionTypeName)
+
+	assert.NoError(t, validateConditionOutputType(conditionType))
+	assert.NoError(t, validateConditionOutputType(cel.ListType(conditionType)))
+	assert.NoError(t, validateConditionOutputType(cel.DynType))
+	assert.NoError(t, validateConditionOutputType(cel.ListType(cel.DynType)))
+
+	assert.Error(t, validateConditionOutputType(cel.StringType))
+	assert.Error(t, validateConditionOutputType(cel.ListType(cel.StringType)))
+	assert.Error(t, validateConditionOutputType(cel.MapType(cel.StringType, cel.StringType)))
+}
+
+// TestGraphBuilder_RuntimeOutsideConditionsRejected verifies that the
+// runtime CEL variable is rejected at build time everywhere except the
+// schema's status.conditions block, where it is injected at evaluation time.
+func TestGraphBuilder_RuntimeOutsideConditionsRejected(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+
+	configmap := func(data map[string]interface{}) generator.ResourceGraphDefinitionOption {
+		return generator.WithResource("configmap", map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
+			"data":       data,
+		}, nil, nil)
+	}
+	validData := map[string]interface{}{"foo": "${schema.spec.name}"}
+	nameSchema := map[string]interface{}{"name": "string"}
+
+	tests := []struct {
+		name    string
+		opts    []generator.ResourceGraphDefinitionOption
+		wantErr string
+	}{
+		{
+			name: "template field",
+			opts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema("Test", "v1alpha1", nameSchema, nil),
+				configmap(map[string]interface{}{
+					"probe": `${runtime.condition(schema, 'Ready').status}`,
+				}),
+			},
+			wantErr: "runtime is only available in status.conditions expressions",
+		},
+		{
+			name: "forEach dimension",
+			opts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema("Test", "v1alpha1", nameSchema, nil),
+				generator.WithResourceCollection("cms", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]interface{}{"name": "${name}"},
+				}, []krov1alpha1.ForEachDimension{
+					{"name": `${[runtime.condition(schema, 'Ready').status]}`},
+				}, nil, nil),
+			},
+			wantErr: "runtime is only available in status.conditions expressions",
+		},
+		{
+			name: "plain status field",
+			opts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema("Test", "v1alpha1", nameSchema,
+					map[string]interface{}{
+						"myfield": `${runtime.newCondition({type: 'X', status: 'True', reason: '', message: ''}).status}`,
+					}),
+				configmap(validData),
+			},
+			wantErr: "references unknown identifiers: [runtime]",
+		},
+		{
+			name: "allowed in status.conditions",
+			opts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema("Test", "v1alpha1", nameSchema,
+					map[string]interface{}{
+						"conditions": []interface{}{
+							`${runtime.newCondition({type: 'X', status: 'True', reason: '', message: ''})}`,
+						},
+					}),
+				configmap(validData),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := generator.NewResourceGraphDefinition("test-runtime-rejection", tt.opts...)
+			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}

@@ -198,6 +198,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 			DeletionGraceTimeDuration: 30 * time.Second,
 			DeletionPolicy:            "Delete",
 			RGDConfig:                 r.cfg.RGDConfig,
+			HasAuthorConditions:       len(processedRGD.Instance.Conditions) > 0,
 		},
 		gvr,
 		r.revisionsRegistry.ResolverForRGD(rgd.Name),
@@ -208,7 +209,6 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		r.dynamicController.Coordinator(),
 		// recorder keyed by CRD name to uniquely identify the event source
 		r.newEventRecorder(fmt.Sprintf("kro/%s-controller", processedRGD.CRD.Name)),
-		len(processedRGD.Instance.Conditions) > 0,
 	)
 }
 

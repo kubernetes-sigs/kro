@@ -224,9 +224,10 @@ func (c *Controller) removeFinalizer(rcx *ReconcileContext) error {
 		rcx.Mark.InstanceNotManaged("failed removing finalizer: %v", err)
 		return err
 	}
-	rcx.Instance = patched
-	rcx.Runtime.Instance().SetObserved([]*unstructured.Unstructured{patched})
-	rcx.Mark = NewConditionsMarkerFor(rcx.Instance)
+	if patched != nil {
+		rcx.rebindInstance(patched)
+		rcx.Runtime.Instance().SetObserved([]*unstructured.Unstructured{patched})
+	}
 	rcx.Mark.ResourcesUnderDeletion("deleting resources")
 	return nil
 }
@@ -245,9 +246,11 @@ func resourceClientFor(
 
 // setUnmanaged removes the instance finalizer using JSON merge patch with retry on conflict.
 // Uses merge patch (not SSA) to avoid field manager ownership blocking finalizer removal.
+// Returns the server's response, or nil when the finalizer was already absent
+// and no request was made (callers must only rebind on a non-nil return).
 func (c *Controller) setUnmanaged(rcx *ReconcileContext, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if exist := metadata.HasInstanceFinalizer(obj); !exist {
-		return obj, nil
+		return nil, nil
 	}
 	rcx.Log.Info("Removing managed state", "name", obj.GetName(), "namespace", obj.GetNamespace())
 

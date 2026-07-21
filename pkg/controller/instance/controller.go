@@ -61,6 +61,10 @@ type ReconcileConfig struct {
 	DeletionPolicy string
 	// RGDConfig holds RGD runtime configuration parameters.
 	RGDConfig graph.RGDConfig
+	// HasAuthorConditions is true when the RGD declares an author
+	// `conditions:` block, which replaces kro's built-in conditions on
+	// .status.conditions[].
+	HasAuthorConditions bool
 }
 
 // GraphRevisionResolver resolves compiled graph revisions for a single RGD.
@@ -123,12 +127,6 @@ type Controller struct {
 	// feature gate flags, captured once at construction time.
 	eventsEnabled  bool
 	metricsEnabled bool
-
-	// hasAuthorConditions reports whether the RGD this controller serves
-	// declared an author `conditions:` block. When true, the graph-resolve
-	// failure early-exit (updateConditionsStatus) suppresses kro's built-in
-	// conditions so .status.conditions[] only contains author conditions.
-	hasAuthorConditions bool
 }
 
 // NewController constructs a new controller that resolves the newest issued
@@ -144,7 +142,6 @@ func NewController(
 	childResourceLabeler metadata.Labeler,
 	coord *dynamiccontroller.WatchCoordinator,
 	eventRecorder record.EventRecorder,
-	hasAuthorConditions bool,
 ) *Controller {
 	return &Controller{
 		log:                  log,
@@ -159,7 +156,6 @@ func NewController(
 		eventRecorder:        eventRecorder,
 		eventsEnabled:        features.FeatureGate.Enabled(features.InstanceConditionEvents),
 		metricsEnabled:       features.FeatureGate.Enabled(features.InstanceConditionMetrics),
-		hasAuthorConditions:  hasAuthorConditions,
 	}
 }
 
@@ -332,9 +328,8 @@ func (c *Controller) ensureManaged(rcx *ReconcileContext) error {
 		return err
 	}
 	if patched != nil {
-		rcx.Instance = patched
+		rcx.rebindInstance(patched)
 		rcx.Runtime.Instance().SetObserved([]*unstructured.Unstructured{patched})
-		rcx.Mark = NewConditionsMarkerFor(rcx.Instance)
 	}
 	rcx.Mark.InstanceManaged()
 	return nil
@@ -379,6 +374,10 @@ func (c *Controller) resolveCompiledGraph() (*graph.Graph, error) {
 	}
 }
 
+// applyManagedFinalizerAndLabels ensures the instance carries kro's finalizer
+// and management labels. It returns the server's response when a patch was
+// issued and nil when the instance was already correct, so callers only
+// rebind (re-capture the wire status) after an actual write.
 func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*unstructured.Unstructured, error) {
 	obj := rcx.Instance
 	// Fast path: if everything is already correct → no patch
@@ -397,7 +396,7 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	}
 
 	if needPatch := needFinalizer || needLabelPatch; !needPatch {
-		return obj, nil
+		return nil, nil
 	}
 
 	//-------------------------------------------

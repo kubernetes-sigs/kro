@@ -15,10 +15,11 @@
 package instance
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -55,19 +56,7 @@ func (u *unstructuredWrapper) GetConditions() []v1alpha1.Condition {
 	if err != nil || !found {
 		return []v1alpha1.Condition{}
 	}
-	result := make([]v1alpha1.Condition, 0, len(condSlice))
-	for _, item := range condSlice {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		var c v1alpha1.Condition
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(m, &c); err != nil {
-			continue
-		}
-		result = append(result, c)
-	}
-	return result
+	return decodeConditions(condSlice)
 }
 
 func (u *unstructuredWrapper) SetConditions(conditions []v1alpha1.Condition) {
@@ -82,6 +71,24 @@ func (u *unstructuredWrapper) SetConditions(conditions []v1alpha1.Condition) {
 	if err := unstructured.SetNestedSlice(u.Object, conditionsInterface, "status", "conditions"); err != nil {
 		return // Fail silently - could log this in the future
 	}
+}
+
+// decodeConditions converts a slice of condition maps into typed conditions,
+// skipping malformed entries.
+func decodeConditions(raw []interface{}) []v1alpha1.Condition {
+	result := make([]v1alpha1.Condition, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		var c v1alpha1.Condition
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(m, &c); err != nil {
+			continue
+		}
+		result = append(result, c)
+	}
+	return result
 }
 
 type ConditionsMarker struct {
@@ -128,13 +135,11 @@ func (m *ConditionsMarker) ResourcesUnderDeletion(msg string, args ...any) {
 	m.cs.SetUnknownWithReason(ResourcesReady, "UnderDeletion", fmt.Sprintf(msg, args...))
 }
 
-// updateConditionsStatus persists only the conditions and state from the
-// instance object. Used on early-exit paths (e.g. graph resolution failure)
-// where a full ReconcileContext is not available.
-//
-// When the RGD declared an author `conditions:` block, kro's four built-in
-// conditions are filtered out before the write, honoring the visibility rule
-// that only author conditions appear on .status.conditions[].
+// updateConditionsStatus persists conditions and state from the instance
+// object. Used on early-exit paths (e.g. graph resolution failure) where a
+// full ReconcileContext is not available. When the RGD declares author
+// conditions this path cannot evaluate them (there is no graph), so only
+// `state` is written and the persisted conditions are left untouched.
 func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructured.Unstructured) error {
 	ri := c.client.Dynamic().Resource(c.gvr)
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -152,11 +157,10 @@ func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructu
 		if status == nil {
 			status = map[string]interface{}{}
 		}
-		if conds, found, _ := unstructured.NestedSlice(inst.Object, "status", "conditions"); found {
-			if c.hasAuthorConditions {
-				conds = filterOutKroBuiltinConditions(conds)
+		if !c.reconcileConfig.HasAuthorConditions {
+			if conds, found, _ := unstructured.NestedSlice(inst.Object, "status", "conditions"); found {
+				status["conditions"] = conds
 			}
-			status["conditions"] = conds
 		}
 		status["state"] = string(v1alpha1.InstanceStateError)
 		cur.Object["status"] = status
@@ -172,29 +176,8 @@ func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructu
 	})
 }
 
-// filterOutKroBuiltinConditions returns conds with the four kro built-in
-// condition types (InstanceManaged, GraphResolved, ResourcesReady, Ready)
-// removed. Used to honor the visibility rule on graph-resolve failures
-// when the RGD declared author conditions.
-func filterOutKroBuiltinConditions(conds []interface{}) []interface{} {
-	filtered := make([]interface{}, 0, len(conds))
-	for _, c := range conds {
-		m, ok := c.(map[string]interface{})
-		if !ok {
-			filtered = append(filtered, c)
-			continue
-		}
-		switch m["type"] {
-		case InstanceManaged, GraphResolved, ResourcesReady, Ready:
-			continue
-		}
-		filtered = append(filtered, c)
-	}
-	return filtered
-}
-
 func (c *Controller) updateStatus(rcx *ReconcileContext) error {
-	previousState, _, _ := unstructured.NestedString(rcx.Instance.Object, "status", "state")
+	previousState, _ := rcx.WireStatus["state"].(string)
 
 	rcx.updateInstanceState()
 	status := rcx.initialStatus()
@@ -213,15 +196,23 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 		}
 	}
 
-	// When the RGD declares conditions, only the author's conditions appear
-	// on the wire. kroBuiltins lets runtime.condition(schema, 'X') resolve
-	// kro's internal value for the four reserved condition types.
+	// When the RGD declares author conditions, only those appear on the
+	// wire. kro's built-ins stay readable from author CEL through
+	// runtime.condition(schema, 'X').
 	instanceNode := rcx.Runtime.Instance()
 	if instanceNode.HasConditions() {
-		kroBuiltins := condSet.For(&unstructuredWrapper{rcx.Instance}).List()
-		authored, evalErr := instanceNode.EvaluateConditions(rcx.Log, kroBuiltins)
-		previous := getPreviousConditions(rcx.Instance)
+		authored, incomplete, evalErr := instanceNode.EvaluateConditions(rcx.Log, builtinConditions(rcx.Instance))
+
+		// Read previous conditions from the wire snapshot, not rcx.Instance:
+		// the markers have already overwritten any built-in-typed override.
+		conds, _ := rcx.WireStatus["conditions"].([]interface{})
+		previous := decodeConditions(conds)
 		stamped := stampAuthorConditions(authored, previous, rcx.Instance.GetGeneration())
+		if incomplete {
+			// Keep the previously persisted conditions for the types that
+			// produced no output this reconcile.
+			stamped = mergeWithPrevious(stamped, previous)
+		}
 		status["conditions"] = conditionsToInterfaceSlice(stamped)
 
 		// A degraded result still surfaces its surviving conditions; set
@@ -232,17 +223,15 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 		}
 	}
 
-	// Skip the API server write if status hasn't changed. This prevents an
-	// infinite reconcile loop where every unconditional UpdateStatus bumps
-	// resourceVersion, which triggers a watch event, which re-enqueues the
-	// instance, which reconciles again.
-	oldStatus, _, _ := unstructured.NestedMap(rcx.Instance.Object, "status")
-
-	// Mirror persisted status onto the instance so the deferred
-	// emitters read what's on the wire, not the marker's built-ins.
+	// Mirror the computed status onto the instance so the deferred emitters
+	// read what's on the wire, not the marker's built-ins.
 	rcx.Instance.Object["status"] = status
 
-	if equality.Semantic.DeepEqual(oldStatus, status) {
+	// Skip the API server write if the persisted status already matches.
+	// This prevents an infinite reconcile loop where every unconditional
+	// UpdateStatus bumps resourceVersion, which triggers a watch event,
+	// which re-enqueues the instance, which reconciles again.
+	if statusesMatch(rcx.WireStatus, status) {
 		return nil
 	}
 
@@ -259,44 +248,85 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 		return err
 	}
 
-	newState := rcx.StateManager.State
-	if v1alpha1.InstanceState(previousState) != newState {
+	// Record the transition using the state actually written, which may
+	// differ from the state manager's view (degraded author conditions).
+	writtenState, _ := status["state"].(string)
+	if previousState != writtenState {
 		gvk := rcx.Instance.GroupVersionKind().String()
 		metrics.InstanceStateTransitionsTotal.WithLabelValues(
 			gvk,
 			previousState,
-			string(newState),
+			writtenState,
 		).Inc()
 	}
 
 	return nil
 }
 
-func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
-	inst := rcx.Instance
-
-	cs := condSet.For(&unstructuredWrapper{inst})
-	conds := cs.List()
-
-	arr := make([]interface{}, 0, len(conds))
-	for _, c := range conds {
-		raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&c)
-		if err != nil {
-			panic(err)
-		}
-		arr = append(arr, raw)
+// statusesMatch reports whether the computed status would persist the same
+// JSON the wire snapshot already holds. The canonical JSON encodings are
+// compared instead of the Go values because the two sides type numbers
+// differently: apimachinery decodes a persisted whole number as int64,
+// while CEL evaluation yields float64 (a whole 3.0 included), so a
+// DeepEqual would keep reporting a difference that serializes identically.
+// Marshal errors fall through to a write, which the API server no-ops.
+func statusesMatch(wire, computed map[string]interface{}) bool {
+	wireJSON, err := json.Marshal(wire)
+	if err != nil {
+		return false
 	}
+	computedJSON, err := json.Marshal(computed)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(wireJSON, computedJSON)
+}
 
-	// Start fresh - user-defined status fields come solely from current resolution,
-	// not preserved from previous status. This ensures fields disappear when their
-	// dependencies become unavailable.
+// builtinConditions returns kro's built-in conditions as computed for this
+// reconcile on the (marker-mutated) instance object.
+func builtinConditions(inst *unstructured.Unstructured) []v1alpha1.Condition {
+	all := condSet.For(&unstructuredWrapper{inst}).List()
+	out := make([]v1alpha1.Condition, 0, len(v1alpha1.KROBuiltinConditionTypes))
+	for _, c := range all {
+		if _, ok := v1alpha1.KROBuiltinConditionTypes[string(c.Type)]; ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// mergeWithPrevious appends previously persisted conditions whose types were
+// not produced by the current evaluation, so conditions do not disappear
+// from the wire while their expression cannot produce output.
+func mergeWithPrevious(current, previous []v1alpha1.Condition) []v1alpha1.Condition {
+	have := make(map[v1alpha1.ConditionType]struct{}, len(current))
+	for _, c := range current {
+		have[c.Type] = struct{}{}
+	}
+	for _, p := range previous {
+		if _, ok := have[p.Type]; !ok {
+			current = append(current, p)
+		}
+	}
+	return current
+}
+
+func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
+	cs := condSet.For(&unstructuredWrapper{rcx.Instance})
+
+	// Start fresh - user-defined status fields come solely from current
+	// resolution, so fields disappear when their dependencies become
+	// unavailable. Only kro's built-in conditions are written; anything else
+	// (e.g. author conditions left over after a conditions: block was
+	// removed) is dropped. State is a plain string to compare equal to the
+	// wire value.
 	status := map[string]interface{}{
-		"conditions": arr,
+		"conditions": conditionsToInterfaceSlice(builtinConditions(rcx.Instance)),
 	}
 	if cs.IsRootReady() {
-		status["state"] = v1alpha1.InstanceStateActive
+		status["state"] = string(v1alpha1.InstanceStateActive)
 	} else {
-		status["state"] = rcx.StateManager.State
+		status["state"] = string(rcx.StateManager.State)
 	}
 	return status
 }
@@ -310,33 +340,10 @@ func (rcx *ReconcileContext) updateInstanceState() {
 	}
 }
 
-// getPreviousConditions reads the instance's currently-persisted conditions
-// from .status.conditions[]. Used to preserve lastTransitionTime across
-// reconciles when an author condition's status hasn't changed.
-func getPreviousConditions(inst *unstructured.Unstructured) []v1alpha1.Condition {
-	condSlice, found, err := unstructured.NestedSlice(inst.Object, "status", "conditions")
-	if err != nil || !found {
-		return nil
-	}
-	result := make([]v1alpha1.Condition, 0, len(condSlice))
-	for _, item := range condSlice {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		var c v1alpha1.Condition
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(m, &c); err != nil {
-			continue
-		}
-		result = append(result, c)
-	}
-	return result
-}
-
-// stampAuthorConditions converts library.Condition values (returned from
-// CEL evaluation) into wire-shaped v1alpha1.Condition values, preserving
-// lastTransitionTime when the status hasn't changed and stamping
-// observedGeneration with the instance's current generation.
+// stampAuthorConditions converts evaluated library.Condition values into
+// wire-shaped v1alpha1.Condition values, preserving lastTransitionTime when
+// the status hasn't changed and stamping observedGeneration with the
+// instance's current generation.
 func stampAuthorConditions(
 	authored []library.Condition,
 	previous []v1alpha1.Condition,
@@ -371,7 +378,7 @@ func stampAuthorConditions(
 }
 
 // conditionsToInterfaceSlice converts a typed Condition slice into the
-// []interface{} shape expected by unstructured.NestedSlice writes.
+// []interface{} shape expected by unstructured status writes.
 func conditionsToInterfaceSlice(conds []v1alpha1.Condition) []interface{} {
 	out := make([]interface{}, 0, len(conds))
 	for _, c := range conds {

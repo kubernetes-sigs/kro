@@ -1,0 +1,98 @@
+// Copyright 2025 The Kubernetes Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package variable
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestResourceVariableKind(t *testing.T) {
+	tests := []struct {
+		name          string
+		kind          ResourceVariableKind
+		expectedStr   string
+		isStatic      bool
+		isDynamic     bool
+		isIncludeWhen bool
+		isIteration   bool
+	}{
+		{
+			name:          "Static Kind",
+			kind:          ResourceVariableKindStatic,
+			expectedStr:   "static",
+			isStatic:      true,
+			isDynamic:     false,
+			isIncludeWhen: false,
+			isIteration:   false,
+		},
+		{
+			name:          "Dynamic Kind",
+			kind:          ResourceVariableKindDynamic,
+			expectedStr:   "dynamic",
+			isStatic:      false,
+			isDynamic:     true,
+			isIncludeWhen: false,
+			isIteration:   false,
+		},
+		{
+			name:          "ReadyWhen Kind",
+			kind:          ResourceVariableKindReadyWhen,
+			expectedStr:   "readyWhen",
+			isStatic:      false,
+			isDynamic:     false,
+			isIncludeWhen: false,
+			isIteration:   false,
+		},
+		{
+			name:          "IncludeWhen Kind",
+			kind:          ResourceVariableKindIncludeWhen,
+			expectedStr:   "includeWhen",
+			isStatic:      false,
+			isDynamic:     false,
+			isIncludeWhen: true,
+			isIteration:   false,
+		},
+		{
+			name:          "Iteration Kind",
+			kind:          ResourceVariableKindIteration,
+			expectedStr:   "iteration",
+			isStatic:      false,
+			isDynamic:     false,
+			isIncludeWhen: false,
+			isIteration:   true,
+		},
+		{
+			name:          "Unknown Kind",
+			kind:          ResourceVariableKind("unknown"),
+			expectedStr:   "unknown",
+			isStatic:      false,
+			isDynamic:     false,
+			isIncludeWhen: false,
+			isIteration:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expectedStr, tc.kind.String())
+			assert.Equal(t, tc.isStatic, tc.kind.IsStatic())
+			assert.Equal(t, tc.isDynamic, tc.kind.IsDynamic())
+			assert.Equal(t, tc.isIncludeWhen, tc.kind.IsIncludeWhen())
+			assert.Equal(t, tc.isIteration, tc.kind.IsIteration())
+		})
+	}
+}

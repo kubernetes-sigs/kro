@@ -185,12 +185,21 @@ var _ = Describe("CRD", func() {
 			// Delete ResourceGraphDefinition
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
-			// Verify CRD is deleted
+			// Wait for the RGD to be fully gone — this proves the controller
+			// processed the deletion, removed its finalizer (which includes
+			// issuing the CRD Delete), and the object was garbage collected.
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Now verify the CRD is also gone (may take a moment for the
+			// apiserver's customresourcecleanup finalizer to clear).
 			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})
 				g.Expect(err).To(MatchError(errors.IsNotFound, "crd should be deleted"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		})
 	})
 
@@ -751,16 +760,20 @@ var _ = Describe("CRD", func() {
 			// trigger a reconciliation of the owning RGD, which calls crdManager.Ensure()
 			// to recreate the CRD.
 			//
-			// Without the fix (DeleteFunc returning false in the CRD watch predicate),
-			// this would timeout because the delete event would be silently filtered
-			// out, leaving the CRD permanently deleted.
+			// The old CRD may linger briefly with a customresourcecleanup finalizer
+			// while the apiserver garbage-collects stored CR data; skip polls where
+			// the old UID is still present with a deletionTimestamp.
 			recreatedCRD := &apiextensionsv1.CustomResourceDefinition{}
 			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, recreatedCRD)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				// A different UID proves this is a new object, not the original
-				g.Expect(recreatedCRD.UID).NotTo(Equal(originalUID))
+				g.Expect(
+					recreatedCRD.UID != originalUID ||
+						recreatedCRD.DeletionTimestamp != nil,
+				).To(BeTrue(), "old CRD still present without deletionTimestamp — waiting for new CRD")
+				g.Expect(recreatedCRD.UID).ToNot(Equal(originalUID),
+					"old CRD still terminating (customresourcecleanup finalizer)")
 
 				g.Expect(metadata.IsKROOwned(&recreatedCRD.ObjectMeta)).To(BeTrue())
 				g.Expect(recreatedCRD.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal(rgdName))

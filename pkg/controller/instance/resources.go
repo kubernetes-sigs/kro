@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
@@ -194,8 +195,8 @@ func (c *Controller) processNodes(
 	var resources []applyset.Resource
 
 	var firstUnresolvedErr error
-	for _, node := range nodes {
-		resourcesToAdd, err := c.processNode(rcx, node)
+	for i, node := range nodes {
+		resourcesToAdd, err := c.processNode(rcx, node, i+1)
 		if err != nil {
 			if !runtime.IsDataPending(err) {
 				return nil, err
@@ -337,6 +338,7 @@ func (c *Controller) createApplySet(rcx *ReconcileContext) *applyset.ApplySet {
 func (c *Controller) processNode(
 	rcx *ReconcileContext,
 	node *runtime.Node,
+	applyOrder int,
 ) ([]applyset.Resource, error) {
 	id := node.Spec.Meta.ID
 	rcx.Log.V(3).Info("Preparing resource", "id", id)
@@ -381,9 +383,9 @@ func (c *Controller) processNode(
 	case graph.NodeTypeExternalCollection:
 		nodeState, err = c.processExternalCollectionNode(rcx, node, desired)
 	case graph.NodeTypeCollection:
-		resources, nodeState, err = c.processCollectionNode(rcx, node, desired)
+		resources, nodeState, err = c.processCollectionNode(rcx, node, desired, applyOrder)
 	case graph.NodeTypeResource:
-		resources, nodeState, err = c.processRegularNode(rcx, node, desired)
+		resources, nodeState, err = c.processRegularNode(rcx, node, desired, applyOrder)
 	case graph.NodeTypeInstance:
 		panic("instance node should not be processed for apply")
 	default:
@@ -400,6 +402,7 @@ func (c *Controller) processRegularNode(
 	rcx *ReconcileContext,
 	node *runtime.Node,
 	desiredList []*unstructured.Unstructured,
+	applyOrder int,
 ) ([]applyset.Resource, NodeState, error) {
 	id := node.Spec.Meta.ID
 	nodeMeta := node.Spec.Meta
@@ -436,7 +439,7 @@ func (c *Controller) processRegularNode(
 	}
 
 	// Apply decorator labels to desired object
-	c.applyDecoratorLabels(rcx, desired, id, nil)
+	c.applyDecoratorLabels(rcx, desired, id, applyOrder, nil)
 
 	resource := applyset.Resource{
 		ID:      id,
@@ -452,6 +455,7 @@ func (c *Controller) applyDecoratorLabels(
 	rcx *ReconcileContext,
 	obj *unstructured.Unstructured,
 	nodeID string,
+	applyOrder int,
 	collectionInfo *CollectionInfo,
 ) {
 	labels := obj.GetLabels()
@@ -479,6 +483,7 @@ func (c *Controller) applyDecoratorLabels(
 
 	// Add node ID label
 	labels[metadata.NodeIDLabel] = nodeID
+	labels[metadata.ApplyOrderLabel] = strconv.Itoa(applyOrder)
 
 	// Add collection labels if applicable
 	if collectionInfo != nil {

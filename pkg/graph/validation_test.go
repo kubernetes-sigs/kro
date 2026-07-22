@@ -707,6 +707,22 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 			},
 			expectError: false,
 		},
+		{
+			name:       "internal kro-owned labels",
+			resourceID: "testResource",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "test",
+					"labels": map[string]interface{}{
+						"internal.kro.run/apply-order": "99",
+					},
+				},
+			},
+			expectError: true,
+			errorMsg:    "internal.kro.run/",
+		},
 	}
 
 	for _, tt := range tests {

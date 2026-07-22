@@ -325,7 +325,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	}
 
 	// Build instance status schema.
-	// Status expressions reference resources (validated to not reference schema).
+	// Status expressions reference resources and/or the instance's own schema.
 	// We infer the status field types from the CEL expression output types.
 	statusSchema, statusVariables, statusTemplate, conditionExprStrings, err := buildStatusSchema(
 		bc,
@@ -742,10 +742,17 @@ func buildInstanceNode(
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract dependencies from expression %q: %w", statusVariable.Expression, err)
 		}
-		if len(deps) == 0 {
-			return nil, fmt.Errorf("instance status field must refer to a resource: %s", statusVariable.Path)
+		// Status fields may reference resources, schema, or both.
+		referencesSchema := slices.Contains(statusVariable.Expression.References, SchemaVarName)
+		if len(deps) == 0 && !referencesSchema {
+			return nil, fmt.Errorf("instance status field must refer to a resource or schema: %s", statusVariable.Path)
 		}
 		instanceDeps = append(instanceDeps, deps...)
+		// If this expression references schema, include the instance node itself as a dep
+		// so the runtime wires it into instNode.deps for context building.
+		if referencesSchema && !slices.Contains(instanceDeps, InstanceNodeID) {
+			instanceDeps = append(instanceDeps, InstanceNodeID)
+		}
 
 		instanceStatusVariables = append(instanceStatusVariables, &variable.ResourceField{
 			FieldDescriptor: statusVariable,
@@ -857,13 +864,11 @@ func buildStatusSchema(
 		return nil, nil, nil, nil, fmt.Errorf("status fields without expressions are not supported: %v", noExpressionFields)
 	}
 
-	// Instance status expressions can ONLY reference resources, not schema.
-	// At runtime, status is populated after resources are created.
-
-	// Verify status expressions don't reference schema and populate References
+	// Verify status expressions only reference known resources or schema, and populate References.
+	allowedStatusVars := slices.Concat(nodeNames, []string{SchemaVarName})
 	for _, fieldDescriptor := range fieldDescriptors {
 		expression := fieldDescriptor.Expression
-		result, err := inspectExpressionRestricted(inspector, expression.Original, nodeNames)
+		result, err := inspectExpressionRestricted(inspector, expression.Original, allowedStatusVars)
 		if err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, expression.UserExpression(), err)
 		}

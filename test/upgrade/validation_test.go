@@ -253,6 +253,16 @@ var fixtures = []fixtureRGD{
 			{GVR: gvrCoreConfigMaps, Name: "test-deletion-target-configmap", Namespace: "upgrade-test"},
 		},
 	},
+	{
+		// This fixture verifies that an RGD authored with the old strict selector
+		// schema (a literal Kubernetes LabelSelector object) is still accepted and
+		// reconciled after the selector field was relaxed to runtime.RawExtension.
+		Name:                   "upgrade-legacy-selector",
+		ExpectedInstanceGVR:    kroGVR("upgradelegacyselectors"),
+		InstanceName:           "test-legacy-selector",
+		InstanceNamespace:      "upgrade-test",
+		ExpectedChildResources: []expectedChild{},
+	},
 }
 
 var _ = ginkgo.Describe("Shared Validation", ginkgo.Ordered, func() {

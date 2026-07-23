@@ -1,0 +1,27 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: upgrade-legacy-selector
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UpgradeLegacySelector
+    spec:
+      name: string
+    status:
+      collectionSize: ${string(size(extcollection))}
+  resources:
+  # externalRef whose selector is a literal Kubernetes LabelSelector object,
+  # i.e. the pre-schemaless form that existed before the selector field was
+  # relaxed to runtime.RawExtension. This fixture proves that an RGD authored
+  # against the old strict schema continues to be accepted and reconciled after
+  # the API change.
+  - id: extcollection
+    externalRef:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        namespace: upgrade-test
+        selector:
+          matchLabels:
+            upgrade-test/collection: "true"

@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeLegacySelector
+metadata:
+  name: test-legacy-selector
+  namespace: upgrade-test
+spec:
+  name: test-legacy-selector

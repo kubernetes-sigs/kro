@@ -24,7 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	apiservercel "k8s.io/apiserver/pkg/cel"
@@ -3885,9 +3884,27 @@ spec:
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{"app": "demo"},
-					},
+					Selector: toRawExtension(t, map[string]any{
+						"matchLabels": map[string]any{
+							"app": "demo",
+						},
+					}),
+				},
+			},
+		}, 0, true)
+		require.NoError(t, err)
+		assert.Equal(t, NodeTypeExternalCollection, node.Meta.Type)
+	})
+
+	t.Run("external selector CEL string becomes collection", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		node, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "external",
+			ExternalRef: &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: toRawExtension(t, "${schema.spec.selector}"),
 				},
 			},
 		}, 0, true)
@@ -4452,6 +4469,36 @@ func TestBuilderHelperCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, tt.run)
+	}
+}
+
+func TestSelectorFieldType(t *testing.T) {
+	tests := []struct {
+		path string
+		want *cel.Type
+	}{
+		{"metadata.selector", cel.MapType(cel.StringType, cel.DynType)},
+		{"metadata.selector.matchLabels", cel.MapType(cel.StringType, cel.StringType)},
+		{"metadata.selector.matchLabels.app", cel.StringType},
+		{"metadata.selector.matchLabels.some-key", cel.StringType},
+		{"metadata.selector.matchExpressions", cel.ListType(cel.DynType)},
+		{"metadata.name", nil},
+		{"spec.replicas", nil},
+		{"metadata.labels", nil},
+		{"", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := selectorFieldType(tt.path)
+			if tt.want == nil {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.True(t, tt.want.IsEquivalentType(got),
+					"path %q: got %v, want %v", tt.path, got, tt.want)
+			}
+		})
 	}
 }
 

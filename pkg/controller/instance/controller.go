@@ -285,17 +285,20 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	annotations := inst.GetAnnotations()
 	reconcileState := annotations[v1alpha1.InstanceReconcileAnnotation]
-	if !v1alpha1.IsReconcileSuspended(reconcileState) {
-		if err := c.reconcileNodes(rcx); err != nil {
-			if deletingErr, ok2 := errors.AsType[*resourceDeletingError](err); ok2 {
-				rcx.Mark.ResourcesDeleting("%v", deletingErr)
-				_ = c.updateStatus(rcx)
-				return rcx.delayedRequeue(deletingErr)
-			}
-			rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
+	if v1alpha1.IsReconcileSuspended(reconcileState) {
+		rcx.Mark.ReconciliationSuspended("reconciliation suspended via %s annotation", v1alpha1.InstanceReconcileAnnotation)
+		return c.updateStatus(rcx)
+	}
+
+	if err := c.reconcileNodes(rcx); err != nil {
+		if deletingErr, ok2 := errors.AsType[*resourceDeletingError](err); ok2 {
+			rcx.Mark.ResourcesDeleting("%v", deletingErr)
 			_ = c.updateStatus(rcx)
-			return err
+			return rcx.delayedRequeue(deletingErr)
 		}
+		rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
+		_ = c.updateStatus(rcx)
+		return err
 	}
 	// Only mark ResourcesReady if all resources reached terminal state.
 	// Resources with unsatisfied readyWhen are in WaitingForReadiness,

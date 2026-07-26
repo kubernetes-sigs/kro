@@ -467,8 +467,12 @@ func (a *ApplySet) ListOrphans(ctx context.Context, opts PruneOptions) ([]Orphan
 // to avoid deleting a resource that was recreated since listing.
 func (a *ApplySet) DeleteOrphan(ctx context.Context, candidate OrphanCandidate) (DeleteOrphanResult, error) {
 	uid := candidate.Object.GetUID()
+	// An unspecified propagation policy would fall back to the type's default
+	// GC policy, which orphans dependents for some types (e.g. batch/v1 Job).
+	propagationPolicy := metav1.DeletePropagationBackground
 	deleteOpts := metav1.DeleteOptions{
-		Preconditions: &metav1.Preconditions{UID: &uid},
+		Preconditions:     &metav1.Preconditions{UID: &uid},
+		PropagationPolicy: &propagationPolicy,
 	}
 
 	var err error

@@ -161,12 +161,14 @@ nodeSelector: ${schema.spec.pinToNode ? {"kubernetes.io/hostname": schema.spec.n
 ### Runtime
 
 The `runtime` variable builds and reads instance status conditions. It is only
-available in the schema's `status.conditions` block.
+available in the schema's `status.conditions` block; expressions elsewhere
+(resource templates, `readyWhen`, `includeWhen`, `forEach`, plain status
+fields) are rejected when the RGD is created.
 
 | Function | Returns | Description |
 |---|---|---|
 | `runtime.newCondition({type, status, reason, message})` | `Condition` | Builds a condition. `type` and `status` are required; `status` must be `True`, `False`, or `Unknown`. |
-| `runtime.condition(schema, type)` | `Condition` | Reads kro's internal value for a built-in condition type (`Ready`, `InstanceManaged`, `GraphResolved`, `ResourcesReady`). |
+| `runtime.condition(obj, type)` | `Condition` | Looks up a condition by type on `obj.status.conditions[]`. With `schema` as the object, it reads kro's internal value for a built-in condition type (`Ready`, `InstanceManaged`, `GraphResolved`, `ResourcesReady`). Returns an empty condition when not found. |
 
 **Examples:**
 

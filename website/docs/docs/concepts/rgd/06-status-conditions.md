@@ -42,8 +42,10 @@ schema:
 
 `runtime.newCondition` takes a map with four keys: `type`, `status`, `reason`,
 and `message`. `type` and `status` are required; `status` must be `'True'`,
-`'False'`, or `'Unknown'`. kro stamps `lastTransitionTime` and
-`observedGeneration` on the written condition.
+`'False'`, or `'Unknown'`. Each entry must return a condition (or a list of
+conditions, see below); anything else is rejected when the RGD is created.
+kro stamps `lastTransitionTime` and `observedGeneration` on the written
+condition.
 
 ## Ownership of the status surface
 
@@ -51,6 +53,10 @@ When an RGD declares a `conditions:` block, only the author's conditions appear
 on `.status.conditions[]`. kro's four built-ins are filtered off the wire so the
 author owns the status surface. The built-ins are still computed and remain
 readable from author CEL through `runtime.condition` (see below).
+
+The instance's `status.state` field stays kro-driven: it reflects kro's
+reconciliation lifecycle, so an instance can report `state: ACTIVE` while the
+author's own `Ready` condition is `False`.
 
 ## Reading kro's built-in conditions
 
@@ -71,10 +77,17 @@ status:
       })}
 ```
 
-Custom conditions cannot reference each other: `runtime.condition(schema, 'X')`
-where `X` is a type the same RGD defines with `runtime.newCondition` is
-rejected when the RGD is created. Only kro's built-in types can be read this
-way.
+Lookups on `schema` are restricted: `runtime.condition(schema, 'X')` where `X`
+is a type the same RGD defines with `runtime.newCondition` is rejected when
+the RGD is created (custom conditions cannot reference each other), and any
+other literal `X` that isn't a built-in type is rejected as unknown. A
+computed type looks up only the built-ins and returns an empty condition when
+not found. Conditions on child resources
+(`runtime.condition(myresource, 'X')`) can be read freely.
+
+Two `conditions:` entries may not declare the same literal `type`; the RGD is
+rejected when created. Computed types that collide at evaluation time are
+handled as described under [Degraded evaluation](#degraded-evaluation).
 
 ## One condition per collection item
 
@@ -113,7 +126,16 @@ resources:
 
 ## Degraded evaluation
 
-If a condition expression fails to evaluate or two conditions resolve to the
-same `type`, the surviving conditions are still written and the instance's
-`state` is set to `Error`. An expression whose data is not yet available is
-skipped for that reconcile and reappears once the data resolves.
+If a condition expression fails to evaluate or two computed conditions
+resolve to the same `type`, the surviving conditions are still written and
+the instance's `state` is set to `Error`. An expression whose data is not yet
+available (for example, a referenced resource that hasn't been created) is
+skipped for that reconcile without setting `state: Error`.
+
+In all of these cases, conditions previously written for the types that
+produced no output stay on `.status.conditions[]` unchanged — keeping their
+`lastTransitionTime` and `observedGeneration` — until their expression
+evaluates again. A fully successful evaluation replaces the wire, so
+condition types that are no longer produced are cleaned up. Removing the
+`conditions:` block from an RGD returns ownership of `.status.conditions[]`
+to kro's built-ins.

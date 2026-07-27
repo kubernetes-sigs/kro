@@ -94,22 +94,20 @@ var (
 		[]string{"gvr"},
 	)
 
-	// InstanceConditionCurrentStatusSeconds tracks the duration an instance condition
-	// has been in its current state. The value is computed at reconcile time
-	// as time.Since(lastTransitionTime). To get fresher gauge values, consider
-	// lowering --dynamic-controller-default-resync-period.
-	InstanceConditionCurrentStatusSeconds = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "instance_condition_current_status_seconds",
-			Help: "The current amount of time in seconds that an instance status condition has been in a specific state.",
-		},
-		[]string{labelGVR, labelNamespace, labelName, labelConditionType, labelConditionStatus, labelReason},
+	// InstanceConditionCurrentStatusSeconds is computed at scrape time by a
+	// Collector so it stays accurate for non-PromQL consumers (CloudWatch,
+	// Datadog) even while the controller is idle. The cache rebuilds from
+	// etcd as instances reconcile after a restart.
+	InstanceConditionCurrentStatusSeconds = newDurationCollector(
+		"instance_condition_current_status_seconds",
+		"The current amount of time in seconds that an instance status condition has been in a specific state.",
 	)
 )
 
-// emitConditionMetrics computes the diff between initial and final conditions,
-// emits gauge metrics for all current conditions, emits structured logs for
-// changed conditions, and cleans up gauges for disappeared conditions.
+// EmitConditionMetrics syncs the duration cache with an instance's
+// conditions. For each final condition it caches the LastTransitionTime
+// keyed by condition type, and evicts conditions that no longer appear.
+// It also logs status transitions.
 func EmitConditionMetrics(
 	log logr.Logger,
 	gvr schema.GroupVersionResource,
@@ -129,29 +127,27 @@ func EmitConditionMetrics(
 		finalTypes[cond.Type] = struct{}{}
 		reason := ptr.Deref(cond.Reason, "")
 
-		var durationSeconds float64
+		var lastTransition time.Time
 		if cond.LastTransitionTime != nil {
-			durationSeconds = time.Since(cond.LastTransitionTime.Time).Seconds()
+			lastTransition = cond.LastTransitionTime.Time
 		}
+
+		// Cache overwrites any previous status/reason for this condition
+		// type, so a transition replaces the old series without a separate
+		// eviction step.
+		InstanceConditionCurrentStatusSeconds.Cache(
+			conditionKey{
+				gvr:           gvrKey,
+				namespace:     ns,
+				name:          name,
+				conditionType: string(cond.Type),
+			},
+			string(cond.Status),
+			reason,
+			lastTransition,
+		)
 
 		oldCond, existed := initialByType[cond.Type]
-
-		// Delete the old series when status or reason changed to avoid stale gauges.
-		if existed {
-			oldReason := ptr.Deref(oldCond.Reason, "")
-			if oldCond.Status != cond.Status || oldReason != reason {
-				InstanceConditionCurrentStatusSeconds.DeleteLabelValues(
-					gvrKey, ns, name,
-					string(oldCond.Type), string(oldCond.Status), oldReason,
-				)
-			}
-		}
-
-		InstanceConditionCurrentStatusSeconds.WithLabelValues(
-			gvrKey, ns, name,
-			string(cond.Type), string(cond.Status), reason,
-		).Set(durationSeconds)
-
 		if !existed || oldCond.Status != cond.Status {
 			oldStatus := "none"
 			if existed {
@@ -169,35 +165,28 @@ func EmitConditionMetrics(
 		}
 	}
 
-	// Clean up gauges for conditions that disappeared.
 	for _, oldCond := range initialConditions {
 		if _, stillPresent := finalTypes[oldCond.Type]; !stillPresent {
-			InstanceConditionCurrentStatusSeconds.DeletePartialMatch(prometheus.Labels{
-				labelGVR:           gvrKey,
-				labelNamespace:     ns,
-				labelName:          name,
-				labelConditionType: string(oldCond.Type),
+			InstanceConditionCurrentStatusSeconds.EvictKey(conditionKey{
+				gvr:           gvrKey,
+				namespace:     ns,
+				name:          name,
+				conditionType: string(oldCond.Type),
 			})
 		}
 	}
 }
 
-// deleteInstanceMetrics removes all gauge metrics for a specific instance.
+// DeleteInstanceMetrics removes all metrics for a specific instance.
 // Called when an instance is deleted (not found).
 func DeleteInstanceMetrics(gvr schema.GroupVersionResource, namespace, name string) {
-	InstanceConditionCurrentStatusSeconds.DeletePartialMatch(prometheus.Labels{
-		labelGVR:       gvr.String(),
-		labelNamespace: namespace,
-		labelName:      name,
-	})
+	InstanceConditionCurrentStatusSeconds.EvictInstance(gvr.String(), namespace, name)
 }
 
-// DeleteGVRMetrics removes all gauge metrics for all instances of a GVR.
+// DeleteGVRMetrics removes all metrics for all instances of a GVR.
 // Called when an RGD is deregistered (deleted).
 func DeleteGVRMetrics(gvr schema.GroupVersionResource) {
-	InstanceConditionCurrentStatusSeconds.DeletePartialMatch(prometheus.Labels{
-		labelGVR: gvr.String(),
-	})
+	InstanceConditionCurrentStatusSeconds.EvictGVR(gvr.String())
 }
 
 // indexConditionsByType builds a lookup map from condition type to condition.

@@ -279,12 +279,12 @@ func TestSetUnmanaged(t *testing.T) {
 		withFinalizer bool
 		patchErr      string
 		wantErrText   string
-		wantSame      bool
+		wantNil       bool
 		wantManaged   bool
 	}{
 		{
-			name:        "returns the original object when finalizer is absent",
-			wantSame:    true,
+			name:        "returns nil when finalizer is absent",
+			wantNil:     true,
 			wantManaged: false,
 		},
 		{
@@ -323,7 +323,12 @@ func TestSetUnmanaged(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantSame, patched == rcx.Instance)
+			if tt.wantNil {
+				assert.Nil(t, patched, "no server write means nil, so callers don't rebind")
+				patched = rcx.Instance
+			} else {
+				require.NotNil(t, patched)
+			}
 			assert.Equal(t, tt.wantManaged, metadata.HasInstanceFinalizer(patched))
 		})
 	}

@@ -43,6 +43,12 @@ type ReconcileContext struct {
 	Instance *unstructured.Unstructured
 	Config   ReconcileConfig
 
+	// WireStatus is a deep copy of the instance's .status as fetched from
+	// the API server, captured before the condition markers mutate Instance
+	// in memory. Skip-write comparison and lastTransitionTime preservation
+	// run against it.
+	WireStatus map[string]interface{}
+
 	Mark         *ConditionsMarker
 	StateManager *StateManager
 
@@ -73,19 +79,37 @@ func NewReconcileContext(
 	instance *unstructured.Unstructured,
 ) *ReconcileContext {
 	return &ReconcileContext{
-		Ctx:          ctx,
-		Log:          log,
-		GVR:          gvr,
-		Namespaced:   namespaced,
-		Client:       client,
-		RestMapper:   restMapper,
-		Labeler:      labeler,
-		Runtime:      rt,
-		Instance:     instance,
-		Config:       config,
+		Ctx:        ctx,
+		Log:        log,
+		GVR:        gvr,
+		Namespaced: namespaced,
+		Client:     client,
+		RestMapper: restMapper,
+		Labeler:    labeler,
+		Runtime:    rt,
+		Instance:   instance,
+		Config:     config,
+		// WireStatus must be captured before NewConditionsMarkerFor
+		// initializes the built-in conditions on the instance object.
+		WireStatus:   captureWireStatus(instance),
 		Mark:         NewConditionsMarkerFor(instance),
 		StateManager: newStateManager(),
 	}
+}
+
+// rebindInstance replaces rcx.Instance with a fresh server response (e.g.
+// after an SSA patch), re-capturing the wire status before the condition
+// marker mutates the new object.
+func (rcx *ReconcileContext) rebindInstance(instance *unstructured.Unstructured) {
+	rcx.Instance = instance
+	rcx.WireStatus = captureWireStatus(instance)
+	rcx.Mark = NewConditionsMarkerFor(instance)
+}
+
+// captureWireStatus deep-copies the instance's .status subtree.
+func captureWireStatus(instance *unstructured.Unstructured) map[string]interface{} {
+	status, _, _ := unstructured.NestedMap(instance.Object, "status")
+	return status
 }
 
 func (rcx *ReconcileContext) delayedRequeue(err error) error {

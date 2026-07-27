@@ -31,8 +31,7 @@ import (
 )
 
 func TestEmitConditionMetrics_NewCondition(t *testing.T) {
-	// Reset metrics for test isolation.
-	InstanceConditionCurrentStatusSeconds.Reset()
+	InstanceConditionCurrentStatusSeconds.reset()
 
 	log := zap.New(zap.UseDevMode(true))
 	gvr := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "webapps"}
@@ -53,13 +52,12 @@ func TestEmitConditionMetrics_NewCondition(t *testing.T) {
 
 	EmitConditionMetrics(log, gvr, inst, initial, final)
 
-	// Gauge should have one series.
-	gaugeCount := testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds)
-	assert.Equal(t, 1, gaugeCount)
+	assert.Equal(t, 1, InstanceConditionCurrentStatusSeconds.size())
+	assert.Equal(t, 1, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
 }
 
 func TestEmitConditionMetrics_NoTransition(t *testing.T) {
-	InstanceConditionCurrentStatusSeconds.Reset()
+	InstanceConditionCurrentStatusSeconds.reset()
 
 	log := zap.New(zap.UseDevMode(true))
 	gvr := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "webapps"}
@@ -79,13 +77,12 @@ func TestEmitConditionMetrics_NoTransition(t *testing.T) {
 
 	EmitConditionMetrics(log, gvr, inst, conds, conds)
 
-	// Gauge should still be set (updated duration).
-	gaugeCount := testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds)
-	assert.Equal(t, 1, gaugeCount)
+	assert.Equal(t, 1, InstanceConditionCurrentStatusSeconds.size())
+	assert.Equal(t, 1, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
 }
 
 func TestEmitConditionMetrics_StatusTransition(t *testing.T) {
-	InstanceConditionCurrentStatusSeconds.Reset()
+	InstanceConditionCurrentStatusSeconds.reset()
 
 	log := zap.New(zap.UseDevMode(true))
 	gvr := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "webapps"}
@@ -110,22 +107,26 @@ func TestEmitConditionMetrics_StatusTransition(t *testing.T) {
 			LastTransitionTime: &now,
 		},
 	}
-
-	// Pre-populate the old series to verify it gets cleaned up.
-	InstanceConditionCurrentStatusSeconds.WithLabelValues(
-		gvr.String(), "default", "my-app", "ResourcesReady", "False", "NotReady",
-	).Set(42)
-	assert.Equal(t, 1, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
+	InstanceConditionCurrentStatusSeconds.Cache(conditionKey{
+		gvr:           gvr.String(),
+		namespace:     "default",
+		name:          "my-app",
+		conditionType: "ResourcesReady",
+	}, "False", "NotReady", now.Time)
+	assert.Equal(t, 1, InstanceConditionCurrentStatusSeconds.size())
 
 	EmitConditionMetrics(log, gvr, inst, initial, final)
 
-	// Only the new series should remain; the old False/NotReady series must be deleted.
-	gaugeCount := testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds)
-	assert.Equal(t, 1, gaugeCount)
+	assert.Equal(t, 1, InstanceConditionCurrentStatusSeconds.size())
+	got := collectorEntries(t, InstanceConditionCurrentStatusSeconds)
+	require.Len(t, got, 1, "the transition must leave exactly one series")
+	assert.Equal(t, "True", got[0].labels["condition_status"],
+		"the remaining series must reflect the new status, not the pre-seeded False")
+	assert.Equal(t, "AllResourcesReady", got[0].labels["reason"])
 }
 
-func TestEmitConditionMetrics_DisappearedCondition(t *testing.T) {
-	InstanceConditionCurrentStatusSeconds.Reset()
+func TestEmitConditionMetrics_NoPhantomWhenCacheDivergesFromEtcd(t *testing.T) {
+	InstanceConditionCurrentStatusSeconds.reset()
 
 	log := zap.New(zap.UseDevMode(true))
 	gvr := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "webapps"}
@@ -135,10 +136,38 @@ func TestEmitConditionMetrics_DisappearedCondition(t *testing.T) {
 
 	now := metav1.Now()
 
-	// Pre-populate the gauge for the condition that will disappear.
-	InstanceConditionCurrentStatusSeconds.WithLabelValues(
-		gvr.String(), "default", "my-app", "ResourcesReady", "True", "AllResourcesReady",
-	).Set(10)
+	// Simulates a cache/etcd divergence (e.g. a failed status write): reconcile 1's
+	// condition is cached but absent from reconcile 2's initialConditions.
+	EmitConditionMetrics(log, gvr, inst, nil, []v1alpha1.Condition{
+		{Type: "Ready", Status: metav1.ConditionFalse, Reason: strPtr("ReasonA"), LastTransitionTime: &now},
+	})
+
+	EmitConditionMetrics(log, gvr, inst, nil, []v1alpha1.Condition{
+		{Type: "Ready", Status: metav1.ConditionFalse, Reason: strPtr("ReasonB"), LastTransitionTime: &now},
+	})
+
+	got := collectorEntries(t, InstanceConditionCurrentStatusSeconds)
+	require.Len(t, got, 1, "must not strand a phantom series when the cache diverges from etcd")
+	assert.Equal(t, "ReasonB", got[0].labels["reason"], "only the latest series should remain")
+}
+
+func TestEmitConditionMetrics_DisappearedCondition(t *testing.T) {
+	InstanceConditionCurrentStatusSeconds.reset()
+
+	log := zap.New(zap.UseDevMode(true))
+	gvr := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "webapps"}
+	inst := &unstructured.Unstructured{}
+	inst.SetNamespace("default")
+	inst.SetName("my-app")
+
+	now := metav1.Now()
+
+	InstanceConditionCurrentStatusSeconds.Cache(conditionKey{
+		gvr:           gvr.String(),
+		namespace:     "default",
+		name:          "my-app",
+		conditionType: "ResourcesReady",
+	}, "True", "AllResourcesReady", now.Time)
 
 	initial := []v1alpha1.Condition{
 		{
@@ -152,49 +181,54 @@ func TestEmitConditionMetrics_DisappearedCondition(t *testing.T) {
 
 	EmitConditionMetrics(log, gvr, inst, initial, final)
 
-	// Gauge should be cleaned up (no series left).
-	gaugeCount := testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds)
-	assert.Equal(t, 0, gaugeCount)
-}
-
-func TestDeleteInstanceMetrics(t *testing.T) {
-	InstanceConditionCurrentStatusSeconds.Reset()
-
-	gvr := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "webapps"}
-	gvrKey := gvr.String()
-
-	// Populate metrics for two instances.
-	InstanceConditionCurrentStatusSeconds.WithLabelValues(gvrKey, "default", "app-1", "Ready", "True", "AllReady").Set(5)
-	InstanceConditionCurrentStatusSeconds.WithLabelValues(gvrKey, "default", "app-2", "Ready", "True", "AllReady").Set(10)
-
-	assert.Equal(t, 2, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
-
-	DeleteInstanceMetrics(gvr, "default", "app-1")
-
-	// Only app-2 should remain.
-	assert.Equal(t, 1, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
-}
-
-func TestDeleteGVRMetrics(t *testing.T) {
-	InstanceConditionCurrentStatusSeconds.Reset()
-
-	gvr := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "webapps"}
-	gvrKey := gvr.String()
-
-	// Populate metrics for two instances.
-	InstanceConditionCurrentStatusSeconds.WithLabelValues(gvrKey, "default", "app-1", "Ready", "True", "AllReady").Set(5)
-	InstanceConditionCurrentStatusSeconds.WithLabelValues(gvrKey, "default", "app-2", "Ready", "True", "AllReady").Set(10)
-
-	assert.Equal(t, 2, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
-
-	DeleteGVRMetrics(gvr)
-
-	// All metrics for this GVR should be gone.
+	assert.Equal(t, 0, InstanceConditionCurrentStatusSeconds.size())
 	assert.Equal(t, 0, testutilCountMetrics(t, InstanceConditionCurrentStatusSeconds))
 }
 
+func TestDeleteInstanceMetrics(t *testing.T) {
+	InstanceConditionCurrentStatusSeconds.reset()
+
+	gvr := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "webapps"}
+	gvrKey := gvr.String()
+	now := time.Now()
+
+	InstanceConditionCurrentStatusSeconds.Cache(conditionKey{
+		gvr: gvrKey, namespace: "default", name: "app-1", conditionType: "Ready",
+	}, "True", "AllReady", now)
+	InstanceConditionCurrentStatusSeconds.Cache(conditionKey{
+		gvr: gvrKey, namespace: "default", name: "app-2", conditionType: "Ready",
+	}, "True", "AllReady", now)
+
+	assert.Equal(t, 2, InstanceConditionCurrentStatusSeconds.size())
+
+	DeleteInstanceMetrics(gvr, "default", "app-1")
+
+	assert.Equal(t, 1, InstanceConditionCurrentStatusSeconds.size())
+}
+
+func TestDeleteGVRMetrics(t *testing.T) {
+	InstanceConditionCurrentStatusSeconds.reset()
+
+	gvr := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "webapps"}
+	gvrKey := gvr.String()
+	now := time.Now()
+
+	InstanceConditionCurrentStatusSeconds.Cache(conditionKey{
+		gvr: gvrKey, namespace: "default", name: "app-1", conditionType: "Ready",
+	}, "True", "AllReady", now)
+	InstanceConditionCurrentStatusSeconds.Cache(conditionKey{
+		gvr: gvrKey, namespace: "default", name: "app-2", conditionType: "Ready",
+	}, "True", "AllReady", now)
+
+	assert.Equal(t, 2, InstanceConditionCurrentStatusSeconds.size())
+
+	DeleteGVRMetrics(gvr)
+
+	assert.Equal(t, 0, InstanceConditionCurrentStatusSeconds.size())
+}
+
 func TestEmitConditionMetrics_DurationIsPositive(t *testing.T) {
-	InstanceConditionCurrentStatusSeconds.Reset()
+	InstanceConditionCurrentStatusSeconds.reset()
 
 	log := zap.New(zap.UseDevMode(true))
 	gvr := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "webapps"}
@@ -215,16 +249,49 @@ func TestEmitConditionMetrics_DurationIsPositive(t *testing.T) {
 
 	EmitConditionMetrics(log, gvr, inst, initial, final)
 
-	// The gauge value should be >= 30 seconds.
-	val := testutilGetGaugeValue(t, InstanceConditionCurrentStatusSeconds, gvr.String(), "default", "my-app", "Ready", "True", "AllReady")
+	val := testutilGetCollectorValue(t, InstanceConditionCurrentStatusSeconds,
+		gvr.String(), "default", "my-app", "Ready", "True", "AllReady")
 	assert.GreaterOrEqual(t, val, 30.0)
+}
+
+func TestEmitConditionMetrics_DurationStaysAccurateBetweenReconciles(t *testing.T) {
+	InstanceConditionCurrentStatusSeconds.reset()
+
+	log := zap.New(zap.UseDevMode(true))
+	gvr := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "webapps"}
+	inst := &unstructured.Unstructured{}
+	inst.SetNamespace("default")
+	inst.SetName("my-app")
+
+	past := metav1.NewTime(time.Now().Add(-10 * time.Second))
+	final := []v1alpha1.Condition{
+		{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			Reason:             strPtr("AllReady"),
+			LastTransitionTime: &past,
+		},
+	}
+
+	EmitConditionMetrics(log, gvr, inst, nil, final)
+
+	val1 := testutilGetCollectorValue(t, InstanceConditionCurrentStatusSeconds,
+		gvr.String(), "default", "my-app", "Ready", "True", "AllReady")
+
+	time.Sleep(150 * time.Millisecond)
+
+	val2 := testutilGetCollectorValue(t, InstanceConditionCurrentStatusSeconds,
+		gvr.String(), "default", "my-app", "Ready", "True", "AllReady")
+
+	assert.Greater(t, val2, val1, "scrape-time duration must advance even without a reconcile")
 }
 
 func strPtr(s string) *string {
 	return &s
 }
 
-// testutilCountMetrics returns the number of active metric series in a collector.
+// testutilCountMetrics returns the number of active metric series a
+// collector emits.
 func testutilCountMetrics(t *testing.T, c prometheus.Collector) int {
 	t.Helper()
 	ch := make(chan prometheus.Metric, 100)
@@ -237,18 +304,35 @@ func testutilCountMetrics(t *testing.T, c prometheus.Collector) int {
 	return count
 }
 
-// testutilGetGaugeValue retrieves the value of a specific gauge series.
-func testutilGetGaugeValue(t *testing.T, gv *prometheus.GaugeVec, labels ...string) float64 {
+// testutilGetCollectorValue retrieves the value of a specific gauge series.
+func testutilGetCollectorValue(t *testing.T, c prometheus.Collector,
+	gvr, namespace, name, conditionType, conditionStatus, reason string) float64 {
 	t.Helper()
-	gauge, err := gv.GetMetricWithLabelValues(labels...)
-	require.NoError(t, err)
-
-	ch := make(chan prometheus.Metric, 1)
-	gauge.Collect(ch)
+	want := map[string]string{
+		labelGVR:             gvr,
+		labelNamespace:       namespace,
+		labelName:            name,
+		labelConditionType:   conditionType,
+		labelConditionStatus: conditionStatus,
+		labelReason:          reason,
+	}
+	ch := make(chan prometheus.Metric, 100)
+	c.Collect(ch)
 	close(ch)
 
-	m := <-ch
-	var dto io_prometheus_client.Metric
-	require.NoError(t, m.Write(&dto))
-	return dto.GetGauge().GetValue()
+	for m := range ch {
+		var dto io_prometheus_client.Metric
+		require.NoError(t, m.Write(&dto))
+		match := true
+		for _, lp := range dto.Label {
+			if v, ok := want[lp.GetName()]; !ok || v != lp.GetValue() {
+				match = false
+				break
+			}
+		}
+		if match && len(dto.Label) == len(want) {
+			return dto.GetGauge().GetValue()
+		}
+	}
+	return 0
 }

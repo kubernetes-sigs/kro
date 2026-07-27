@@ -325,7 +325,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	}
 
 	// Build instance status schema.
-	// Status expressions reference resources (validated to not reference schema).
+	// Status expressions reference resources and/or the instance's own schema.
 	// We infer the status field types from the CEL expression output types.
 	statusSchema, statusVariables, statusTemplate, conditionExprStrings, err := buildStatusSchema(
 		bc,
@@ -747,10 +747,17 @@ func buildInstanceNode(
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract dependencies from expression %q: %w", statusVariable.Expression, err)
 		}
-		if len(deps) == 0 {
-			return nil, fmt.Errorf("instance status field must refer to a resource: %s", statusVariable.Path)
+		// Status fields may reference resources, schema, or both.
+		referencesSchema := slices.Contains(statusVariable.Expression.References, SchemaVarName)
+		if len(deps) == 0 && !referencesSchema {
+			return nil, fmt.Errorf("instance status field must refer to a resource or schema: %s", statusVariable.Path)
 		}
 		instanceDeps = append(instanceDeps, deps...)
+		// If this expression references schema, include the instance node itself as a dep
+		// so the runtime wires it into instNode.deps for context building.
+		if referencesSchema && !slices.Contains(instanceDeps, InstanceNodeID) {
+			instanceDeps = append(instanceDeps, InstanceNodeID)
+		}
 
 		instanceStatusVariables = append(instanceStatusVariables, &variable.ResourceField{
 			FieldDescriptor: statusVariable,
@@ -759,12 +766,18 @@ func buildInstanceNode(
 	}
 
 	// Fold condition dependencies into instanceDeps so the instance reconciles
-	// after the resources its conditions read
-	conditionDeps, err := extractConditionDependencies(inspector, conditions)
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract condition dependencies: %w", err)
+	// after the resources its conditions read. References were populated by
+	// buildConditions; schema and runtime are not resource dependencies.
+	for _, expr := range conditions {
+		for _, ref := range expr.References {
+			if ref == SchemaVarName || ref == library.RuntimeVarName {
+				continue
+			}
+			if !slices.Contains(instanceDeps, ref) {
+				instanceDeps = append(instanceDeps, ref)
+			}
+		}
 	}
-	instanceDeps = append(instanceDeps, conditionDeps...)
 
 	// Create the instance node.
 	// Instance doesn't have IncludeWhen, ReadyWhen, or ForEach.
@@ -862,13 +875,11 @@ func buildStatusSchema(
 		return nil, nil, nil, nil, fmt.Errorf("status fields without expressions are not supported: %v", noExpressionFields)
 	}
 
-	// Instance status expressions can ONLY reference resources, not schema.
-	// At runtime, status is populated after resources are created.
-
-	// Verify status expressions don't reference schema and populate References
+	// Verify status expressions only reference known resources or schema, and populate References.
+	allowedStatusVars := slices.Concat(nodeNames, []string{SchemaVarName})
 	for _, fieldDescriptor := range fieldDescriptors {
 		expression := fieldDescriptor.Expression
-		result, err := inspectExpressionRestricted(inspector, expression.Original, nodeNames)
+		result, err := inspectExpressionRestricted(inspector, expression.Original, allowedStatusVars)
 		if err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, expression.UserExpression(), err)
 		}
@@ -956,13 +967,13 @@ func buildConditions(
 		return nil, fmt.Errorf("invalid conditions block: %w", err)
 	}
 
-	// Enforce the self-reference rule. The structural rules for
-	// runtime.newCondition are handled by its parse-time macro.
+	// Enforce the self-reference and literal-value rules. The structural
+	// rules for runtime.newCondition are handled by its parse-time macro.
 	stripped := make([]string, len(conditions))
 	for i, c := range conditions {
 		stripped[i] = c.Original
 	}
-	if err := library.ValidateConditionExpressions(inspectorEnv, stripped); err != nil {
+	if err := validateConditionExpressions(inspectorEnv, stripped); err != nil {
 		return nil, err
 	}
 
@@ -982,8 +993,12 @@ func buildConditions(
 	}
 
 	for _, expr := range conditions {
-		if _, err := bc.parseAndCheck(bc.env, expr); err != nil {
+		checkedAST, err := bc.parseAndCheck(bc.env, expr)
+		if err != nil {
 			return nil, fmt.Errorf("failed to type-check condition %q: %w", expr.UserExpression(), err)
+		}
+		if err := validateConditionOutputType(checkedAST.OutputType()); err != nil {
+			return nil, fmt.Errorf("condition %q: %w", expr.UserExpression(), err)
 		}
 		if _, err := bc.compile(bc.env, expr); err != nil {
 			return nil, fmt.Errorf("failed to compile condition %q: %w", expr.UserExpression(), err)
@@ -991,6 +1006,23 @@ func buildConditions(
 	}
 
 	return conditions, nil
+}
+
+// validateConditionOutputType verifies that a condition expression returns a
+// Condition or a list of Conditions. Dyn is tolerated (e.g. mapping over an
+// untyped collection); the runtime rejects malformed results in that case.
+func validateConditionOutputType(outputType *cel.Type) error {
+	t := outputType
+	if elem, err := krocel.ListElementType(t); err == nil {
+		t = elem
+	}
+	if library.IsConditionType(t) || t.IsExactType(cel.DynType) {
+		return nil
+	}
+	return fmt.Errorf(
+		"condition expressions must return runtime.newCondition(...) or a list of them, got %q",
+		outputType.String(),
+	)
 }
 
 // inspectExpressionRestricted uses the shared inspector to parse an expression,
@@ -1058,10 +1090,15 @@ func extractDependencies(inspector *ast.Inspector, expr *krocel.Expression, iter
 	}
 
 	for _, resource := range inspectionResult.ResourceDependencies {
-		// SchemaVarName is the instance spec, RuntimeVarName is a kro runtime
-		// library variable. Neither is a resource dependency.
-		if resource.ID == SchemaVarName || resource.ID == library.RuntimeVarName {
+		// SchemaVarName is the instance spec, not a resource dependency.
+		if resource.ID == SchemaVarName {
 			continue
+		}
+		// The runtime library variable is only injected when evaluating
+		// status.conditions expressions (inspected in buildConditions, not
+		// here); reject it everywhere else.
+		if resource.ID == library.RuntimeVarName {
+			return nil, nil, fmt.Errorf("runtime is only available in status.conditions expressions")
 		}
 		// Everything else is a resource dependency
 		if !slices.Contains(resourceDeps, resource.ID) {

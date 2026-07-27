@@ -140,10 +140,8 @@ type Node struct {
 	// nil or empty means this is not a collection.
 	ForEach []ForEachDimension
 
-	// Conditions holds compiled CEL expressions for the author-defined
-	// `conditions:` block on the instance (NodeTypeInstance only). Each
-	// expression returns a Condition (or list(Condition) for collection
-	// expansion) at evaluation time. Resource nodes leave this nil.
+	// Conditions holds the compiled expressions of the author-defined
+	// `conditions:` block (NodeTypeInstance only; nil for resource nodes).
 	Conditions []*krocel.Expression
 }
 

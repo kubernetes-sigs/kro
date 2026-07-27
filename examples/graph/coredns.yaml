@@ -1,0 +1,150 @@
+# KREP-024 Example: CoreDNS Installation
+#
+# Install CoreDNS as a single Graph — the static-bundle pattern. One object
+# replaces a Helm chart: dependency-ordered, health-aware, fully declarative.
+# Delete the Graph and the entire stack is cleaned up in reverse order.
+#
+# Resources are evaluated in dependency order inferred from CEL references:
+#   ServiceAccount → ClusterRole → ClusterRoleBinding → ConfigMap → Deployment → Service
+# ---------------------------------------------------------------------------
+apiVersion: kro.run/v1alpha1
+kind: Graph
+metadata:
+  name: coredns
+  namespace: kube-system
+spec:
+  nodes:
+    - id: sa
+      template:
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: coredns
+
+    - id: role
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: system:coredns
+        rules:
+          - apiGroups: [""]
+            resources: [endpoints, services, pods, namespaces]
+            verbs: [list, watch]
+          - apiGroups: [discovery.k8s.io]
+            resources: [endpointslices]
+            verbs: [list, watch]
+
+    - id: binding
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: system:coredns
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: ${role.metadata.name}
+        subjects:
+          - kind: ServiceAccount
+            name: ${sa.metadata.name}
+            namespace: kube-system
+
+    - id: corefile
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: coredns
+        data:
+          Corefile: |
+            .:53 {
+                errors
+                health { lameduck 5s }
+                ready
+                kubernetes cluster.local in-addr.arpa ip6.arpa {
+                    pods insecure
+                    fallthrough in-addr.arpa ip6.arpa
+                    ttl 30
+                }
+                prometheus :9153
+                forward . /etc/resolv.conf { max_concurrent 1000 }
+                cache 30
+                loop
+                reload
+                loadbalance
+            }
+
+    - id: deployment
+      readyWhen:
+        - ${deployment.status.availableReplicas == deployment.spec.replicas}
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: coredns
+          labels:
+            k8s-app: kube-dns
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              k8s-app: kube-dns
+          template:
+            metadata:
+              labels:
+                k8s-app: kube-dns
+            spec:
+              serviceAccountName: ${sa.metadata.name}
+              containers:
+                - name: coredns
+                  image: registry.k8s.io/coredns/coredns:v1.11.1
+                  args: ["-conf", "/etc/coredns/Corefile"]
+                  ports:
+                    - containerPort: 53
+                      name: dns
+                      protocol: UDP
+                    - containerPort: 53
+                      name: dns-tcp
+                      protocol: TCP
+                    - containerPort: 9153
+                      name: metrics
+                      protocol: TCP
+                  volumeMounts:
+                    - name: config
+                      mountPath: /etc/coredns
+                      readOnly: true
+                  readinessProbe:
+                    httpGet:
+                      path: /ready
+                      port: 8181
+                  livenessProbe:
+                    httpGet:
+                      path: /health
+                      port: 8080
+              volumes:
+                - name: config
+                  configMap:
+                    name: ${corefile.metadata.name}
+
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: kube-dns
+          labels:
+            k8s-app: kube-dns
+        spec:
+          clusterIP: 10.96.0.10
+          selector: ${deployment.spec.selector.matchLabels}
+          ports:
+            - name: dns
+              port: 53
+              protocol: UDP
+            - name: dns-tcp
+              port: 53
+              protocol: TCP
+            - name: metrics
+              port: 9153
+              protocol: TCP

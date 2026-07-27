@@ -146,6 +146,9 @@ helm upgrade kro oci://registry.k8s.io/kro/charts/kro \
   --namespace kro-system
 ```
 
+:::info
+Helm does not update CRDs automatically. If a new version includes CRD changes, you may need to manually apply them. Check the release notes for CRD updates.
+:::
   </TabItem>
   <TabItem value="specific" label="Specific Version">
 

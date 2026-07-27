@@ -186,11 +186,11 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 
 .PHONY: build
 build: manifests generate fmt vet ## Build controller binary.
-	go build -ldflags=${LDFLAGS} -o bin/controller ./cmd/controller/main.go
+	go build -ldflags=${LDFLAGS} -o bin/controller ./cmd/controller
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./cmd/controller/main.go
+	go run ./cmd/controller
 
 ##@ Build Dependencies
 
@@ -361,7 +361,7 @@ ko-apply: ko
 ## CLI
 .PHONY: cli
 cli:
-	go build -o bin/kro cmd/kro/main.go
+	go build -C cmd/kro -o $(LOCALBIN)/kro .
 	sudo mv bin/kro /usr/local/bin
 	@echo "CLI built successfully"
 

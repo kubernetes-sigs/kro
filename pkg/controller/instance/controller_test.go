@@ -32,9 +32,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	clientfake "github.com/kubernetes-sigs/kro/pkg/client/fake"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
@@ -45,17 +47,17 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 		presetFinalizer bool
 		presetLabels    bool
 		wantActions     int
-		wantSameObject  bool
+		wantPatched     bool
 	}{
 		{
-			name:            "no patch needed",
+			name:            "no patch needed returns nil",
 			presetFinalizer: true,
 			presetLabels:    true,
-			wantSameObject:  true,
 		},
 		{
 			name:        "patches missing finalizer and labels",
 			wantActions: 1,
+			wantPatched: true,
 		},
 	}
 
@@ -74,7 +76,12 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantActions, len(raw.Actions()))
-			assert.Equal(t, tt.wantSameObject, patched == rcx.Instance)
+			if !tt.wantPatched {
+				assert.Nil(t, patched, "no server write means nil, so callers don't rebind")
+				patched = rcx.Instance
+			} else {
+				require.NotNil(t, patched)
+			}
 			assert.True(t, metadata.HasInstanceFinalizer(patched))
 			for key, value := range metadata.NewKROMetaLabeler().Labels() {
 				assert.Equal(t, value, patched.GetLabels()[key])
@@ -248,7 +255,6 @@ func TestReconcileGraphResolutionFailureMarksCondition(t *testing.T) {
 				metadata.NewKROMetaLabeler(),
 				newControllerTestCoordinator(t),
 				record.NewFakeRecorder(100),
-				false,
 			)
 
 			err := controller.Reconcile(context.Background(), ctrl.Request{
@@ -301,7 +307,7 @@ func TestReconcileGraphResolveFailureKeepsOnlyAuthorConditionsOnWire(t *testing.
 
 	controller := NewController(
 		zap.New(zap.UseDevMode(true)),
-		ReconcileConfig{DefaultRequeueDuration: 2 * time.Second},
+		ReconcileConfig{DefaultRequeueDuration: 2 * time.Second, HasAuthorConditions: true},
 		controllerTestParentGVR,
 		testRevisionResolver{
 			getLatestRevision: func() (revisions.Entry, bool) {
@@ -317,7 +323,6 @@ func TestReconcileGraphResolveFailureKeepsOnlyAuthorConditionsOnWire(t *testing.
 		metadata.NewKROMetaLabeler(),
 		newControllerTestCoordinator(t),
 		record.NewFakeRecorder(100),
-		true,
 	)
 
 	err := controller.Reconcile(context.Background(), ctrl.Request{
@@ -346,6 +351,150 @@ func TestReconcileGraphResolveFailureKeepsOnlyAuthorConditionsOnWire(t *testing.
 
 	state, _, _ := unstructured.NestedString(stored.Object, "status", "state")
 	assert.Equal(t, "ERROR", state, "state flips to ERROR during graph-resolve failure")
+}
+
+// TestReconcileManagedFastPathDoesNotLeakBuiltins is a regression test for
+// the already-managed reconcile path: with no finalizer/label patch needed,
+// the wire snapshot must not be re-captured from the marker-mutated
+// in-memory object, or an incomplete evaluation merges the built-ins onto
+// the wire alongside the author's conditions.
+func TestReconcileManagedFastPathDoesNotLeakBuiltins(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	metadata.SetInstanceFinalizer(instance)
+	metadata.NewKROMetaLabeler().ApplyLabels(instance)
+	require.NoError(t, unstructured.SetNestedField(instance.Object, int64(1), "metadata", "generation"))
+	require.NoError(t, unstructured.SetNestedSlice(instance.Object, []interface{}{
+		map[string]interface{}{
+			"type":               "Flaky",
+			"status":             "True",
+			"reason":             "SeenBefore",
+			"lastTransitionTime": "2026-01-01T00:00:00Z",
+		},
+	}, "status", "conditions"))
+
+	instanceNode := authorConditionsInstanceNode(t,
+		mustCompileControllerExpr(t,
+			`runtime.newCondition({type: 'Steady', status: 'True', reason: '', message: ''})`,
+			library.RuntimeVarName,
+		),
+		mustCompileControllerExpr(t,
+			`runtime.newCondition({type: 'Flaky', status: schema.spec.missing.value, reason: '', message: ''})`,
+			library.RuntimeVarName, "schema",
+		),
+	)
+
+	raw := newControllerTestDynamicClient(t, instance.DeepCopy())
+	controller, _ := newControllerUnderTest(t, raw, newTestGraphWithInstance(instanceNode))
+
+	require.NoError(t, controller.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "demo", Namespace: "default"},
+	}))
+
+	stored := getStoredParentObject(t, raw)
+	byType := map[string]v1alpha1.Condition{}
+	for _, c := range conditionsFromInstance(stored) {
+		byType[string(c.Type)] = c
+	}
+
+	assert.Contains(t, byType, "Steady")
+	require.Contains(t, byType, "Flaky", "the pending condition must be carried forward from the wire")
+	require.NotNil(t, byType["Flaky"].LastTransitionTime)
+	assert.Equal(t, "2026-01-01T00:00:00Z", byType["Flaky"].LastTransitionTime.UTC().Format(time.RFC3339))
+	for _, builtin := range []string{InstanceManaged, GraphResolved, ResourcesReady, Ready} {
+		assert.NotContains(t, byType, builtin,
+			"marker-written built-ins must not leak onto the wire through the fast-path rebind")
+	}
+}
+
+// TestReconcileManagedFastPathSkipsNoopStatusWrite verifies the skip-write
+// guard fires through the full reconcile of an already-managed instance
+// whose persisted status matches the computed one.
+func TestReconcileManagedFastPathSkipsNoopStatusWrite(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	metadata.SetInstanceFinalizer(instance)
+	metadata.NewKROMetaLabeler().ApplyLabels(instance)
+	require.NoError(t, unstructured.SetNestedField(instance.Object, int64(1), "metadata", "generation"))
+	require.NoError(t, unstructured.SetNestedField(instance.Object,
+		string(v1alpha1.InstanceStateActive), "status", "state"))
+	require.NoError(t, unstructured.SetNestedSlice(instance.Object, []interface{}{
+		map[string]interface{}{
+			"type":               "AppReady",
+			"status":             "True",
+			"reason":             "Healthy",
+			"lastTransitionTime": "2026-01-01T00:00:00Z",
+			"observedGeneration": int64(1),
+		},
+	}, "status", "conditions"))
+
+	instanceNode := authorConditionsInstanceNode(t, mustCompileControllerExpr(t,
+		`runtime.newCondition({type: 'AppReady', status: 'True', reason: 'Healthy', message: ''})`,
+		library.RuntimeVarName,
+	))
+
+	raw := newControllerTestDynamicClient(t, instance.DeepCopy())
+	controller, _ := newControllerUnderTest(t, raw, newTestGraphWithInstance(instanceNode))
+
+	require.NoError(t, controller.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "demo", Namespace: "default"},
+	}))
+
+	for _, action := range raw.Actions() {
+		assert.NotEqual(t, "update", action.GetVerb(),
+			"steady state must not issue a status write")
+	}
+}
+
+// TestReconcileSkipsNoopStatusWriteForWholeNumbers verifies the skip-write
+// guard is not defeated by Go number types alone: apimachinery decodes a
+// persisted whole number as int64 while CEL evaluation yields float64, and
+// both serialize to the same JSON. The int64 is seeded explicitly because
+// the fake dynamic client stores objects as-is and never round-trips them
+// through JSON the way a real API server response would.
+func TestReconcileSkipsNoopStatusWriteForWholeNumbers(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	metadata.SetInstanceFinalizer(instance)
+	metadata.NewKROMetaLabeler().ApplyLabels(instance)
+	require.NoError(t, unstructured.SetNestedField(instance.Object, int64(1), "metadata", "generation"))
+	require.NoError(t, unstructured.SetNestedField(instance.Object,
+		string(v1alpha1.InstanceStateActive), "status", "state"))
+	// The wire value as a real API server would return it: int64.
+	require.NoError(t, unstructured.SetNestedField(instance.Object, int64(3), "status", "replicas"))
+	require.NoError(t, unstructured.SetNestedSlice(instance.Object, []interface{}{
+		map[string]interface{}{
+			"type":               "AppReady",
+			"status":             "True",
+			"reason":             "Healthy",
+			"lastTransitionTime": "2026-01-01T00:00:00Z",
+			"observedGeneration": int64(1),
+		},
+	}, "status", "conditions"))
+
+	instanceNode := authorConditionsInstanceNode(t, mustCompileControllerExpr(t,
+		`runtime.newCondition({type: 'AppReady', status: 'True', reason: 'Healthy', message: ''})`,
+		library.RuntimeVarName,
+	))
+	// A CEL double that is a whole number lands in the computed status as
+	// float64(3), semantically equal to the persisted int64(3).
+	instanceNode.Template = &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"status": map[string]interface{}{"replicas": "${1.5 * 2.0}"},
+		},
+	}
+	instanceNode.Variables = []*variable.ResourceField{
+		standaloneField("status.replicas", mustCompileControllerExpr(t, "1.5 * 2.0"), variable.ResourceVariableKindStatic),
+	}
+
+	raw := newControllerTestDynamicClient(t, instance.DeepCopy())
+	controller, _ := newControllerUnderTest(t, raw, newTestGraphWithInstance(instanceNode))
+
+	require.NoError(t, controller.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "demo", Namespace: "default"},
+	}))
+
+	for _, action := range raw.Actions() {
+		assert.NotEqual(t, "update", action.GetVerb(),
+			"a float64 whole number must compare equal to its persisted int64 form")
+	}
 }
 
 func TestReconcileDeletionRemovesFinalizer(t *testing.T) {

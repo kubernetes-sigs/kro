@@ -1,0 +1,38 @@
+# KREP-024 Example: Namespace Decorator
+#
+# Watch all namespaces labeled "policy: enforced" and create a default-deny
+# NetworkPolicy in each one. No CRD, no schema, no instance — just a Graph
+# that reacts to existing resources.
+#
+# Add or remove the label on a namespace and the policy appears or disappears.
+# Delete the Graph and all managed NetworkPolicies are cleaned up.
+# ---------------------------------------------------------------------------
+apiVersion: kro.run/v1alpha1
+kind: Graph
+metadata:
+  name: namespace-decorator
+  namespace: kro-system
+spec:
+  nodes:
+    - id: namespaces
+      watch:
+        apiVersion: v1
+        kind: Namespace
+        selector:
+          matchLabels:
+            policy: enforced
+
+    - id: policies
+      forEach:
+        - ns: ${namespaces}
+      template:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: default-deny
+          namespace: ${ns.metadata.name}
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+            - Egress

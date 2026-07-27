@@ -55,9 +55,7 @@ const (
 )
 
 // Instance built-in condition types. kro computes these on every managed
-// instance and injects their internal values into author CEL evaluation, so
-// runtime.condition(schema, 'X') can read them even when an author emits a
-// condition with the same type.
+// instance; author CEL reads them via runtime.condition(schema, 'X').
 const (
 	InstanceConditionTypeReady           ConditionType = "Ready"
 	InstanceConditionTypeInstanceManaged ConditionType = "InstanceManaged"
@@ -65,6 +63,8 @@ const (
 	InstanceConditionTypeResourcesReady  ConditionType = "ResourcesReady"
 )
 
+// KROBuiltinConditionTypes is the set form of the instance built-in
+// condition types, for membership checks.
 var KROBuiltinConditionTypes = map[string]struct{}{
 	string(InstanceConditionTypeReady):           {},
 	string(InstanceConditionTypeInstanceManaged): {},

@@ -779,6 +779,57 @@ func TestPrune_UIDPrecondition(t *testing.T) {
 	})
 }
 
+func TestDeleteOrphan_BackgroundPropagation(t *testing.T) {
+	ctx := t.Context()
+	mapper := newTestRESTMapper()
+	parent := newTestParent(schema.GroupVersionKind{
+		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
+	})
+	applySetID := ID(parent)
+
+	orphan := newConfigMap("orphan-cm", "default")
+	orphan.SetLabels(map[string]string{
+		ApplysetPartOfLabel: applySetID,
+	})
+	orphan.SetUID(types.UID("orphan-uid"))
+
+	client := newFakeDynamicClient(orphan)
+
+	var deleteOptions *metav1.DeleteOptions
+	client.PrependReactor("delete", "configmaps", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		deleteAction, ok := action.(k8stesting.DeleteAction)
+		if !ok {
+			return false, nil, nil
+		}
+		opts := deleteAction.GetDeleteOptions()
+		deleteOptions = &opts
+		return false, nil, nil
+	})
+
+	applier := New(Config{
+		Client:          client,
+		RESTMapper:      mapper,
+		Log:             logr.Discard(),
+		ParentNamespace: "default",
+	}, parent)
+
+	cmGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
+	_, err := applier.DeleteOrphan(ctx, OrphanCandidate{Object: orphan, GVR: cmGVR})
+	if err != nil {
+		t.Fatalf("DeleteOrphan() error = %v", err)
+	}
+
+	if deleteOptions == nil {
+		t.Fatal("delete reactor was not invoked")
+	}
+	if deleteOptions.PropagationPolicy == nil {
+		t.Fatal("delete options must set an explicit propagation policy")
+	}
+	if got := *deleteOptions.PropagationPolicy; got != metav1.DeletePropagationBackground {
+		t.Errorf("delete propagation policy = %q, want %q", got, metav1.DeletePropagationBackground)
+	}
+}
+
 func TestErrors_ShouldPreventPrune(t *testing.T) {
 	ctx := t.Context()
 	mapper := newTestRESTMapper()

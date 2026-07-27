@@ -254,6 +254,39 @@ func TestDeleteTarget(t *testing.T) {
 	}
 }
 
+func TestDeleteTargetUsesBackgroundPropagation(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	resourceNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "deploy",
+			Type:       graph.NodeTypeResource,
+			GVR:        controllerTestDeployGVR,
+			Namespaced: true,
+		},
+		Template: newDeploymentObject("demo", ""),
+	}
+
+	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(resourceNode))
+	node := rcx.Runtime.Nodes()[0]
+	node.SetObserved([]*unstructured.Unstructured{newDeploymentObject("demo", "default")})
+
+	var deleteOptions *metav1.DeleteOptions
+	raw.PrependReactor("delete", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+		deleteAction, ok := action.(k8stesting.DeleteAction)
+		require.True(t, ok)
+		opts := deleteAction.GetDeleteOptions()
+		deleteOptions = &opts
+		return true, nil, nil
+	})
+
+	state := rcx.StateManager.NewNodeState("deploy")
+	require.NoError(t, controller.deleteTarget(rcx, node, state))
+
+	require.NotNil(t, deleteOptions, "delete reactor was not invoked")
+	require.NotNil(t, deleteOptions.PropagationPolicy, "delete options must set an explicit propagation policy")
+	assert.Equal(t, metav1.DeletePropagationBackground, *deleteOptions.PropagationPolicy)
+}
+
 func TestReconcileDeletionRequeuesWhileChildDeletionInFlight(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	node := &graph.Node{

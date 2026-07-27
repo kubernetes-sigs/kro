@@ -1,0 +1,37 @@
+# Build output and locally-installed tools.
+bin/
+
+# Test artifacts.
+*.test
+*.out
+cover.out
+coverage.html
+cover.html
+testdata/.cache/
+
+# Go build / native binaries.
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go module / build cache when run inside this directory.
+vendor/
+
+# Profiling / debug.
+*.prof
+cpu.pprof
+mem.pprof
+__debug_bin*
+
+# IDE / editor metadata.
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS-specific.
+.DS_Store
+Thumbs.db

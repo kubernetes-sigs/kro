@@ -1,0 +1,372 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: graphs.kro.run
+spec:
+  group: kro.run
+  names:
+    kind: Graph
+    listKind: GraphList
+    plural: graphs
+    singular: graph
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: READY
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Graph is a scope of composable nodes that manage Kubernetes resources and
+          the relationships between them. Nodes reference each other through CEL
+          expressions; the controller derives an execution order from the implied
+          dependencies.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: GraphSpec defines the desired state of a Graph.
+            properties:
+              nodes:
+                description: |-
+                  Nodes is the unordered list of nodes that make up this Graph. Evaluation
+                  order is derived from inter-node CEL references, not from list order.
+                  Node IDs must be unique within the Graph.
+                items:
+                  description: |-
+                    Node is a single composable unit within a Graph. Each Node carries exactly
+                    one of the type-discriminating fields (Template, Ref, Watch, Def, Graph)
+                    which determines its behavior. Node IDs are the handles other nodes use to
+                    reference it via CEL expressions.
+                  properties:
+                    def:
+                      description: |-
+                        Def introduces raw data into scope without reading or writing any
+                        Kubernetes resource. The value is a free-form object whose fields may
+                        contain CEL expressions.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    forEach:
+                      description: |-
+                        ForEach expands this node into a collection. Each entry binds a
+                        variable name to a CEL expression that evaluates to an array; the
+                        controller produces one instance per element. Multiple dimensions form
+                        the cartesian product of their bindings.
+                      items:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          ForEachDimension defines a single expansion axis in a forEach block.
+                          Each dimension is a map with exactly one entry where the key is the variable name
+                          and the value is the CEL expression. Example: {"region": "${schema.spec.regions}"}
+                          Multiple dimensions create a cartesian product of expansions.
+                        maxProperties: 1
+                        minProperties: 1
+                        type: object
+                      type: array
+                    graph:
+                      description: |-
+                        Graph nests another Graph as a child scope under this node's ID. The
+                        child's nodes form a lexical frame: they may reference this Graph's
+                        nodes (capture) and shadow their names, but a single CEL expression may
+                        not mix the two scopes — it references one frame or the other. The
+                        child's node outputs are addressable under this node's ID, e.g.
+                        `${nodeID.childNode.field}`. Nesting has no depth limit. The payload is
+                        a GraphSpec (a `nodes:` list); it is parsed at compile time, so the CRD
+                        stores it as an opaque object.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    id:
+                      description: |-
+                        ID is the handle that other nodes use to reference this node from CEL
+                        expressions. Must be alphanumeric (case-insensitive) and unique within
+                        the Graph.
+                      pattern: ^[A-Za-z][A-Za-z0-9]*$
+                      type: string
+                    includeWhen:
+                      description: |-
+                        IncludeWhen is a list of CEL expressions that must all evaluate to
+                        true for this node to be applied. Evaluated against scope before
+                        apply, so expressions may reference upstream nodes. When any
+                        returns false the node is skipped entirely: it does not apply, it
+                        does not publish to scope, and dependent expressions that try to
+                        read it will error.
+                      items:
+                        type: string
+                      type: array
+                    readyWhen:
+                      description: |-
+                        ReadyWhen is a list of CEL expressions that must all evaluate to
+                        true for this node to be considered ready. Evaluated against scope
+                        after the node has been applied and its value published, so
+                        expressions typically reference the node's own published state
+                        (e.g. `cluster.status.phase == 'Active'`). Empty means the node is
+                        ready as soon as it is applied. For collection nodes (forEach or
+                        watch) the node's value in scope is a list — use CEL list functions
+                        like `all()` and `exists()`:
+                            readyWhen: [ "${appPods.all(p, p.status.phase == 'Running')}" ]
+                      items:
+                        type: string
+                      type: array
+                    ref:
+                      description: |-
+                        Ref imports a resource that exists outside this Graph into scope. The
+                        referenced resource is read-only; its fields become available to other
+                        nodes through CEL expressions.
+                      properties:
+                        apiVersion:
+                          description: |-
+                            APIVersion is the API version of the external resource.
+                            Example: "v1" for core resources, "apps/v1" for Deployments.
+                          type: string
+                        kind:
+                          description: |-
+                            Kind is the kind of the external resource.
+                            Example: "Service", "ConfigMap", "Deployment".
+                          type: string
+                        metadata:
+                          description: Metadata contains the name and optional namespace
+                            of the external resource.
+                          properties:
+                            name:
+                              description: |-
+                                Name is the name of the external resource to reference.
+                                Mutually exclusive with Selector.
+                              minLength: 1
+                              type: string
+                            namespace:
+                              description: |-
+                                Namespace is the namespace of the external resource.
+                                For single external refs (Name), defaults to the instance's namespace.
+                                For external collections (Selector), empty means list across all namespaces.
+                              type: string
+                            selector:
+                              description: |-
+                                Selector is a label selector for collection external references.
+                                When set, all resources matching the selector are included.
+                                Mutually exclusive with Name.
+                              properties:
+                                matchExpressions:
+                                  description: matchExpressions is a list of label
+                                    selector requirements. The requirements are ANDed.
+                                  items:
+                                    description: |-
+                                      A label selector requirement is a selector that contains values, a key, and an operator that
+                                      relates the key and values.
+                                    properties:
+                                      key:
+                                        description: key is the label key that the
+                                          selector applies to.
+                                        type: string
+                                      operator:
+                                        description: |-
+                                          operator represents a key's relationship to a set of values.
+                                          Valid operators are In, NotIn, Exists and DoesNotExist.
+                                        type: string
+                                      values:
+                                        description: |-
+                                          values is an array of string values. If the operator is In or NotIn,
+                                          the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                          the values array must be empty. This array is replaced during a strategic
+                                          merge patch.
+                                        items:
+                                          type: string
+                                        type: array
+                                        x-kubernetes-list-type: atomic
+                                    required:
+                                    - key
+                                    - operator
+                                    type: object
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                matchLabels:
+                                  additionalProperties:
+                                    type: string
+                                  description: |-
+                                    matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                    map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                    operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                  type: object
+                              type: object
+                              x-kubernetes-map-type: atomic
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of name or selector must be provided
+                            rule: (has(self.name) && !has(self.selector)) || (!has(self.name)
+                              && has(self.selector))
+                      required:
+                      - apiVersion
+                      - kind
+                      - metadata
+                      type: object
+                    template:
+                      description: |-
+                        Template declares that this node creates and manages a Kubernetes
+                        resource. The controller applies the resource on create and on change,
+                        and deletes it on prune.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    watch:
+                      description: |-
+                        Watch makes the collection of resources matching a label selector
+                        available to other nodes through CEL expressions. The set is kept
+                        up-to-date as resources come and go.
+                      properties:
+                        apiVersion:
+                          description: APIVersion of the watched resource.
+                          type: string
+                        kind:
+                          description: Kind of the watched resource.
+                          type: string
+                        namespace:
+                          description: Namespace to watch. Empty means watch across
+                            all namespaces.
+                          type: string
+                        selector:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Selector is a label-equality selector. Values may contain CEL
+                            expressions evaluated in the node's scope before matching.
+                          type: object
+                      required:
+                      - apiVersion
+                      - kind
+                      type: object
+                  required:
+                  - id
+                  type: object
+                  x-kubernetes-validations:
+                  - message: exactly one of template, ref, watch, def, graph must
+                      be set
+                    rule: '[has(self.template), has(self.ref), has(self.watch), has(self.def),
+                      has(self.graph)].exists_one(x, x)'
+                minItems: 1
+                type: array
+            required:
+            - nodes
+            type: object
+          status:
+            description: GraphStatus defines the observed state of a Graph.
+            properties:
+              conditions:
+                description: |-
+                  Conditions represent the latest available observations of the Graph's
+                  state.
+                items:
+                  description: |-
+                    Condition is the common struct used by all CRDs managed by ACK service
+                    controllers to indicate terminal states  of the CR and its backend AWS
+                    service API resource
+                  properties:
+                    lastTransitionTime:
+                      description: Last time the condition transitioned from one status
+                        to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: A human-readable message indicating details about
+                        the transition.
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: The reason for the condition's last transition.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Type is the type of the Condition
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              managedResources:
+                description: |-
+                  ManagedResources is the authoritative list of cluster resources this
+                  Graph has applied. Entries are recorded in topological apply order so
+                  reverse iteration gives reverse-apply order on delete + prune. Each
+                  reconcile rewrites this list — before applying, it is the union of
+                  the previous list and the soon-to-be-applied list (write-ahead);
+                  after a fully-successful apply + prune, it shrinks to just the
+                  currently-applied set.
+                items:
+                  description: |-
+                    ManagedResource is a lightweight pointer to a cluster resource the Graph
+                    controller has applied. The tuple of (APIVersion, Kind, Namespace, Name)
+                    identifies the resource; UID is captured post-apply for safe deletion
+                    (preconditioned on UID so we never delete an impostor recreated by some
+                    other actor between apply and prune).
+                  properties:
+                    apiVersion:
+                      description: APIVersion of the resource ("apps/v1", "v1", ...).
+                      type: string
+                    kind:
+                      description: Kind of the resource ("Deployment", "ConfigMap",
+                        ...).
+                      type: string
+                    name:
+                      description: Name of the resource.
+                      type: string
+                    namespace:
+                      description: Namespace of the resource. Empty for cluster-scoped
+                        resources.
+                      type: string
+                    nodeID:
+                      description: |-
+                        NodeID is the Graph node that produced this resource. Multiple
+                        resources may share a NodeID for forEach expansions.
+                      type: string
+                    uid:
+                      description: |-
+                        UID returned by the API server when the resource was applied. Used
+                        as a delete precondition so we don't remove a resource that was
+                        deleted-and-recreated out of band between apply and prune. Absent
+                        on entries that haven't been observed yet (e.g. union-state entries
+                        declared but not yet applied this cycle).
+                      type: string
+                  required:
+                  - apiVersion
+                  - kind
+                  - name
+                  - nodeID
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

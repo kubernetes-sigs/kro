@@ -360,6 +360,16 @@ func (in *Schema) DeepCopyInto(out *Schema) {
 		*out = make([]v1.CustomResourceColumnDefinition, len(*in))
 		copy(*out, *in)
 	}
+	if in.ShortNames != nil {
+		in, out := &in.ShortNames, &out.ShortNames
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.Categories != nil {
+		in, out := &in.Categories, &out.Categories
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Metadata != nil {
 		in, out := &in.Metadata, &out.Metadata
 		*out = new(CRDMetadata)

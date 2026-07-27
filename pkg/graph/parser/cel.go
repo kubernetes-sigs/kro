@@ -130,9 +130,9 @@ func extractExpressions(str string) ([]exprMatch, error) {
 	return matches, nil
 }
 
-// isStandaloneExpression returns true if the string is a single, complete non-nested expression.
+// IsStandaloneExpression returns true if the string is a single, complete non-nested expression.
 // It returns an error if it encounters a nested expression.
-func isStandaloneExpression(str string) (bool, error) {
+func IsStandaloneExpression(str string) (bool, error) {
 	matches, err := extractExpressions(str)
 	if err != nil {
 		return false, err

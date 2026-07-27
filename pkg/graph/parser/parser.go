@@ -282,7 +282,7 @@ func (p *Parser) parseArray(field []interface{}, schema *spec.Schema, path strin
 }
 
 func parseString(field string, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
-	ok, err := isStandaloneExpression(field)
+	ok, err := IsStandaloneExpression(field)
 	if err != nil {
 		return nil, err
 	}

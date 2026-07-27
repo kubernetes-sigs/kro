@@ -23,10 +23,13 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	metav1validation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
+	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -285,34 +288,65 @@ func validateExternalRefMetadata(metadata v1alpha1.ExternalRefMetadata) error {
 	}
 
 	if bytes.Contains(raw, []byte("${")) {
-		if raw[0] != '{' {
-			// The entire selector is a string (e.g. a standalone CEL expression
-			// that resolves to a LabelSelector at runtime). Allow it; the
-			// downstream parser will validate the expression.
-			return nil
+		return validateCELSelector(raw)
+	}
+
+	return validateLiteralSelector(raw)
+}
+
+// validateCELSelector validates a selector that contains a CEL expression marker.
+// It allows standalone CEL string expressions and LabelSelector objects with
+// standalone CEL values in known fields.
+func validateCELSelector(raw []byte) error {
+	expressionBytes := raw
+	if raw[0] == '"' {
+		var unquoted string
+		if err := json.Unmarshal(raw, &unquoted); err != nil {
+			return fmt.Errorf("invalid selector string: %w", err)
 		}
-		// The selector is an object containing CEL markers in some values.
-		// Validate structural types of known fields so that a string at a
-		// position that expects an object is caught the same way the
-		// schema-aware parser would catch it for other RawExtension fields.
-		return validateSelectorStructure(raw)
+		expressionBytes = []byte(unquoted)
+	}
+
+	isStandalone, err := parser.IsStandaloneExpression(string(expressionBytes))
+	if err != nil {
+		return fmt.Errorf("invalid selector expression: %w", err)
+	}
+	if isStandalone {
+		return nil
 	}
 
 	if raw[0] == '"' {
 		return fmt.Errorf("selector must be a Kubernetes LabelSelector object or a CEL expression that resolves to one")
 	}
 
-	if raw[0] != '{' {
+	// The selector is an object containing CEL markers in some values.
+	// Validate structural types of known fields so that a string at a
+	// position that expects an object is caught the same way the
+	// schema-aware parser would catch it for other RawExtension fields.
+	return validateSelectorStructure(raw)
+}
+
+// validateLiteralSelector validates a selector that does not contain any CEL
+// expression markers. It must be a valid Kubernetes LabelSelector object.
+func validateLiteralSelector(raw []byte) error {
+	switch raw[0] {
+	case '"':
+		return fmt.Errorf("selector must be a Kubernetes LabelSelector object or a CEL expression that resolves to one")
+	case '{':
+		return validateLabelSelectorObject(raw)
+	default:
 		return fmt.Errorf("selector must resolve to a Kubernetes LabelSelector object")
 	}
+}
 
+func validateLabelSelectorObject(raw []byte) error {
 	var selector metav1.LabelSelector
 	if err := json.Unmarshal(raw, &selector); err != nil {
 		return fmt.Errorf("invalid selector object: %w", err)
 	}
 
-	if _, err := metav1.LabelSelectorAsSelector(&selector); err != nil {
-		return fmt.Errorf("invalid label selector: %w", err)
+	if errs := metav1validation.ValidateLabelSelector(&selector, metav1validation.LabelSelectorValidationOptions{}, &field.Path{}); len(errs) != 0 {
+		return fmt.Errorf("invalid label selector: %v", errs)
 	}
 
 	return nil

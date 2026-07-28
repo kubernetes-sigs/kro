@@ -180,9 +180,28 @@ var _ = Describe("DeploymentService", func() {
 		instance.SetAnnotations(currentAnnotations)
 		Expect(env.Client.Update(ctx, instance)).To(Succeed())
 
-		// Instance should still be ready status
+		// Instance should show ReconciliationSuspended condition after suspension.
 		Eventually(func(g Gomega, ctx SpecContext) {
-			instanceIsReady(g, ctx, env, namespace, instance)
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "test-instance",
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			conditions, found, _ := unstructured.NestedSlice(instance.Object, "status", "conditions")
+			g.Expect(found).To(BeTrue())
+
+			var readyCondition map[string]interface{}
+			for _, c := range conditions {
+				cm := c.(map[string]interface{})
+				if cm["type"] == ctrlinstance.Ready {
+					readyCondition = cm
+					break
+				}
+			}
+			g.Expect(readyCondition).ToNot(BeNil())
+			g.Expect(readyCondition["status"]).To(Equal("False"))
+			g.Expect(readyCondition["reason"]).To(Equal("ReconciliationSuspended"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// update instance spec to have replicas=2.

@@ -8,10 +8,10 @@ spec:
   syncPolicy:
     preserveResourcesOnDeletion: false # to be able to cleanup
   generators:
-  - clusters:
-      selector:
-        matchLabels:
-          fleet_member: control-plane
+    - clusters:
+        selector:
+          matchLabels:
+            fleet_member: control-plane
   template:
     metadata:
       name: bootstrap

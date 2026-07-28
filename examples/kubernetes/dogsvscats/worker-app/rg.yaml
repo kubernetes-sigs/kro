@@ -19,53 +19,53 @@ spec:
       availableReplicas: ${deployment.status.availableReplicas}
 
   resources:
-  - id: deployment
-    readyWhen:
-      - ${deployment.spec.replicas == deployment.status.availableReplicas}
-    template:
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ${schema.spec.name}-worker
-        namespace: ${schema.spec.namespace}
-        labels:
-          app.kubernetes.io/name: ${schema.spec.name}-worker
-          app: ${schema.spec.name}-worker
-      spec:
-        replicas: ${schema.spec.replicas}
-        selector:
-          matchLabels:
+    - id: deployment
+      readyWhen:
+        - ${deployment.spec.replicas == deployment.status.availableReplicas}
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}-worker
+          namespace: ${schema.spec.namespace}
+          labels:
             app.kubernetes.io/name: ${schema.spec.name}-worker
             app: ${schema.spec.name}-worker
-        template:
-          metadata:
-            labels:
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
               app.kubernetes.io/name: ${schema.spec.name}-worker
               app: ${schema.spec.name}-worker
-          spec:
-            containers:
-            - name: worker
-              image: ${schema.spec.image}
-              imagePullPolicy: Always
-              resources:
-                requests:
-                  memory: "64Mi"
-                  cpu: "250m"
-                limits:
-                  memory: "512Mi"
-                  cpu: "500m"
-              env:
-              - name: REDIS_HOST
-                value: ${schema.spec.redisEndpoint}
-              - name: POSTGRES_HOST
-                value: ${schema.spec.postgresEndpoint}
-              - name: POSTGRES_USER
-                value: postgres
-              - name: POSTGRES_PASSWORD
-                valueFrom:
-                  secretKeyRef:
-                    name: ${schema.spec.postgresSecretName}
-                    key: password
-              - name: POSTGRES_DB
-                value: postgres
-            restartPolicy: Always
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: ${schema.spec.name}-worker
+                app: ${schema.spec.name}-worker
+            spec:
+              containers:
+                - name: worker
+                  image: ${schema.spec.image}
+                  imagePullPolicy: Always
+                  resources:
+                    requests:
+                      memory: "64Mi"
+                      cpu: "250m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "500m"
+                  env:
+                    - name: REDIS_HOST
+                      value: ${schema.spec.redisEndpoint}
+                    - name: POSTGRES_HOST
+                      value: ${schema.spec.postgresEndpoint}
+                    - name: POSTGRES_USER
+                      value: postgres
+                    - name: POSTGRES_PASSWORD
+                      valueFrom:
+                        secretKeyRef:
+                          name: ${schema.spec.postgresSecretName}
+                          key: password
+                    - name: POSTGRES_DB
+                      value: postgres
+              restartPolicy: Always

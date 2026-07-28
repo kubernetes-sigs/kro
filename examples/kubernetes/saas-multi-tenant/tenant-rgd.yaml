@@ -11,27 +11,26 @@ spec:
       image: string | default=nginx
       replicas: integer | default=2
   resources:
-  - id: tenantEnvironment
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: TenantEnvironment
-      metadata:
-        name: ${schema.spec.tenantId}
-        labels:
+    - id: tenantEnvironment
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: TenantEnvironment
+        metadata:
           name: ${schema.spec.tenantId}
-      spec:
-        tenantId: ${schema.spec.tenantId}
-  - id: tenantApplication
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: TenantApplication
-      metadata:
-        name: ${schema.spec.tenantId}
-        labels:
+          labels:
+            name: ${schema.spec.tenantId}
+        spec:
+          tenantId: ${schema.spec.tenantId}
+    - id: tenantApplication
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: TenantApplication
+        metadata:
           name: ${schema.spec.tenantId}
-      spec:
-        tenantId: ${schema.spec.tenantId}
-        image: ${schema.spec.image}
-        replicas: ${schema.spec.replicas}
-
+          labels:
+            name: ${schema.spec.tenantId}
+        spec:
+          tenantId: ${schema.spec.tenantId}
+          image: ${schema.spec.image}
+          replicas: ${schema.spec.replicas}
 

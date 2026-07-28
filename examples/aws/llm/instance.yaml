@@ -6,7 +6,7 @@ spec:
   name: llm
   namespace: default
   values:
-    storage: 50Gi 
+    storage: 50Gi
     model:
       name: llama3.2 # phi | deepseek
       size: 1b

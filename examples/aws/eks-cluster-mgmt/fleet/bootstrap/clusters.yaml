@@ -12,31 +12,31 @@ spec:
   goTemplateOptions:
     - missingkey=error
   generators:
-  - clusters:
-      selector:
-        matchLabels:
-          fleet_member: control-plane      
+    - clusters:
+        selector:
+          matchLabels:
+            fleet_member: control-plane
   template:
     metadata:
       name: clusters
-      labels:      
+      labels:
         environment: '{{.metadata.labels.environment}}'
-        tenant: '{{.metadata.labels.tenant}}'      
+        tenant: '{{.metadata.labels.tenant}}'
     spec:
       project: default
       sources:
-      - repoURL: '{{.metadata.annotations.fleet_repo_url}}'
-        targetRevision: '{{.metadata.annotations.fleet_repo_revision}}'
-        ref: values
-      - repoURL: '{{.metadata.annotations.fleet_repo_url}}'
-        path: 'charts/kro-clusters/'
-        targetRevision: '{{.metadata.annotations.fleet_repo_revision}}'
-        helm:
-          releaseName: 'kro-clusters'
-          ignoreMissingValueFiles: true
-          valueFiles:
-            - '$values/{{.metadata.annotations.fleet_repo_basepath}}kro-values/default/kro-clusters/values.yaml'
-            - '$values/{{.metadata.annotations.fleet_repo_basepath}}kro-values/tenants/{{.metadata.labels.tenant}}/kro-clusters/values.yaml'
+        - repoURL: '{{.metadata.annotations.fleet_repo_url}}'
+          targetRevision: '{{.metadata.annotations.fleet_repo_revision}}'
+          ref: values
+        - repoURL: '{{.metadata.annotations.fleet_repo_url}}'
+          path: 'charts/kro-clusters/'
+          targetRevision: '{{.metadata.annotations.fleet_repo_revision}}'
+          helm:
+            releaseName: 'kro-clusters'
+            ignoreMissingValueFiles: true
+            valueFiles:
+              - '$values/{{.metadata.annotations.fleet_repo_basepath}}kro-values/default/kro-clusters/values.yaml'
+              - '$values/{{.metadata.annotations.fleet_repo_basepath}}kro-values/tenants/{{.metadata.labels.tenant}}/kro-clusters/values.yaml'
       destination:
         namespace: argocd
         name: '{{.name}}'
@@ -49,4 +49,4 @@ spec:
           limit: 100
         syncOptions:
           - CreateNamespace=true
-          - ServerSideApply=true  # Big CRDs.
+          - ServerSideApply=true # Big CRDs.

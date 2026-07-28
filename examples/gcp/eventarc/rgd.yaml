@@ -14,148 +14,148 @@ spec:
     status:
       url: ${bucket.status.url}
   resources:
-  - id: storageEnable
-    template:
-      apiVersion: serviceusage.cnrm.cloud.google.com/v1beta1
-      kind: Service
-      metadata:
-        annotations:
-          cnrm.cloud.google.com/deletion-policy: "abandon"
-          cnrm.cloud.google.com/disable-dependent-services: "false"
-        name: storage-enablement
-      spec:
-        resourceID: storage.googleapis.com
-  - id: iamEnable
-    template:
-      apiVersion: serviceusage.cnrm.cloud.google.com/v1beta1
-      kind: Service
-      metadata:
-        annotations:
-          cnrm.cloud.google.com/deletion-policy: "abandon"
-          cnrm.cloud.google.com/disable-dependent-services: "false"
-        name: iam-enablement
-      spec:
-        resourceID: iam.googleapis.com
-  - id: pubsubEnable
-    template:
-      apiVersion: serviceusage.cnrm.cloud.google.com/v1beta1
-      kind: Service
-      metadata:
-        annotations:
-          cnrm.cloud.google.com/deletion-policy: "abandon"
-          cnrm.cloud.google.com/disable-dependent-services: "false"
-        name: pubsub-enablement
-      spec:
-        resourceID: pubsub.googleapis.com
-  - id: eventarcEnable
-    template:
-      apiVersion: serviceusage.cnrm.cloud.google.com/v1beta1
-      kind: Service
-      metadata:
-        annotations:
-          cnrm.cloud.google.com/deletion-policy: "abandon"
-          cnrm.cloud.google.com/disable-dependent-services: "false"
-        name: eventarc-enablement
-      spec:
-        resourceID: eventarc.googleapis.com
-  - id: iamsa
-    template:
-      apiVersion: iam.cnrm.cloud.google.com/v1beta1
-      kind: IAMServiceAccount
-      metadata:
-        labels:
-          enabled-service: ${iamEnable.metadata.name}
-        #annotations:
-        #  cnrm.cloud.google.com/project-id: ${schema.spec.project}
-        name: ${schema.spec.name}
-      spec:
-        displayName: ${schema.spec.name}-eventarc-workflow
-  - id: iampmEventarc
-    template:
-      apiVersion: iam.cnrm.cloud.google.com/v1beta1
-      kind: IAMPolicyMember
-      metadata:
-        labels:
-          enabled-service: ${iamEnable.metadata.name}
-        name: ${schema.spec.name}-eventarc
-      spec:
-        memberFrom:
+    - id: storageEnable
+      template:
+        apiVersion: serviceusage.cnrm.cloud.google.com/v1beta1
+        kind: Service
+        metadata:
+          annotations:
+            cnrm.cloud.google.com/deletion-policy: "abandon"
+            cnrm.cloud.google.com/disable-dependent-services: "false"
+          name: storage-enablement
+        spec:
+          resourceID: storage.googleapis.com
+    - id: iamEnable
+      template:
+        apiVersion: serviceusage.cnrm.cloud.google.com/v1beta1
+        kind: Service
+        metadata:
+          annotations:
+            cnrm.cloud.google.com/deletion-policy: "abandon"
+            cnrm.cloud.google.com/disable-dependent-services: "false"
+          name: iam-enablement
+        spec:
+          resourceID: iam.googleapis.com
+    - id: pubsubEnable
+      template:
+        apiVersion: serviceusage.cnrm.cloud.google.com/v1beta1
+        kind: Service
+        metadata:
+          annotations:
+            cnrm.cloud.google.com/deletion-policy: "abandon"
+            cnrm.cloud.google.com/disable-dependent-services: "false"
+          name: pubsub-enablement
+        spec:
+          resourceID: pubsub.googleapis.com
+    - id: eventarcEnable
+      template:
+        apiVersion: serviceusage.cnrm.cloud.google.com/v1beta1
+        kind: Service
+        metadata:
+          annotations:
+            cnrm.cloud.google.com/deletion-policy: "abandon"
+            cnrm.cloud.google.com/disable-dependent-services: "false"
+          name: eventarc-enablement
+        spec:
+          resourceID: eventarc.googleapis.com
+    - id: iamsa
+      template:
+        apiVersion: iam.cnrm.cloud.google.com/v1beta1
+        kind: IAMServiceAccount
+        metadata:
+          labels:
+            enabled-service: ${iamEnable.metadata.name}
+          #annotations:
+          #  cnrm.cloud.google.com/project-id: ${schema.spec.project}
+          name: ${schema.spec.name}
+        spec:
+          displayName: ${schema.spec.name}-eventarc-workflow
+    - id: iampmEventarc
+      template:
+        apiVersion: iam.cnrm.cloud.google.com/v1beta1
+        kind: IAMPolicyMember
+        metadata:
+          labels:
+            enabled-service: ${iamEnable.metadata.name}
+          name: ${schema.spec.name}-eventarc
+        spec:
+          memberFrom:
+            serviceAccountRef:
+              name: ${iamsa.metadata.name}
+          role: roles/eventarc.admin
+          resourceRef:
+            kind: Project
+            external: ${schema.spec.project}
+    - id: iampmWorkflow
+      template:
+        apiVersion: iam.cnrm.cloud.google.com/v1beta1
+        kind: IAMPolicyMember
+        metadata:
+          labels:
+            enabled-service: ${iamEnable.metadata.name}
+          name: ${schema.spec.name}-workflow
+        spec:
+          memberFrom:
+            serviceAccountRef:
+              name: ${iamsa.metadata.name}
+          role: roles/workflows.admin
+          resourceRef:
+            kind: Project
+            external: ${schema.spec.project}
+    - id: topic
+      template:
+        apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+        kind: PubSubTopic
+        metadata:
+          labels:
+            enabled-service: ${pubsubEnable.metadata.name}
+          name: ${schema.spec.name}-gcs-finalizer-topic
+    - id: bucket
+      template:
+        apiVersion: storage.cnrm.cloud.google.com/v1beta1
+        kind: StorageBucket
+        metadata:
+          labels:
+            enabled-service: ${storageEnable.metadata.name}
+          name: ${schema.spec.name}-${schema.spec.project}
+        spec:
+          uniformBucketLevelAccess: true
+    - id: eventTrigger
+      template:
+        apiVersion: eventarc.cnrm.cloud.google.com/v1beta1
+        kind: EventarcTrigger
+        metadata:
+          labels:
+            enabled-service: ${eventarcEnable.metadata.name}
+          name: ${schema.spec.name}-gcsfinalizer
+        spec:
+          destination:
+            workflowRef:
+              external: "projects/${schema.spec.project}/locations/${schema.spec.location}/workflows/${schema.spec.workflowName}"
+          location: ${schema.spec.location}
           serviceAccountRef:
             name: ${iamsa.metadata.name}
-        role: roles/eventarc.admin
-        resourceRef:
-          kind: Project
-          external: ${schema.spec.project}
-  - id: iampmWorkflow
-    template:
-      apiVersion: iam.cnrm.cloud.google.com/v1beta1
-      kind: IAMPolicyMember
-      metadata:
-        labels:
-          enabled-service: ${iamEnable.metadata.name}
-        name: ${schema.spec.name}-workflow
-      spec:
-        memberFrom:
-          serviceAccountRef:
-            name: ${iamsa.metadata.name}
-        role: roles/workflows.admin
-        resourceRef:
-          kind: Project
-          external: ${schema.spec.project}
-  - id: topic
-    template:
-      apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
-      kind: PubSubTopic
-      metadata:
-        labels:
-          enabled-service: ${pubsubEnable.metadata.name}
-        name: ${schema.spec.name}-gcs-finalizer-topic
-  - id: bucket
-    template:
-      apiVersion: storage.cnrm.cloud.google.com/v1beta1
-      kind: StorageBucket
-      metadata:
-        labels:
-          enabled-service: ${storageEnable.metadata.name}
-        name: ${schema.spec.name}-${schema.spec.project}
-      spec:
-        uniformBucketLevelAccess: true
-  - id: eventTrigger
-    template:
-      apiVersion: eventarc.cnrm.cloud.google.com/v1beta1
-      kind: EventarcTrigger
-      metadata:
-        labels:
-          enabled-service: ${eventarcEnable.metadata.name}
-        name: ${schema.spec.name}-gcsfinalizer
-      spec:
-        destination:
-          workflowRef:
-            external: "projects/${schema.spec.project}/locations/${schema.spec.location}/workflows/${schema.spec.workflowName}"
-        location: ${schema.spec.location}
-        serviceAccountRef:
-          name: ${iamsa.metadata.name}
-        transport:
-          pubsub:
-            topicRef:
-              name: ${topic.metadata.name}
-              namespace: config-connector
-        matchingCriteria:
-        - attribute: "type"
-          value: "google.cloud.pubsub.topic.v1.messagePublished"
-        projectRef:
-          external: "projects/${schema.spec.project}"
-  - id: storageNotification
-    template:
-      apiVersion: storage.cnrm.cloud.google.com/v1beta1
-      kind: StorageNotification
-      metadata:
-        name: ${schema.spec.name}-gcs
-      spec:
-        bucketRef:
-          name: ${bucket.metadata.name}
-        topicRef:
-          name: ${topic.metadata.name}
-        eventTypes:
-        - "OBJECT_FINALIZE"
-        payloadFormat: JSON_API_V1
+          transport:
+            pubsub:
+              topicRef:
+                name: ${topic.metadata.name}
+                namespace: config-connector
+          matchingCriteria:
+            - attribute: "type"
+              value: "google.cloud.pubsub.topic.v1.messagePublished"
+          projectRef:
+            external: "projects/${schema.spec.project}"
+    - id: storageNotification
+      template:
+        apiVersion: storage.cnrm.cloud.google.com/v1beta1
+        kind: StorageNotification
+        metadata:
+          name: ${schema.spec.name}-gcs
+        spec:
+          bucketRef:
+            name: ${bucket.metadata.name}
+          topicRef:
+            name: ${topic.metadata.name}
+          eventTypes:
+            - "OBJECT_FINALIZE"
+          payloadFormat: JSON_API_V1

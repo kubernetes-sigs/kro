@@ -92,14 +92,62 @@ func TestValidateConditionExpressions(t *testing.T) {
 			},
 		},
 		{
-			name: "self-reference rejected",
+			name: "cross-reference between entries is allowed",
 			exprs: []string{
 				`runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: '', message: ''})`,
 				`runtime.newCondition({type: 'Ready',
 					status: runtime.condition(schema, 'PrimaryReady').status,
 					reason: '', message: ''})`,
 			},
-			wantErrs: []string{"custom conditions cannot reference each other", `"PrimaryReady"`},
+		},
+		{
+			name: "an entry reading a type it declares itself is rejected",
+			exprs: []string{
+				`runtime.newCondition({type: 'Loop',
+					status: runtime.condition(schema, 'Loop').status,
+					reason: '', message: ''})`,
+			},
+			wantErrs: []string{"cannot depend on a condition type it may itself declare", `"Loop"`},
+		},
+		{
+			name: "reference cycle between two entries is rejected",
+			exprs: []string{
+				`runtime.newCondition({type: 'A',
+					status: runtime.condition(schema, 'B').status, reason: '', message: ''})`,
+				`runtime.newCondition({type: 'B',
+					status: runtime.condition(schema, 'A').status, reason: '', message: ''})`,
+			},
+			wantErrs: []string{"reference cycle", "entry 0 (A)", "entry 1 (B)"},
+		},
+		{
+			name: "a read matched by a dynamic type pattern is allowed",
+			exprs: []string{
+				`schema.spec.servers.map(s,
+					runtime.newCondition({type: 'Shard-' + s.name, status: 'True', reason: '', message: ''}))`,
+				`runtime.newCondition({type: 'Summary',
+					status: runtime.condition(schema, 'Shard-web').status, reason: '', message: ''})`,
+			},
+		},
+		{
+			name: "type expression with too many alternatives is rejected",
+			exprs: []string{
+				`runtime.newCondition({type:
+					(schema.spec.a ? 'a0' : 'b0') + (schema.spec.b ? 'a1' : 'b1') +
+					(schema.spec.c ? 'a2' : 'b2') + (schema.spec.d ? 'a3' : 'b3') +
+					(schema.spec.e ? 'a4' : 'b4') + (schema.spec.f ? 'a5' : 'b5'),
+					status: 'True', reason: '', message: ''})`,
+			},
+			wantErrs: []string{"more than 32 possible values", "split it across separate conditions entries"},
+		},
+		{
+			name: "duplicate type across ternary branches of different entries is rejected",
+			exprs: []string{
+				`schema.spec.p
+					? runtime.newCondition({type: 'Primary', status: 'True', reason: '', message: ''})
+					: runtime.newCondition({type: 'Replica', status: 'True', reason: '', message: ''})`,
+				`runtime.newCondition({type: 'Primary', status: 'False', reason: '', message: ''})`,
+			},
+			wantErrs: []string{`condition type "Primary" is declared by more than one conditions entry`},
 		},
 		{
 			name: "invalid literal status rejected",
@@ -139,11 +187,41 @@ func TestValidateConditionExpressions(t *testing.T) {
 			},
 			wantErrs: []string{"unknown condition type", `"ResourcesRaedy"`},
 		},
+		{
+			name: "literal type held to the Kubernetes condition-type format",
+			exprs: []string{
+				`runtime.newCondition({type: 'Ready Set', status: 'True', reason: '', message: ''})`,
+			},
+			wantErrs: []string{"is not a valid condition type", `"Ready Set"`},
+		},
+		{
+			name: "invalid type in a ternary branch is rejected",
+			exprs: []string{
+				`runtime.newCondition({type: schema.spec.ha ? 'Primary' : 'Bad|Name',
+					status: 'True', reason: '', message: ''})`,
+			},
+			wantErrs: []string{"is not a valid condition type", `"Bad|Name"`},
+		},
+		{
+			name: "dotted and path-prefixed type names are accepted",
+			exprs: []string{
+				`runtime.newCondition({type: 'Ready.v2', status: 'True', reason: '', message: ''})`,
+				`runtime.newCondition({type: 'app.kubernetes.io/Ready', status: 'True', reason: '', message: ''})`,
+				`runtime.newCondition({type: 'acme.io/db-ready', status: 'True', reason: '', message: ''})`,
+			},
+		},
+		{
+			name: "computed type names are not format-checked",
+			exprs: []string{
+				`resource.items.map(i, runtime.newCondition({type: 'Shard-' + i.name,
+					status: 'True', reason: '', message: ''}))`,
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateConditionExpressions(env, tt.exprs)
+			_, err := validateAndOrderConditions(env, tt.exprs)
 			if len(tt.wantErrs) == 0 {
 				assert.NoError(t, err)
 				return
@@ -151,6 +229,70 @@ func TestValidateConditionExpressions(t *testing.T) {
 			require.Error(t, err)
 			for _, want := range tt.wantErrs {
 				assert.Contains(t, err.Error(), want)
+			}
+		})
+	}
+}
+
+func TestDescribeCycleEntriesAlwaysHavePatterns(t *testing.T) {
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(
+		[]string{"shards", SchemaVarName, library.RuntimeVarName},
+	))
+	require.NoError(t, err)
+
+	link := func(typ, dep string) string {
+		return `runtime.newCondition({type: ` + typ +
+			`, status: runtime.condition(schema, '` + dep + `').status, reason: '', message: ''})`
+	}
+
+	tests := []struct {
+		name  string
+		exprs []string
+	}{
+		{
+			name:  "two entries, exact types",
+			exprs: []string{link(`'A'`, "B"), link(`'B'`, "A")},
+		},
+		{
+			name:  "three entries",
+			exprs: []string{link(`'A'`, "C"), link(`'B'`, "A"), link(`'C'`, "B")},
+		},
+		{
+			name:  "four entries",
+			exprs: []string{link(`'A'`, "D"), link(`'B'`, "A"), link(`'C'`, "B"), link(`'D'`, "C")},
+		},
+		{
+			name: "fan-out entry in the cycle",
+			exprs: []string{
+				`shards.map(s, ` + link(`'Shard-' + s.metadata.name`, "Rollup") + `)`,
+				link(`'Rollup'`, "Shard-web"),
+			},
+		},
+		{
+			name: "ternary entry in the cycle",
+			exprs: []string{
+				`schema.spec.ha ? ` + link(`'Primary'`, "Rollup") + ` : ` + link(`'Standalone'`, "Rollup"),
+				link(`'Rollup'`, "Primary"),
+			},
+		},
+		{
+			name: "entries outside the cycle do not appear in it",
+			exprs: []string{
+				link(`'A'`, "B"),
+				link(`'B'`, "A"),
+				`runtime.newCondition({type: 'Bystander', status: 'True', reason: '', message: ''})`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for range 50 {
+				_, err := validateAndOrderConditions(env, tt.exprs)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "reference cycle")
+				assert.NotContains(t, err.Error(), "()",
+					"a cycle segment rendered with no pattern name: %s", err)
 			}
 		})
 	}

@@ -48,12 +48,20 @@ func compileConditionExpr(t *testing.T, expr string) *krocel.Expression {
 }
 
 func graphWithConditions(conditions []*krocel.Expression) *graph.Graph {
+	entries := make([]graph.ConditionEntry, len(conditions))
+	for i, expr := range conditions {
+		entries[i] = graph.ConditionEntry{Expr: expr}
+	}
+	return graphWithConditionEntries(entries)
+}
+
+func graphWithConditionEntries(entries []graph.ConditionEntry) *graph.Graph {
 	return &graph.Graph{
 		TopologicalOrder: []string{},
 		Nodes:            map[string]*graph.Node{},
 		Instance: &graph.Node{
 			Meta:       graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance},
-			Conditions: conditions,
+			Conditions: entries,
 		},
 	}
 }
@@ -387,4 +395,129 @@ func TestEvaluateConditions_FatalErrorInOneExpressionSkippedNotAborted(t *testin
 	require.Len(t, conds, 1)
 	assert.Equal(t, "Good", conds[0].ConditionType,
 		"the well-formed condition must still surface even when a sibling expression fails")
+}
+
+func entryWithRank(expr *krocel.Expression, rank int, deps ...graph.ConditionDependency) graph.ConditionEntry {
+	return graph.ConditionEntry{Expr: expr, EvalRank: rank, DependsOn: deps}
+}
+
+func dependsOn(typ string, declaredBy ...int) graph.ConditionDependency {
+	return graph.ConditionDependency{Type: typ, DeclaredBy: declaredBy}
+}
+
+func TestEvaluateConditions_CrossReferenceReadsThisReconcile(t *testing.T) {
+	summary := compileConditionExpr(t, `runtime.newCondition({
+		type: 'Summary', status: runtime.condition(schema, 'ShardReady').status,
+		reason: '', message: ''})`)
+	shardReady := compileConditionExpr(t, `runtime.newCondition({
+		type: 'ShardReady', status: 'True', reason: '', message: ''})`)
+
+	entries := []graph.ConditionEntry{
+		entryWithRank(summary, 1, dependsOn("ShardReady", 1)),
+		entryWithRank(shardReady, 0),
+	}
+	rt, err := FromGraph(graphWithConditionEntries(entries), testInstance("demo"), graph.RGDConfig{})
+	require.NoError(t, err)
+
+	conds, incomplete, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	require.NoError(t, err)
+	assert.False(t, incomplete)
+	require.Len(t, conds, 2)
+
+	assert.Equal(t, "Summary", conds[0].ConditionType)
+	assert.Equal(t, "ShardReady", conds[1].ConditionType)
+	assert.Equal(t, "True", conds[0].Status,
+		"Summary must observe the ShardReady value published this reconcile")
+}
+
+func TestEvaluateConditions_EmissionOrderIndependentOfEvalRank(t *testing.T) {
+	mk := func() []*krocel.Expression {
+		return []*krocel.Expression{
+			compileConditionExpr(t, `runtime.newCondition({type: 'A', status: 'True', reason: '', message: ''})`),
+			compileConditionExpr(t, `runtime.newCondition({type: 'B', status: 'True', reason: '', message: ''})`),
+			compileConditionExpr(t, `runtime.newCondition({type: 'C', status: 'True', reason: '', message: ''})`),
+		}
+	}
+
+	for _, ranks := range [][]int{{0, 1, 2}, {2, 1, 0}, {1, 2, 0}} {
+		exprs := mk()
+		entries := make([]graph.ConditionEntry, len(exprs))
+		for i, e := range exprs {
+			entries[i] = entryWithRank(e, ranks[i])
+		}
+		rt, err := FromGraph(graphWithConditionEntries(entries), testInstance("demo"), graph.RGDConfig{})
+		require.NoError(t, err)
+
+		conds, _, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+		require.NoError(t, err)
+		require.Len(t, conds, 3)
+
+		got := []string{conds[0].ConditionType, conds[1].ConditionType, conds[2].ConditionType}
+		assert.Equal(t, []string{"A", "B", "C"}, got,
+			"ranks %v must not change wire order", ranks)
+	}
+}
+
+func TestEvaluateConditions_FailedDependencyPropagates(t *testing.T) {
+	a := compileConditionExpr(t, `runtime.newCondition({
+		type: 'A', status: string(schema.spec.missing.deep), reason: '', message: ''})`)
+	b := compileConditionExpr(t, `runtime.newCondition({
+		type: 'B', status: runtime.condition(schema, 'A').status == 'True' ? 'True' : 'False',
+		reason: '', message: ''})`)
+	c := compileConditionExpr(t, `runtime.newCondition({
+		type: 'C', status: runtime.condition(schema, 'B').status == 'True' ? 'True' : 'False',
+		reason: '', message: ''})`)
+
+	entries := []graph.ConditionEntry{
+		entryWithRank(a, 0),
+		entryWithRank(b, 1, dependsOn("A", 0)),
+		entryWithRank(c, 2, dependsOn("B", 1)),
+	}
+	rt, err := FromGraph(graphWithConditionEntries(entries), testInstance("demo"), graph.RGDConfig{})
+	require.NoError(t, err)
+
+	conds, incomplete, _ := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	assert.True(t, incomplete, "a failed dependency must mark the result incomplete")
+	assert.Empty(t, conds, "B depends on failed A, and C on dropped B, so both drop transitively")
+}
+
+func TestEvaluateConditions_DuplicatedTypeBlocksDependent(t *testing.T) {
+	dup1 := compileConditionExpr(t, `runtime.newCondition({type: 'X', status: 'True', reason: '', message: ''})`)
+	dup2 := compileConditionExpr(t, `runtime.newCondition({type: 'X', status: 'False', reason: '', message: ''})`)
+	dependsOnX := compileConditionExpr(t, `runtime.newCondition({
+		type: 'DependsOnX', status: runtime.condition(schema, 'X').status, reason: '', message: ''})`)
+
+	entries := []graph.ConditionEntry{
+		entryWithRank(dup1, 0),
+		entryWithRank(dup2, 1),
+		entryWithRank(dependsOnX, 2, dependsOn("X", 0, 1)),
+	}
+	rt, err := FromGraph(graphWithConditionEntries(entries), testInstance("demo"), graph.RGDConfig{})
+	require.NoError(t, err)
+
+	conds, incomplete, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	require.Error(t, err, "a duplicate type is a degraded result")
+	assert.ErrorIs(t, err, ErrConditionEvaluationDegraded)
+	assert.True(t, incomplete)
+	assert.Empty(t, conds, "both copies of X and the entry depending on X are dropped")
+}
+
+func TestEvaluateConditions_PendingDependencyDropsDependentNotBlanks(t *testing.T) {
+	pending := compileConditionExpr(t, `runtime.newCondition({
+		type: 'Pending', status: schema.spec.missing.value == 'X' ? 'True' : 'False',
+		reason: '', message: ''})`)
+	dependsOnPending := compileConditionExpr(t, `runtime.newCondition({
+		type: 'DependsOnPending', status: runtime.condition(schema, 'Pending').status, reason: '', message: ''})`)
+
+	entries := []graph.ConditionEntry{
+		entryWithRank(pending, 0),
+		entryWithRank(dependsOnPending, 1, dependsOn("Pending", 0)),
+	}
+	rt, err := FromGraph(graphWithConditionEntries(entries), testInstance("demo"), graph.RGDConfig{})
+	require.NoError(t, err)
+
+	conds, incomplete, err := rt.Instance().EvaluateConditions(logr.Discard(), nil)
+	require.NoError(t, err, "data-pending is not a degraded error")
+	assert.True(t, incomplete)
+	assert.Empty(t, conds, "neither the pending entry nor the entry depending on it is emitted")
 }

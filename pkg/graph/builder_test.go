@@ -4613,13 +4613,18 @@ func TestBuildConditionsHappyPath(t *testing.T) {
 	require.Len(t, got, 2)
 
 	for _, e := range got {
-		assert.NotNil(t, e.Program, "expression %q should have a compiled Program", e.Original)
+		assert.NotNil(t, e.Expr.Program, "expression %q should have a compiled Program", e.Expr.Original)
 	}
 
-	assert.Contains(t, got[0].References, "runtime")
-	assert.NotContains(t, got[0].References, "resource")
-	assert.Contains(t, got[1].References, "runtime")
-	assert.Contains(t, got[1].References, "resource")
+	assert.Contains(t, got[0].Expr.References, "runtime")
+	assert.NotContains(t, got[0].Expr.References, "resource")
+	assert.Contains(t, got[1].Expr.References, "runtime")
+	assert.Contains(t, got[1].Expr.References, "resource")
+
+	assert.Equal(t, 0, got[0].EvalRank)
+	assert.Equal(t, 1, got[1].EvalRank)
+	assert.Empty(t, got[0].DependsOn)
+	assert.Empty(t, got[1].DependsOn)
 }
 
 func TestBuildConditionsRejectsInvalid(t *testing.T) {
@@ -4656,17 +4661,51 @@ func TestBuildConditionsRejectsInvalid(t *testing.T) {
 	}
 }
 
-func TestBuildConditionsSelfReference(t *testing.T) {
+func TestBuildConditionsCrossReferenceOrdered(t *testing.T) {
 	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
 
 	exprs := []string{
-		`${runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: '', message: ''})}`,
 		`${runtime.newCondition({type: 'Ready', status: runtime.condition(schema, 'PrimaryReady').status, reason: '', message: ''})}`,
+		`${runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: '', message: ''})}`,
+	}
+
+	got, err := buildConditions(bc, exprs, inspector, inspectorEnv, []string{"resource"})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+
+	assert.Equal(t, 1, got[0].EvalRank, "Ready evaluates second")
+	assert.Equal(t, 0, got[1].EvalRank, "PrimaryReady evaluates first")
+	require.Len(t, got[0].DependsOn, 1)
+	assert.Equal(t, "PrimaryReady", got[0].DependsOn[0].Type)
+	assert.Equal(t, []int{1}, got[0].DependsOn[0].DeclaredBy, "PrimaryReady comes from entry 1")
+	assert.Empty(t, got[1].DependsOn)
+}
+
+func TestBuildConditionsSelfReadRejected(t *testing.T) {
+	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
+
+	exprs := []string{
+		`${runtime.newCondition({type: 'Loop', status: runtime.condition(schema, 'Loop').status, reason: '', message: ''})}`,
 	}
 
 	_, err := buildConditions(bc, exprs, inspector, inspectorEnv, []string{"resource"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "custom conditions cannot reference each other")
+	assert.Contains(t, err.Error(), "cannot depend on a condition type it may itself declare")
+}
+
+func TestBuildConditionsCycleRejected(t *testing.T) {
+	bc, inspectorEnv, inspector := newConditionsBuildContext(t)
+
+	exprs := []string{
+		`${runtime.newCondition({type: 'A', status: runtime.condition(schema, 'B').status, reason: '', message: ''})}`,
+		`${runtime.newCondition({type: 'B', status: runtime.condition(schema, 'A').status, reason: '', message: ''})}`,
+	}
+
+	_, err := buildConditions(bc, exprs, inspector, inspectorEnv, []string{"resource"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reference cycle")
+	assert.Contains(t, err.Error(), "entry 0 (A)")
+	assert.Contains(t, err.Error(), "entry 1 (B)")
 }
 
 func TestBuildInstanceNodeFoldsConditionDeps(t *testing.T) {

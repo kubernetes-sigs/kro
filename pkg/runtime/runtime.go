@@ -15,6 +15,8 @@
 package runtime
 
 import (
+	"cmp"
+	"slices"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -168,10 +170,20 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 	}
 
 	// Each condition Expression carries its own References, populated by the builder.
-	for _, expr := range instNode.Spec.Conditions {
-		state := getOrCreateExpr(expr, variable.ResourceVariableKindDynamic, expr.References)
+	for _, entry := range instNode.Spec.Conditions {
+		state := getOrCreateExpr(entry.Expr, variable.ResourceVariableKindDynamic, entry.Expr.References)
 		instNode.conditionExprs = append(instNode.conditionExprs, state)
 	}
+
+	// Sorting conditionEvalOrder leaves Spec.Conditions in declaration order.
+	// Evaluation follows the sorted indices, emission follows Spec.Conditions.
+	instNode.conditionEvalOrder = make([]int, len(instNode.conditionExprs))
+	for i := range instNode.conditionEvalOrder {
+		instNode.conditionEvalOrder[i] = i
+	}
+	slices.SortStableFunc(instNode.conditionEvalOrder, func(a, b int) int {
+		return cmp.Compare(instNode.Spec.Conditions[a].EvalRank, instNode.Spec.Conditions[b].EvalRank)
+	})
 
 	return rt, nil
 }

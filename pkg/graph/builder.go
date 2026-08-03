@@ -724,7 +724,7 @@ func buildInstanceNode(
 	namespaced bool,
 	statusVariables []variable.FieldDescriptor,
 	statusTemplate map[string]interface{},
-	conditions []*krocel.Expression,
+	conditionEntries []ConditionEntry,
 	inspector *ast.Inspector,
 ) (*Node, error) {
 	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(group, apiVersion, kind)
@@ -763,8 +763,8 @@ func buildInstanceNode(
 	// Fold condition dependencies into instanceDeps so the instance reconciles
 	// after the resources its conditions read. References were populated by
 	// buildConditions; schema and runtime are not resource dependencies.
-	for _, expr := range conditions {
-		for _, ref := range expr.References {
+	for _, entry := range conditionEntries {
+		for _, ref := range entry.Expr.References {
 			if ref == SchemaVarName || ref == library.RuntimeVarName {
 				continue
 			}
@@ -790,7 +790,7 @@ func buildInstanceNode(
 			},
 		},
 		Variables:  instanceStatusVariables,
-		Conditions: conditions,
+		Conditions: conditionEntries,
 	}
 
 	return instance, nil
@@ -951,31 +951,33 @@ func buildConditions(
 	inspector *ast.Inspector,
 	inspectorEnv *cel.Env,
 	nodeNames []string,
-) ([]*krocel.Expression, error) {
+) ([]ConditionEntry, error) {
 	if len(conditionExprStrings) == 0 {
 		return nil, nil
 	}
 
 	// Strip the ${...} wrappers; References and Program are filled in below.
-	conditions, err := parser.UnwrapExpressions(conditionExprStrings)
+	conditionExprs, err := parser.UnwrapExpressions(conditionExprStrings)
 	if err != nil {
 		return nil, fmt.Errorf("invalid conditions block: %w", err)
 	}
 
-	// Enforce the self-reference and literal-value rules. The structural
-	// rules for runtime.newCondition are handled by its parse-time macro.
-	stripped := make([]string, len(conditions))
-	for i, c := range conditions {
+	// Enforce the cross-reference, duplicate, and literal-value rules, and
+	// compute the evaluation order. The structural rules for
+	// runtime.newCondition are handled by its parse-time macro.
+	stripped := make([]string, len(conditionExprs))
+	for i, c := range conditionExprs {
 		stripped[i] = c.Original
 	}
-	if err := validateConditionExpressions(inspectorEnv, stripped); err != nil {
+	condEvalPlan, err := validateAndOrderConditions(inspectorEnv, stripped)
+	if err != nil {
 		return nil, err
 	}
 
 	// Record each expression's references (resources, schema, runtime) so the
 	// runtime keeps them in the eval activation.
-	allowedRefs := append(slices.Clone(nodeNames), SchemaVarName, library.RuntimeVarName)
-	for _, expr := range conditions {
+	allowedRefs := slices.Concat(nodeNames, []string{SchemaVarName, library.RuntimeVarName})
+	for _, expr := range conditionExprs {
 		result, err := inspectExpressionRestricted(inspector, expr.Original, allowedRefs)
 		if err != nil {
 			return nil, fmt.Errorf("condition %q: %w", expr.UserExpression(), err)
@@ -987,7 +989,7 @@ func buildConditions(
 		}
 	}
 
-	for _, expr := range conditions {
+	for _, expr := range conditionExprs {
 		checkedAST, err := bc.parseAndCheck(bc.env, expr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to type-check condition %q: %w", expr.UserExpression(), err)
@@ -1000,7 +1002,15 @@ func buildConditions(
 		}
 	}
 
-	return conditions, nil
+	conditionEntries := make([]ConditionEntry, len(conditionExprs))
+	for i, expr := range conditionExprs {
+		conditionEntries[i] = ConditionEntry{
+			Expr:      expr,
+			EvalRank:  condEvalPlan.Ranks[i],
+			DependsOn: condEvalPlan.DependsOn[i],
+		}
+	}
+	return conditionEntries, nil
 }
 
 // validateConditionOutputType verifies that a condition expression returns a

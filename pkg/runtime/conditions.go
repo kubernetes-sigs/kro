@@ -17,7 +17,8 @@ package runtime
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -64,66 +65,148 @@ func (n *Node) EvaluateConditions(logger logr.Logger, kroBuiltins []v1alpha1.Con
 	ctx := n.buildContext()
 	// The instance is not its own graph dependency, so buildContext provides
 	// neither schema nor runtime; bind them here.
-	ctx[graph.SchemaVarName] = n.schemaForConditions(kroBuiltins)
 	ctx[library.RuntimeVarName] = library.RuntimeSingleton
 
-	var out []library.Condition
+	// visible is what runtime.condition(schema, _) can see, growing as each entry
+	// publishes, so a later entry reads this reconcile's value. filterContext
+	// reads ctx[ref] at call time, so rebinding needs no recompilation.
+	visible := kroBuiltinsAsList(kroBuiltins)
+	ctx[graph.SchemaVarName] = n.schemaForConditions(visible)
+
+	results := make([][]library.Condition, len(n.conditionExprs))
+	noOutputEntries := make([]bool, len(n.conditionExprs))
+	duplicatedTypes := map[string]struct{}{}
+	publishedBy := map[string]int{}
 	var failures []string
-	for _, expr := range n.conditionExprs {
+
+	// Ordering is what makes the dependency check sound: by the time an entry runs,
+	// every entry that could declare what it depends on has been decided.
+	for _, i := range n.conditionEvalOrder {
+		entry := n.Spec.Conditions[i]
+		exprText := entry.Expr.UserExpression()
+
+		if reason, missing := missingDependency(entry.DependsOn, noOutputEntries, duplicatedTypes); missing {
+			logger.V(1).Info("skipping author condition: a condition it depends on is unavailable",
+				"expression", exprText, "reason", reason)
+			noOutputEntries[i] = true
+			incomplete = true
+			continue
+		}
+
+		expr := n.conditionExprs[i]
 		// Evaluate the Program directly: krocel.Expression.Eval converts to
 		// Go-native values, which cannot represent the typed Condition.
 		filteredCtx := filterContext(ctx, expr.Expression.References)
 		raw, _, evalErr := expr.Expression.Program.Eval(filteredCtx)
 		if evalErr != nil {
+			noOutputEntries[i] = true
 			if isCELDataPending(evalErr) {
 				incomplete = true
 				continue
 			}
 			logger.Error(evalErr, "skipping author condition expression with fatal evaluation error",
-				"expression", expr.Expression.UserExpression())
-			failures = append(failures, fmt.Sprintf("%q: %v", expr.Expression.UserExpression(), evalErr))
+				"expression", exprText)
+			failures = append(failures, fmt.Sprintf("%q: %v", exprText, evalErr))
 			continue
 		}
 
-		conds, flattenErr := flattenCelConditionValue(raw, expr.Expression.UserExpression())
+		conds, flattenErr := flattenCelConditionValue(raw, exprText)
 		if flattenErr != nil {
+			noOutputEntries[i] = true
 			logger.Error(flattenErr, "skipping author condition expression with malformed result",
-				"expression", expr.Expression.UserExpression())
-			failures = append(failures, fmt.Sprintf("%q: %v", expr.Expression.UserExpression(), flattenErr))
+				"expression", exprText)
+			failures = append(failures, fmt.Sprintf("%q: %v", exprText, flattenErr))
 			continue
 		}
-		out = append(out, conds...)
+		results[i] = conds
+
+		// Publish immediately so the next entry reads these values, and withdraw a
+		// duplicated type at the moment of collision, before a later entry can read
+		// an ambiguous value.
+		changed := false
+		for _, c := range conds {
+			if _, dup := publishedBy[c.ConditionType]; dup {
+				duplicatedTypes[c.ConditionType] = struct{}{}
+				visible = removeConditionEntry(visible, c.ConditionType)
+				changed = true
+				continue
+			}
+			publishedBy[c.ConditionType] = i
+			// An override of a built-in type must not shadow it for lookups. The
+			// override still reaches the wire via results[i].
+			if _, builtin := v1alpha1.KROBuiltinConditionTypes[c.ConditionType]; builtin {
+				continue
+			}
+			visible = upsertConditionEntry(visible, c)
+			changed = true
+		}
+		if changed {
+			ctx[graph.SchemaVarName] = n.schemaForConditions(visible)
+		}
 	}
 
-	out, dups := dedupConditionTypes(out)
-	if len(dups) > 0 {
+	// Emit in declaration order. A duplicated type is dropped even from the entry
+	// that published it; dropping rather than blanking lets the caller keep the
+	// last good value.
+	for i := range results {
+		for _, c := range results[i] {
+			if _, bad := duplicatedTypes[c.ConditionType]; bad {
+				continue
+			}
+			conditions = append(conditions, c)
+		}
+	}
+
+	if len(duplicatedTypes) > 0 {
+		dups := slices.Sorted(maps.Keys(duplicatedTypes))
 		logger.Info("dropping author conditions with duplicate types", "types", dups)
 		failures = append(failures, fmt.Sprintf("duplicate condition type(s) %v dropped", dups))
 	}
-
 	if len(failures) > 0 {
-		return out, true, fmt.Errorf("%w: %s", ErrConditionEvaluationDegraded, strings.Join(failures, "; "))
+		return conditions, true, fmt.Errorf("%w: %s", ErrConditionEvaluationDegraded, strings.Join(failures, "; "))
 	}
-	return out, incomplete, nil
+	return conditions, incomplete, nil
+}
+
+// missingDependency reports why a dependency is missing. A type is
+// missing if a collision withdrew it or if an entry that could
+// declare it produced no output. A built-in has no declaring entry
+// and is never withdrawn, so it is never missing.
+func missingDependency(
+	dependsOn []graph.ConditionDependency,
+	noOutputEntries []bool,
+	duplicatedTypes map[string]struct{},
+) (string, bool) {
+	for _, d := range dependsOn {
+		if _, bad := duplicatedTypes[d.Type]; bad {
+			return fmt.Sprintf("condition type %q was withdrawn", d.Type), true
+		}
+		for _, e := range d.DeclaredBy {
+			if noOutputEntries[e] {
+				return fmt.Sprintf("condition type %q comes from entry %d, which did not run", d.Type, e), true
+			}
+		}
+	}
+	return "", false
 }
 
 // schemaForConditions builds the value bound to the `schema` CEL variable
 // when evaluating author conditions: the instance's spec/metadata (status
 // stripped, matching every other CEL eval path) plus a synthesized
-// status.conditions[] holding kro's built-in conditions for
+// status.conditions[] holding the conditions visible so far for
 // runtime.condition(schema, _) lookups.
-func (n *Node) schemaForConditions(kroBuiltins []v1alpha1.Condition) any {
+func (n *Node) schemaForConditions(entries []any) any {
 	if len(n.observed) == 0 {
 		return map[string]any{
 			"status": map[string]any{
-				"conditions": kroBuiltinsAsList(kroBuiltins),
+				"conditions": entries,
 			},
 		}
 	}
 
 	obj := withStatusOmitted(n.observed[0].Object)
 	obj["status"] = map[string]any{
-		"conditions": kroBuiltinsAsList(kroBuiltins),
+		"conditions": entries,
 	}
 
 	if n.resourceSchema == nil {
@@ -156,33 +239,39 @@ func kroBuiltinsAsList(conds []v1alpha1.Condition) []any {
 	return out
 }
 
-// dedupConditionTypes removes every occurrence of any condition type that
-// appears more than once, returning the kept conditions and the sorted list
-// of dropped types. Uniqueness is enforced at runtime because collection
-// expansion can produce types that are not known until evaluation.
-func dedupConditionTypes(conds []library.Condition) ([]library.Condition, []string) {
-	counts := make(map[string]int, len(conds))
-	for _, c := range conds {
-		counts[c.ConditionType]++
+// conditionEntry renders a condition in the plain-map shape conditionFromMap
+// expects.
+func conditionEntry(c library.Condition) map[string]any {
+	return map[string]any{
+		"type":    c.ConditionType,
+		"status":  c.Status,
+		"reason":  c.Reason,
+		"message": c.Message,
 	}
-	kept := make([]library.Condition, 0, len(conds))
-	dupSet := make(map[string]struct{})
-	for _, c := range conds {
-		if counts[c.ConditionType] > 1 {
-			dupSet[c.ConditionType] = struct{}{}
+}
+
+// upsertConditionEntry replaces the entry of c's type if present, else appends.
+func upsertConditionEntry(entries []any, c library.Condition) []any {
+	for i, e := range entries {
+		if m, ok := e.(map[string]any); ok && m["type"] == c.ConditionType {
+			entries[i] = conditionEntry(c)
+			return entries
+		}
+	}
+	return append(entries, conditionEntry(c))
+}
+
+// removeConditionEntry drops the given type, so a reader of a duplicated type sees
+// the empty condition rather than an ambiguous value.
+func removeConditionEntry(entries []any, typ string) []any {
+	out := make([]any, 0, len(entries))
+	for _, e := range entries {
+		if m, ok := e.(map[string]any); ok && m["type"] == typ {
 			continue
 		}
-		kept = append(kept, c)
+		out = append(out, e)
 	}
-	if len(dupSet) == 0 {
-		return kept, nil
-	}
-	dups := make([]string, 0, len(dupSet))
-	for t := range dupSet {
-		dups = append(dups, t)
-	}
-	sort.Strings(dups)
-	return kept, dups
+	return out
 }
 
 // flattenCelConditionValue extracts Condition values from a CEL result: a

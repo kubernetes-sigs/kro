@@ -172,12 +172,12 @@ func TestUpdateStatusMirrorsPersistedConditionsOntoInstance(t *testing.T) {
 		Template: &unstructured.Unstructured{
 			Object: map[string]interface{}{"status": map[string]interface{}{}},
 		},
-		Conditions: []*krocel.Expression{
+		Conditions: conditionEntries(
 			mustCompileControllerExpr(t,
 				`runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: 'Healthy', message: 'all good'})`,
 				library.RuntimeVarName,
 			),
-		},
+		),
 	}
 
 	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraphWithInstance(instanceNode))
@@ -314,6 +314,14 @@ func TestStampAuthorConditionsEmptyReasonAndMessage(t *testing.T) {
 	assert.Nil(t, stamped[0].Message, "empty message should serialize as nil pointer")
 }
 
+func conditionEntries(exprs ...*krocel.Expression) []graph.ConditionEntry {
+	entries := make([]graph.ConditionEntry, len(exprs))
+	for i, e := range exprs {
+		entries[i] = graph.ConditionEntry{Expr: e}
+	}
+	return entries
+}
+
 // authorConditionsInstanceNode returns an instance node declaring the given
 // author condition expressions.
 func authorConditionsInstanceNode(t *testing.T, exprs ...*krocel.Expression) *graph.Node {
@@ -328,7 +336,7 @@ func authorConditionsInstanceNode(t *testing.T, exprs ...*krocel.Expression) *gr
 		Template: &unstructured.Unstructured{
 			Object: map[string]interface{}{"status": map[string]interface{}{}},
 		},
-		Conditions: exprs,
+		Conditions: conditionEntries(exprs...),
 	}
 }
 

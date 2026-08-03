@@ -50,9 +50,14 @@ type Node struct {
 	templateVars     []*variable.ResourceField
 
 	// conditionExprs are the per-reconcile evaluation states for the
-	// instance's author-defined `conditions:` expressions. Only the
-	// instance node populates this; resource nodes leave it nil.
+	// instance's author-defined `conditions:` expressions, in declaration
+	// order (index-aligned with Spec.Conditions). Only the instance node
+	// populates this; resource nodes leave it nil.
 	conditionExprs []*expressionEvaluationState
+
+	// conditionEvalOrder lists declaration indices in evaluation order, so an
+	// entry reading another's output runs after it.
+	conditionEvalOrder []int
 
 	rgdConfig graph.RGDConfig
 

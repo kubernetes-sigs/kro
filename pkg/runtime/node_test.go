@@ -2849,7 +2849,7 @@ func TestNode_DeleteTargets(t *testing.T) {
 			},
 		},
 		{
-			name: "collection deletes only observed objects that still match desired identities in desired order",
+			name: "collection deletes all observed objects during instance deletion",
 			node: func() *Node {
 				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
 					withObserved(map[string]any{
@@ -2881,8 +2881,9 @@ func TestNode_DeleteTargets(t *testing.T) {
 			},
 			validate: func(t *testing.T, _ *Node, result []*unstructured.Unstructured, err error) {
 				require.NoError(t, err)
-				require.Len(t, result, 2)
-				assert.Equal(t, []string{"east", "west"}, []string{result[0].GetName(), result[1].GetName()})
+				// Returns ALL observed items, including orphans (forEach expansion is skipped)
+				require.Len(t, result, 3)
+				assert.Equal(t, []string{"west", "orphan", "east"}, []string{result[0].GetName(), result[1].GetName(), result[2].GetName()})
 			},
 		},
 		{
@@ -2907,7 +2908,7 @@ func TestNode_DeleteTargets(t *testing.T) {
 			expectPanic: true,
 		},
 		{
-			name: "identity resolution errors are surfaced",
+			name: "collections skip identity resolution during deletion",
 			node: func() *Node {
 				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
 					withObserved(map[string]any{"spec": map[string]any{}}).
@@ -2922,6 +2923,9 @@ func TestNode_DeleteTargets(t *testing.T) {
 					}).
 					withTemplateVar("metadata.name", "region").
 					withTemplateExpr("region", variable.ResourceVariableKindIteration).
+					withObservedUnstructured(
+						newUnstructured("v1", "ConfigMap", "tenant-a", "item1"),
+					).
 					build()
 				node.Spec.ForEach = []graph.ForEachDimension{
 					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
@@ -2929,9 +2933,11 @@ func TestNode_DeleteTargets(t *testing.T) {
 				node.forEachExprs[0].Expression.References = []string{"schema"}
 				return node
 			},
-			validate: func(t *testing.T, _ *Node, _ []*unstructured.Unstructured, err error) {
-				require.Error(t, err)
-				assert.ErrorIs(t, err, ErrDataPending)
+			validate: func(t *testing.T, _ *Node, result []*unstructured.Unstructured, err error) {
+				// Collections skip GetDesiredIdentity, so no error even though forEach would fail
+				require.NoError(t, err)
+				require.Len(t, result, 1)
+				assert.Equal(t, "item1", result[0].GetName())
 			},
 		},
 		{

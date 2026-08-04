@@ -49,8 +49,8 @@ type buildContext struct {
 	// inference, then compile reuses the cached AST.
 	checkedASTs map[checkedASTKey]*cel.Ast
 
-	// (parent env, varName) → extended env. Deduplicates readyWhen on
-	// collection nodes that share the same schema.
+	// (parent env, varName, schema pointer) → extended env. Deduplicates
+	// readyWhen on collection nodes that share the same schema.
 	extendedEnvs map[extendedEnvKey]*cel.Env
 }
 
@@ -62,6 +62,7 @@ type checkedASTKey struct {
 type extendedEnvKey struct {
 	parent  *cel.Env
 	varName string
+	schema  *spec.Schema
 }
 
 // schemaDeclType returns a DeclType for the given schema, memoized by pointer.
@@ -124,7 +125,7 @@ func (bc *buildContext) compile(env *cel.Env, expr *krocel.Expression) (*cel.Ast
 // single typed variable declaration derived from the given schema. Uses
 // schemaDeclType for memoized schema→DeclType conversion.
 func (bc *buildContext) extendWithTypedVar(parent *cel.Env, varName string, s *spec.Schema) (*cel.Env, error) {
-	key := extendedEnvKey{parent: parent, varName: varName}
+	key := extendedEnvKey{parent: parent, varName: varName, schema: s}
 	if env, ok := bc.extendedEnvs[key]; ok {
 		return env, nil
 	}

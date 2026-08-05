@@ -125,6 +125,34 @@ func (c *Condition) GetStatus() metav1.ConditionStatus {
 	return c.Status
 }
 
+// MarshalLog implements logr.Marshaler so structured loggers render a
+// Condition with its optional pointer fields dereferenced. Without this,
+// loggers fall back to reflection over Reason, Message, and
+// LastTransitionTime, which are pointers. Unset optionals are omitted.
+//
+// The receiver is a value, not a pointer, because conditions are logged as
+// slice elements: a pointer receiver would leave Condition itself without
+// the method and silently fall back to reflection.
+func (c Condition) MarshalLog() any {
+	m := map[string]any{
+		"type":   string(c.Type),
+		"status": string(c.Status),
+	}
+	if c.Reason != nil {
+		m["reason"] = *c.Reason
+	}
+	if c.Message != nil {
+		m["message"] = *c.Message
+	}
+	if c.LastTransitionTime != nil {
+		m["lastTransitionTime"] = c.LastTransitionTime
+	}
+	if c.ObservedGeneration != 0 {
+		m["observedGeneration"] = c.ObservedGeneration
+	}
+	return m
+}
+
 // Conditions is a list of conditions.
 type Conditions []Condition
 

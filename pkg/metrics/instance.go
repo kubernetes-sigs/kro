@@ -147,20 +147,19 @@ func EmitConditionMetrics(
 			lastTransition,
 		)
 
-		oldCond, existed := initialByType[cond.Type]
-		if !existed || oldCond.Status != cond.Status {
-			oldStatus := "none"
+		initialCondition, existed := initialByType[cond.Type]
+		if !existed || initialCondition.Status != cond.Status {
+			// nil rather than a zero-value Condition when the type is
+			// appearing for the first time and so has no prior state.
+			var oldCondition any
 			if existed {
-				oldStatus = string(oldCond.Status)
+				oldCondition = initialCondition
 			}
-			log.V(2).Info("condition transitioned",
+			log.Info("condition transitioned",
 				"gvr", gvrKey,
-				"namespace", ns,
-				"name", name,
-				"condition_type", string(cond.Type),
-				"old_status", oldStatus,
-				"new_status", string(cond.Status),
-				"reason", reason,
+				"conditionType", string(cond.Type),
+				"oldCondition", oldCondition,
+				"newCondition", cond,
 			)
 		}
 	}

@@ -1,0 +1,42 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    kubernetes.io/description: |
+      This ClusterRole grants read/write access to kro resources by aggregating into the admin and edit ClusterRoles.
+  name: {{ include "kro.fullname" . }}-edit
+  labels:
+    {{- include "kro.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+- apiGroups:
+  - kro.run
+  resources: ["*"]
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    kubernetes.io/description: |
+      This ClusterRole grants read access to kro resources by aggregating into the view, edit, and admin ClusterRoles.
+  name: {{ include "kro.fullname" . }}-view
+  labels:
+    {{- include "kro.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+- apiGroups:
+  - kro.run
+  resources: ["*"]
+  verbs:
+  - get
+  - list
+  - watch

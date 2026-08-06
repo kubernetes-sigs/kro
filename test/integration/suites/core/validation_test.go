@@ -339,7 +339,7 @@ var _ = Describe("Validation", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
-		It("should reject an external collection with an invalid literal selector object", func(ctx SpecContext) {
+		It("should reject an external collection with a mis-shaped selector object", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-invalid-external-selector",
 				generator.WithSchema(
 					"TestInvalidExternalSelector", "v1alpha1",
@@ -351,17 +351,38 @@ var _ = Describe("Validation", func() {
 					Kind:       "ConfigMap",
 					Metadata: krov1alpha1.ExternalRefMetadata{
 						Selector: toRawExtension(map[string]interface{}{
-							"matchExpressions": []map[string]interface{}{{
-								"key":      "team",
-								"operator": "NotARealOperator",
-							}},
+							"matchLabels": "team=platform",
 						}),
 					},
 				}, nil, nil),
 			)
 
 			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-			expectRGDInactiveWithError(ctx, rgd, "invalid label selector")
+			expectRGDInactiveWithError(ctx, rgd, "expected object type for path metadata.selector.matchLabels")
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		It("should reject an external collection with an unknown selector field", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-unknown-external-selector-field",
+				generator.WithSchema(
+					"TestUnknownExternalSelectorField", "v1alpha1",
+					map[string]interface{}{},
+					nil,
+				),
+				generator.WithExternalRef("extconfigs", &krov1alpha1.ExternalRef{
+					APIVersion: "v1",
+					Kind:       "ConfigMap",
+					Metadata: krov1alpha1.ExternalRefMetadata{
+						Selector: toRawExtension(map[string]interface{}{
+							"matchLabels": map[string]interface{}{"team": "platform"},
+							"bogusField":  "value",
+						}),
+					},
+				}, nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			expectRGDInactiveWithError(ctx, rgd, "schema not found for field bogusField")
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 	})

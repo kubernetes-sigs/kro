@@ -1256,6 +1256,11 @@ func expectedTypeForField(bc *buildContext, descriptor *variable.FieldDescriptor
 // selectorFieldType returns the expected CEL type for well-known
 // LabelSelector fields under metadata.selector. Returns nil for paths
 // that are not part of the selector structure.
+//
+// These types are intentionally lenient (dyn-valued maps/lists) so that a
+// standalone expression like `selector: ${schema.spec.selector}` type-checks
+// against a loosely-typed user schema field. Structural validation of the
+// selector is handled by validateSelector in pkg/graph/validation.go.
 func selectorFieldType(path string) *cel.Type {
 	switch {
 	case path == "metadata.selector":

@@ -2281,6 +2281,111 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 	}
 }
 
+// TestGraphBuilder_ExternalCollectionSelectorCELTypes checks that a CEL
+// expression used in an external-collection selector is type-checked against
+// the LabelSelector shape at build time: the expression must resolve to a value
+// of the type the selector position expects (a map for the whole selector or
+// matchLabels, a string for a matchLabels value, a list for matchExpressions).
+// This is the "does the expression actually reference a LabelSelector object"
+// guarantee — a selector whose CEL resolves to the wrong type must be rejected
+// before the RGD is accepted, not fail at reconcile time.
+func TestGraphBuilder_ExternalCollectionSelectorCELTypes(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+
+	// externalCollectionRGD builds an RGD whose single resource is a ConfigMap
+	// external collection selected by the given selector, with the given schema
+	// spec field types available for the selector's CEL expressions to reference.
+	externalCollectionRGD := func(specTypes map[string]interface{}, selector interface{}) *krov1alpha1.ResourceGraphDefinition {
+		return generator.NewResourceGraphDefinition("test-selector-cel",
+			generator.WithSchema("Test", "v1alpha1", specTypes, nil),
+			generator.WithExternalRef("configs", &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: toRawExtension(t, selector),
+				},
+			}, nil, nil),
+		)
+	}
+
+	tests := []struct {
+		name      string
+		specTypes map[string]interface{}
+		selector  interface{}
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name:      "whole-selector CEL resolving to a map is valid",
+			specTypes: map[string]interface{}{"sel": "map[string]string"},
+			selector:  "${schema.spec.sel}",
+		},
+		{
+			name:      "whole-selector CEL resolving to a string is rejected",
+			specTypes: map[string]interface{}{"sel": "string"},
+			selector:  "${schema.spec.sel}",
+			wantErr:   true,
+			// selector position expects a map; a string does not reference a
+			// LabelSelector object.
+			errMsg: `at path "metadata.selector"`,
+		},
+		{
+			name:      "matchLabels CEL resolving to map[string]string is valid",
+			specTypes: map[string]interface{}{"labels": "map[string]string"},
+			selector:  map[string]interface{}{"matchLabels": "${schema.spec.labels}"},
+		},
+		{
+			name:      "matchLabels CEL resolving to a string is rejected",
+			specTypes: map[string]interface{}{"labels": "string"},
+			selector:  map[string]interface{}{"matchLabels": "${schema.spec.labels}"},
+			wantErr:   true,
+			errMsg:    `at path "metadata.selector.matchLabels"`,
+		},
+		{
+			name:      "matchLabels value CEL resolving to a string is valid",
+			specTypes: map[string]interface{}{"tier": "string"},
+			selector: map[string]interface{}{
+				"matchLabels": map[string]interface{}{"app": "${schema.spec.tier}"},
+			},
+		},
+		{
+			name:      "matchLabels value CEL resolving to an int is rejected",
+			specTypes: map[string]interface{}{"tier": "integer"},
+			selector: map[string]interface{}{
+				"matchLabels": map[string]interface{}{"app": "${schema.spec.tier}"},
+			},
+			wantErr: true,
+			errMsg:  `at path "metadata.selector.matchLabels.app"`,
+		},
+		{
+			name:      "matchExpressions CEL resolving to a string is rejected",
+			specTypes: map[string]interface{}{"exprs": "string"},
+			selector:  map[string]interface{}{"matchExpressions": "${schema.spec.exprs}"},
+			wantErr:   true,
+			errMsg:    `at path "metadata.selector.matchExpressions"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := externalCollectionRGD(tt.specTypes, tt.selector)
+			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "type mismatch")
+				assert.Contains(t, err.Error(), tt.errMsg)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestNewBuilder(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	fakeRESTMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))

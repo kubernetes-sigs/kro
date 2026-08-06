@@ -70,6 +70,14 @@ func (p *Parser) ParseResource(resource map[string]interface{}, resourceSchema *
 	return p.parseResource(resource, resourceSchema, "")
 }
 
+// ParseResourceAtPath behaves like ParseResource but roots error messages and
+// field descriptor paths at the given prefix. This is useful when validating a
+// sub-object (e.g. a LabelSelector at "metadata.selector") against a standalone
+// schema so that diagnostics reference the field's location in the full resource.
+func (p *Parser) ParseResourceAtPath(resource map[string]interface{}, resourceSchema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
+	return p.parseResource(resource, resourceSchema, path)
+}
+
 // parseResource is a helper function that recursively extracts CEL expressions
 // from a resource. It uses a depth first search to traverse the resource and
 // extract expressions from string fields.

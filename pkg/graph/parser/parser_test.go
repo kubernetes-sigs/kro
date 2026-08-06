@@ -565,6 +565,38 @@ func TestParseWithExpectedSchema(t *testing.T) {
 	}
 }
 
+// TestParseResourceAtPath verifies the path prefix is applied to both extracted
+// descriptor paths and error messages, which is why the method exists (so a
+// selector sub-object validates with diagnostics rooted at metadata.selector).
+func TestParseResourceAtPath(t *testing.T) {
+	schema := newSchema(spec.SchemaProps{
+		Type: []string{"object"},
+		Properties: map[string]spec.Schema{
+			"matchLabels": newSchema(spec.SchemaProps{
+				Type:                 []string{"object"},
+				AdditionalProperties: &spec.SchemaOrBool{Allows: true, Schema: new(newSchema(spec.SchemaProps{Type: []string{"string"}}))},
+			}),
+		},
+	})
+
+	fds, err := New(schemacache.NewCache()).ParseResourceAtPath(map[string]interface{}{
+		"matchLabels": map[string]interface{}{"app": "${schema.spec.tier}"},
+	}, &schema, "metadata.selector")
+	if err != nil {
+		t.Fatalf("ParseResourceAtPath() error = %v", err)
+	}
+	if len(fds) != 1 || fds[0].Path != "metadata.selector.matchLabels.app" {
+		t.Fatalf("descriptor path = %+v, want metadata.selector.matchLabels.app", fds)
+	}
+
+	_, err = New(schemacache.NewCache()).ParseResourceAtPath(map[string]interface{}{
+		"matchLabels": "notAnObject", // string where object is expected
+	}, &schema, "metadata.selector")
+	if err == nil || !strings.Contains(err.Error(), "metadata.selector.matchLabels") {
+		t.Errorf("error = %v, want prefixed path metadata.selector.matchLabels", err)
+	}
+}
+
 func TestParserEdgeCases(t *testing.T) {
 	testCases := []struct {
 		name          string

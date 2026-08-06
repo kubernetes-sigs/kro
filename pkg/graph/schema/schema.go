@@ -32,6 +32,12 @@ var ObjectMetaSchema spec.Schema
 // does not exist at runtime.
 var NamespacelessObjectMetaSchema spec.Schema
 
+// LabelSelectorSchema holds the k8s metav1.LabelSelector schema, populated once
+// at startup. External collection references (externalRef.metadata.selector) are
+// validated against this schema so that structural type enforcement comes from
+// the canonical Kubernetes definition rather than hand-rolled checks.
+var LabelSelectorSchema spec.Schema
+
 func init() {
 	// Populate ObjectMeta schema once at startup to avoid repeated query operations.
 	var err error
@@ -43,12 +49,27 @@ func init() {
 		panic(fmt.Sprintf("failed to initialize ObjectMeta schema: %v", err))
 	}
 	NamespacelessObjectMetaSchema = buildNamespacelessObjectMetaSchema(ObjectMetaSchema)
+
+	LabelSelectorSchema, err = getModelSchema(metav1.LabelSelector{}.OpenAPIModelName())
+	if err != nil {
+		// This should never happen unless the Kubernetes OpenAPI definitions are
+		// missing, which would be a critical build/dependency issue.
+		panic(fmt.Sprintf("failed to initialize LabelSelector schema: %v", err))
+	}
 }
 
 // getObjectMetaSchema extracts the ObjectMeta schema from Kubernetes OpenAPI definitions.
 // This returns the fully resolved ObjectMeta schema including all nested types like
 // OwnerReference, ManagedFieldsEntry, Time, etc.
 func getObjectMetaSchema() (spec.Schema, error) {
+	return getModelSchema(metav1.ObjectMeta{}.OpenAPIModelName())
+}
+
+// getModelSchema extracts and fully resolves the schema for the given OpenAPI
+// model name (e.g. "io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector") from
+// the Kubernetes OpenAPI definitions bundled with the apiserver package. All
+// nested $ref references are populated so the returned schema is self-contained.
+func getModelSchema(modelName string) (spec.Schema, error) {
 	// get OpenAPI definitions from apiserver package
 	definitions := openapi.GetOpenAPIDefinitions(spec.MustCreateRef)
 	populatedSchema, err := resolver.PopulateRefs(func(ref string) (*spec.Schema, bool) {
@@ -57,9 +78,9 @@ func getObjectMetaSchema() (spec.Schema, error) {
 			return nil, false
 		}
 		return new(def.Schema), true
-	}, metav1.ObjectMeta{}.OpenAPIModelName())
+	}, modelName)
 	if err != nil {
-		return spec.Schema{}, fmt.Errorf("failed to populate refs for ObjectMeta: %w", err)
+		return spec.Schema{}, fmt.Errorf("failed to populate refs for %s: %w", modelName, err)
 	}
 	return *populatedSchema, nil
 }

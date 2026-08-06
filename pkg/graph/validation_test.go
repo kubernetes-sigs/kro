@@ -807,7 +807,7 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 		{
 			name: "selector CEL string is valid",
 			metadata: v1alpha1.ExternalRefMetadata{
-				Selector: rawExt("${schema.spec.selector}"),
+				Selector: toRawExtension(t, "${schema.spec.selector}"),
 			},
 		},
 		{
@@ -871,19 +871,27 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 		{
 			name: "scalar selector string is invalid",
 			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, "app=demo"),
+			},
+			wantErr: "selector must be a Kubernetes LabelSelector object or a CEL expression that resolves to one",
+		},
+		{
+			name: "selector that is not valid JSON is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
 				Selector: rawExt("app=demo"),
 			},
-			wantErr: "selector must resolve to a Kubernetes LabelSelector object",
+			wantErr: "invalid selector",
 		},
 		{
 			name: "non object non string selector is invalid",
 			metadata: v1alpha1.ExternalRefMetadata{
 				Selector: toRawExtension(t, 42),
 			},
-			wantErr: "selector must resolve to a Kubernetes LabelSelector object",
+			wantErr: "selector must be a Kubernetes LabelSelector object or a CEL expression that resolves to one",
 		},
 		{
-			name: "invalid selector object is invalid",
+			// Operator validity is enforced by LabelSelectorAsSelector on list.
+			name: "structurally valid selector with a bad operator is accepted",
 			metadata: v1alpha1.ExternalRefMetadata{
 				Selector: toRawExtension(t, map[string]any{
 					"matchExpressions": []map[string]any{{
@@ -892,7 +900,6 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 					}},
 				}),
 			},
-			wantErr: "invalid label selector",
 		},
 		{
 			name: "matchLabels unterminated CEL string is invalid",
@@ -938,18 +945,73 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 					"matchExpressions": "${schema.spec.expressions}",
 				}),
 			},
-			wantErr: "expected object type for path metadata.selector.matchLabels, got string",
+			wantErr: "expected object type for path metadata.selector.matchLabels",
 		},
 		{
-			// Standalone CEL expressions at matchLabels/matchExpressions pass
-			// validateExternalRefMetadata — the function cannot run the CEL
-			// type checker. Type mismatches (e.g. string where map is expected)
-			// are caught later by validateAndCompileTemplates via
-			// selectorFieldType, which returns the concrete expected types.
+			// CEL type mismatches are caught later by the type checker via
+			// selectorFieldType, not here.
 			name: "matchExpressions standalone CEL passes validateExternalRefMetadata",
 			metadata: v1alpha1.ExternalRefMetadata{
 				Selector: toRawExtension(t, map[string]any{
 					"matchExpressions": "${schema.spec.expressions}",
+				}),
+			},
+		},
+		{
+			name: "CEL expression in top-level selector key is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"${schema.spec.labelKey}": "${schema.spec.labelValue}",
+				}),
+			},
+			wantErr: "schema not found for field ${schema.spec.labelKey}",
+		},
+		{
+			name: "unknown field in CEL-bearing selector is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchLabels": "${schema.spec.labels}",
+					"bogusField":  "value",
+				}),
+			},
+			wantErr: "schema not found for field bogusField",
+		},
+		{
+			name: "unknown field in literal selector is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchLabels": map[string]any{"app": "demo"},
+					"bogusField":  "value",
+				}),
+			},
+			wantErr: "schema not found for field bogusField",
+		},
+		{
+			name: "matchExpressions scalar item is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchExpressions": []any{"${schema.spec.teamName}", "notAnObject"},
+				}),
+			},
+			wantErr: "expected object type for path metadata.selector.matchExpressions[1]",
+		},
+		{
+			name: "matchExpressions values element scalar is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchExpressions": []map[string]any{{
+						"key": "${schema.spec.k}", "operator": "In", "values": []any{42},
+					}},
+				}),
+			},
+			wantErr: "expected string type for path metadata.selector.matchExpressions[0].values[0]",
+		},
+		{
+			// Label syntax is enforced by LabelSelectorAsSelector on list.
+			name: "malformed label key is accepted; syntax is enforced at list time",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchLabels": map[string]any{"bad key!": "demo"},
 				}),
 			},
 		},

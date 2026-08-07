@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"github.com/google/cel-go/cel"
-	"golang.org/x/exp/maps"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -250,8 +249,11 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// Create a single expression inspector for all AST inspection operations.
 	// This uses a lightweight env that only declares identifier names (no full schemas) -
 	// sufficient for parsing and finding references, but NOT for type-checking or compilation.
-	nodeNames := maps.Keys(nodes)
-	allIdentifiers := append(nodeNames, SchemaVarName, EachVarName, library.RuntimeVarName)
+	nodeNames := make([]string, 0, len(nodes))
+	for name := range nodes {
+		nodeNames = append(nodeNames, name)
+	}
+	allIdentifiers := slices.Concat(nodeNames, []string{SchemaVarName, EachVarName, library.RuntimeVarName})
 	inspectorEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(allIdentifiers))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create inspector environment: %w", err)

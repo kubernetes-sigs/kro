@@ -15,6 +15,7 @@
 package graph
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -24,6 +25,8 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
+	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
+	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -267,6 +270,50 @@ func validateCombinableResourceFields(res *v1alpha1.Resource) error {
 	return nil
 }
 
+func validateExternalRefMetadata(metadata v1alpha1.ExternalRefMetadata) error {
+	if metadata.HasName() == metadata.HasSelector() {
+		return fmt.Errorf("exactly one of name or selector must be provided")
+	}
+
+	if !metadata.HasSelector() {
+		return nil
+	}
+
+	return validateSelector(metadata.Selector.Raw)
+}
+
+// validateSelector validates the structure of externalRef.metadata.selector.
+// The field is schemaless, so it may hold either a literal LabelSelector or a
+// CEL expression that resolves to one. Label syntax and operator validity are
+// left to LabelSelectorAsSelector when the collection is listed.
+func validateSelector(raw []byte) error {
+	var decoded interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return fmt.Errorf("invalid selector: %w", err)
+	}
+
+	switch selector := decoded.(type) {
+	case string:
+		standalone, err := parser.IsStandaloneExpression(selector)
+		if err != nil {
+			return fmt.Errorf("invalid selector expression: %w", err)
+		}
+		if !standalone {
+			return errSelectorShape
+		}
+		return nil
+	case map[string]interface{}:
+		_, err := parser.New(schema.NewCache()).
+			ParseResourceAtPath(selector, &schema.LabelSelectorSchema, "metadata.selector")
+		return err
+	default:
+		return errSelectorShape
+	}
+}
+
+var errSelectorShape = fmt.Errorf(
+	"selector must be a Kubernetes LabelSelector object or a CEL expression that resolves to one")
+
 // validateTemplateConstraints enforces template-level constraints before parsing expressions.
 // Keep this small and focused on invariants that must hold regardless of CEL.
 func validateTemplateConstraints(
@@ -288,7 +335,7 @@ func validateTemplateConstraints(
 	if resourceNamespaced && !instanceNamespaced {
 		// External collection refs (selector-based) are allowed to omit namespace
 		// on cluster-scoped instances — this means "list across all namespaces".
-		isExternalCollection := rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.Selector != nil
+		isExternalCollection := rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.HasSelector()
 		if !isExternalCollection {
 			if !found {
 				return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", rgResource.ID)

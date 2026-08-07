@@ -17,7 +17,7 @@
 
 package apis
 
-import "golang.org/x/exp/slices"
+import "slices"
 
 // NewReadyConditions returns a ConditionTypes to hold the conditions for the
 // resource. ConditionReady is used as the root condition.
@@ -75,12 +75,7 @@ func (ct ConditionTypes) For(object Object) ConditionSet {
 
 // DependsOn is a helper function to determine if deps contains the provided condition type.
 func (ct ConditionTypes) DependsOn(d string) bool {
-	for i := range ct.dependents {
-		if ct.dependents[i] == d {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ct.dependents, d)
 }
 
 func newConditionTypes(root string, dependents ...string) ConditionTypes {

@@ -102,5 +102,16 @@ func (e *Expression) Eval(ctx map[string]any) (any, error) {
 		return nil, fmt.Errorf("convert %q: %w", e.UserExpression(), err)
 	}
 
-	return native, nil
+	// The result of an expression evaluation is used to build resource
+	// templates and status fields via apimachinery's unstructured deep-copy,
+	// which cannot represent the uint64/[]byte values GoNativeType returns
+	// for CEL uint/bytes. Guard here, at the point where that constraint
+	// actually applies, rather than in GoNativeType itself (other callers,
+	// like json.marshal, don't have this restriction).
+	safe, err := conversion.EnsureJSONSafe(native)
+	if err != nil {
+		return nil, fmt.Errorf("convert %q: %w", e.UserExpression(), err)
+	}
+
+	return safe, nil
 }

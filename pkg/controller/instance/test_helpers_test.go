@@ -277,6 +277,33 @@ func newControllerAndContext(
 	return controller, rcx, raw
 }
 
+func newControllerAndDeletionContext(
+	t *testing.T,
+	instance *unstructured.Unstructured,
+	g *graph.Graph,
+	extraObjs ...apimachineryruntime.Object,
+) (*Controller, *DeletionContext, *dynamicfake.FakeDynamicClient) {
+	t.Helper()
+
+	objs := append([]apimachineryruntime.Object{instance.DeepCopy()}, extraObjs...)
+	raw := newControllerTestDynamicClient(t, objs...)
+	controller, clientSet := newControllerUnderTest(t, raw, g)
+
+	dcx := NewDeletionContext(
+		context.Background(),
+		controller.log,
+		controllerTestParentGVR,
+		instance.GetNamespace() != "",
+		clientSet.Dynamic(),
+		clientSet.RESTMapper(),
+		controller.reconcileConfig,
+		instance.DeepCopy(),
+	)
+	dcx.Watcher = dynamiccontroller.NoopInstanceWatcher{}
+
+	return controller, dcx, raw
+}
+
 func newInstanceObject(name, namespace string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{

@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -187,86 +188,104 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 	rcx.updateInstanceState()
 	status := rcx.initialStatus()
 
-	if rcx.Runtime == nil {
-		// Early deletion deliberately bypasses graph resolution. Keep status
-		// projections that cannot be recomputed without a runtime.
-		for k, v := range rcx.WireStatus {
-			if k != "conditions" && k != "state" {
-				status[k] = v
+	desired, err := rcx.Runtime.Instance().GetDesired()
+	if err != nil {
+		return err
+	}
+	if resolved, found, _ := unstructured.NestedMap(desired[0].Object, "status"); found {
+		for k, v := range resolved {
+			if k == "conditions" || k == "state" {
+				continue
 			}
-		}
-		// Author conditions cannot be evaluated without a runtime. Preserve
-		// them exactly as fetched instead of replacing them with kro built-ins.
-		if c.reconcileConfig.HasAuthorConditions {
-			if conditions, found := rcx.WireStatus["conditions"]; found {
-				status["conditions"] = conditions
-			} else {
-				delete(status, "conditions")
-			}
-		}
-	} else {
-		desired, err := rcx.Runtime.Instance().GetDesired()
-		if err != nil {
-			return err
-		}
-		if resolved, found, _ := unstructured.NestedMap(desired[0].Object, "status"); found {
-			for k, v := range resolved {
-				if k == "conditions" || k == "state" {
-					continue
-				}
-				status[k] = v
-			}
-		}
-
-		// When the RGD declares author conditions, only those appear on the
-		// wire. kro's built-ins stay readable from author CEL through
-		// runtime.condition(schema, 'X').
-		instanceNode := rcx.Runtime.Instance()
-		if instanceNode.HasConditions() {
-			authored, incomplete, evalErr := instanceNode.EvaluateConditions(
-				rcx.Log, builtinConditions(rcx.Instance),
-			)
-
-			// Read previous conditions from the wire snapshot, not rcx.Instance:
-			// the markers have already overwritten any built-in-typed override.
-			conds, _ := rcx.WireStatus["conditions"].([]interface{})
-			previous := decodeConditions(conds)
-			stamped := stampAuthorConditions(authored, previous, rcx.Instance.GetGeneration())
-			if incomplete {
-				// Keep the previously persisted conditions for the types that
-				// produced no output this reconcile.
-				stamped = mergeWithPrevious(stamped, previous)
-			}
-			status["conditions"] = conditionsToInterfaceSlice(stamped)
-
-			// A degraded result still surfaces its surviving conditions; set
-			// state=Error rather than failing the reconcile.
-			if evalErr != nil {
-				rcx.Log.Error(evalErr, "author conditions degraded; setting state=Error")
-				status["state"] = string(v1alpha1.InstanceStateError)
-			}
+			status[k] = v
 		}
 	}
 
+	// When the RGD declares author conditions, only those appear on the
+	// wire. kro's built-ins stay readable from author CEL through
+	// runtime.condition(schema, 'X').
+	instanceNode := rcx.Runtime.Instance()
+	if instanceNode.HasConditions() {
+		authored, incomplete, evalErr := instanceNode.EvaluateConditions(
+			rcx.Log, builtinConditions(rcx.Instance),
+		)
+
+		// Read previous conditions from the wire snapshot, not rcx.Instance:
+		// the markers have already overwritten any built-in-typed override.
+		conds, _ := rcx.WireStatus["conditions"].([]interface{})
+		previous := decodeConditions(conds)
+		stamped := stampAuthorConditions(authored, previous, rcx.Instance.GetGeneration())
+		if incomplete {
+			// Keep the previously persisted conditions for the types that
+			// produced no output this reconcile.
+			stamped = mergeWithPrevious(stamped, previous)
+		}
+		status["conditions"] = conditionsToInterfaceSlice(stamped)
+
+		// A degraded result still surfaces its surviving conditions; set
+		// state=Error rather than failing the reconcile.
+		if evalErr != nil {
+			rcx.Log.Error(evalErr, "author conditions degraded; setting state=Error")
+			status["state"] = string(v1alpha1.InstanceStateError)
+		}
+	}
+
+	return c.persistStatus(
+		rcx.Ctx, rcx.InstanceClient(), rcx.Instance, rcx.WireStatus, status, previousState,
+	)
+}
+
+// updateDeletionStatus updates instance-level deletion status without a
+// runtime. Status projections and author conditions that cannot be evaluated
+// during early deletion are preserved from the wire.
+func (c *Controller) updateDeletionStatus(dcx *DeletionContext) error {
+	previousState, _ := dcx.WireStatus["state"].(string)
+	status := initialStatus(dcx.Instance, dcx.StateManager)
+	for k, v := range dcx.WireStatus {
+		if k != "conditions" && k != "state" {
+			status[k] = v
+		}
+	}
+	if dcx.Config.HasAuthorConditions {
+		if conditions, found := dcx.WireStatus["conditions"]; found {
+			status["conditions"] = conditions
+		} else {
+			delete(status, "conditions")
+		}
+	}
+	return c.persistStatus(
+		dcx.Ctx, dcx.InstanceClient(), dcx.Instance, dcx.WireStatus, status, previousState,
+	)
+}
+
+func (c *Controller) persistStatus(
+	ctx context.Context,
+	client dynamic.ResourceInterface,
+	instance *unstructured.Unstructured,
+	wireStatus map[string]interface{},
+	status map[string]interface{},
+	previousState string,
+) error {
+
 	// Mirror the computed status onto the instance so the deferred emitters
 	// read what's on the wire, not the marker's built-ins.
-	rcx.Instance.Object["status"] = status
+	instance.Object["status"] = status
 
 	// Skip the API server write if the persisted status already matches.
 	// This prevents an infinite reconcile loop where every unconditional
 	// UpdateStatus bumps resourceVersion, which triggers a watch event,
 	// which re-enqueues the instance, which reconciles again.
-	if statusesMatch(rcx.WireStatus, status) {
+	if statusesMatch(wireStatus, status) {
 		return nil
 	}
 
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cur, err := rcx.InstanceClient().Get(rcx.Ctx, rcx.Instance.GetName(), metav1.GetOptions{})
+		cur, err := client.Get(ctx, instance.GetName(), metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
 		cur.Object["status"] = status
-		_, err = rcx.InstanceClient().UpdateStatus(rcx.Ctx, cur, metav1.UpdateOptions{})
+		_, err = client.UpdateStatus(ctx, cur, metav1.UpdateOptions{})
 		return err
 	})
 	if err != nil {
@@ -277,7 +296,7 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 	// differ from the state manager's view (degraded author conditions).
 	writtenState, _ := status["state"].(string)
 	if previousState != writtenState {
-		gvk := rcx.Instance.GroupVersionKind().String()
+		gvk := instance.GroupVersionKind().String()
 		metrics.InstanceStateTransitionsTotal.WithLabelValues(
 			gvk,
 			previousState,
@@ -337,7 +356,11 @@ func mergeWithPrevious(current, previous []v1alpha1.Condition) []v1alpha1.Condit
 }
 
 func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
-	cs := condSet.For(&unstructuredWrapper{rcx.Instance})
+	return initialStatus(rcx.Instance, rcx.StateManager)
+}
+
+func initialStatus(instance *unstructured.Unstructured, stateManager *StateManager) map[string]interface{} {
+	cs := condSet.For(&unstructuredWrapper{instance})
 
 	// Start fresh - user-defined status fields come solely from current
 	// resolution, so fields disappear when their dependencies become
@@ -346,12 +369,12 @@ func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
 	// removed) is dropped. State is a plain string to compare equal to the
 	// wire value.
 	status := map[string]interface{}{
-		"conditions": conditionsToInterfaceSlice(builtinConditions(rcx.Instance)),
+		"conditions": conditionsToInterfaceSlice(builtinConditions(instance)),
 	}
 	if cs.IsRootReady() {
 		status["state"] = string(v1alpha1.InstanceStateActive)
 	} else {
-		status["state"] = string(rcx.StateManager.State)
+		status["state"] = string(stateManager.State)
 	}
 	return status
 }

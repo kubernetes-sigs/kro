@@ -33,22 +33,20 @@ import (
 )
 
 // reconcileDeletion drives deletion workflow for an instance.
-func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
-	rcx.StateManager.State = v1alpha1.InstanceStateDeleting
-	rcx.Mark.ResourcesUnderDeletion("deleting resources")
+func (c *Controller) reconcileDeletion(dcx *DeletionContext) error {
+	dcx.StateManager.State = v1alpha1.InstanceStateDeleting
+	dcx.Mark.ResourcesUnderDeletion("deleting resources")
 
-	candidates, applier, err := c.discoverDeletionInventory(rcx)
+	candidates, applier, err := c.discoverDeletionInventory(dcx)
 	if err != nil {
 		return err
 	}
 
 	if len(candidates) == 0 {
-		return c.removeFinalizer(rcx)
+		return c.removeFinalizer(dcx)
 	}
 
 	wave, highest := highestDeletionWave(candidates)
-
-	c.updateDeletionNodeStates(rcx, candidates)
 
 	conflict := false
 	for _, candidate := range wave {
@@ -56,36 +54,38 @@ func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
 			continue
 		}
 
-		result, err := applier.DeleteOrphan(rcx.Ctx, candidate)
+		result, err := applier.DeleteOrphan(dcx.Ctx, candidate)
 		if err != nil {
-			if nodeID := candidate.Object.GetLabels()[metadata.NodeIDLabel]; nodeID != "" {
-				rcx.StateManager.SetNodeState(nodeID, errorState(err))
-			}
 			return err
 		}
 		conflict = conflict || result.Conflict
 	}
 
 	if conflict {
-		return rcx.delayedRequeue(fmt.Errorf("deletion encountered UID conflicts; retrying"))
+		return dcx.delayedRequeue(fmt.Errorf("deletion encountered UID conflicts; retrying"))
 	}
-	return rcx.delayedRequeue(fmt.Errorf("deleting apply-order wave %d", highest))
+	return dcx.delayedRequeue(fmt.Errorf("deleting apply-order wave %d", highest))
 }
 
 // discoverDeletionInventory reconstructs the deletion search scope solely from
 // the parent ApplySet metadata. It does not evaluate the current graph or CEL.
 func (c *Controller) discoverDeletionInventory(
-	rcx *ReconcileContext,
+	dcx *DeletionContext,
 ) ([]applyset.OrphanCandidate, *applyset.ApplySet, error) {
-	if err := applyset.ValidateParentInventory(rcx.Instance); err != nil {
+	if err := applyset.ValidateParentInventory(dcx.Instance); err != nil {
 		return nil, nil, fmt.Errorf("validate deletion inventory: %w", err)
 	}
-	applier := c.createApplySet(rcx)
+	applier := applyset.New(applyset.Config{
+		Client:          dcx.Client,
+		RESTMapper:      dcx.RestMapper,
+		Log:             dcx.Log,
+		ParentNamespace: dcx.Instance.GetNamespace(),
+	}, dcx.Instance)
 	inventory, err := applier.Project(nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("project deletion inventory: %w", err)
 	}
-	candidates, err := applier.ListOrphans(rcx.Ctx, applyset.PruneOptions{
+	candidates, err := applier.ListOrphans(dcx.Ctx, applyset.PruneOptions{
 		KeepUIDs: sets.New[types.UID](),
 		Scope:    inventory.PruneScope(),
 	})
@@ -120,51 +120,23 @@ func highestDeletionWave(candidates []applyset.OrphanCandidate) ([]applyset.Orph
 	return wave, highest
 }
 
-func (c *Controller) updateDeletionNodeStates(rcx *ReconcileContext, candidates []applyset.OrphanCandidate) {
-	if rcx.Runtime == nil {
-		return
-	}
-	liveNodes := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		if nodeID := candidate.Object.GetLabels()[metadata.NodeIDLabel]; nodeID != "" {
-			liveNodes[nodeID] = struct{}{}
-		}
-	}
-	for _, node := range rcx.Runtime.Nodes() {
-		id := node.Spec.Meta.ID
-		switch node.Spec.Meta.Type {
-		case graph.NodeTypeExternal, graph.NodeTypeExternalCollection:
-			rcx.StateManager.SetNodeState(id, skippedState())
-		default:
-			if _, exists := liveNodes[id]; exists {
-				rcx.StateManager.SetNodeState(id, deletingState())
-			} else {
-				rcx.StateManager.SetNodeState(id, deletedState())
-			}
-		}
-	}
-}
-
 // removeFinalizer clears managed state on the instance after deletions complete.
-func (c *Controller) removeFinalizer(rcx *ReconcileContext) error {
+func (c *Controller) removeFinalizer(dcx *DeletionContext) error {
 	// Clean up coordinator watch requests before removing the finalizer.
 	c.coordinator.RemoveInstance(c.gvr, types.NamespacedName{
-		Name:      rcx.Instance.GetName(),
-		Namespace: rcx.Instance.GetNamespace(),
+		Name:      dcx.Instance.GetName(),
+		Namespace: dcx.Instance.GetNamespace(),
 	})
 
-	patched, err := c.setUnmanaged(rcx, rcx.Instance)
+	patched, err := c.setUnmanaged(dcx, dcx.Instance)
 	if err != nil {
-		rcx.Mark.InstanceNotManaged("failed removing finalizer: %v", err)
+		dcx.Mark.InstanceNotManaged("failed removing finalizer: %v", err)
 		return err
 	}
 	if patched != nil {
-		rcx.rebindInstance(patched)
-		if rcx.Runtime != nil {
-			rcx.Runtime.Instance().SetObserved([]*unstructured.Unstructured{patched})
-		}
+		dcx.rebindInstance(patched)
 	}
-	rcx.Mark.ResourcesUnderDeletion("deleting resources")
+	dcx.Mark.ResourcesUnderDeletion("deleting resources")
 	return nil
 }
 
@@ -184,16 +156,16 @@ func resourceClientFor(
 // Uses merge patch (not SSA) to avoid field manager ownership blocking finalizer removal.
 // Returns the server's response, or nil when the finalizer was already absent
 // and no request was made (callers must only rebind on a non-nil return).
-func (c *Controller) setUnmanaged(rcx *ReconcileContext, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+func (c *Controller) setUnmanaged(dcx *DeletionContext, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if exist := metadata.HasInstanceFinalizer(obj); !exist {
 		return nil, nil
 	}
-	rcx.Log.Info("Removing managed state", "name", obj.GetName(), "namespace", obj.GetNamespace())
+	dcx.Log.Info("Removing managed state", "name", obj.GetName(), "namespace", obj.GetNamespace())
 
 	var updated *unstructured.Unstructured
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		// Re-fetch fresh object on each retry attempt
-		current, err := rcx.InstanceClient().Get(rcx.Ctx, obj.GetName(), metav1.GetOptions{})
+		current, err := dcx.InstanceClient().Get(dcx.Ctx, obj.GetName(), metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
@@ -217,8 +189,8 @@ func (c *Controller) setUnmanaged(rcx *ReconcileContext, obj *unstructured.Unstr
 			return fmt.Errorf("failed to marshal finalizer patch: %w", err)
 		}
 
-		updated, err = rcx.InstanceClient().Patch(
-			rcx.Ctx,
+		updated, err = dcx.InstanceClient().Patch(
+			dcx.Ctx,
 			current.GetName(),
 			types.MergePatchType,
 			patchData,

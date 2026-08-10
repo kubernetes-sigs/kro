@@ -128,7 +128,7 @@ func TestDiscoverLiveResources(t *testing.T) {
 
 	managed := newManagedObject(newDeploymentObject("demo", "default"), instance, "deploy", 1)
 
-	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(deployNode), managed)
+	controller, rcx, _ := newControllerAndDeletionContext(t, instance, newTestGraph(deployNode), managed)
 
 	live, _, err := controller.discoverDeletionInventory(rcx)
 	require.NoError(t, err)
@@ -165,7 +165,7 @@ func TestDiscoverLiveResourcesSkipsExternalNodes(t *testing.T) {
 	sourceCM.SetLabels(map[string]string{metadata.InstanceIDLabel: uid, metadata.NodeIDLabel: "source"})
 	managed := newManagedObject(newDeploymentObject("demo", "default"), instance, "deploy", 2)
 
-	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(externalNode, deployNode), sourceCM, managed)
+	controller, rcx, _ := newControllerAndDeletionContext(t, instance, newTestGraph(externalNode, deployNode), sourceCM, managed)
 
 	live, _, err := controller.discoverDeletionInventory(rcx)
 	require.NoError(t, err)
@@ -198,7 +198,7 @@ func TestDiscoverLiveResourcesMultipleGVRs(t *testing.T) {
 	managedDeploy := newManagedObject(newDeploymentObject("demo", "default"), instance, "deploy", 1)
 	managedCM := newManagedObject(newConfigMapObject("config", "default"), instance, "config", 2)
 
-	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(deployNode, cmNode), managedDeploy, managedCM)
+	controller, rcx, _ := newControllerAndDeletionContext(t, instance, newTestGraph(deployNode, cmNode), managedDeploy, managedCM)
 
 	live, _, err := controller.discoverDeletionInventory(rcx)
 	require.NoError(t, err)
@@ -219,7 +219,7 @@ func TestDiscoverLiveResourcesListError(t *testing.T) {
 	}
 
 	addDeletionScope(instance, controllerTestDeployGVK, "default")
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(deployNode))
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(deployNode))
 	raw.PrependReactor("list", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
 		return true, nil, errors.New("list failed")
 	})
@@ -235,7 +235,7 @@ func TestDiscoverDeletionInventoryRejectsMissingScope(t *testing.T) {
 	annotations := instance.GetAnnotations()
 	delete(annotations, applyset.ApplySetGKsAnnotation)
 	instance.SetAnnotations(annotations)
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph())
 
 	lists := 0
 	raw.PrependReactor("list", "*", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
@@ -264,13 +264,14 @@ func TestReconcileDeletionDeletesAllAndRequeues(t *testing.T) {
 
 	managed := newManagedObject(newDeploymentObject("demo", "default"), instance, "deploy", 1)
 
-	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(deployNode), managed)
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(deployNode), managed)
 
 	err := controller.reconcileDeletion(rcx)
 	var retryAfter *requeue.RequeueNeededAfter
 	require.ErrorAs(t, err, &retryAfter)
 	assert.Equal(t, v1alpha1.InstanceStateDeleting, rcx.StateManager.State)
-	assert.Equal(t, v1alpha1.NodeStateDeleting, rcx.StateManager.NodeStates["deploy"].State)
+	_, getErr := raw.Tracker().Get(controllerTestDeployGVR, "default", "demo")
+	require.Error(t, getErr)
 }
 
 func TestReconcileDeletionRemovesFinalizerWhenNoLiveResources(t *testing.T) {
@@ -289,7 +290,7 @@ func TestReconcileDeletionRemovesFinalizerWhenNoLiveResources(t *testing.T) {
 	}
 
 	// No managed objects in the cluster.
-	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(deployNode))
+	controller, rcx, _ := newControllerAndDeletionContext(t, instance, newTestGraph(deployNode))
 
 	err := controller.reconcileDeletion(rcx)
 	require.NoError(t, err)
@@ -313,7 +314,7 @@ func TestReconcileDeletionSkipsAlreadyTerminatingResources(t *testing.T) {
 	now := metav1.NewTime(time.Now())
 	managed.SetDeletionTimestamp(&now)
 
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(deployNode), managed)
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(deployNode), managed)
 
 	// Track whether DELETE is called — it should NOT be.
 	deletesCalled := 0
@@ -326,7 +327,6 @@ func TestReconcileDeletionSkipsAlreadyTerminatingResources(t *testing.T) {
 	var retryAfter *requeue.RequeueNeededAfter
 	require.ErrorAs(t, err, &retryAfter)
 	assert.Equal(t, 0, deletesCalled, "DELETE should not be called for already-terminating resources")
-	assert.Equal(t, v1alpha1.NodeStateDeleting, rcx.StateManager.NodeStates["deploy"].State)
 }
 
 func TestReconcileDeletionDeleteErrorBubblesUp(t *testing.T) {
@@ -344,7 +344,7 @@ func TestReconcileDeletionDeleteErrorBubblesUp(t *testing.T) {
 
 	managed := newManagedObject(newDeploymentObject("demo", "default"), instance, "deploy", 1)
 
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(deployNode), managed)
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(deployNode), managed)
 	raw.PrependReactor("delete", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
 		return true, nil, errors.New("delete failed")
 	})
@@ -352,7 +352,6 @@ func TestReconcileDeletionDeleteErrorBubblesUp(t *testing.T) {
 	err := controller.reconcileDeletion(rcx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "delete failed")
-	assert.Equal(t, v1alpha1.NodeStateError, rcx.StateManager.NodeStates["deploy"].State)
 }
 
 func TestReconcileDeletionExternalRefGoneDoesNotBlock(t *testing.T) {
@@ -382,47 +381,13 @@ func TestReconcileDeletionExternalRefGoneDoesNotBlock(t *testing.T) {
 	// Managed resource still exists (has a controller finalizer keeping it alive).
 	managed := newManagedObject(newDeploymentObject("mirror", "default"), instance, "mirror", 2)
 
-	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(externalNode, deployNode), managed)
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(externalNode, deployNode), managed)
 
 	err := controller.reconcileDeletion(rcx)
 	var retryAfter *requeue.RequeueNeededAfter
 	require.ErrorAs(t, err, &retryAfter)
-	assert.Equal(t, v1alpha1.NodeStateDeleting, rcx.StateManager.NodeStates["mirror"].State)
-	assert.Equal(t, v1alpha1.NodeStateSkipped, rcx.StateManager.NodeStates["source"].State)
-}
-
-func TestReconcileDeletionMarksExternalAndMissingNodesCorrectly(t *testing.T) {
-	instance := newInstanceObject("demo", "default")
-
-	externalNode := &graph.Node{
-		Meta: graph.NodeMeta{
-			ID:         "ext",
-			Type:       graph.NodeTypeExternal,
-			GVR:        controllerTestCMGVR,
-			Namespaced: true,
-		},
-		Template: newConfigMapObject("ext", ""),
-	}
-	managedNode := &graph.Node{
-		Meta: graph.NodeMeta{
-			ID:         "deploy",
-			Type:       graph.NodeTypeResource,
-			GVR:        controllerTestDeployGVR,
-			Namespaced: true,
-		},
-		Template: newDeploymentObject("deploy", ""),
-	}
-
-	// One managed resource still alive — the state loop will run.
-	managed := newManagedObject(newDeploymentObject("deploy", "default"), instance, "deploy", 2)
-
-	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(externalNode, managedNode), managed)
-
-	err := controller.reconcileDeletion(rcx)
-	var retryAfter *requeue.RequeueNeededAfter
-	require.ErrorAs(t, err, &retryAfter)
-	assert.Equal(t, v1alpha1.NodeStateSkipped, rcx.StateManager.NodeStates["ext"].State)
-	assert.Equal(t, v1alpha1.NodeStateDeleting, rcx.StateManager.NodeStates["deploy"].State)
+	_, getErr := raw.Tracker().Get(controllerTestDeployGVR, "default", "mirror")
+	require.Error(t, getErr)
 }
 
 func TestReconcileDeletionDeletesOnlyHighestOrderWave(t *testing.T) {
@@ -432,7 +397,7 @@ func TestReconcileDeletionDeletesOnlyHighestOrderWave(t *testing.T) {
 	a := newManagedObject(newDeploymentObject("a", "default"), instance, "a", 1)
 	b := newManagedObject(newDeploymentObject("b", "default"), instance, "b", 2)
 
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
 	var deleted []string
 	raw.PrependReactor("delete", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
 		deleted = append(deleted, action.(k8stesting.DeleteAction).GetName())
@@ -443,8 +408,6 @@ func TestReconcileDeletionDeletesOnlyHighestOrderWave(t *testing.T) {
 	var retryAfter *requeue.RequeueNeededAfter
 	require.ErrorAs(t, err, &retryAfter)
 	assert.Equal(t, []string{"b"}, deleted)
-	assert.Equal(t, v1alpha1.NodeStateDeleting, rcx.StateManager.NodeStates["a"].State)
-	assert.Equal(t, v1alpha1.NodeStateDeleting, rcx.StateManager.NodeStates["b"].State)
 }
 
 func TestReconcileDeletionAdvancesAfterHigherWaveDisappears(t *testing.T) {
@@ -454,7 +417,7 @@ func TestReconcileDeletionAdvancesAfterHigherWaveDisappears(t *testing.T) {
 	a := newManagedObject(newDeploymentObject("a", "default"), instance, "a", 1)
 	b := newManagedObject(newDeploymentObject("b", "default"), instance, "b", 2)
 
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
 	require.Error(t, controller.reconcileDeletion(rcx))
 
 	var deleted []string
@@ -475,7 +438,7 @@ func TestReconcileDeletionTerminatingHighestOrderBlocksLowerOrders(t *testing.T)
 	now := metav1.Now()
 	b.SetDeletionTimestamp(&now)
 
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
 	deletes := 0
 	raw.PrependReactor("delete", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
 		deletes++
@@ -492,7 +455,7 @@ func TestReconcileDeletionDeletesAllResourcesInHighestWave(t *testing.T) {
 	one := newManagedObject(newDeploymentObject("one", "default"), instance, "workers", 3)
 	two := newManagedObject(newDeploymentObject("two", "default"), instance, "workers", 3)
 
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(node), one, two)
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(node), one, two)
 	var deleted []string
 	raw.PrependReactor("delete", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
 		deleted = append(deleted, action.(k8stesting.DeleteAction).GetName())
@@ -544,7 +507,7 @@ func TestReconcileDeletionDefersInvalidOrdersUntilLastWave(t *testing.T) {
 			}
 			b.SetLabels(labels)
 
-			controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
+			controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
 
 			// The valid order runs before the fallback wave.
 			require.Error(t, controller.reconcileDeletion(rcx))
@@ -579,7 +542,7 @@ func TestReconcileDeletionDeletesInvalidOrdersInSharedFallbackWave(t *testing.T)
 	twoLabels[metadata.ApplyOrderLabel] = "invalid"
 	two.SetLabels(twoLabels)
 
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(node), one, two)
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(node), one, two)
 	var deleted []string
 	raw.PrependReactor("delete", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
 		deleted = append(deleted, action.(k8stesting.DeleteAction).GetName())
@@ -598,7 +561,7 @@ func TestReconcileDeletionUIDConflictDoesNotAdvance(t *testing.T) {
 	a := newManagedObject(newDeploymentObject("a", "default"), instance, "a", 1)
 	b := newManagedObject(newDeploymentObject("b", "default"), instance, "b", 2)
 
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
 	var deleted []string
 	raw.PrependReactor("delete", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
 		name := action.(k8stesting.DeleteAction).GetName()
@@ -616,7 +579,7 @@ func TestDeletionInventoryIncludesRemovedGraphNodes(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	current := &graph.Node{Meta: graph.NodeMeta{ID: "current", Type: graph.NodeTypeResource, GVR: controllerTestDeployGVR, Namespaced: true}}
 	removed := newManagedObject(newDeploymentObject("removed", "default"), instance, "old-node", 4)
-	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(current), removed)
+	controller, rcx, _ := newControllerAndDeletionContext(t, instance, newTestGraph(current), removed)
 
 	candidates, _, err := controller.discoverDeletionInventory(rcx)
 	require.NoError(t, err)
@@ -661,7 +624,7 @@ func TestSetUnmanaged(t *testing.T) {
 				metadata.SetInstanceFinalizer(instance)
 			}
 
-			controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
+			controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph())
 			if tt.patchErr != "" {
 				raw.PrependReactor("patch", "webapps", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
 					return true, nil, errors.New(tt.patchErr)
@@ -693,7 +656,7 @@ func TestSetUnmanagedRetriesOnConflict(t *testing.T) {
 	metadata.SetInstanceFinalizer(instance)
 	instance.SetFinalizers(append(instance.GetFinalizers(), "other.io/finalizer"))
 
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph())
 
 	var attempts atomic.Int32
 	raw.PrependReactor("get", "webapps", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
@@ -743,7 +706,7 @@ func TestRemoveFinalizerMarksInstanceNotManagedOnError(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	metadata.SetInstanceFinalizer(instance)
 
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph())
 	raw.PrependReactor("patch", "webapps", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
 		return true, nil, errors.New("patch failed")
 	})

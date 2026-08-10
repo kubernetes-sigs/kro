@@ -88,13 +88,12 @@ The deletion path does not call `IsIgnored`, `GetDesired`,
 observation. Deletion is handled before compiled GraphRevision resolution.
 This is intentional: resolving the current revision can itself require
 unavailable dependencies or invalid CEL, which is exactly the failure mode in
-#1316. The early path only needs the parent object, persisted ApplySet
-annotations, and dynamic REST mappings. The tradeoff is that deletion status
-cannot describe current graph nodes when no revision can be resolved; the
-controller still reports the instance-level deleting condition and preserves
-the finalizer on inventory or deletion failures. Keeping deletion after graph
-resolution would preserve richer node status, but would leave the root
-finalizer stuck whenever resolution fails.
+#1316. The early path uses a dedicated runtime-free context containing only the
+parent object, persisted ApplySet annotations, dynamic client, and REST
+mappings. Deletion intentionally reports only instance-level status; it does
+not synthesize per-node states that cannot be persisted without a resolved
+runtime. Keeping deletion after graph resolution would preserve richer node
+status, but would leave the root finalizer stuck whenever resolution fails.
 
 #### Ordered deletion waves
 
@@ -155,8 +154,8 @@ is available.
 
 ApplySet LIST failures and RESTMapping failures retain the root finalizer and
 retry through normal reconciliation error handling. DELETE errors retain the
-finalizer, mark the associated node Error when possible, and propagate. A UID
-precondition conflict causes a delayed requeue with the active wave unchanged.
+finalizer and propagate through the instance-level status. A UID precondition
+conflict causes a delayed requeue with the active wave unchanged.
 
 Deletion validates the ApplySet parent ID, kro tooling ownership, and the
 presence and syntax of the persisted group-kind and namespace annotations

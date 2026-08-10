@@ -204,11 +204,14 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	// Events and metrics are gated behind separate feature flags so operators
 	// can enable them independently.
 	var rcx *ReconcileContext
+	var dcx *DeletionContext
 	if c.eventsEnabled || c.metricsEnabled {
 		initialConditions := conditionsFromInstance(inst)
 		defer func() {
 			obj := inst
-			if rcx != nil {
+			if dcx != nil {
+				obj = dcx.Instance
+			} else if rcx != nil {
 				obj = rcx.Instance
 			}
 			finalConditions := conditionsFromInstance(obj)
@@ -227,16 +230,16 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	// Deletion must not depend on resolving the current GraphRevision or CEL.
 	// Build a context without a runtime and use persisted ApplySet inventory.
 	if inst.GetDeletionTimestamp() != nil {
-		rcx = NewReconcileContext(
+		dcx = NewDeletionContext(
 			ctx, log, c.gvr, c.namespaced, c.client.Dynamic(), c.client.RESTMapper(),
-			c.childResourceLabeler, nil, c.reconcileConfig, inst,
+			c.reconcileConfig, inst,
 		)
-		rcx.Watcher = watcher
-		if err := c.reconcileDeletion(rcx); err != nil {
-			_ = c.updateStatus(rcx)
+		dcx.Watcher = watcher
+		if err := c.reconcileDeletion(dcx); err != nil {
+			_ = c.updateDeletionStatus(dcx)
 			return err
 		}
-		return c.updateStatus(rcx)
+		return c.updateDeletionStatus(dcx)
 	}
 
 	//--------------------------------------------------------------

@@ -29,13 +29,26 @@ import (
 // with the provided spec and status schemas.
 // scope must be either extv1.NamespaceScoped or extv1.ClusterScoped; defaults to NamespaceScoped.
 func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, scope extv1.ResourceScope, rgSchema *v1alpha1.Schema) *extv1.CustomResourceDefinition {
-	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), scope, rgSchema.AdditionalPrinterColumns, rgSchema.Metadata, rgSchema.ShortNames, rgSchema.Categories)
+	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), scope, rgSchema)
 }
 
-func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope extv1.ResourceScope, additionalPrinterColumns []extv1.CustomResourceColumnDefinition, metadata *v1alpha1.CRDMetadata, shortNames, categories []string) *extv1.CustomResourceDefinition {
+func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope extv1.ResourceScope, rgSchema *v1alpha1.Schema) *extv1.CustomResourceDefinition {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
 	if scope == "" {
 		scope = extv1.NamespaceScoped
+	}
+
+	var (
+		additionalPrinterColumns []extv1.CustomResourceColumnDefinition
+		metadata                 *v1alpha1.CRDMetadata
+		shortNames               []string
+		categories               []string
+	)
+	if rgSchema != nil {
+		additionalPrinterColumns = rgSchema.AdditionalPrinterColumns
+		metadata = rgSchema.Metadata
+		shortNames = rgSchema.ShortNames
+		categories = rgSchema.Categories
 	}
 
 	objectMeta := metav1.ObjectMeta{

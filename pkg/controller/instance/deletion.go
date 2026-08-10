@@ -46,13 +46,7 @@ func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
 		return c.removeFinalizer(rcx)
 	}
 
-	wave, highest, orderErr := highestDeletionWave(candidates)
-	if orderErr != nil {
-		if nodeID := orderErr.nodeID; nodeID != "" {
-			rcx.StateManager.SetNodeState(nodeID, errorState(orderErr))
-		}
-		return orderErr
-	}
+	wave, highest := highestDeletionWave(candidates)
 
 	c.updateDeletionNodeStates(rcx, candidates)
 
@@ -98,41 +92,19 @@ func (c *Controller) discoverDeletionInventory(
 	return candidates, applier, nil
 }
 
-type deletionOrderError struct {
-	nodeID string
-	err    error
-}
+const fallbackDeletionOrder = 0
 
-func (e *deletionOrderError) Error() string { return e.err.Error() }
-func (e *deletionOrderError) Unwrap() error { return e.err }
-
-// highestDeletionWave validates the complete inventory before any mutation and
-// returns only candidates in the highest remaining order.
-func highestDeletionWave(
-	candidates []applyset.OrphanCandidate,
-) ([]applyset.OrphanCandidate, int, *deletionOrderError) {
-	highest := 0
+// highestDeletionWave returns only candidates in the highest remaining order.
+// Resources without a valid positive order share the fallback wave, which runs
+// after every ordered wave has disappeared.
+func highestDeletionWave(candidates []applyset.OrphanCandidate) ([]applyset.OrphanCandidate, int) {
+	highest := fallbackDeletionOrder
 	wave := make([]applyset.OrphanCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		obj := candidate.Object
-		raw := obj.GetLabels()[metadata.ApplyOrderLabel]
-		validDigits := raw != ""
-		for _, digit := range raw {
-			validDigits = validDigits && digit >= '0' && digit <= '9'
-		}
+		raw := candidate.Object.GetLabels()[metadata.ApplyOrderLabel]
 		order, err := strconv.Atoi(raw)
-		if !validDigits || err != nil || order <= 0 {
-			gvk := obj.GroupVersionKind().String()
-			if obj.GroupVersionKind().Empty() {
-				gvk = candidate.GVR.String()
-			}
-			return nil, 0, &deletionOrderError{
-				nodeID: obj.GetLabels()[metadata.NodeIDLabel],
-				err: fmt.Errorf(
-					"resource %s %s has invalid %s label %q: expected a positive base-10 integer",
-					gvk, resourceRef(obj), metadata.ApplyOrderLabel, raw,
-				),
-			}
+		if err != nil || order <= 0 {
+			order = fallbackDeletionOrder
 		}
 		if order > highest {
 			highest = order
@@ -142,7 +114,7 @@ func highestDeletionWave(
 			wave = append(wave, candidate)
 		}
 	}
-	return wave, highest, nil
+	return wave, highest
 }
 
 func (c *Controller) updateDeletionNodeStates(rcx *ReconcileContext, candidates []applyset.OrphanCandidate) {

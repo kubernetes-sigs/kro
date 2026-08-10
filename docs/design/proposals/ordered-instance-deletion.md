@@ -24,9 +24,10 @@ created.
 
 Persist each managed child's apply order and use the instance's ApplySet
 inventory as the authority for deletion. Instance deletion lists that inventory
-without resolving desired objects, validates every member's persisted order,
-and deletes only the highest remaining order. It waits for that entire wave to
-disappear before advancing.
+without resolving desired objects, groups members by persisted order, and
+deletes only the highest remaining order. It waits for that entire wave to
+disappear before advancing. Members without a usable persisted order share a
+fallback wave that runs after every valid order.
 
 External references remain read-only inputs. They are not finalized, mutated,
 or deleted by kro.
@@ -37,17 +38,17 @@ The lifecycle is governed by these invariants:
 
 - Managed-resource identity during deletion comes from persisted ApplySet
   inventory, not from reconstructed desired objects or current graph nodes.
-- Every managed child carries `internal.kro.run/apply-order`. Its value is the
-  child's one-based position in the complete runtime DAG's total topological
-  order.
+- Normal reconciliation gives every managed child
+  `internal.kro.run/apply-order`. Its value is the child's one-based position
+  in the complete runtime DAG's total topological order.
 - External nodes occupy positions in that total order but are not applied, so
   managed-resource order values may have gaps.
 - Deletion processes only the highest order still present in inventory.
 - A wave remains active until all of its objects are absent, including objects
   that already have a deletion timestamp.
+- Members with missing or invalid order metadata share one fallback wave. That
+  wave runs last and has no ordering guarantee within it.
 - The instance finalizer is removed only after the inventory is empty.
-- Missing or invalid order metadata is a visible migration error. The root
-  finalizer remains, and deletion never silently changes to unordered cleanup.
 
 #### Normal reconciliation
 
@@ -91,19 +92,19 @@ unavailable dependencies or invalid CEL, which is exactly the failure mode in
 annotations, and dynamic REST mappings. The tradeoff is that deletion status
 cannot describe current graph nodes when no revision can be resolved; the
 controller still reports the instance-level deleting condition and preserves
-the finalizer on inventory or ordering failures. Keeping deletion after graph
+the finalizer on inventory or deletion failures. Keeping deletion after graph
 resolution would preserve richer node status, but would leave the root
 finalizer stuck whenever resolution fails.
 
 #### Ordered deletion waves
 
-Before issuing any DELETE, the controller parses every candidate's
-`internal.kro.run/apply-order`. Only positive base-10 integers are accepted.
-Missing, malformed, zero, or negative values fail the reconciliation before any
-cluster mutation. The error identifies the resource's GVK, namespace, and name.
-When the candidate has a current `kro.run/node-id`, that node is marked Error.
-There is no inference from node ID, graph shape, collection index, or LIST
-order.
+The controller parses every candidate's `internal.kro.run/apply-order`.
+Positive base-10 integers retain their persisted order. Missing, malformed,
+zero, or negative values are assigned internal order zero, which is lower than
+every valid order. All such candidates therefore share a fallback wave that is
+selected only after every valid ordered wave is absent. There is no inference
+from node ID, graph shape, collection index, or LIST order, and no
+reverse-order guarantee among members of the fallback wave.
 
 After validation, the controller finds the highest remaining order and selects
 only candidates at that order. It skips a DELETE for a candidate that already
@@ -126,8 +127,8 @@ Node status during deletion is derived without CEL:
 - Current managed nodes represented by any live candidate are Deleting,
   including lower-order nodes that have not received DELETE yet.
 - Current managed nodes with no candidates are Deleted.
-- A DELETE or ordering error marks the relevant current node Error when its
-  node ID is available.
+- A DELETE error marks the relevant current node Error when its node ID is
+  available.
 
 #### Rollout behavior
 
@@ -140,27 +141,22 @@ separate migration job nor a forced restart loop.
 Some instances can miss that backfill. An instance already deleting when the
 new version starts bypasses normal child apply. Suspended instances, instances
 whose desired resources cannot resolve, and instances deleted before startup
-reconciliation completes can also retain unlabeled children. These cases fail
-safely during deletion: the ordering error is reported and the root finalizer
-is retained.
+reconciliation completes can also retain unlabeled children. Deletion still
+processes every labeled wave in reverse order, then deletes all remaining
+unlabeled or invalidly labeled children in the shared fallback wave.
 
-Operators have two break-glass choices:
-
-1. Determine the correct historical order and manually assign valid
-   `internal.kro.run/apply-order` labels before allowing deletion to continue.
-2. Remove the root finalizer and manually clean up all remaining managed
-   children.
-
-This is an accepted upgrade limitation, not an unordered compatibility mode.
-The controller must not guess an order for an unlabeled resource.
+This compatibility behavior deliberately prioritizes deletion liveness over
+reverse-order guarantees for resources whose historical order was never
+persisted. It avoids leaving an instance and its children indefinitely stuck in
+deletion during rollout while preserving strict ordering wherever the metadata
+is available.
 
 #### Failure behavior
 
 ApplySet LIST failures and RESTMapping failures retain the root finalizer and
-retry through normal reconciliation error handling. Malformed ordering metadata
-is reported before any DELETE. DELETE errors retain the finalizer, mark the
-associated node Error when possible, and propagate. A UID precondition conflict
-causes a delayed requeue with the active wave unchanged.
+retry through normal reconciliation error handling. DELETE errors retain the
+finalizer, mark the associated node Error when possible, and propagate. A UID
+precondition conflict causes a delayed requeue with the active wave unchanged.
 
 A child with a deletion timestamp is expected progress rather than an error.
 It remains Deleting and continues to block lower orders until the API server no
@@ -175,12 +171,12 @@ Rejected. External references are read-only, can be shared by unrelated
 instances, and can be managed by another authority. Giving kro a finalizer on
 them would change that ownership contract and could block their deletion.
 
-#### Unordered label-based deletion
+#### Fully unordered label-based deletion
 
-Rejected. Finding children by an ownership label avoids CEL but deletes all
-resources together. That is a breaking change to kro's dependent-before-
-dependency lifecycle and can remove resources while their dependents are still
-terminating.
+Rejected as the general deletion strategy. Finding children by an ownership
+label avoids CEL but deleting all resources together discards usable persisted
+ordering. The compatibility fallback limits unordered deletion to members that
+have no usable order and runs it only after every ordered member is absent.
 
 #### Reconstruct identity from CEL and current desired state
 
@@ -192,7 +188,8 @@ that no longer describes resources created by an older revision.
 
 Rejected for this rollout. It complicates migration and can be wrong when the
 current GraphRevision differs from the revision that created an older resource.
-Failing visibly preserves ordering rather than hiding uncertainty.
+The fallback wave represents that uncertainty explicitly without inventing an
+order that may be wrong.
 
 ## Scoping
 
@@ -203,8 +200,7 @@ Failing visibly preserves ordering rather than hiding uncertainty.
 - Reserving the public and internal kro label prefixes in RGD templates.
 - ApplySet-inventory discovery for instance deletion.
 - Strict, UID-preconditioned, highest-order deletion waves.
-- Startup-reconcile backfill and documented manual remediation for missed
-  migration.
+- A final compatibility wave for resources that missed order-label backfill.
 - Unit and focused integration coverage for the lifecycle.
 
 #### What is not in scope?
@@ -216,8 +212,8 @@ The durable-inventory and wait-for-wave semantics remain applicable: store the
 level on each member, delete the highest remaining level, and wait for absence
 before advancing.
 
-This proposal does not add an upgrade migration controller or infer metadata for missed
-backfills, or change normal orphan-pruning order.
+This proposal does not add an upgrade migration controller, infer metadata for
+missed backfills, or change normal orphan-pruning order.
 
 ## Testing strategy
 
@@ -241,8 +237,9 @@ Deletion unit tests verify that only the highest remaining order receives
 DELETE, a terminating highest-order resource blocks lower orders, the next wave
 starts only after the higher wave disappears, and all resources at one order
 are handled together. They also cover empty-inventory finalizer removal;
-missing, malformed, zero, and negative labels before any DELETE; DELETE error
-state; UID-conflict requeue; and deletion with an absent external reference.
+missing, malformed, zero, and negative labels in a shared final wave; DELETE
+error state; UID-conflict requeue; and deletion with an absent external
+reference.
 
 The core integration suite reproduces #1316 by creating an external ConfigMap
 and a managed child derived from it, asserting the child's persisted order,
@@ -260,4 +257,5 @@ The persisted order is a total topological position starting at one, not a
 dependency depth. Gaps caused by external nodes are intentional and harmless.
 The central contract is not that orders are contiguous; it is that deletion
 uses only persisted inventory and never advances below the highest remaining
-value.
+valid value. The fallback order zero is selected only when no valid ordered
+members remain.

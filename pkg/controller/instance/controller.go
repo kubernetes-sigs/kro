@@ -221,6 +221,9 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		}()
 	}
 
+	//--------------------------------------------------------------
+	// 2. Handle deletion before graph resolution
+	//--------------------------------------------------------------
 	// Deletion must not depend on resolving the current GraphRevision or CEL.
 	// Build a context without a runtime and use persisted ApplySet inventory.
 	if inst.GetDeletionTimestamp() != nil {
@@ -237,7 +240,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 
 	//--------------------------------------------------------------
-	// 2. Create a fresh runtime for this reconciliation
+	// 3. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
 	compiledGraph, err := c.resolveCompiledGraph()
 	if err != nil {
@@ -256,7 +259,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 
 	//--------------------------------------------------------------
-	// 3. Build reconciliation context (clients, mapper, labeler, runtime)
+	// 4. Build reconciliation context (clients, mapper, labeler, runtime)
 	//--------------------------------------------------------------
 	rcx = NewReconcileContext(
 		ctx, log, c.gvr,

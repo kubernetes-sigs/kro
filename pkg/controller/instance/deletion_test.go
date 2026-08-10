@@ -33,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	k8stesting "k8s.io/client-go/testing"
-	"k8s.io/utils/ptr"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
@@ -469,25 +468,25 @@ func TestHighestDeletionWaveReturnsMatchingCandidates(t *testing.T) {
 		{Object: newManagedObject(newDeploymentObject("one", "default"), instance, "workers", 1)},
 		{Object: newManagedObject(newDeploymentObject("two", "default"), instance, "workers", 3)},
 		{Object: newManagedObject(newDeploymentObject("three", "default"), instance, "workers", 3)},
+		{Object: newManagedObject(newDeploymentObject("fallback", "default"), instance, "workers", 0)},
 	}
 
-	wave, highest, orderErr := highestDeletionWave(candidates)
-	require.NoError(t, orderErr)
+	wave, highest := highestDeletionWave(candidates)
 	require.Len(t, wave, 2)
 	assert.Equal(t, 3, highest)
 	assert.Equal(t, "two", wave[0].Object.GetName())
 	assert.Equal(t, "three", wave[1].Object.GetName())
 }
 
-func TestReconcileDeletionRejectsInvalidOrderBeforeDeleting(t *testing.T) {
+func TestReconcileDeletionDefersInvalidOrdersUntilLastWave(t *testing.T) {
 	tests := []struct {
 		name string
-		raw  *string
+		raw  string
 	}{
 		{name: "missing"},
-		{name: "malformed", raw: ptr.To("later")},
-		{name: "zero", raw: ptr.To("0")},
-		{name: "negative", raw: ptr.To("-1")},
+		{name: "malformed", raw: "later"},
+		{name: "zero", raw: "0"},
+		{name: "negative", raw: "-1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -498,26 +497,56 @@ func TestReconcileDeletionRejectsInvalidOrderBeforeDeleting(t *testing.T) {
 			b := newManagedObject(newDeploymentObject("b", "default"), instance, "b", 2)
 			labels := b.GetLabels()
 			delete(labels, metadata.ApplyOrderLabel)
-			if tt.raw != nil {
-				labels[metadata.ApplyOrderLabel] = *tt.raw
+			if tt.raw != "" {
+				labels[metadata.ApplyOrderLabel] = tt.raw
 			}
 			b.SetLabels(labels)
 
 			controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
-			deletes := 0
+
+			// The valid order runs before the fallback wave.
+			require.Error(t, controller.reconcileDeletion(rcx))
+			_, err := raw.Tracker().Get(controllerTestDeployGVR, "default", "a")
+			require.Error(t, err)
+			_, err = raw.Tracker().Get(controllerTestDeployGVR, "default", "b")
+			require.NoError(t, err)
+
+			var deleted []string
 			raw.PrependReactor("delete", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
-				deletes++
+				deleted = append(deleted, action.(k8stesting.DeleteAction).GetName())
 				return true, nil, nil
 			})
 
-			err := controller.reconcileDeletion(rcx)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), metadata.ApplyOrderLabel)
-			assert.Contains(t, err.Error(), "default/b")
-			assert.Zero(t, deletes)
-			assert.Equal(t, v1alpha1.NodeStateError, rcx.StateManager.NodeStates["b"].State)
+			require.Error(t, controller.reconcileDeletion(rcx))
+			assert.Equal(t, []string{"b"}, deleted)
 		})
 	}
+}
+
+func TestReconcileDeletionDeletesInvalidOrdersInSharedFallbackWave(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	node := &graph.Node{Meta: graph.NodeMeta{
+		ID: "workers", Type: graph.NodeTypeCollection, GVR: controllerTestDeployGVR, Namespaced: true,
+	}}
+	one := newManagedObject(newDeploymentObject("one", "default"), instance, "workers", 1)
+	two := newManagedObject(newDeploymentObject("two", "default"), instance, "workers", 1)
+	oneLabels := one.GetLabels()
+	delete(oneLabels, metadata.ApplyOrderLabel)
+	one.SetLabels(oneLabels)
+	twoLabels := two.GetLabels()
+	twoLabels[metadata.ApplyOrderLabel] = "invalid"
+	two.SetLabels(twoLabels)
+
+	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(node), one, two)
+	var deleted []string
+	raw.PrependReactor("delete", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+		deleted = append(deleted, action.(k8stesting.DeleteAction).GetName())
+		return true, nil, nil
+	})
+
+	require.Error(t, controller.reconcileDeletion(rcx))
+	sort.Strings(deleted)
+	assert.Equal(t, []string{"one", "two"}, deleted)
 }
 
 func TestReconcileDeletionUIDConflictDoesNotAdvance(t *testing.T) {

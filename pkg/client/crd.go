@@ -22,6 +22,7 @@ import (
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -160,7 +161,8 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 		}
 
 		// If there are no changes at all, we can skip the update
-		if !report.HasChanges() {
+		namesChanged := !equality.Semantic.DeepEqual(existing.Spec.Names, desired.Spec.Names)
+		if !report.HasChanges() && !namesChanged {
 			log.V(1).Info("CRD is up-to-date", "name", desired.Name)
 			return nil
 		}
@@ -194,7 +196,7 @@ func (w *CRDWrapper) create(ctx context.Context, crd v1.CustomResourceDefinition
 }
 
 func (w *CRDWrapper) patch(ctx context.Context, newCRD v1.CustomResourceDefinition) error {
-	patchBytes, err := json.Marshal(newCRD)
+	patchBytes, err := mergePatchForCRD(newCRD)
 	if err != nil {
 		return fmt.Errorf("failed to marshal CRD for patch: %w", err)
 	}
@@ -207,6 +209,38 @@ func (w *CRDWrapper) patch(ctx context.Context, newCRD v1.CustomResourceDefiniti
 		metav1.PatchOptions{},
 	)
 	return err
+}
+
+func mergePatchForCRD(crd v1.CustomResourceDefinition) ([]byte, error) {
+	patchBytes, err := json.Marshal(crd)
+	if err != nil {
+		return nil, err
+	}
+
+	var patch map[string]any
+	if err := json.Unmarshal(patchBytes, &patch); err != nil {
+		return nil, err
+	}
+
+	spec, ok := patch["spec"].(map[string]any)
+	if !ok {
+		spec = map[string]any{}
+		patch["spec"] = spec
+	}
+	names, ok := spec["names"].(map[string]any)
+	if !ok {
+		names = map[string]any{}
+		spec["names"] = names
+	}
+
+	if len(crd.Spec.Names.ShortNames) == 0 {
+		names["shortNames"] = nil
+	}
+	if len(crd.Spec.Names.Categories) == 0 {
+		names["categories"] = nil
+	}
+
+	return json.Marshal(patch)
 }
 
 // Delete removes a CRD if it exists

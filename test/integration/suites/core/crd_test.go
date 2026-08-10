@@ -162,6 +162,57 @@ var _ = Describe("CRD", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
+		It("should update CRD short names and categories", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-crd-names",
+				generator.WithSchema(
+					"TestNames", "v1alpha1",
+					map[string]interface{}{
+						"field": "string",
+					},
+					nil,
+				),
+			)
+			rgd.Spec.Schema.ShortNames = []string{"tn", "tname"}
+			rgd.Spec.Schema.Categories = []string{"kro", "platform"}
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "testnames.kro.run"}, crd)).To(Succeed())
+				g.Expect(crd.Spec.Names.ShortNames).To(ConsistOf("tn", "tname"))
+				g.Expect(crd.Spec.Names.Categories).To(ConsistOf("kro", "platform"))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
+				rgd.Spec.Schema.ShortNames = []string{"tn2"}
+				rgd.Spec.Schema.Categories = []string{"platform"}
+				g.Expect(env.Client.Update(ctx, rgd)).To(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "testnames.kro.run"}, crd)).To(Succeed())
+				g.Expect(crd.Spec.Names.ShortNames).To(ConsistOf("tn2"))
+				g.Expect(crd.Spec.Names.Categories).To(ConsistOf("platform"))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
+				rgd.Spec.Schema.ShortNames = nil
+				rgd.Spec.Schema.Categories = nil
+				g.Expect(env.Client.Update(ctx, rgd)).To(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "testnames.kro.run"}, crd)).To(Succeed())
+				g.Expect(crd.Spec.Names.ShortNames).To(BeEmpty())
+				g.Expect(crd.Spec.Names.Categories).To(BeEmpty())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
 		It("should delete CRD when ResourceGraphDefinition is deleted", func(ctx SpecContext) {
 			// Create ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd-delete",

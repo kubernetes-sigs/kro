@@ -17,6 +17,7 @@ package conversion
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"time"
 
@@ -44,13 +45,25 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 	case types.IntType:
 		return v.Value().(int64), nil
 	case types.UintType:
-		return v.Value().(uint64), nil
+		// apimachinery's unstructured deep-copy only accepts int64 for
+		// integers (not uint64), so convert here rather than let a raw
+		// uint64 reach DeepCopyJSONValue and panic. Values that don't fit
+		// in an int64 have no JSON-safe representation, so surface an
+		// actionable error instead.
+		u := v.Value().(uint64)
+		if u > math.MaxInt64 {
+			return nil, fmt.Errorf("%w: uint value %d overflows int64; convert it explicitly, e.g. string(...)", ErrUnsupportedType, u)
+		}
+		return int64(u), nil
 	case types.DoubleType:
 		return v.Value().(float64), nil
 	case types.StringType:
 		return v.Value().(string), nil
 	case types.BytesType:
-		return v.Value().([]byte), nil
+		// Raw bytes have no JSON-safe representation and panic apimachinery's
+		// unstructured deep-copy (DeepCopyJSONValue). Require the author to
+		// encode explicitly rather than silently pick an encoding for them.
+		return nil, fmt.Errorf("%w: bytes value cannot be used directly in a resource template or status field; encode it explicitly, e.g. base64.encode(...)", ErrUnsupportedType)
 	case types.DurationType:
 		return v1.Duration{Duration: v.Value().(time.Duration)}.ToUnstructured(), nil
 	case types.TimestampType:

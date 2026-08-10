@@ -108,6 +108,9 @@ func TestGoNativeType_ComplexNested(t *testing.T) {
 }
 
 func TestGoNativeType_Bytes(t *testing.T) {
+	// Raw bytes have no JSON-safe representation (apimachinery's unstructured
+	// deep-copy panics on []byte), so GoNativeType must reject them with an
+	// actionable error instead of returning a value that later panics.
 	env, err := cel.NewEnv()
 	require.NoError(t, err)
 
@@ -121,17 +124,54 @@ func TestGoNativeType_Bytes(t *testing.T) {
 	require.NoError(t, err)
 
 	native, err := GoNativeType(val)
+	require.ErrorIs(t, err, ErrUnsupportedType)
+	assert.Nil(t, native)
+}
+
+func TestGoNativeType_Uint(t *testing.T) {
+	env, err := cel.NewEnv()
 	require.NoError(t, err)
 
-	// Check type
-	bytes, ok := native.([]byte)
-	require.True(t, ok, "Expected []byte, got %T", native)
-	assert.Equal(t, []byte("hello world"), bytes)
+	ast, issues := env.Compile(`uint(42)`)
+	require.NoError(t, issues.Err())
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	val, _, err := prog.Eval(map[string]interface{}{})
+	require.NoError(t, err)
+
+	native, err := GoNativeType(val)
+	require.NoError(t, err)
+
+	// GoNativeType converts uint to int64 so it survives apimachinery's
+	// unstructured deep-copy, which only accepts int64 (not uint64).
+	i, ok := native.(int64)
+	require.True(t, ok, "Expected int64, got %T", native)
+	assert.Equal(t, int64(42), i)
 
 	// Check JSON marshalling
 	marshalled, err := json.Marshal(native)
 	assert.NoError(t, err, "Should be JSON marshallable")
 	assert.NotEmpty(t, marshalled)
+}
+
+func TestGoNativeType_UintOverflow(t *testing.T) {
+	env, err := cel.NewEnv()
+	require.NoError(t, err)
+
+	ast, issues := env.Compile(`18446744073709551615u`) // math.MaxUint64
+	require.NoError(t, issues.Err())
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	val, _, err := prog.Eval(map[string]interface{}{})
+	require.NoError(t, err)
+
+	native, err := GoNativeType(val)
+	require.ErrorIs(t, err, ErrUnsupportedType)
+	assert.Nil(t, native)
 }
 
 func TestConvertMap_DeepCopiesRawMap(t *testing.T) {

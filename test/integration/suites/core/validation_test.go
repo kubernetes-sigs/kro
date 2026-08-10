@@ -16,6 +16,7 @@ package core_test
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -42,6 +43,62 @@ var _ = Describe("Validation", func() {
 				Name: namespace,
 			},
 		})).To(Succeed())
+	})
+
+	Context("Schema short names and categories", func() {
+		It("should reject invalid values at admission", func(ctx SpecContext) {
+			tests := []struct {
+				name   string
+				mutate func(*krov1alpha1.Schema)
+			}{
+				{
+					name: "uppercase short name",
+					mutate: func(schema *krov1alpha1.Schema) {
+						schema.ShortNames = []string{"WA"}
+					},
+				},
+				{
+					name: "duplicate short name",
+					mutate: func(schema *krov1alpha1.Schema) {
+						schema.ShortNames = []string{"wa", "wa"}
+					},
+				},
+				{
+					name: "too long short name",
+					mutate: func(schema *krov1alpha1.Schema) {
+						schema.ShortNames = []string{strings.Repeat("a", 64)}
+					},
+				},
+				{
+					name: "uppercase category",
+					mutate: func(schema *krov1alpha1.Schema) {
+						schema.Categories = []string{"Kro"}
+					},
+				},
+				{
+					name: "duplicate category",
+					mutate: func(schema *krov1alpha1.Schema) {
+						schema.Categories = []string{"platform", "platform"}
+					},
+				},
+			}
+
+			for _, tt := range tests {
+				By(tt.name)
+				rgd := generator.NewResourceGraphDefinition(fmt.Sprintf("test-alias-validation-%s", rand.String(5)),
+					generator.WithSchema(
+						"AliasValidation", "v1alpha1",
+						map[string]interface{}{
+							"name": "string",
+						},
+						nil,
+					),
+				)
+				tt.mutate(rgd.Spec.Schema)
+
+				Expect(env.Client.Create(ctx, rgd)).ToNot(Succeed())
+			}
+		})
 	})
 
 	Context("Resource IDs", func() {

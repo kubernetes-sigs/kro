@@ -39,6 +39,7 @@ func (c *Controller) reconcileDeletion(dcx *DeletionContext) error {
 
 	candidates, applier, err := c.discoverDeletionInventory(dcx)
 	if err != nil {
+		dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
 		return err
 	}
 
@@ -56,13 +57,16 @@ func (c *Controller) reconcileDeletion(dcx *DeletionContext) error {
 
 		result, err := applier.DeleteOrphan(dcx.Ctx, candidate)
 		if err != nil {
+			dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
 			return err
 		}
 		conflict = conflict || result.Conflict
 	}
 
 	if conflict {
-		return dcx.delayedRequeue(fmt.Errorf("deletion encountered UID conflicts; retrying"))
+		err := fmt.Errorf("deletion encountered UID conflicts; retrying")
+		dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
+		return dcx.delayedRequeue(err)
 	}
 	return dcx.delayedRequeue(fmt.Errorf("deleting apply-order wave %d", highest))
 }

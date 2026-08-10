@@ -120,14 +120,10 @@ to advance. Only a later reconciliation that observes no higher-order members
 can begin the next order. Empty inventory is the sole condition for removing
 the root finalizer and cleaning up coordinator watches.
 
-Node status during deletion is derived without CEL:
-
-- External nodes are Skipped.
-- Current managed nodes represented by any live candidate are Deleting,
-  including lower-order nodes that have not received DELETE yet.
-- Current managed nodes with no candidates are Deleted.
-- A DELETE error marks the relevant current node Error when its node ID is
-  available.
+Deletion status is intentionally instance-level. The runtime-free path cannot
+derive meaningful current-graph node states, and those transient states were
+never persisted independently. `ResourcesReady=Unknown` with reason
+`UnderDeletion` reports progress or the error currently blocking deletion.
 
 #### Rollout behavior
 
@@ -154,7 +150,9 @@ is available.
 
 ApplySet LIST failures and RESTMapping failures retain the root finalizer and
 retry through normal reconciliation error handling. DELETE errors retain the
-finalizer and propagate through the instance-level status. A UID precondition
+finalizer and propagate through the instance-level status. Inventory, LIST,
+DELETE, and UID-conflict errors replace the generic deletion-progress message
+with an actionable `ResourcesReady` condition message. A UID precondition
 conflict causes a delayed requeue with the active wave unchanged.
 
 Deletion validates the ApplySet parent ID, kro tooling ownership, and the
@@ -207,6 +205,7 @@ order that may be wrong.
   resources.
 - Reserving the public and internal kro label prefixes in RGD templates.
 - ApplySet-inventory discovery for instance deletion.
+- Validation and checksumming of persisted ApplySet deletion inventory.
 - Strict, UID-preconditioned, highest-order deletion waves.
 - A final compatibility wave for resources that missed order-label backfill.
 - Unit and focused integration coverage for the lifecycle.
@@ -230,8 +229,9 @@ missed backfills, or change normal orphan-pruning order.
 Fake-client deletion fixtures carry a stable UID, the computed
 `applyset.kubernetes.io/part-of` value, `kro.run/node-id`, and
 `internal.kro.run/apply-order`. Their parent instance carries the ApplySet
-group-kind and namespace annotations. Integration tests use synthetic child
-finalizers to make ordering observable rather than timing-dependent.
+parent ID, tooling, group-kind, and namespace metadata. Integration tests use
+synthetic child finalizers to make ordering observable rather than
+timing-dependent.
 
 #### Test plan
 
@@ -246,8 +246,8 @@ DELETE, a terminating highest-order resource blocks lower orders, the next wave
 starts only after the higher wave disappears, and all resources at one order
 are handled together. They also cover empty-inventory finalizer removal;
 missing, malformed, zero, and negative labels in a shared final wave; DELETE
-error state; UID-conflict requeue; and deletion with an absent external
-reference.
+error visibility; invalid-inventory finalizer retention; UID-conflict requeue;
+and deletion with an absent external reference.
 
 The core integration suite reproduces #1316 by creating an external ConfigMap
 and a managed child derived from it, asserting the child's persisted order,

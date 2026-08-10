@@ -249,6 +249,21 @@ func TestDiscoverDeletionInventoryRejectsMissingScope(t *testing.T) {
 	assert.Zero(t, lists, "invalid inventory must fail before listing resources")
 }
 
+func TestReconcileDeletionSurfacesInvalidInventory(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	metadata.SetInstanceFinalizer(instance)
+	controller, dcx, _ := newControllerAndDeletionContext(t, instance, newTestGraph())
+
+	err := controller.reconcileDeletion(dcx)
+	require.Error(t, err)
+	condition := conditionByType(t, dcx.Instance, ResourcesReady)
+	assert.Equal(t, metav1.ConditionUnknown, condition.Status)
+	require.NotNil(t, condition.Message)
+	assert.Contains(t, *condition.Message, "deletion blocked")
+	assert.Contains(t, *condition.Message, applyset.ApplySetParentIDLabel)
+	assert.True(t, metadata.HasInstanceFinalizer(dcx.Instance))
+}
+
 func TestReconcileDeletionDeletesAllAndRequeues(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 
@@ -352,6 +367,10 @@ func TestReconcileDeletionDeleteErrorBubblesUp(t *testing.T) {
 	err := controller.reconcileDeletion(rcx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "delete failed")
+	condition := conditionByType(t, rcx.Instance, ResourcesReady)
+	require.NotNil(t, condition.Message)
+	assert.Contains(t, *condition.Message, "deletion blocked")
+	assert.Contains(t, *condition.Message, "delete failed")
 }
 
 func TestReconcileDeletionExternalRefGoneDoesNotBlock(t *testing.T) {

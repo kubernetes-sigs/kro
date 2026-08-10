@@ -38,29 +38,21 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope
 		scope = extv1.NamespaceScoped
 	}
 
-	var (
-		additionalPrinterColumns []extv1.CustomResourceColumnDefinition
-		metadata                 *v1alpha1.CRDMetadata
-		shortNames               []string
-		categories               []string
-	)
-	if rgSchema != nil {
-		additionalPrinterColumns = rgSchema.AdditionalPrinterColumns
-		metadata = rgSchema.Metadata
-		shortNames = rgSchema.ShortNames
-		categories = rgSchema.Categories
+	var emptySchema v1alpha1.Schema
+	if rgSchema == nil {
+		rgSchema = &emptySchema
 	}
 
 	objectMeta := metav1.ObjectMeta{
 		Name:            fmt.Sprintf("%s.%s", pluralKind, group),
 		OwnerReferences: nil, // Injecting owner references is the responsibility of the caller.
 	}
-	if metadata != nil {
-		if len(metadata.Labels) > 0 {
-			objectMeta.Labels = metadata.Labels
+	if rgSchema.Metadata != nil {
+		if len(rgSchema.Metadata.Labels) > 0 {
+			objectMeta.Labels = rgSchema.Metadata.Labels
 		}
-		if len(metadata.Annotations) > 0 {
-			objectMeta.Annotations = metadata.Annotations
+		if len(rgSchema.Metadata.Annotations) > 0 {
+			objectMeta.Annotations = rgSchema.Metadata.Annotations
 		}
 	}
 
@@ -73,8 +65,8 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope
 				ListKind:   kind + "List",
 				Plural:     pluralKind,
 				Singular:   strings.ToLower(kind),
-				ShortNames: shortNames,
-				Categories: categories,
+				ShortNames: rgSchema.ShortNames,
+				Categories: rgSchema.Categories,
 			},
 			Scope: scope,
 			Versions: []extv1.CustomResourceDefinitionVersion{
@@ -88,7 +80,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope
 					Subresources: &extv1.CustomResourceSubresources{
 						Status: &extv1.CustomResourceSubresourceStatus{},
 					},
-					AdditionalPrinterColumns: newCRDAdditionalPrinterColumns(additionalPrinterColumns),
+					AdditionalPrinterColumns: newCRDAdditionalPrinterColumns(rgSchema.AdditionalPrinterColumns),
 				},
 			},
 		},

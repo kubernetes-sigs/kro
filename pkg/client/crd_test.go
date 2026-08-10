@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -60,6 +61,46 @@ func TestEnsureClearsCRDNames(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got.Spec.Names.ShortNames)
 	assert.Empty(t, got.Spec.Names.Categories)
+}
+
+func TestCRDMergePatchClearsEmptyNames(t *testing.T) {
+	patchBytes, err := crdMergePatch(*testCRD())
+	require.NoError(t, err)
+
+	var patch map[string]any
+	require.NoError(t, json.Unmarshal(patchBytes, &patch))
+
+	spec := requireMap(t, patch, "spec")
+	names := requireMap(t, spec, "names")
+	assert.Contains(t, names, "shortNames")
+	assert.Nil(t, names["shortNames"])
+	assert.Contains(t, names, "categories")
+	assert.Nil(t, names["categories"])
+	assert.NotContains(t, patch, "status")
+	assert.NotContains(t, patch, "apiVersion")
+	assert.NotContains(t, patch, "kind")
+}
+
+func TestCRDMergePatchIncludesMetadataLabels(t *testing.T) {
+	crd := testCRD()
+	patchBytes, err := crdMergePatch(*crd)
+	require.NoError(t, err)
+
+	var patch map[string]any
+	require.NoError(t, json.Unmarshal(patchBytes, &patch))
+
+	metadataPatch := requireMap(t, patch, "metadata")
+	labels := requireMap(t, metadataPatch, "labels")
+	assert.Equal(t, "true", labels[metadata.OwnedLabel])
+	assert.Equal(t, "widgets", labels[metadata.ResourceGraphDefinitionNameLabel])
+	assert.Equal(t, "uid", labels[metadata.ResourceGraphDefinitionIDLabel])
+}
+
+func requireMap(t *testing.T, parent map[string]any, key string) map[string]any {
+	t.Helper()
+	value, ok := parent[key].(map[string]any)
+	require.True(t, ok, "%q is not an object", key)
+	return value
 }
 
 func newTestCRDWrapper(crd *v1.CustomResourceDefinition) *CRDWrapper {

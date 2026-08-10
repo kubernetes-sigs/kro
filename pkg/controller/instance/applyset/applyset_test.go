@@ -1445,8 +1445,8 @@ func TestMetadata_Annotations(t *testing.T) {
 
 	annotations := m.Annotations()
 
-	if len(annotations) != 3 {
-		t.Errorf("Annotations() returned %d annotations, want 3", len(annotations))
+	if len(annotations) != 4 {
+		t.Errorf("Annotations() returned %d annotations, want 4", len(annotations))
 	}
 
 	if got := annotations[ApplySetToolingAnnotation]; got != "kro/v1.0.0" {
@@ -1459,6 +1459,9 @@ func TestMetadata_Annotations(t *testing.T) {
 
 	if got := annotations[ApplySetAdditionalNamespacesAnnotation]; got != "default" {
 		t.Errorf("Annotations()[%s] = %q, want %q", ApplySetAdditionalNamespacesAnnotation, got, "default")
+	}
+	if got := annotations[ApplySetInventoryHashAnnotation]; got == "" {
+		t.Errorf("Annotations()[%s] is empty", ApplySetInventoryHashAnnotation)
 	}
 }
 

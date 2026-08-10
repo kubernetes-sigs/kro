@@ -158,6 +158,15 @@ retry through normal reconciliation error handling. DELETE errors retain the
 finalizer, mark the associated node Error when possible, and propagate. A UID
 precondition conflict causes a delayed requeue with the active wave unchanged.
 
+Deletion validates the ApplySet parent ID, kro tooling ownership, and the
+presence and syntax of the persisted group-kind and namespace annotations
+before listing members. Normal reconciliation also writes a checksum over that
+inventory; when present, deletion verifies it to detect accidental partial
+mutation. Invalid inventory retains the root finalizer and reports an
+actionable reconciliation error rather than treating the inventory as empty
+and orphaning children. Parents created by older kro versions may omit the
+checksum, but must still carry the standard ApplySet inventory annotations.
+
 A child with a deletion timestamp is expected progress rather than an error.
 It remains Deleting and continues to block lower orders until the API server no
 longer lists it. No error path is allowed to issue deletion for a lower-order

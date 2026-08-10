@@ -77,6 +77,9 @@ func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
 func (c *Controller) discoverDeletionInventory(
 	rcx *ReconcileContext,
 ) ([]applyset.OrphanCandidate, *applyset.ApplySet, error) {
+	if err := applyset.ValidateParentInventory(rcx.Instance); err != nil {
+		return nil, nil, fmt.Errorf("validate deletion inventory: %w", err)
+	}
 	applier := c.createApplySet(rcx)
 	inventory, err := applier.Project(nil)
 	if err != nil {

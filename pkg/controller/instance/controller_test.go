@@ -533,6 +533,7 @@ func TestReconcileSkipsNoopStatusWriteForWholeNumbers(t *testing.T) {
 
 func TestReconcileDeletionRemovesFinalizer(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
+	addEmptyDeletionScope(instance)
 	metadata.SetInstanceFinalizer(instance)
 	instance.SetDeletionTimestamp(new(metav1.NewTime(time.Now())))
 
@@ -551,6 +552,7 @@ func TestReconcileDeletionRemovesFinalizer(t *testing.T) {
 
 func TestReconcileDeletionPreservesAuthorStatusWithoutRuntime(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
+	addEmptyDeletionScope(instance)
 	metadata.SetInstanceFinalizer(instance)
 	instance.SetDeletionTimestamp(new(metav1.NewTime(time.Now())))
 	require.NoError(t, unstructured.SetNestedMap(instance.Object, map[string]interface{}{

@@ -150,6 +150,7 @@ func (m Metadata) Annotations() map[string]string {
 		ApplySetToolingAnnotation:              m.Tooling,
 		ApplySetGKsAnnotation:                  m.GroupKindsString(),
 		ApplySetAdditionalNamespacesAnnotation: m.NamespacesString(),
+		ApplySetInventoryHashAnnotation:        inventoryHash(m.ID, m.GroupKinds, m.AdditionalNamespaces),
 	}
 }
 

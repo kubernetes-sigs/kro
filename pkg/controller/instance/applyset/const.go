@@ -84,6 +84,10 @@ const (
 	// Example value: "ConfigMap,Deployment.apps,Service"
 	ApplySetGKsAnnotation = "applyset.kubernetes.io/contains-group-kinds"
 
+	// ApplySetInventoryHashAnnotation detects accidental mutation of the
+	// persisted group-kind and namespace inventory used during deletion.
+	ApplySetInventoryHashAnnotation = "internal.kro.run/applyset-inventory-hash"
+
 	// ApplySetParentIDLabel is the key of the label that makes object an ApplySet parent object.
 	// Its value MUST use the format specified in V1ApplySetIdFormat below.
 	ApplySetParentIDLabel = "applyset.kubernetes.io/id"

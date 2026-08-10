@@ -63,9 +63,30 @@ func addDeletionScope(instance *unstructured.Unstructured, gvk schema.GroupVersi
 	}
 	sort.Strings(values)
 	annotations[applyset.ApplySetGKsAnnotation] = strings.Join(values, ",")
+	annotations[applyset.ApplySetToolingAnnotation] = applyset.ToolingID()
+	if _, exists := annotations[applyset.ApplySetAdditionalNamespacesAnnotation]; !exists {
+		annotations[applyset.ApplySetAdditionalNamespacesAnnotation] = ""
+	}
 	if namespace != "" && namespace != instance.GetNamespace() {
 		annotations[applyset.ApplySetAdditionalNamespacesAnnotation] = namespace
 	}
+	instance.SetAnnotations(annotations)
+	labels := instance.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[applyset.ApplySetParentIDLabel] = applyset.ID(instance)
+	instance.SetLabels(labels)
+}
+
+func addEmptyDeletionScope(instance *unstructured.Unstructured) {
+	annotations := instance.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[applyset.ApplySetToolingAnnotation] = applyset.ToolingID()
+	annotations[applyset.ApplySetGKsAnnotation] = ""
+	annotations[applyset.ApplySetAdditionalNamespacesAnnotation] = ""
 	instance.SetAnnotations(annotations)
 	labels := instance.GetLabels()
 	if labels == nil {
@@ -208,6 +229,26 @@ func TestDiscoverLiveResourcesListError(t *testing.T) {
 	assert.Contains(t, err.Error(), "list failed")
 }
 
+func TestDiscoverDeletionInventoryRejectsMissingScope(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	addEmptyDeletionScope(instance)
+	annotations := instance.GetAnnotations()
+	delete(annotations, applyset.ApplySetGKsAnnotation)
+	instance.SetAnnotations(annotations)
+	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
+
+	lists := 0
+	raw.PrependReactor("list", "*", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+		lists++
+		return false, nil, nil
+	})
+
+	_, _, err := controller.discoverDeletionInventory(rcx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), applyset.ApplySetGKsAnnotation)
+	assert.Zero(t, lists, "invalid inventory must fail before listing resources")
+}
+
 func TestReconcileDeletionDeletesAllAndRequeues(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 
@@ -235,6 +276,7 @@ func TestReconcileDeletionDeletesAllAndRequeues(t *testing.T) {
 func TestReconcileDeletionRemovesFinalizerWhenNoLiveResources(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	metadata.SetInstanceFinalizer(instance)
+	addEmptyDeletionScope(instance)
 
 	deployNode := &graph.Node{
 		Meta: graph.NodeMeta{

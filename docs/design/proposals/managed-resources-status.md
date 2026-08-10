@@ -2,35 +2,37 @@
 
 ## Problem statement
 
-When kro reconciles a ResourceGraphDefinition (RGD) instance, it needs to
+When Kro reconciles a ResourceGraphDefinition (RGD) instance, it needs to
 track its own view of the resource graph: which managed resources exist, their
 topological ordering, dependency relationships, and the current reconciliation
-state. Today this data is mixed into the user-facing `status` block, which
-creates two problems.
+state. Today this data lives in the `status` block of the *RGD*
+(`ResourceGraphDefinitionStatus.TopologicalOrder` and `.Resources`); instances
+record none of it. That creates two problems.
 
-**API surface pollution.** The `status` subresource is the contract between
-kro and the user. Fields such as `topologicalOrder` and
-`resources []ResourceInformation` are kro implementation details based on its graph projection that should
-not be part of that contract. Every time kro's internal bookkeeping changes,
-the user-visible API changes with it.
+**Wrong object, and API surface pollution.** An RGD is a template. The graph is
+a property of each instance, which may differ per instance through collection
+expansions, `includeWhen` outcomes, and adoption. On top of that,
+`ResourceGraphDefinitionStatus` is a published `v1alpha1` Go type, so evolving
+Kro's bookkeeping means changing a versioned API that users read.
 
-**Scalability.** If managed resource objects (or even rich per-node detail) were
-stored inside the instance status, the instance object would grow proportionally
-to the number and size of its managed resources. For graphs with many nodes, or
-with collection expansions, this quickly becomes an etcd size problem. The only
-safe data to store is a compact identity reference, not full resource content.
+**Scalability.** Whatever replaces this must not grow with the number or size of
+the managed resources — for graphs with many nodes, or with collection
+expansions, that becomes an etcd size problem. The only safe data to store is a
+compact identity reference, not full resource content.
 
 ## Proposal
 
 Introduce a dedicated `graph` field at the top level of every kro-generated
 Instance CRD, sitting alongside `spec` and `status`. The `graph` field is
-written exclusively by kro using its own field manager, keeping it
-operationally separate from user-controlled `status`. It contains only the
-internal bookkeeping data kro needs to reconcile the instance.
+written exclusively by Kro using its own field manager, keeping it
+operationally separate from the user-facing `status` (which Kro also writes,
+including the RGD-projected fields). It contains only the internal bookkeeping
+data Kro needs to reconcile the instance.
 
-The `graph` field stores a compact identity reference (`ManagedResourceRef`)
-for each managed resource rather than the full resource object. Consumers who
-need live resource data look it up directly using the identity fields.
+The `graph` field stores a compact identity reference
+(`ManagedGraphResourceRef`) for each managed resource rather than the full
+resource object. Consumers who need live resource data look it up directly
+using the identity fields.
 
 #### graph as a Kubernetes subresource
 
@@ -48,7 +50,7 @@ separation exists so that controllers can update status without accidentally
 racing with user writes to spec, and so RBAC can grant status-write permission
 independently of spec-write permission.
 
-Ideally `graph` would work the same way — a separate REST endpoint that kro
+Ideally `graph` would work the same way — a separate REST endpoint that Kro
 updates independently, with its own RBAC verb (`update` on
 `myapps/graph`). However, the `apiextensions.k8s.io` CRD API only supports
 `status` and `scale` as named subresource slots; [**arbitrary named subresources
@@ -62,24 +64,34 @@ field ownership:
 
 - `graph` is declared as a top-level field in the CRD OpenAPI schema, alongside
   `spec` and `status`.
-- kro applies the `graph` field using a dedicated field manager
-  (`kro-graph-manager`). Server-side apply records ownership of every field
-  under `graph` to that manager.
+- Kro applies the `graph` field using a dedicated field manager
+  (`kro-graph-manager`). `graph.resources` is `x-kubernetes-list-type: atomic`,
+  so ownership is recorded for the list as a unit (see Discussion and notes).
 - No other actor — user, admission webhook, or GitOps controller — should claim
-  ownership of `graph` fields. If a foreign manager attempts to set a field
-  under `graph`, the API server will return a conflict error, making the
-  boundary machine-enforceable.
+  ownership of `graph` fields. This is not machine-enforced: SSA returns a
+  conflict only for a non-forced *apply* by another manager, while an `Update`,
+  a merge patch, or `--force-conflicts` take the field silently. Kro rewrites
+  `graph` on the next reconcile, so the failure mode is a transient wrong value.
 - From a RBAC perspective, `graph` cannot be isolated at the verb level today
   (since there is no `/graph` subresource path). Access is controlled at the
   resource level. Operators who want to read graph data but not modify the
-  instance can be granted `get`/`list`/`watch` on the instance resource; kro
+  instance can be granted `get`/`list`/`watch` on the instance resource; Kro
   itself needs `update` (or `patch`) on the instance to write `graph`.
 
 This is the same pattern used by tools such as cert-manager (which applies
 `status` fields on generated `Secret` objects) and Argo CD (which writes
 `metadata.annotations` under its own field manager without touching user
 annotations). It is a well-understood, production-proven approach that does not
-require infrastructure beyond what kro already uses.
+require infrastructure beyond what Kro already uses.
+
+**GitOps.** Because `graph` is in the object body, `kubectl get -o yaml`
+displays it, so an instance checked into git has a `graph` block and the
+GitOps controller either reports permanent drift or fights Kro for the field.
+Argo CD's fix is `ignoreDifferences.managedFieldsManagers:
+[kro-graph-manager]`; Flux's is `spec.driftDetection.ignore` with
+`fromFieldPath: graph`. Both must be documented user-facing, not only here. Kro
+never treats a foreign write to `graph` as an error, so a misconfigured setup
+degrades to churn rather than a broken instance.
 
 If the Kubernetes ecosystem adds support for arbitrary named CRD subresources in
 the future, migrating `graph` to a true subresource would be a backwards-
@@ -89,7 +101,7 @@ endpoint, and existing readers could be updated incrementally.
 #### Overview
 
 - Add a `graph` field to the schema of every kro-generated Instance CRD.
-- kro writes `graph` with its own field manager (`kro-graph-manager`), never
+- Kro writes `graph` with its own field manager (`kro-graph-manager`), never
   touching `status` for bookkeeping data.
 - `graph.resources` holds only identity fields per managed resource — no spec,
   no status mirroring. it is efficient also for large collections.
@@ -108,25 +120,41 @@ graph:
     state:
       type: string
       description: >
-        kro's view of the reconciliation state for this instance.
+        Kro's view of the reconciliation state for this instance.
         Mirrors status.state so that consumers of the graph field do not
         need to cross-reference the status block.
+    observedGeneration:
+      type: integer
+      format: int64
+      description: >
+        The instance metadata.generation this graph was computed from. graph
+        and status are written by two separate calls, so consumers use this to
+        detect a graph that has not caught up yet.
     resources:
       type: array
+      # Atomic: Kro is the only writer, so per-element ownership buys nothing
+      # and would add one metadata.managedFields entry per node.
+      x-kubernetes-list-type: atomic
       description: Identity references to all managed resources in the graph.
       items:
         type: object
-        required: [ id, version, kind ]
+        required: [ id, nodeType, apiVersion, kind ]
         properties:
           id:
             type: string
             description: The resource ID as defined in the RGD.
-          group:
+          nodeType:
             type: string
-            description: API group of the managed resource (empty for core group).
-          version:
+            enum: [ Resource, External, Collection, ExternalCollection ]
+            description: >
+              Which kind of graph node this entry represents, so consumers can
+              switch on it rather than inferring from the presence of selector,
+              and can filter out nodes Kro references but does not own.
+          apiVersion:
             type: string
-            description: API version of the managed resource.
+            description: >
+              Group/version of the managed resource, in the form used by
+              ownerReferences ("apps/v1", or "v1" for the core group).
           kind:
             type: string
             description: Kind of the managed resource.
@@ -151,10 +179,11 @@ graph:
               rolling graph update.
           selector:
             type: object
+            x-kubernetes-map-type: atomic   # matches upstream metav1.LabelSelector
             description: >
               Label selector (metav1.LabelSelector) identifying all members of a
-              collection node. Set only for forEach collection nodes; absent for
-              scalar resources.
+              collection node. Set when nodeType is Collection or
+              ExternalCollection; absent for scalar resources.
             properties:
               matchLabels:
                 type: object
@@ -162,6 +191,7 @@ graph:
                   type: string
               matchExpressions:
                 type: array
+                x-kubernetes-list-type: atomic
                 items:
                   type: object
                   required: [ key, operator ]
@@ -184,16 +214,31 @@ A new `ManagedGraphResourceRef` type in `api/v1alpha1/`:
 
 package v1alpha1
 
+// GraphNodeType mirrors the internal graph.NodeType values reachable from an
+// instance. NodeTypeInstance is never emitted.
+type GraphNodeType string
+
+const (
+	GraphNodeTypeResource           GraphNodeType = "Resource"
+	GraphNodeTypeExternal           GraphNodeType = "External"
+	GraphNodeTypeCollection         GraphNodeType = "Collection"
+	GraphNodeTypeExternalCollection GraphNodeType = "ExternalCollection"
+)
+
 // ManagedGraphResourceRef is a compact identity reference to a managed Kubernetes
 // resource. For scalar resources it identifies the specific object; for
 // collection (forEach) nodes it carries a label selector instead.
 type ManagedGraphResourceRef struct {
 	// ID is the resource identifier as defined in the RGD spec.
 	ID string `json:"id"`
-	// Group is the API group of the managed resource. Empty for core group.
-	Group string `json:"group,omitempty"`
-	// Version is the API version of the managed resource.
-	Version string `json:"version"`
+	// NodeType is the kind of graph node this entry represents. Consumers
+	// switch on this rather than on Selector != nil, and filter on it to
+	// separate resources Kro owns from ones it only references.
+	NodeType GraphNodeType `json:"nodeType"`
+	// APIVersion is the group/version of the managed resource, in the form used
+	// by ownerReferences. Split with schema.ParseGroupVersion when a
+	// GroupVersionKind is needed.
+	APIVersion string `json:"apiVersion"`
 	// Kind is the kind of the managed resource.
 	Kind string `json:"kind"`
 	// Namespace is the namespace of the managed resource. Empty for cluster-scoped.
@@ -205,14 +250,14 @@ type ManagedGraphResourceRef struct {
 	// UID is the UID of the managed resource at the time of last reconciliation.
 	// Set for scalar resources; omitted for collection nodes.
 	UID string `json:"uid,omitempty"`
-	// Revision is the RGD generation under which this resource's desired state
-	// was last computed. Populated from graph.Graph.RGDGeneration, a new field
-	// to be added to graph.Graph by the builder. Allows detecting stale nodes
-	// during rolling graph updates.
+	// Revision is the RGD metadata.generation under which this resource's
+	// desired state was last computed. Populated from graph.Graph.RGDGeneration,
+	// a new field to be added to graph.Graph by the builder. Allows detecting
+	// stale nodes during rolling graph updates.
 	Revision int64 `json:"revision,omitempty"`
 	// Selector is the label selector identifying all members of a collection node.
-	// Set only for collections; nil for scalar resources.
-	// The selector always includes kro.run/instance-id and kro.run/node-id.
+	// Set when NodeType is Collection or ExternalCollection; nil otherwise.
+	// For Collection it is always kro.run/instance-id and kro.run/node-id.
 	Selector *metav1.LabelSelector `json:"selector,omitempty"`
 }
 ```
@@ -227,33 +272,36 @@ type ManagedGraphResourceRef struct {
   server-side apply with field manager `kro-graph-manager`. Because `graph` is
   a distinct top-level field, this update never conflicts with user writes to
   `status`.
-- `graph.state` mirrors `status.state` so that consumers needing kro's
+- `graph.state` mirrors `status.state` so that consumers needing Kro's
   reconciliation state do not have to cross-reference two fields.
+
+This is second call is necessarily because `status` is a subresource, so a write
+to `/status` persists only `status` and a write to the main endpoint ignores it.
 
 ##### Collections
 
-When a resource node uses `forEach`, kro expands it into multiple concrete
+When a resource node uses `forEach`, Kro expands it into multiple concrete
 resources at reconcile time. Rather than listing each expanded object
-individually — which would cause `graph.resources` to grow with the collection
-size — a collection node is represented by a single `ManagedResourceRef` that
-stores the label selector kro uses to target all of its members.
+individually, which would cause `graph.resources` to grow with the collection, size a
+collection node is represented by a single `ManagedGraphResourceRef` that
+stores the label selector Kro uses to target all of its members.
 
-kro already stamps every resource it manages with a set of labels (see
+Kro already stamps every resource it manages with a set of labels (see
 `pkg/metadata/labels.go`). For collection members the two relevant labels are:
 
 - `kro.run/instance-id`: the UID of the owning instance
 - `kro.run/node-id`: the resource ID as defined in the RGD
 
 Together these form a stable, unambiguous selector for all objects belonging to
-a given collection node within a given instance. The `ManagedResourceRef` for a
+a given collection node within a given instance. The `ManagedGraphResourceRef` for a
 collection node therefore uses a `selector` field instead of `name`/`uid`:
 
 ```yaml
 graph:
   resources:
     - id: worker
-      group: apps
-      version: v1
+      nodeType: Collection
+      apiVersion: apps/v1
       kind: Deployment
       selector:
         matchLabels:
@@ -270,18 +318,18 @@ kubectl get deployments \
 ```
 
 This approach keeps the `graph` object size constant regardless of how many
-items the collection expands to, and avoids having kro maintain a potentially
+items the collection expands to, and avoids having Kro maintain a potentially
 large and rapidly-changing list of individual object identities.
 
 A node that is currently excluded (via `includeWhen`) is absent from
-`graph.resources`. If it is later included it appears; if it is pruned it
-disappears.
+`graph.resources` once its objects are gone. See the merge rule below for why
+it stays listed while they are still being pruned.
 
 ##### Population during reconciliation
 
-The `graph` field is populated in `updateGraph()` during every status update,
-using data already available in the reconciliation context — no additional API
-calls are needed.
+The `graph` field is assembled in `updateGraph()` during every status update,
+using data already available in the reconciliation context — no additional
+*reads* are needed (the extra write is covered above).
 
 The assembly steps are:
 
@@ -291,12 +339,17 @@ The assembly steps are:
 2. **Node type filtering**: All four managed node types are included.
    `NodeTypeInstance` is the only exclusion — it represents the CR itself.
 
-   | Node type                    | Representation in `graph.resources`                  |
-      |------------------------------|------------------------------------------------------|
-   | `NodeTypeResource`           | scalar: `name` + `uid` from observed                 |
-   | `NodeTypeExternal`           | scalar: `name` + `uid` from observed                 |
-   | `NodeTypeCollection`         | selector: kro's own `instance-id` + `node-id` labels |
-   | `NodeTypeExternalCollection` | selector: the user-supplied `metav1.LabelSelector`   |
+   | Node type                    | `nodeType`           | Representation in `graph.resources`                  | Kro owns it |
+   |------------------------------|----------------------|------------------------------------------------------|-------------|
+   | `NodeTypeResource`           | `Resource`           | scalar: `name` + `uid` from observed                 | yes         |
+   | `NodeTypeExternal`           | `External`           | scalar: `name` + `uid` from observed                 | no          |
+   | `NodeTypeCollection`         | `Collection`         | selector: Kro's own `instance-id` + `node-id` labels | yes         |
+   | `NodeTypeExternalCollection` | `ExternalCollection` | selector: the user-supplied `metav1.LabelSelector`   | no          |
+
+   External refs are included but tagged: `nodeType` makes the distinction
+   machine-readable, so a consumer wanting only kro-owned objects filters on
+   `nodeType in (Resource, Collection)`. Dropping them would hide the nodes most
+   likely to be the cause when an instance is stuck waiting.
 
 3. **Observed objects (scalar nodes)**: `node.observed` holds the
    `[]*unstructured.Unstructured` currently seen in the cluster. This field is
@@ -307,7 +360,7 @@ The assembly steps are:
 4. **Collection and external-collection nodes**: No per-object iteration is
    needed — each is represented by a single entry carrying a label selector.
 
-    - **`NodeTypeCollection`**: the selector is assembled from two labels kro
+    - **`NodeTypeCollection`**: the selector is assembled from two labels Kro
       already stamps on every collection member (`pkg/metadata/labels.go`):
         - `kro.run/instance-id`: `rcx.Instance.GetUID()`
         - `kro.run/node-id`: `node.Spec.Meta.ID`
@@ -319,19 +372,26 @@ The assembly steps are:
       no selector was specified (i.e. `labels.Everything()`), the `selector`
       field is omitted from the ref.
 
-5. **GVK**: `node.Spec.Template.GroupVersionKind()` provides group, version, and
-   kind. `node.Spec.Meta.Namespaced` indicates namespace-scope.
+5. **GVK**: `node.Spec.Template.GroupVersionKind()` provides the GVK;
+   `gvk.GroupVersion().String()` yields `apiVersion`.
+   `node.Spec.Meta.Namespaced` indicates namespace-scope.
 
 6. **Revision**: `graph.Graph.RGDGeneration` — a new `int64` field to be added
-   to `graph.Graph` by the builder, set to the GraphRevision revision spec field at
-   build time. When the RGD is updated and a new graph is built, the revision increments,
-   making it visible in `graph.resources` which nodes are operating under the new
-   graph and which are still converging. This allows n-1 to n migration logic.
+   to `graph.Graph` by the builder, set at build time from the RGD's
+   `metadata.generation` (not the `GraphRevision` object's own counter, which
+   numbers graph builds rather than spec changes). Every entry written in one
+   pass has the same revision. Entries differ only when one is taken over
+   from an earlier pass, which is what makes a partially converged instance
+   visible and why the field is per-entry.
 
-A new `graph.resources` list is assembled fresh on every reconcile pass from the
-current observed state. Nodes where `IsIgnored()` is true and nodes with no
-observed objects need to be kept until the graph converges to avoid lost state.
-The list is the authoritative live view at the time of the last write.
+**Merge rule.** `graph.resources` is not rebuilt purely from observed state. A
+node can be temporarily unobservable (`includeWhen` unresolved, dependencies
+missing, `IsIgnored()`), and dropping it would flap the field and lose the
+identity of resources Kro still owns. Instead: a node with observed objects
+replaces its entry, and a node without one keeps its previous entry unchanged,
+including the older `revision` that marks it unconverged. An entry is dropped
+only when its node leaves the graph, or is excluded by `includeWhen` *and* its
+objects are confirmed pruned.
 
 **Performance**: All inputs (`Nodes()`, `GetObserved()`, `GetName()`, etc.) are
 in-memory operations on objects already fetched during the reconciliation cycle.
@@ -342,9 +402,13 @@ For a typical RGD with 5–10 nodes the assembled payload adds approximately
 
 `api/v1alpha1/resourcegraphdefinition_types.go`:
 
-Long-Term we can (but don't have to) Remove `TopologicalOrder []string` and `Resources []ResourceInformation` from
-`ResourceGraphDefinitionStatus`, as the instance projection is more accurate than the one from the RGD.
-The equivalent data for instances could now be held in `graph`.
+`TopologicalOrder []string` and `Resources []ResourceInformation` on
+`ResourceGraphDefinitionStatus` become redundant once instances carry `graph`,
+since the per-instance projection is more accurate than the RGD-level one.
+Removing them is **out of scope here**: they are fields on a published
+`v1alpha1` type, so deleting them breaks existing readers and nothing proposed
+here requires it. This KREP marks them deprecated in godoc, pointing at instance
+`graph`, and keeps populating them; removal waits for an API version bump.
 The `GraphRevision` internal type already holds this information for the graph-build phase and is unaffected.
 
 ##### Example
@@ -369,10 +433,12 @@ status:
   # user-projected fields from the RGD schema
   endpoint: "https://my-app.example.com"
 graph:
+  observedGeneration: 2
   resources:
     # scalar resource — identified by name and uid
     - id: configmap
-      version: v1
+      nodeType: Resource
+      apiVersion: v1
       kind: ConfigMap
       namespace: default
       name: my-app-config
@@ -380,8 +446,8 @@ graph:
       revision: 3
     # collection node — identified by label selector
     - id: worker
-      group: apps
-      version: v1
+      nodeType: Collection
+      apiVersion: apps/v1
       kind: Deployment
       revision: 3
       selector:
@@ -414,7 +480,7 @@ users and tooling that need it.
 ## Other solutions considered
 
 **Keep everything in `status`.** Rejected. `status` is the user-facing contract
-and should not carry kro implementation details. Mixing the two makes the API
+and should not carry Kro implementation details. Mixing the two makes the API
 harder to understand and harder to evolve independently.
 
 **Companion `GraphState` CRD per instance.** A separate namespaced CRD
@@ -424,7 +490,7 @@ This significant complexity: a new CRD, new RBAC, GC logic, and a lookup step fo
 every reconcile. Deferred until required.
 
 **Store full resource objects.** Rejected. Full resource content duplicates
-data already in etcd, causes unbounded object growth, and makes kro responsible
+data already in etcd, causes unbounded object growth, and makes Kro responsible
 for keeping copies in sync, on top of providing easy boundary hits for the maximum object size for large collections.
 Identity references are sufficient — consumers look
 up live data via the Kubernetes API.
@@ -434,50 +500,68 @@ up live data via the Kubernetes API.
 #### What is in scope for this proposal?
 
 - Schema design for the `graph` field on Instance CRDs.
-- Definition of `ManagedResourceRef` (identity-only reference).
+- Definition of `ManagedGraphResourceRef` (identity-only reference).
 - CRD synthesis changes to include the `graph` field.
-- Write path changes to populate `graph` independently of `status`.
-- Removal of `TopologicalOrder` and `Resources []ResourceInformation` from
-  `ResourceGraphDefinitionStatus`.
+- Write path changes to populate `graph` independently of `status`, including
+  the merge rule and the skip-if-unchanged check.
+- Deprecation godoc on `ResourceGraphDefinitionStatus.TopologicalOrder` and
+  `.Resources`, and user-facing docs for the GitOps interaction.
 
 #### What is not in scope?
 
+- Removal of `TopologicalOrder` and `Resources []ResourceInformation` from
+  `ResourceGraphDefinitionStatus` — deprecated here, removed at an API bump.
 - Per-node readiness state inside `graph` (tracked via conditions in `status`).
 - Changes to `GraphRevision` internal types.
 - Migration tooling for existing instances that already have `topologicalOrder`
-  or `resources` in their `status` block from earlier kro versions.
+  or `resources` in their `status` block from earlier Kro versions.
 
 ## Testing strategy
 
 #### Requirements
 
-- A running kro controller (integration test environment via envtest is
+- A running Kro controller (integration test environment via envtest is
   sufficient).
 - Generated Instance CRDs that include the `graph` field.
 
 #### Test plan
 
 - **Unit tests**: Verify `defaultGraphType` schema is correct; verify
-  `ManagedResourceRef` marshals/unmarshals correctly.
+  `ManagedGraphResourceRef` marshals/unmarshals correctly.
 - **Integration tests** (`test/integration/`): After reconciling an instance,
   assert that `graph.resources` contains the expected identity refs and that
   `graph.resources` matches the RGD's dependency order together with the revision.
 - **Field manager tests**: Verify that a user patching `status` does not
-  overwrite `graph`, and a kro patch to `graph` does not overwrite user
-  `status` fields.
+  overwrite `graph`, and a Kro patch to `graph` does not overwrite user
+  `status` fields. That a reconcile changing nothing issues no graph write, and
+  that `metadata.managedFields` gains exactly one `kro-graph-manager` entry
+  whose size does not scale with node count (the atomic-list regression guard).
 - **E2E tests** (`test/e2e/`): Smoke-test that existing chainsaw tests still
-  pass with the new schema; no `topologicalOrder` field in `status`.
+  pass with the new schema. RGD `status.topologicalOrder` is still populated,
+  since removal is out of scope.
 
 ## Discussion and notes
 
-- **Why SSA and not a strategic merge patch?** SSA tracks per-field ownership,
-  making it impossible for another manager to silently overwrite `graph` fields.
-  A strategic merge patch offers no ownership guarantees and would require the
-  caller to include the full `graph` object on every update, increasing the risk
-  of accidental overwrites from concurrent writers.
+- **Why SSA?** SMP is not available for custom resources at all, since it relies on
+  `patchStrategy`/`patchMergeKey` tags compiled into the API server. The real
+  alternatives are JSON merge patch, which records no ownership, and `Update`,
+  which is read-modify-write and forces Kro to take fields it does not own. SSA
+  writes only Kro's fields and records that it owns them but there is no enforcement.
 
-- **Conflict between kro instances using the same field manager name.** If two
-  kro controllers manage the same instance (e.g. during a controller rollout),
+- **Why `x-kubernetes-list-type: atomic` on `resources`?** `listType: map` +
+  `listMapKey: id` would give per-element ownership, but Kro is the only writer,
+  so there is no second manager to arbitrate against. SSA would then record
+  one `metadata.managedFields` entry per node, on every instance. `atomic` keeps
+  a single entry regardless of graph size, which is important because `managedFields`
+  size counts against the ~1.5 MiB object limit.
+
+- **A user can still clobber `graph`.** It lives in the object body, so
+  `kubectl replace` or any read-modify-write `Update` omitting it will drop it;
+  client-side `kubectl apply` will not, since `graph` is never in
+  `last-applied-configuration`. Kro restores it on the next reconcile.
+
+- **Conflict between Kro instances using the same field manager name.** If two
+  Kro controllers manage the same instance (e.g. during a controller rollout),
   both write `graph` under `kro-graph-manager`. SSA considers this a single
   manager and the last writer wins — consistent with how `status` is treated by
   controller-runtime today. Field manager conflicts can be detected on reconcile.
@@ -488,12 +572,15 @@ up live data via the Kubernetes API.
   explicit list could be added later if consumers need it, but would likely
   become inaccurate as soon as we implement other topological syncing mechanisms.
 
-- **`graph.state` vs `status.state`.** Both fields reflect kro's reconciliation
+- **`graph.state` vs `status.state`.** Both fields reflect Kro's reconciliation
   state. `status.state` is the user-facing signal; `graph.state` is there so that
   a consumer status is kept separate from KRO's working state. Keeping
-  them in sync is the responsibility of `updateGraph()`.
+  them in sync is the responsibility of `updateGraph()`. Because they are written
+  by two calls they can disagree briefly, hence `graph.observedGeneration`; if
+  review would rather not duplicate state at all, dropping `graph.state` and
+  keeping only `observedGeneration` is a reasonable simplification.
 
-- **Adoption of pre-existing resources.** When kro adopts a resource it did not
+- **Adoption of pre-existing resources.** When Kro adopts a resource it did not
   create (e.g. an external ref), the resource appears in `graph.resources` with
   its actual `name` and `uid`. The `revision` field indicates the RGD generation
   that first included this resource.

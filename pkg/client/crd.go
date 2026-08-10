@@ -195,52 +195,62 @@ func (w *CRDWrapper) create(ctx context.Context, crd v1.CustomResourceDefinition
 	return err
 }
 
-func (w *CRDWrapper) patch(ctx context.Context, newCRD v1.CustomResourceDefinition) error {
-	patchBytes, err := mergePatchForCRD(newCRD)
+func (w *CRDWrapper) patch(ctx context.Context, crd v1.CustomResourceDefinition) error {
+	patchBytes, err := crdMergePatch(crd)
 	if err != nil {
-		return fmt.Errorf("failed to marshal CRD for patch: %w", err)
+		return err
 	}
 
-	_, err = w.client.Patch(
-		ctx,
-		newCRD.Name,
-		types.MergePatchType,
-		patchBytes,
-		metav1.PatchOptions{},
-	)
+	_, err = w.client.Patch(ctx, crd.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
 	return err
 }
 
-func mergePatchForCRD(crd v1.CustomResourceDefinition) ([]byte, error) {
-	patchBytes, err := json.Marshal(crd)
+func crdMergePatch(crd v1.CustomResourceDefinition) ([]byte, error) {
+	// The desired CRD is used as a JSON merge-patch document, not as the full
+	// post-patch object. Omitted fields preserve existing/defaulted values. The
+	// alias fields need explicit nulls because their CRD type uses omitempty.
+	patch := map[string]any{
+		"spec": map[string]any{
+			"group": crd.Spec.Group,
+			"names": map[string]any{
+				"plural":     crd.Spec.Names.Plural,
+				"singular":   crd.Spec.Names.Singular,
+				"kind":       crd.Spec.Names.Kind,
+				"listKind":   crd.Spec.Names.ListKind,
+				"shortNames": crd.Spec.Names.ShortNames,
+				"categories": crd.Spec.Names.Categories,
+			},
+			"scope":    crd.Spec.Scope,
+			"versions": crd.Spec.Versions,
+		},
+	}
+
+	if len(crd.Labels) > 0 || len(crd.Annotations) > 0 {
+		metadata := map[string]any{}
+		if len(crd.Labels) > 0 {
+			metadata["labels"] = crd.Labels
+		}
+		if len(crd.Annotations) > 0 {
+			metadata["annotations"] = crd.Annotations
+		}
+		patch["metadata"] = metadata
+	}
+
+	if crd.Spec.Conversion != nil || crd.Spec.PreserveUnknownFields {
+		spec := patch["spec"].(map[string]any)
+		if crd.Spec.Conversion != nil {
+			spec["conversion"] = crd.Spec.Conversion
+		}
+		if crd.Spec.PreserveUnknownFields {
+			spec["preserveUnknownFields"] = crd.Spec.PreserveUnknownFields
+		}
+	}
+
+	patchBytes, err := json.Marshal(patch)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal CRD merge patch: %w", err)
 	}
-
-	var patch map[string]any
-	if err := json.Unmarshal(patchBytes, &patch); err != nil {
-		return nil, err
-	}
-
-	spec, ok := patch["spec"].(map[string]any)
-	if !ok {
-		spec = map[string]any{}
-		patch["spec"] = spec
-	}
-	names, ok := spec["names"].(map[string]any)
-	if !ok {
-		names = map[string]any{}
-		spec["names"] = names
-	}
-
-	if len(crd.Spec.Names.ShortNames) == 0 {
-		names["shortNames"] = nil
-	}
-	if len(crd.Spec.Names.Categories) == 0 {
-		names["categories"] = nil
-	}
-
-	return json.Marshal(patch)
+	return patchBytes, nil
 }
 
 // Delete removes a CRD if it exists

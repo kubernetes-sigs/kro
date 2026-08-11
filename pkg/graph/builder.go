@@ -1231,13 +1231,17 @@ func resolveSchemaAndTypeName(c *schema.Cache, segments []fieldpath.Segment, roo
 
 // expectedTypeForField computes the expected CEL type for a field descriptor
 // by deriving it from the OpenAPI schema at the path.
-func expectedTypeForField(bc *buildContext, descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string) *cel.Type {
+func expectedTypeForField(bc *buildContext, descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string, nodeType NodeType) *cel.Type {
 	// Paths under metadata.selector come from ExternalRef synthetic resources.
 	// The selector is always a LabelSelector, whose structure is known, but
 	// it doesn't exist in the target resource's OpenAPI schema. Return the
-	// concrete types so the CEL type checker can catch mismatches.
-	if t := selectorFieldType(descriptor.Path); t != nil {
-		return t
+	// concrete types so the CEL type checker can catch mismatches. Other node
+	// types keep schema-derived typing: a schemaless resource may legitimately
+	// carry an unrelated field at metadata.selector.
+	if nodeType == NodeTypeExternalCollection {
+		if t := selectorFieldType(descriptor.Path); t != nil {
+			return t
+		}
 	}
 
 	segments, err := fieldpath.Parse(descriptor.Path)
@@ -1421,7 +1425,7 @@ func validateAndCompileTemplates(
 
 	for _, templateVariable := range node.Variables {
 		// Compute expected type for this field
-		expectedType := expectedTypeForField(bc, &templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID)
+		expectedType := expectedTypeForField(bc, &templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, node.Meta.Type)
 
 		expression := templateVariable.Expression
 		displayExpr := expression.UserExpression()

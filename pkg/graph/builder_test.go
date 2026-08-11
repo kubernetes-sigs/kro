@@ -4417,10 +4417,10 @@ func TestBuilderHelperCases(t *testing.T) {
 			run: func(t *testing.T) {
 				assert.Equal(t, cel.DynType, expectedTypeForField(bc, &variable.FieldDescriptor{
 					Path: "spec[",
-				}, rootSchema, "resource"))
+				}, rootSchema, "resource", NodeTypeResource))
 				assert.Equal(t, cel.DynType, expectedTypeForField(bc, &variable.FieldDescriptor{
 					Path: "spec.missing",
-				}, rootSchema, "resource"))
+				}, rootSchema, "resource", NodeTypeResource))
 			},
 		},
 		{
@@ -4652,6 +4652,33 @@ func TestSelectorFieldType(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The LabelSelector typing shortcut must only apply to external collection
+// nodes. A regular resource may legitimately carry an unrelated field at
+// metadata.selector (e.g. a schemaless CRD template), and its expected type
+// must still come from the resource schema.
+func TestExpectedTypeForFieldSelectorIsExternalCollectionOnly(t *testing.T) {
+	rootSchema := objectSchema(map[string]spec.Schema{
+		"metadata": *objectSchema(map[string]spec.Schema{
+			"selector": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+		}),
+	})
+	env, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{"resource": rootSchema})
+	bc := newTestBuildContext(t, env, provider)
+	descriptor := &variable.FieldDescriptor{Path: "metadata.selector"}
+
+	for _, nodeType := range []NodeType{NodeTypeResource, NodeTypeCollection, NodeTypeExternal} {
+		t.Run(nodeType.String(), func(t *testing.T) {
+			got := expectedTypeForField(bc, descriptor, rootSchema, "resource", nodeType)
+			assert.True(t, cel.StringType.IsEquivalentType(got), "got %v, want string", got)
+		})
+	}
+
+	t.Run(NodeTypeExternalCollection.String(), func(t *testing.T) {
+		got := expectedTypeForField(bc, descriptor, rootSchema, "resource", NodeTypeExternalCollection)
+		assert.True(t, cel.MapType(cel.StringType, cel.DynType).IsEquivalentType(got), "got %v, want map(string, dyn)", got)
+	})
 }
 
 func newConditionsBuildContext(t *testing.T) (*buildContext, *cel.Env, *ast.Inspector) {

@@ -136,7 +136,7 @@ instead of the full plural resource name:
 kubectl get webapplications
 ```
 
-Short names and categories must be valid DNS-1035 labels: lowercase letters, numbers, and hyphens; starting with a letter; ending with a letter or number; maximum 63 characters. Duplicate entries are rejected.
+Short names and categories must be valid [RFC 1035 label names](https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#rfc-1035-label-names). Duplicate entries are rejected.
 
 ## The spec Section
 

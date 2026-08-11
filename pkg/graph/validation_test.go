@@ -740,6 +740,47 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 	}
 }
 
+func TestValidateNoKROOwnedAnnotations(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]interface{}
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "public kro-owned annotation",
+			annotations: map[string]interface{}{"kro.run/example": "value"},
+			expectError: true,
+			errorMsg:    "kro.run/",
+		},
+		{
+			name:        "internal kro-owned annotation",
+			annotations: map[string]interface{}{"internal.kro.run/apply-order": "99"},
+			expectError: true,
+			errorMsg:    "internal.kro.run/",
+		},
+		{
+			name:        "unowned annotation",
+			annotations: map[string]interface{}{"example.com/key": "value"},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			obj := map[string]interface{}{
+				"metadata": map[string]interface{}{"annotations": tt.annotations},
+			}
+			err := validateNoKROOwnedAnnotations("testResource", obj)
+			if tt.expectError {
+				require.ErrorContains(t, err, tt.errorMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestValidateCombinableResourceFields(t *testing.T) {
 	tests := []struct {
 		name    string

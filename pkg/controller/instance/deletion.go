@@ -108,7 +108,7 @@ func highestDeletionWave(candidates []applyset.OrphanCandidate) ([]applyset.Orph
 	highest := fallbackDeletionOrder
 	wave := make([]applyset.OrphanCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		raw := candidate.Object.GetLabels()[metadata.ApplyOrderLabel]
+		raw := candidate.Object.GetAnnotations()[metadata.ApplyOrderAnnotation]
 		order, err := strconv.Atoi(raw)
 		if err != nil || order <= 0 {
 			order = fallbackDeletionOrder

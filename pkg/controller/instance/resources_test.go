@@ -118,7 +118,7 @@ func TestProcessNodesLabelsReverseTopologicalWaves(t *testing.T) {
 
 	orders := make(map[string]string, len(resources))
 	for _, resource := range resources {
-		orders[resource.ID] = resource.Object.GetLabels()[metadata.ApplyOrderLabel]
+		orders[resource.ID] = resource.Object.GetAnnotations()[metadata.ApplyOrderAnnotation]
 	}
 	assert.Equal(t, map[string]string{
 		"a": "1",
@@ -146,7 +146,7 @@ func TestProcessNodesFallsBackWhenApplyOrderIsMissing(t *testing.T) {
 	resources, err := controller.processNodes(rcx)
 	require.NoError(t, err)
 	require.Len(t, resources, 1)
-	assert.Equal(t, "0", resources[0].Object.GetLabels()[metadata.ApplyOrderLabel])
+	assert.Equal(t, "0", resources[0].Object.GetAnnotations()[metadata.ApplyOrderAnnotation])
 }
 
 func TestReconcileNodesPaths(t *testing.T) {
@@ -401,7 +401,7 @@ func TestProcessNodePaths(t *testing.T) {
 			if tt.wantResources > 0 {
 				assert.Equal(t, tt.wantSkipApply, resources[0].SkipApply)
 				if resources[0].Object != nil {
-					assert.Equal(t, "1", resources[0].Object.GetLabels()[metadata.ApplyOrderLabel])
+					assert.Equal(t, "1", resources[0].Object.GetAnnotations()[metadata.ApplyOrderAnnotation])
 				}
 			}
 
@@ -430,12 +430,12 @@ func TestProcessNodeCollectionTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resources, 1)
 	assert.Equal(t, "configs-0", resources[0].ID)
-	assert.Equal(t, "1", resources[0].Object.GetLabels()[metadata.ApplyOrderLabel])
+	assert.Equal(t, "1", resources[0].Object.GetAnnotations()[metadata.ApplyOrderAnnotation])
 
 	resources, err = controller.processNode(rcx, rcx.Runtime.Nodes()[1], 2)
 	require.NoError(t, err)
 	assert.Nil(t, resources)
-	assert.Empty(t, externalCollection.Template.GetLabels()[metadata.ApplyOrderLabel])
+	assert.Empty(t, externalCollection.Template.GetAnnotations()[metadata.ApplyOrderAnnotation])
 	assert.Equal(t, v1alpha1.NodeStateSynced, rcx.StateManager.NodeStates["external-configs"].State)
 }
 
@@ -511,8 +511,8 @@ func TestCollectionAndExternalCollectionProcessing(t *testing.T) {
 	assert.NotNil(t, resources[0].Current)
 	assert.Equal(t, "0", resources[0].Object.GetLabels()[metadata.CollectionIndexLabel])
 	assert.Equal(t, "2", resources[0].Object.GetLabels()[metadata.CollectionSizeLabel])
-	assert.Equal(t, "1", resources[0].Object.GetLabels()[metadata.ApplyOrderLabel])
-	assert.Equal(t, "1", resources[1].Object.GetLabels()[metadata.ApplyOrderLabel])
+	assert.Equal(t, "1", resources[0].Object.GetAnnotations()[metadata.ApplyOrderAnnotation])
+	assert.Equal(t, "1", resources[1].Object.GetAnnotations()[metadata.ApplyOrderAnnotation])
 	_ = nodeState // state registered by caller
 
 	extState, err := controller.processExternalCollectionNode(
@@ -724,11 +724,11 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 
 	obj := newConfigMapObject("demo", "default")
 	obj.SetLabels(map[string]string{"keep": "yes"})
-	controller.applyDecoratorLabels(rcx, obj, "configs", 4, &CollectionInfo{Index: 1, Size: 3})
+	controller.applyDecoratorMetadata(rcx, obj, "configs", 4, &CollectionInfo{Index: 1, Size: 3})
 
 	assert.Equal(t, "yes", obj.GetLabels()["keep"])
 	assert.Equal(t, "configs", obj.GetLabels()[metadata.NodeIDLabel])
-	assert.Equal(t, "4", obj.GetLabels()[metadata.ApplyOrderLabel])
+	assert.Equal(t, "4", obj.GetAnnotations()[metadata.ApplyOrderAnnotation])
 	assert.Equal(t, "1", obj.GetLabels()[metadata.CollectionIndexLabel])
 	assert.Equal(t, string(instance.GetUID()), obj.GetLabels()[metadata.InstanceIDLabel])
 	assert.Empty(t, obj.GetLabels()[metadata.ManagedByLabelKey])
@@ -765,7 +765,7 @@ func TestReconcileNodesBackfillsApplyOrderOnExistingResource(t *testing.T) {
 
 	stored, err := raw.Tracker().Get(controllerTestDeployGVR, "default", "demo")
 	require.NoError(t, err)
-	assert.Equal(t, "1", stored.(*unstructured.Unstructured).GetLabels()[metadata.ApplyOrderLabel])
+	assert.Equal(t, "1", stored.(*unstructured.Unstructured).GetAnnotations()[metadata.ApplyOrderAnnotation])
 }
 
 func TestPruneOrphansPaths(t *testing.T) {

@@ -106,9 +106,14 @@ func newManagedObject(base, instance *unstructured.Unstructured, nodeID string, 
 	}
 	labels[metadata.InstanceIDLabel] = string(instance.GetUID())
 	labels[metadata.NodeIDLabel] = nodeID
-	labels[metadata.ApplyOrderLabel] = strconv.Itoa(order)
 	labels[applyset.ApplysetPartOfLabel] = applyset.ID(instance)
 	obj.SetLabels(labels)
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[metadata.ApplyOrderAnnotation] = strconv.Itoa(order)
+	obj.SetAnnotations(annotations)
 	obj.SetUID(types.UID(nodeID + "-uid"))
 	return obj
 }
@@ -519,12 +524,12 @@ func TestReconcileDeletionDefersInvalidOrdersUntilLastWave(t *testing.T) {
 			nodeB := &graph.Node{Meta: graph.NodeMeta{ID: "b", Type: graph.NodeTypeResource, GVR: controllerTestDeployGVR, Namespaced: true}}
 			a := newManagedObject(newDeploymentObject("a", "default"), instance, "a", 1)
 			b := newManagedObject(newDeploymentObject("b", "default"), instance, "b", 2)
-			labels := b.GetLabels()
-			delete(labels, metadata.ApplyOrderLabel)
+			annotations := b.GetAnnotations()
+			delete(annotations, metadata.ApplyOrderAnnotation)
 			if tt.raw != "" {
-				labels[metadata.ApplyOrderLabel] = tt.raw
+				annotations[metadata.ApplyOrderAnnotation] = tt.raw
 			}
-			b.SetLabels(labels)
+			b.SetAnnotations(annotations)
 
 			controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(nodeA, nodeB), a, b)
 
@@ -554,12 +559,12 @@ func TestReconcileDeletionDeletesInvalidOrdersInSharedFallbackWave(t *testing.T)
 	}}
 	one := newManagedObject(newDeploymentObject("one", "default"), instance, "workers", 1)
 	two := newManagedObject(newDeploymentObject("two", "default"), instance, "workers", 1)
-	oneLabels := one.GetLabels()
-	delete(oneLabels, metadata.ApplyOrderLabel)
-	one.SetLabels(oneLabels)
-	twoLabels := two.GetLabels()
-	twoLabels[metadata.ApplyOrderLabel] = "invalid"
-	two.SetLabels(twoLabels)
+	oneAnnotations := one.GetAnnotations()
+	delete(oneAnnotations, metadata.ApplyOrderAnnotation)
+	one.SetAnnotations(oneAnnotations)
+	twoAnnotations := two.GetAnnotations()
+	twoAnnotations[metadata.ApplyOrderAnnotation] = "invalid"
+	two.SetAnnotations(twoAnnotations)
 
 	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(node), one, two)
 	var deleted []string

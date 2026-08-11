@@ -299,8 +299,11 @@ func validateTemplateConstraints(
 		}
 	}
 
-	// Validate that users don't set KRO-owned labels
+	// Validate that users don't set KRO-owned metadata.
 	if err := validateNoKROOwnedLabels(rgResource.ID, resourceObject); err != nil {
+		return err
+	}
+	if err := validateNoKROOwnedAnnotations(rgResource.ID, resourceObject); err != nil {
 		return err
 	}
 
@@ -366,6 +369,34 @@ func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]inter
 		for _, prefix := range []string{metadata.LabelKROPrefix, metadata.InternalLabelKROPrefix} {
 			if strings.HasPrefix(key, prefix) {
 				return fmt.Errorf("invalid label for resource %q. labels with prefix %q are reserved for internal use", resourceID, prefix)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateNoKROOwnedAnnotations prevents resource templates from overriding
+// annotations used as persisted controller state.
+func validateNoKROOwnedAnnotations(resourceID string, resourceObject map[string]interface{}) error {
+	annotationsRaw, found, err := unstructured.NestedFieldCopy(resourceObject, "metadata", "annotations")
+	if err != nil || !found {
+		return nil
+	}
+
+	annotationsMap, ok := annotationsRaw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	for key := range annotationsMap {
+		for _, prefix := range []string{metadata.AnnotationKROPrefix, metadata.InternalAnnotationKROPrefix} {
+			if strings.HasPrefix(key, prefix) {
+				return fmt.Errorf(
+					"invalid annotation for resource %q. annotations with prefix %q are reserved for internal use",
+					resourceID,
+					prefix,
+				)
 			}
 		}
 	}

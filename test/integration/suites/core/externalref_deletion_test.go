@@ -145,7 +145,7 @@ var _ = Describe("ExternalRef Deletion", func() {
 				}, managedCM)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(managedCM.Data["inherited"]).To(Equal("from-external"))
-				g.Expect(managedCM.Labels[krometadata.ApplyOrderLabel]).To(Equal("2"))
+				g.Expect(managedCM.Annotations[krometadata.ApplyOrderAnnotation]).To(Equal("2"))
 			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			By("holding the managed child in termination")
@@ -214,7 +214,7 @@ var _ = Describe("ExternalRef Deletion", func() {
 		Eventually(func(g Gomega, ctx SpecContext) {
 			g.Expect(env.Client.Get(ctx, aKey, &corev1.ConfigMap{})).To(Succeed())
 			g.Expect(env.Client.Get(ctx, bKey, b)).To(Succeed())
-			g.Expect(b.Labels[krometadata.ApplyOrderLabel]).To(Equal("2"))
+			g.Expect(b.Annotations[krometadata.ApplyOrderAnnotation]).To(Equal("2"))
 		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		b.Finalizers = append(b.Finalizers, "test.kro.run/block-deletion")

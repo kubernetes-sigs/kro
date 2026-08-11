@@ -54,23 +54,23 @@ The lifecycle is governed by these invariants:
 #### Normal reconciliation
 
 Before processing nodes, the controller groups the compiled DAG into reverse
-topological layers. Regular managed resources receive the node ID and the
-layer's one-based apply order as controller-owned labels. Every expanded member
-of a `forEach` collection receives the same order because the collection is one
-graph node. External references and external collections participate in layer
-calculation but are observed rather than applied and receive no apply-order
-label.
+topological layers. Regular managed resources receive a node ID label and the
+layer's one-based apply order as a controller-owned annotation. Every expanded
+member of a `forEach` collection receives the same order because the collection
+is one graph node. External references and external collections participate in
+layer calculation but are observed rather than applied and receive no
+apply-order annotation.
 
-The existing server-side apply path writes the label alongside the desired
-resource. This also backfills an unchanged child: SSA still submits controller
-metadata even when the resource spec has not changed. A later successful
-reconcile against a new GraphRevision can update an object's order. An object
-removed from the graph keeps its last persisted order until normal pruning
-deletes it.
+The existing server-side apply path writes the annotation alongside the
+desired resource. This also backfills an unchanged child: SSA still submits
+controller metadata even when the resource spec has not changed. A later
+successful reconcile against a new GraphRevision can update an object's order.
+An object removed from the graph keeps its last persisted order until normal
+pruning deletes it.
 
-Both `kro.run/` and `internal.kro.run/` are reserved label prefixes in resource
-templates. RGD authors therefore cannot override the node identity or deletion
-order owned by the controller.
+Both `kro.run/` and `internal.kro.run/` are reserved label and annotation
+prefixes in resource templates. RGD authors therefore cannot override the node
+identity or deletion order owned by the controller.
 
 The write that first installs the instance finalizer also creates a valid empty
 ApplySet inventory when none exists. If the instance already has valid
@@ -144,16 +144,17 @@ precedence so cleanup failures remain observable.
 
 When an instance controller registers a GVR at startup, it explicitly enqueues
 the instances already present in its cache. Healthy, unsuspended instances
-therefore run normal reconciliation and acquire the order label through SSA,
+therefore run normal reconciliation and acquire the order annotation through SSA,
 even when their child specs are unchanged. This proposal adds neither a
 separate migration job nor a forced restart loop.
 
 Some instances can miss that backfill. An instance already deleting when the
 new version starts bypasses normal child apply. Suspended instances, instances
 whose desired resources cannot resolve, and instances deleted before startup
-reconciliation completes can also retain unlabeled children. Deletion still
-processes every labeled wave in reverse order, then deletes all remaining
-unlabeled or invalidly labeled children in the shared fallback wave.
+reconciliation completes can also retain children without the annotation.
+Deletion still processes every annotated wave in reverse order, then deletes
+all remaining children with missing or invalid annotations in the shared
+fallback wave.
 
 This compatibility behavior deliberately prioritizes deletion liveness over
 reverse-order guarantees for resources whose historical order was never
@@ -218,11 +219,13 @@ order that may be wrong.
 
 - Persisting reverse topological deletion waves on regular and collection
   resources.
-- Reserving the public and internal kro label prefixes in RGD templates.
+- Reserving the public and internal kro label and annotation prefixes in RGD
+  templates.
 - ApplySet-inventory discovery for instance deletion.
 - Validation and checksumming of persisted ApplySet deletion inventory.
 - Strict, UID-preconditioned, highest-order deletion waves.
-- A final compatibility wave for resources that missed order-label backfill.
+- A final compatibility wave for resources that missed order-annotation
+  backfill.
 - Unit and focused integration coverage for the lifecycle.
 
 #### What is not in scope?
@@ -246,16 +249,16 @@ timing-dependent.
 #### Test plan
 
 Unit tests verify regular-resource order, shared collection order, external
-exclusion, SSA label application to existing objects, and validation of both
-reserved prefixes. ApplySet tests cover namespaced and cluster-scoped discovery
-from parent annotations, including older resources no longer represented by the
-current graph.
+exclusion, SSA annotation application to existing objects, and validation of
+both reserved prefixes. ApplySet tests cover namespaced and cluster-scoped
+discovery from parent annotations, including older resources no longer
+represented by the current graph.
 
 Deletion unit tests verify that only the highest remaining order receives
 DELETE, a terminating highest-order resource blocks lower orders, the next wave
 starts only after the higher wave disappears, and all resources at one order
 are handled together. They also cover empty-inventory finalizer removal;
-missing, malformed, zero, and negative labels in a shared final wave; DELETE
+missing, malformed, zero, and negative annotations in a shared final wave; DELETE
 error visibility; invalid-inventory finalizer retention; UID-conflict requeue;
 and deletion with an absent external reference.
 

@@ -98,7 +98,7 @@ func (c *Controller) processCollectionNode(
 	for i, expandedResource := range expandedResources {
 		// Apply decorator labels with collection info
 		collectionInfo := &CollectionInfo{Index: i, Size: collectionSize}
-		c.applyDecoratorLabels(rcx, expandedResource, id, applyOrder, collectionInfo)
+		c.applyDecoratorMetadata(rcx, expandedResource, id, applyOrder, collectionInfo)
 
 		// Look up current revision from LIST results
 		key := expandedResource.GetNamespace() + "/" + expandedResource.GetName()

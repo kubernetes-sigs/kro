@@ -448,7 +448,7 @@ func (c *Controller) processRegularNode(
 	}
 
 	// Apply decorator labels to desired object
-	c.applyDecoratorLabels(rcx, desired, id, applyOrder, nil)
+	c.applyDecoratorMetadata(rcx, desired, id, applyOrder, nil)
 
 	resource := applyset.Resource{
 		ID:      id,
@@ -459,8 +459,8 @@ func (c *Controller) processRegularNode(
 	return []applyset.Resource{resource}, inProgressState(), nil
 }
 
-// applyDecoratorLabels merges tool labels and adds node/collection identifiers.
-func (c *Controller) applyDecoratorLabels(
+// applyDecoratorMetadata adds controller-owned labels and annotations.
+func (c *Controller) applyDecoratorMetadata(
 	rcx *ReconcileContext,
 	obj *unstructured.Unstructured,
 	nodeID string,
@@ -490,9 +490,8 @@ func (c *Controller) applyDecoratorLabels(
 		labels[k] = v
 	}
 
-	// Add node ID label
+	// Add searchable identity labels and persist deletion order as an annotation.
 	labels[metadata.NodeIDLabel] = nodeID
-	labels[metadata.ApplyOrderLabel] = strconv.Itoa(applyOrder)
 
 	// Add collection labels if applicable
 	if collectionInfo != nil {
@@ -501,6 +500,13 @@ func (c *Controller) applyDecoratorLabels(
 	}
 
 	obj.SetLabels(labels)
+
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[metadata.ApplyOrderAnnotation] = strconv.Itoa(applyOrder)
+	obj.SetAnnotations(annotations)
 }
 
 // patchInstanceWithApplySetMetadata applies applyset metadata to the parent instance.

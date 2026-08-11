@@ -17,6 +17,7 @@ package applyset
 import (
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -36,6 +37,21 @@ func validInventoryParent() *testParent {
 	parent.SetLabels(metadata.Labels())
 	parent.SetAnnotations(metadata.Annotations())
 	return parent
+}
+
+func TestProjectRejectsMalformedParentInventory(t *testing.T) {
+	parent := validInventoryParent()
+	parent.Annotations[ApplySetGKsAnnotation] = "ConfigMap,"
+	applier := New(Config{
+		Client:          newFakeDynamicClient(),
+		RESTMapper:      newTestRESTMapper(),
+		Log:             logr.Discard(),
+		ParentNamespace: "default",
+	}, parent)
+
+	_, err := applier.Project(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), ApplySetGKsAnnotation)
 }
 
 func TestValidateParentInventory(t *testing.T) {

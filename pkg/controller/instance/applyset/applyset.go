@@ -245,7 +245,10 @@ func (a *ApplySet) Project(resources []Resource) (Metadata, error) {
 	}
 
 	// Union with parent annotations (memory from previous reconciles)
-	parentGKs, parentNamespaces := a.parentAnnotationSets()
+	parentGKs, parentNamespaces, err := a.parentAnnotationSets()
+	if err != nil {
+		return Metadata{}, err
+	}
 	for gk := range parentGKs {
 		gks.Insert(gk)
 	}
@@ -572,43 +575,8 @@ func (a *ApplySet) listOrphans(
 	return candidates, nil
 }
 
-func (a *ApplySet) parentAnnotationSets() (sets.Set[schema.GroupKind], sets.Set[string]) {
-	gks := sets.New[schema.GroupKind]()
-	namespaces := sets.New[string]()
-
-	if len(a.parentAnnotations) == 0 {
-		return gks, namespaces
-	}
-
-	// Parse GKs from standard KEP annotation
-	if raw := a.parentAnnotations[ApplySetGKsAnnotation]; raw != "" {
-		for _, entry := range strings.Split(raw, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry == "" {
-				continue
-			}
-			parts := strings.SplitN(entry, ".", 2)
-			gk := schema.GroupKind{Kind: parts[0]}
-			if len(parts) == 2 {
-				gk.Group = parts[1]
-			}
-			if gk.Kind != "" {
-				gks.Insert(gk)
-			}
-		}
-	}
-
-	if raw := a.parentAnnotations[ApplySetAdditionalNamespacesAnnotation]; raw != "" {
-		for _, entry := range strings.Split(raw, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry == "" {
-				continue
-			}
-			namespaces.Insert(entry)
-		}
-	}
-
-	return gks, namespaces
+func (a *ApplySet) parentAnnotationSets() (sets.Set[schema.GroupKind], sets.Set[string], error) {
+	return parseParentAnnotationSets(a.parentAnnotations)
 }
 
 func (a *ApplySet) buildMetadata(

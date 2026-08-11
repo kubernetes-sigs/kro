@@ -47,22 +47,16 @@ func ValidateParentInventory(parent parentObject) error {
 		return fmt.Errorf("invalid %s annotation: %q is not owned by kro", ApplySetToolingAnnotation, tooling)
 	}
 
-	rawGroupKinds, exists := annotations[ApplySetGKsAnnotation]
-	if !exists {
+	if _, exists := annotations[ApplySetGKsAnnotation]; !exists {
 		return fmt.Errorf("missing required %s annotation", ApplySetGKsAnnotation)
 	}
-	groupKinds, err := parseGroupKinds(rawGroupKinds)
-	if err != nil {
-		return fmt.Errorf("invalid %s annotation: %w", ApplySetGKsAnnotation, err)
-	}
-
-	rawNamespaces, exists := annotations[ApplySetAdditionalNamespacesAnnotation]
-	if !exists {
+	if _, exists := annotations[ApplySetAdditionalNamespacesAnnotation]; !exists {
 		return fmt.Errorf("missing required %s annotation", ApplySetAdditionalNamespacesAnnotation)
 	}
-	namespaces, err := parseNamespaces(rawNamespaces)
+
+	groupKinds, namespaces, err := parseParentAnnotationSets(annotations)
 	if err != nil {
-		return fmt.Errorf("invalid %s annotation: %w", ApplySetAdditionalNamespacesAnnotation, err)
+		return err
 	}
 
 	// The hash is optional for ApplySet parents created by earlier kro
@@ -74,6 +68,22 @@ func ValidateParentInventory(parent parentObject) error {
 		}
 	}
 	return nil
+}
+
+// parseParentAnnotationSets is the single parser for the persisted ApplySet
+// discovery scope used by both normal projection and deletion validation.
+func parseParentAnnotationSets(
+	annotations map[string]string,
+) (sets.Set[schema.GroupKind], sets.Set[string], error) {
+	groupKinds, err := parseGroupKinds(annotations[ApplySetGKsAnnotation])
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid %s annotation: %w", ApplySetGKsAnnotation, err)
+	}
+	namespaces, err := parseNamespaces(annotations[ApplySetAdditionalNamespacesAnnotation])
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid %s annotation: %w", ApplySetAdditionalNamespacesAnnotation, err)
+	}
+	return groupKinds, namespaces, nil
 }
 
 func parseGroupKinds(raw string) (sets.Set[schema.GroupKind], error) {

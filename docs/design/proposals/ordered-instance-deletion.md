@@ -10,9 +10,10 @@ evaluation pipeline used during normal reconciliation.
 why that dependency is unsafe. An instance creates a managed child whose
 identity or desired state references an external object. The child remains
 alive behind a finalizer owned by another controller. The external reference is
-then deleted, followed by the root instance. During deletion, kro can no longer
-evaluate the child's CEL expressions because the external data is unavailable.
-The child is not deleted and the kro finalizer on the root instance is stuck.
+then deleted, followed by (or at the same time as) the root instance. During
+deletion, kro can no longer evaluate the child's CEL expressions because the
+external data is unavailable. The child is not deleted and the kro finalizer on
+the root instance is stuck.
 
 This is one example of a broader lifecycle invariant: deleting an instance must
 remain possible when desired-state projection, identity CEL, readiness CEL, or
@@ -22,123 +23,107 @@ created.
 
 ## Proposal
 
-Persist each managed child's apply order and use the instance's ApplySet
+Persist each managed child's _apply order_ and use the instance's `ApplySet`
 inventory as the authority for deletion. Instance deletion lists that inventory
 without resolving desired objects, groups members by persisted order, and
 deletes only the highest remaining order. It waits for that entire wave to
 disappear before advancing. Members without a usable persisted order share a
 fallback wave that runs after every valid order.
 
-External references remain read-only inputs. They are not finalized, mutated,
-or deleted by kro.
-
 #### Overview
 
 The lifecycle is governed by these invariants:
 
-- Managed-resource identity during deletion comes from persisted ApplySet
+- Managed-resource identity during deletion comes from persisted `ApplySet`
   inventory, not from reconstructed desired objects or current graph nodes.
-- Normal reconciliation gives every managed child
+- Normal reconciliation gives every managed child an annotation
   `internal.kro.run/apply-order`. Its value is the child's one-based reverse
-  topological deletion wave. Dependents have higher values than their
-  dependencies, while nodes that can be deleted together share a value.
-- External nodes participate in the graph layers but are not applied, so
-  managed-resource order values may have gaps.
-- Deletion processes only the highest order still present in inventory.
-- A wave remains active until all of its objects are absent, including objects
-  that already have a deletion timestamp.
+  topological "layer". Dependents have higher values than their dependencies,
+  while nodes that can be deleted together share a value. In other words,
+  children sharing the same value belong to the same _deletion wave_.
+- Deletion is processed in waves, actuating deletion only for the highest order
+  still present in inventory.
+- A wave remains active until all of its objects are absent; having a deletion
+  timestamp is not enough, but the child must be fully garbage collected.
 - Members with missing or invalid order metadata share one fallback wave. That
-  wave runs last and has no ordering guarantee within it.
-- The instance finalizer is removed only after the inventory is empty.
+  wave runs last and has no ordering guarantee within it. This is also the
+  behavior that will apply to deletions triggered concurrently with rolling this
+  change out; effectively, every graph not reconciled at least once with this
+  change, has all its children with the fallback apply order (`0`).
+- The instance finalizer is removed only after the inventory is empty, i.e. when
+  all children have been successfully deleted and garbage collected.
+- Progress is made observable with a condition on the root instance.
 
-#### Normal reconciliation
+#### Normal reconciliation writes metadata
 
-Before processing nodes, the controller groups the compiled DAG into reverse
-topological layers. Regular managed resources receive a node ID label and the
-layer's one-based apply order as a controller-owned annotation. Every expanded
-member of a `forEach` collection receives the same order because the collection
-is one graph node. External references and external collections participate in
-layer calculation but are observed rather than applied and receive no
-apply-order annotation.
+Resources with no deletion timestamp, processes and stores metadata as follows:
 
-The existing server-side apply path writes the annotation alongside the
-desired resource. This also backfills an unchanged child: SSA still submits
-controller metadata even when the resource spec has not changed. A later
-successful reconcile against a new GraphRevision can update an object's order.
-An object removed from the graph keeps its last persisted order until normal
-pruning deletes it.
+Each child node gets
+- a label with a node id referencing the root instance (current behavior)
+- an annotation with an apply order, indicating its topological layer in the DAG
+  (this is new for this proposal)
 
-Both `kro.run/` and `internal.kro.run/` are reserved label and annotation
-prefixes in resource templates. RGD authors therefore cannot override the node
+Additionally, the root instance itself gets
+- an annotation indicating all GVKs and namespaces where to find children; this
+  is the `ApplySet` inventory already managed by the current behavior
+- an annotation with a checksum of the inventory, guarding against partial
+  mutation that might result in incorrect deletion behavior
+
+The current implementation already ensures that the `ApplySet` inventory
+includes all GKVs/namespaces in use, even in the case of transient failures, so
+relying on it for finding children is valid even when the RGD has recently been
+updated and there are children present in the cluster that are not referenced in
+the graph.
+
+#### ⚠️ Label/annotation domain guards
+
+As [previously proposed][krep-label-migration], `internal.kro.run/` is used as a
+prefix for new metadata. Additionally, both `kro.run/` and `internal.kro.run/`
+are now reserved label and annotation prefixes in resource templates; defining
+either manually on an RGD child instance is now an error. RGD authors therefore cannot override the node
 identity or deletion order owned by the controller.
 
-The write that first installs the instance finalizer also creates a valid empty
-ApplySet inventory when none exists. If the instance already has valid
-inventory, that write preserves it; partial or malformed inventory prevents
-finalizer installation rather than being replaced with an empty scope. An
-automatic replacement could hide previously managed children and orphan them
-during deletion. Recovery therefore requires repairing the metadata, or
-removing it only after confirming that no managed members remain.
-
-#### Deletion inventory
-
-The instance is already the ApplySet parent. Its annotations persist the union
-of group-kinds and additional namespaces that can contain members. Deletion
-creates the same ApplySet, calls `Project(nil)` to reconstruct that scope from
-the parent annotations, and calls `ListOrphans` with an empty keep-UID set. All
-ApplySet members are consequently deletion candidates.
-
-This inventory has two important properties. First, external references are
-absent because kro never applies them and they are not ApplySet members. Second,
-resources retained from an older GraphRevision remain discoverable even if
-their group-kind, namespace, or node ID is absent from the current graph.
-
-The deletion path does not call `IsIgnored`, `GetDesired`,
-`GetDesiredIdentity`, `DeleteTargets`, readiness evaluation, or external
-observation. Deletion is handled before compiled GraphRevision resolution.
-This is intentional: resolving the current revision can itself require
-unavailable dependencies or invalid CEL, which is exactly the failure mode in
-#1316. The early path uses a dedicated runtime-free context containing only the
-parent object, persisted ApplySet annotations, dynamic client, and REST
-mappings. Deletion intentionally reports only instance-level status; it does
-not synthesize per-node states that cannot be persisted without a resolved
-runtime. Keeping deletion after graph resolution would preserve richer node
-status, but would leave the root finalizer stuck whenever resolution fails.
+[krep-label-migration]: https://github.com/kubernetes-sigs/kro/blob/main/docs/design/proposals/label-migration.md
 
 #### Ordered deletion waves
 
-The controller parses every candidate's `internal.kro.run/apply-order`.
-Positive base-10 integers retain their persisted order. Missing, malformed,
-zero, or negative values are assigned internal order zero, which is lower than
-every valid order. All such candidates therefore share a fallback wave that is
-selected only after every valid ordered wave is absent. There is no inference
-from node ID, graph shape, collection index, or LIST order, and no
-reverse-order guarantee among members of the fallback wave.
+When deletion of the root instance is requested (its deletion timestamp is non-
+nil), the reconciler _does not_ process the entire RGD to resolve identities,
+CEL expressions, etc.
+
+Instead, it inspects the root instance's `ApplySet` inventory annotation, and
+issues `LIST` calls for each GVK/namespace, filtered by the node-id label.
+
+Resources are collected into _waves_ based on the persisted apply order.
+Missing, malformed, zero, or negative values are assigned internal order zero,
+which is lower than every valid order; all such candidates therefore share a
+fallback wave that is selected only after every valid ordered wave is absent.
+There is no ordering guarantee within a wave; this _might_ violate previous
+reverse-order guarantees in the fallback wave, but the ordering of the waves
+themselves should guarantee reverse-order deletion for all valid resources.
 
 After validation, the controller finds the highest remaining order and selects
-only candidates at that order. It skips a DELETE for a candidate that already
+only candidates at that order. It skips a `DELETE` for a candidate that already
 has a deletion timestamp, but that candidate remains in the active wave and
 blocks every lower order until it is actually absent. Other active-wave
-candidates are passed to `ApplySet.DeleteOrphan`. Its UID precondition prevents
+candidates are passed to `ApplySet.DeleteOrphan`; its UID precondition prevents
 a LIST/DELETE race from deleting a different object recreated with the same
 name.
 
-DELETE calls within a wave are sequential. All candidates remain visible on
+`DELETE` calls within a wave are sequential. All candidates remain visible on
 the next LIST, so every reconciliation with non-empty inventory returns a
 delayed requeue. A UID conflict also requeues and does not permit a lower wave
 to advance. Only a later reconciliation that observes no higher-order members
 can begin the next order. Empty inventory is the sole condition for removing
 the root finalizer and cleaning up coordinator watches.
 
-Deletion status is intentionally instance-level. The runtime-free path cannot
-derive meaningful current-graph node states, and those transient states were
-never persisted independently. `ResourcesReady=Unknown` with reason
-`UnderDeletion` reports progress or the error currently blocking deletion.
-When an RGD defines author conditions, deletion preserves their last persisted
-values and overlays this kro-owned lifecycle condition because author
-conditions cannot be reevaluated without a runtime. If the author defines a
-condition with the same type, the deletion condition temporarily takes
-precedence so cleanup failures remain observable.
+Deletion status is reported on the root instance, using `ResourcesReady=Unknown`
+with reason `UnderDeletion`. When an RGD defines author conditions, deletion
+preserves their last persisted values and overlays this kro-owned lifecycle
+condition because author conditions cannot be reevaluated without processing the
+full graph including CEL resolution etc. If the author defines a condition with
+the same type, the deletion condition temporarily takes precedence so cleanup
+failures remain observable.
 
 #### Rollout behavior
 
@@ -164,12 +149,12 @@ is available.
 
 #### Failure behavior
 
-ApplySet LIST failures and RESTMapping failures retain the root finalizer and
-retry through normal reconciliation error handling. DELETE errors retain the
-finalizer and propagate through the instance-level status. Inventory, LIST,
-DELETE, and UID-conflict errors replace the generic deletion-progress message
-with an actionable `ResourcesReady` condition message. A UID precondition
-conflict causes a delayed requeue with the active wave unchanged.
+ApplySet `LIST` failures and `RESTMapping` failures retain the root finalizer
+and retry through normal reconciliation error handling. `DELETE` errors retain
+the finalizer and propagate through the instance-level status. Inventory,
+`LIST`, `DELETE`, and UID-conflict errors replace the generic deletion-progress
+message with an actionable `ResourcesReady` condition message. A UID
+precondition conflict causes a delayed requeue with the active wave unchanged.
 
 Deletion validates the ApplySet parent ID, kro tooling ownership, and the
 presence and syntax of the persisted group-kind and namespace annotations
@@ -189,95 +174,28 @@ resource while a higher-order member remains.
 
 #### Finalize external references
 
-Rejected. External references are read-only, can be shared by unrelated
+**Rejected.** External references are read-only, can be shared by unrelated
 instances, and can be managed by another authority. Giving kro a finalizer on
 them would change that ownership contract and could block their deletion.
 
 #### Fully unordered label-based deletion
 
-Rejected as the general deletion strategy. Finding children by an ownership
+**Rejected.** as the general deletion strategy. Finding children by an ownership
 label avoids CEL but deleting all resources together discards usable persisted
 ordering. The compatibility fallback limits unordered deletion to members that
-have no usable order and runs it only after every ordered member is absent.
+have no usable order and runs it only after every ordered member is absent, but
+under normal operations we should be able to guarantee that dependencies are
+deleted before their dependents.
 
 #### Reconstruct identity from CEL and current desired state
 
-Rejected. This is the failure mode in #1316. Deletion must survive missing
+**Rejected.** This is the failure mode in #1316. Deletion must survive missing
 dependencies, invalid expressions, unavailable observation, and desired state
 that no longer describes resources created by an older revision.
 
 #### Infer missing order from current node IDs
 
-Rejected for this rollout. It complicates migration and can be wrong when the
-current GraphRevision differs from the revision that created an older resource.
-The fallback wave represents that uncertainty explicitly without inventing an
-order that may be wrong.
-
-## Scoping
-
-#### What is in scope for this proposal?
-
-- Persisting reverse topological deletion waves on regular and collection
-  resources.
-- Reserving the public and internal kro label and annotation prefixes in RGD
-  templates.
-- ApplySet-inventory discovery for instance deletion.
-- Validation and checksumming of persisted ApplySet deletion inventory.
-- Strict, UID-preconditioned, highest-order deletion waves.
-- A final compatibility wave for resources that missed order-annotation
-  backfill.
-- Unit and focused integration coverage for the lifecycle.
-
-#### What is not in scope?
-
-The deletion-wave calculation does not change normal reconciliation to apply
-resources concurrently. This proposal also does not add an upgrade migration
-controller, infer metadata for missed backfills, or change normal
-orphan-pruning order.
-
-## Testing strategy
-
-#### Requirements
-
-Fake-client deletion fixtures carry a stable UID, the computed
-`applyset.kubernetes.io/part-of` value, `kro.run/node-id`, and
-`internal.kro.run/apply-order`. Their parent instance carries the ApplySet
-parent ID, tooling, group-kind, and namespace metadata. Integration tests use
-synthetic child finalizers to make ordering observable rather than
-timing-dependent.
-
-#### Test plan
-
-Unit tests verify regular-resource order, shared collection order, external
-exclusion, SSA annotation application to existing objects, and validation of
-both reserved prefixes. ApplySet tests cover namespaced and cluster-scoped
-discovery from parent annotations, including older resources no longer
-represented by the current graph.
-
-Deletion unit tests verify that only the highest remaining order receives
-DELETE, a terminating highest-order resource blocks lower orders, the next wave
-starts only after the higher wave disappears, and all resources at one order
-are handled together. They also cover empty-inventory finalizer removal;
-missing, malformed, zero, and negative annotations in a shared final wave; DELETE
-error visibility; invalid-inventory finalizer retention; UID-conflict requeue;
-and deletion with an absent external reference.
-
-The core integration suite reproduces #1316 by creating an external ConfigMap
-and a managed child derived from it, asserting the child's persisted order,
-holding the child with a synthetic finalizer, deleting both the external object
-and root, and observing that the child receives a deletion timestamp. Removing
-the child finalizer must allow both child and root to disappear.
-
-A second integration scenario creates `A -> B`, holds B with a synthetic
-finalizer, and deletes the root. B must become terminating while A has no
-deletion timestamp. Only after B disappears may A and then the root disappear.
-
-## Discussion and notes
-
-The persisted order is a reverse topological layer starting at one. Sink nodes
-receive the highest value, and removing that layer exposes the next set of
-nodes whose dependents are gone. Gaps caused by external-only layers are
-intentional and harmless. The central contract is not that orders are
-contiguous; it is that deletion uses only persisted inventory and never
-advances below the highest remaining valid value. The fallback order zero is
-selected only when no valid ordered members remain.
+**Rejected.** for this rollout. It complicates migration and can be wrong when
+the current GraphRevision differs from the revision that created an older
+resource. The fallback wave represents that uncertainty explicitly without
+inventing an order that may be wrong.

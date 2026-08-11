@@ -247,15 +247,31 @@ func (c *Controller) updateDeletionStatus(dcx *DeletionContext) error {
 		}
 	}
 	if dcx.Config.HasAuthorConditions {
-		if conditions, found := dcx.WireStatus["conditions"]; found {
-			status["conditions"] = conditions
-		} else {
-			delete(status, "conditions")
-		}
+		status["conditions"] = deletionConditions(dcx.Instance, dcx.WireStatus)
 	}
 	return c.persistStatus(
 		dcx.Ctx, dcx.InstanceClient(), dcx.Instance, dcx.WireStatus, status, previousState,
 	)
+}
+
+// deletionConditions preserves author conditions that cannot be evaluated
+// without a runtime and overlays kro's ResourcesReady deletion condition. The
+// overlay makes progress and blocking errors visible even when the RGD owns
+// the normal condition surface.
+func deletionConditions(
+	instance *unstructured.Unstructured,
+	wireStatus map[string]interface{},
+) []interface{} {
+	current := make([]v1alpha1.Condition, 0, 1)
+	for _, condition := range builtinConditions(instance) {
+		if condition.Type == v1alpha1.ConditionType(ResourcesReady) {
+			current = append(current, condition)
+			break
+		}
+	}
+
+	previousRaw, _ := wireStatus["conditions"].([]interface{})
+	return conditionsToInterfaceSlice(mergeWithPrevious(current, decodeConditions(previousRaw)))
 }
 
 func (c *Controller) persistStatus(

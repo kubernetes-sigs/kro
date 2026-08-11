@@ -132,6 +132,11 @@ Deletion status is intentionally instance-level. The runtime-free path cannot
 derive meaningful current-graph node states, and those transient states were
 never persisted independently. `ResourcesReady=Unknown` with reason
 `UnderDeletion` reports progress or the error currently blocking deletion.
+When an RGD defines author conditions, deletion preserves their last persisted
+values and overlays this kro-owned lifecycle condition because author
+conditions cannot be reevaluated without a runtime. If the author defines a
+condition with the same type, the deletion condition temporarily takes
+precedence so cleanup failures remain observable.
 
 #### Rollout behavior
 

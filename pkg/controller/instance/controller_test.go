@@ -620,10 +620,46 @@ func TestReconcileDeletionPreservesAuthorStatusWithoutRuntime(t *testing.T) {
 	assert.False(t, metadata.HasInstanceFinalizer(stored))
 	assert.Equal(t, "https://example.test", stored.Object["status"].(map[string]interface{})["endpoint"])
 	conditions := conditionsFromInstance(stored)
-	require.Len(t, conditions, 1)
-	assert.Equal(t, v1alpha1.ConditionType("AuthorHealthy"), conditions[0].Type)
-	require.NotNil(t, conditions[0].LastTransitionTime)
-	assert.Equal(t, "2026-01-01T00:00:00Z", conditions[0].LastTransitionTime.UTC().Format(time.RFC3339))
+	require.Len(t, conditions, 2)
+	authorHealthy := conditionByType(t, stored, "AuthorHealthy")
+	require.NotNil(t, authorHealthy.LastTransitionTime)
+	assert.Equal(t, "2026-01-01T00:00:00Z", authorHealthy.LastTransitionTime.UTC().Format(time.RFC3339))
+	resourcesReady := conditionByType(t, stored, ResourcesReady)
+	assert.Equal(t, metav1.ConditionUnknown, resourcesReady.Status)
+	assert.Equal(t, new("UnderDeletion"), resourcesReady.Reason)
+}
+
+func TestReconcileDeletionSurfacesErrorsWithAuthorConditions(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	metadata.SetInstanceFinalizer(instance)
+	instance.SetDeletionTimestamp(new(metav1.NewTime(time.Now())))
+	require.NoError(t, unstructured.SetNestedMap(instance.Object, map[string]interface{}{
+		"state": string(v1alpha1.InstanceStateActive),
+		"conditions": []interface{}{map[string]interface{}{
+			"type":               "AuthorHealthy",
+			"status":             "True",
+			"reason":             "Healthy",
+			"lastTransitionTime": "2026-01-01T00:00:00Z",
+		}},
+	}, "status"))
+
+	raw := newControllerTestDynamicClient(t, instance.DeepCopy())
+	controller, _ := newControllerUnderTest(t, raw, newTestGraph())
+	controller.reconcileConfig.HasAuthorConditions = true
+
+	err := controller.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: instance.GetName(), Namespace: instance.GetNamespace()},
+	})
+	require.Error(t, err)
+
+	stored := getStoredParentObject(t, raw)
+	assert.True(t, metadata.HasInstanceFinalizer(stored))
+	assert.Equal(t, metav1.ConditionTrue, conditionByType(t, stored, "AuthorHealthy").Status)
+	resourcesReady := conditionByType(t, stored, ResourcesReady)
+	assert.Equal(t, metav1.ConditionUnknown, resourcesReady.Status)
+	require.NotNil(t, resourcesReady.Message)
+	assert.Contains(t, *resourcesReady.Message, "deletion blocked")
+	assert.Contains(t, *resourcesReady.Message, applyset.ApplySetParentIDLabel)
 }
 
 func TestReconcileResourceMutationRequestsRequeue(t *testing.T) {

@@ -39,9 +39,10 @@ The lifecycle is governed by these invariants:
 - Managed-resource identity during deletion comes from persisted ApplySet
   inventory, not from reconstructed desired objects or current graph nodes.
 - Normal reconciliation gives every managed child
-  `internal.kro.run/apply-order`. Its value is the child's one-based position
-  in the complete runtime DAG's total topological order.
-- External nodes occupy positions in that total order but are not applied, so
+  `internal.kro.run/apply-order`. Its value is the child's one-based reverse
+  topological deletion wave. Dependents have higher values than their
+  dependencies, while nodes that can be deleted together share a value.
+- External nodes participate in the graph layers but are not applied, so
   managed-resource order values may have gaps.
 - Deletion processes only the highest order still present in inventory.
 - A wave remains active until all of its objects are absent, including objects
@@ -52,12 +53,13 @@ The lifecycle is governed by these invariants:
 
 #### Normal reconciliation
 
-`processNodes` enumerates every runtime node in topological order. Regular
-managed resources receive the node ID and the one-based apply order as
-controller-owned labels. Every expanded member of a `forEach` collection
-receives the same order because the collection is one graph node. External
-references and external collections are observed but never applied and receive
-no apply-order label.
+Before processing nodes, the controller groups the compiled DAG into reverse
+topological layers. Regular managed resources receive the node ID and the
+layer's one-based apply order as controller-owned labels. Every expanded member
+of a `forEach` collection receives the same order because the collection is one
+graph node. External references and external collections participate in layer
+calculation but are observed rather than applied and receive no apply-order
+label.
 
 The existing server-side apply path writes the label alongside the desired
 resource. This also backfills an unchanged child: SSA still submits controller
@@ -214,7 +216,7 @@ order that may be wrong.
 
 #### What is in scope for this proposal?
 
-- Persisting total topological apply positions on regular and collection
+- Persisting reverse topological deletion waves on regular and collection
   resources.
 - Reserving the public and internal kro label prefixes in RGD templates.
 - ApplySet-inventory discovery for instance deletion.
@@ -225,15 +227,10 @@ order that may be wrong.
 
 #### What is not in scope?
 
-A future level-aware reconciliation engine may replace total positions with
-dependency levels, as discussed in
-[PR #1215](https://github.com/kubernetes-sigs/kro/pull/1215#discussion_r3164471497).
-The durable-inventory and wait-for-wave semantics remain applicable: store the
-level on each member, delete the highest remaining level, and wait for absence
-before advancing.
-
-This proposal does not add an upgrade migration controller, infer metadata for
-missed backfills, or change normal orphan-pruning order.
+The deletion-wave calculation does not change normal reconciliation to apply
+resources concurrently. This proposal also does not add an upgrade migration
+controller, infer metadata for missed backfills, or change normal
+orphan-pruning order.
 
 ## Testing strategy
 
@@ -274,9 +271,10 @@ deletion timestamp. Only after B disappears may A and then the root disappear.
 
 ## Discussion and notes
 
-The persisted order is a total topological position starting at one, not a
-dependency depth. Gaps caused by external nodes are intentional and harmless.
-The central contract is not that orders are contiguous; it is that deletion
-uses only persisted inventory and never advances below the highest remaining
-valid value. The fallback order zero is selected only when no valid ordered
-members remain.
+The persisted order is a reverse topological layer starting at one. Sink nodes
+receive the highest value, and removing that layer exposes the next set of
+nodes whose dependents are gone. Gaps caused by external-only layers are
+intentional and harmless. The central contract is not that orders are
+contiguous; it is that deletion uses only persisted inventory and never
+advances below the highest remaining valid value. The fallback order zero is
+selected only when no valid ordered members remain.

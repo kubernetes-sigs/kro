@@ -15,6 +15,7 @@
 package runtime
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,6 +24,7 @@ import (
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -227,6 +229,7 @@ func TestFromGraph(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			withTestDAG(tt.graph)
 			// Capture original state for mutation test
 			var origDeps []string
 			var origIncludeLen int
@@ -274,6 +277,7 @@ func TestFromGraph_InstanceWithDependencies(t *testing.T) {
 			},
 		},
 	}
+	withTestDAG(g)
 
 	rt, err := FromGraph(g, testInstance("test"), graph.RGDConfig{MaxCollectionSize: 1000})
 	require.NoError(t, err)
@@ -283,6 +287,51 @@ func TestFromGraph_InstanceWithDependencies(t *testing.T) {
 	assert.Same(t, rt.Nodes()[0], inst.deps["deployment"])
 	assert.Len(t, inst.templateVars, 1)
 	assert.Len(t, inst.templateExprs, 1)
+}
+
+func TestFromGraphComputesApplyOrderWaves(t *testing.T) {
+	g := &graph.Graph{
+		TopologicalOrder: []string{"a", "b", "c", "d"},
+		Nodes: map[string]*graph.Node{
+			"a": {Meta: graph.NodeMeta{ID: "a"}},
+			"b": {Meta: graph.NodeMeta{ID: "b", Dependencies: []string{"a"}}},
+			"c": {Meta: graph.NodeMeta{ID: "c", Dependencies: []string{"a"}}},
+			"d": {Meta: graph.NodeMeta{ID: "d", Dependencies: []string{"b", "c"}}},
+		},
+		Instance: &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID}},
+	}
+	withTestDAG(g)
+
+	rt, err := FromGraph(g, testInstance("test"), graph.RGDConfig{})
+	require.NoError(t, err)
+
+	for nodeID, want := range map[string]int{"a": 1, "b": 2, "c": 2, "d": 3} {
+		got, ok := rt.ApplyOrder(nodeID)
+		assert.True(t, ok)
+		assert.Equal(t, want, got)
+	}
+}
+
+func withTestDAG(g *graph.Graph) *graph.Graph {
+	dependencyGraph := dag.NewDirectedAcyclicGraph[string]()
+	for i, nodeID := range g.TopologicalOrder {
+		if err := dependencyGraph.AddVertex(nodeID, i); err != nil {
+			panic(fmt.Sprintf("adding test graph vertex %q: %v", nodeID, err))
+		}
+	}
+	for nodeID, node := range g.Nodes {
+		dependencies := make([]string, 0, len(node.Meta.Dependencies))
+		for _, dependency := range node.Meta.Dependencies {
+			if _, ok := dependencyGraph.Vertices[dependency]; ok {
+				dependencies = append(dependencies, dependency)
+			}
+		}
+		if err := dependencyGraph.AddDependencies(nodeID, dependencies); err != nil {
+			panic(fmt.Sprintf("adding test graph dependencies for %q: %v", nodeID, err))
+		}
+	}
+	g.DAG = dependencyGraph
+	return g
 }
 
 func testInstance(name string) *unstructured.Unstructured {

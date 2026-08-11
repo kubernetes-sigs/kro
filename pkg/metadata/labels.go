@@ -37,7 +37,7 @@ const (
 
 const (
 	NodeIDLabel = LabelKROPrefix + "node-id"
-	// ApplyOrderLabel persists a managed resource's total topological position.
+	// ApplyOrderLabel persists a managed resource's reverse topological deletion wave.
 	ApplyOrderLabel = InternalLabelKROPrefix + "apply-order"
 
 	// Collection labels for tracking collection membership and position.

@@ -15,12 +15,14 @@
 package runtime
 
 import (
+	"fmt"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
@@ -35,16 +37,20 @@ type Interface interface {
 
 	// Instance returns the instance node.
 	Instance() *Node
+
+	// ApplyOrder returns the deletion-wave value to persist for a node.
+	ApplyOrder(nodeID string) (int, bool)
 }
 
 // Runtime is the execution context for a single reconciliation.
 // It holds nodes in topological order and provides access to the instance node.
 // Expression deduplication is done during FromGraph construction via a local cache.
 type Runtime struct {
-	order     []string
-	nodes     map[string]*Node
-	instance  *Node
-	rgdConfig graph.RGDConfig
+	order       []string
+	nodes       map[string]*Node
+	instance    *Node
+	applyOrders map[string]int
+	rgdConfig   graph.RGDConfig
 }
 
 // FromGraph creates a new Runtime from a Graph and instance.
@@ -56,12 +62,17 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 		metrics.RuntimeCreationDuration.Observe(duration.Seconds())
 		metrics.RuntimeCreationTotal.Inc()
 	}()
+	applyOrders, err := applyOrdersForDAG(g.DAG)
+	if err != nil {
+		return nil, fmt.Errorf("calculate apply-order waves: %w", err)
+	}
 	instanceObj := instance.DeepCopy()
 
 	rt := &Runtime{
-		order:     g.TopologicalOrder,
-		nodes:     make(map[string]*Node),
-		rgdConfig: rgdConfig,
+		order:       g.TopologicalOrder,
+		nodes:       make(map[string]*Node),
+		applyOrders: applyOrders,
+		rgdConfig:   rgdConfig,
 	}
 
 	// Expression cache for non-iteration expressions only.
@@ -188,4 +199,28 @@ func (r *Runtime) Nodes() []*Node {
 // Instance returns the instance node.
 func (r *Runtime) Instance() *Node {
 	return r.instance
+}
+
+// ApplyOrder returns the deletion-wave value to persist for a node.
+func (r *Runtime) ApplyOrder(nodeID string) (int, bool) {
+	order, ok := r.applyOrders[nodeID]
+	return order, ok
+}
+
+func applyOrdersForDAG(
+	dependencyGraph *dag.DirectedAcyclicGraph[string],
+) (map[string]int, error) {
+	layers, err := dependencyGraph.ReverseTopologicalLayers()
+	if err != nil {
+		return nil, err
+	}
+
+	orders := make(map[string]int, len(dependencyGraph.Vertices))
+	for i, layer := range layers {
+		order := len(layers) - i
+		for _, nodeID := range layer {
+			orders[nodeID] = order
+		}
+	}
+	return orders, nil
 }

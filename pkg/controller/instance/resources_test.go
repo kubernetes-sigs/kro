@@ -43,6 +43,14 @@ import (
 	krt "github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
+type runtimeWithoutApplyOrders struct {
+	krt.Interface
+}
+
+func (runtimeWithoutApplyOrders) ApplyOrder(string) (int, bool) {
+	return 0, false
+}
+
 func TestProcessNodesReturnsDataPending(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	pendingNode := &graph.Node{
@@ -71,6 +79,74 @@ func TestProcessNodesReturnsDataPending(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, krt.IsDataPending(err))
 	assert.Empty(t, resources)
+}
+
+func TestProcessNodesLabelsReverseTopologicalWaves(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	newNode := func(id string, dependencies ...string) *graph.Node {
+		return &graph.Node{
+			Meta: graph.NodeMeta{
+				ID:           id,
+				Type:         graph.NodeTypeResource,
+				GVR:          controllerTestCMGVR,
+				Namespaced:   true,
+				Dependencies: dependencies,
+			},
+			Template: newConfigMapObject(id, ""),
+		}
+	}
+
+	// Diamond topology: A -> B,C -> D. B and C can be deleted together.
+	controller, rcx, _ := newControllerAndContext(
+		t,
+		instance,
+		newTestGraph(
+			newNode("a"),
+			newNode("b", "a"),
+			newNode("c", "a"),
+			newNode("d", "b", "c"),
+		),
+		newConfigMapObject("a", "default"),
+		newConfigMapObject("b", "default"),
+		newConfigMapObject("c", "default"),
+		newConfigMapObject("d", "default"),
+	)
+
+	resources, err := controller.processNodes(rcx)
+	require.NoError(t, err)
+	require.Len(t, resources, 4)
+
+	orders := make(map[string]string, len(resources))
+	for _, resource := range resources {
+		orders[resource.ID] = resource.Object.GetLabels()[metadata.ApplyOrderLabel]
+	}
+	assert.Equal(t, map[string]string{
+		"a": "1",
+		"b": "2",
+		"c": "2",
+		"d": "3",
+	}, orders)
+}
+
+func TestProcessNodesFallsBackWhenApplyOrderIsMissing(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	node := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "config",
+			Type:       graph.NodeTypeResource,
+			GVR:        controllerTestCMGVR,
+			Namespaced: true,
+		},
+		Template: newConfigMapObject("config", ""),
+	}
+
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(node))
+	rcx.Runtime = runtimeWithoutApplyOrders{Interface: rcx.Runtime}
+
+	resources, err := controller.processNodes(rcx)
+	require.NoError(t, err)
+	require.Len(t, resources, 1)
+	assert.Equal(t, "0", resources[0].Object.GetLabels()[metadata.ApplyOrderLabel])
 }
 
 func TestReconcileNodesPaths(t *testing.T) {

@@ -195,8 +195,17 @@ func (c *Controller) processNodes(
 	var resources []applyset.Resource
 
 	var firstUnresolvedErr error
-	for i, node := range nodes {
-		resourcesToAdd, err := c.processNode(rcx, node, i+1)
+	for _, node := range nodes {
+		applyOrder, ok := rcx.Runtime.ApplyOrder(node.Spec.Meta.ID)
+		if !ok {
+			rcx.Log.Error(
+				fmt.Errorf("apply-order wave missing for node %q", node.Spec.Meta.ID),
+				"using fallback apply order",
+				"nodeID", node.Spec.Meta.ID,
+			)
+			applyOrder = fallbackDeletionOrder
+		}
+		resourcesToAdd, err := c.processNode(rcx, node, applyOrder)
 		if err != nil {
 			if !runtime.IsDataPending(err) {
 				return nil, err

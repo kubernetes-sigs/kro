@@ -99,9 +99,6 @@ func NewReconcileContext(
 	config ReconcileConfig,
 	instance *unstructured.Unstructured,
 ) *ReconcileContext {
-	if rt == nil {
-		panic("NewReconcileContext requires a runtime; use NewDeletionContext for deletion")
-	}
 	return &ReconcileContext{
 		Ctx:        ctx,
 		Log:        log,

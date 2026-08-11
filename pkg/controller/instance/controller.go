@@ -259,6 +259,11 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		log.Error(err, "failed to create runtime")
 		return err
 	}
+	if runtimeObj == nil {
+		err := errors.New("runtime creation returned nil without an error")
+		log.Error(err, "failed to create runtime")
+		return err
+	}
 
 	//--------------------------------------------------------------
 	// 4. Build reconciliation context (clients, mapper, labeler, runtime)

@@ -87,6 +87,76 @@ func (h *topoHeap[T]) Pop() any {
 	return item
 }
 
+type traversalDirection int
+
+const (
+	dependenciesFirst traversalDirection = iota
+	dependentsFirst
+)
+
+type topologicalTraversal[T cmp.Ordered] struct {
+	graph     *DirectedAcyclicGraph[T]
+	remaining map[T]int
+	unlocks   map[T][]T
+	ready     topoHeap[T]
+}
+
+func newTopologicalTraversal[T cmp.Ordered](
+	graph *DirectedAcyclicGraph[T],
+	direction traversalDirection,
+) *topologicalTraversal[T] {
+	traversal := &topologicalTraversal[T]{
+		graph:     graph,
+		remaining: make(map[T]int, len(graph.Vertices)),
+		unlocks:   make(map[T][]T, len(graph.Vertices)),
+		ready:     make(topoHeap[T], 0, len(graph.Vertices)),
+	}
+
+	for id := range graph.Vertices {
+		traversal.remaining[id] = 0
+	}
+	for id, vertex := range graph.Vertices {
+		for dependency := range vertex.DependsOn {
+			switch direction {
+			case dependenciesFirst:
+				traversal.remaining[id]++
+				traversal.unlocks[dependency] = append(traversal.unlocks[dependency], id)
+			case dependentsFirst:
+				traversal.remaining[dependency]++
+				traversal.unlocks[id] = append(traversal.unlocks[id], dependency)
+			}
+		}
+	}
+
+	for id, remaining := range traversal.remaining {
+		if remaining == 0 {
+			traversal.ready = append(traversal.ready, topoHeapItem[T]{
+				ID:    id,
+				Order: graph.Vertices[id].Order,
+			})
+		}
+	}
+	heap.Init(&traversal.ready)
+
+	return traversal
+}
+
+func (t *topologicalTraversal[T]) popReady() topoHeapItem[T] {
+	return heap.Pop(&t.ready).(topoHeapItem[T])
+}
+
+func (t *topologicalTraversal[T]) advance(id T) {
+	for _, unlocked := range t.unlocks[id] {
+		t.remaining[unlocked]--
+		if t.remaining[unlocked] == 0 {
+			heap.Push(&t.ready, topoHeapItem[T]{
+				ID:    unlocked,
+				Order: t.graph.Vertices[unlocked].Order,
+			})
+		}
+	}
+}
+
 // NewDirectedAcyclicGraph creates a new directed acyclic graph.
 func NewDirectedAcyclicGraph[T cmp.Ordered]() *DirectedAcyclicGraph[T] {
 	return &DirectedAcyclicGraph[T]{
@@ -172,39 +242,13 @@ func (d *DirectedAcyclicGraph[T]) AddDependencies(from T, dependencies []T) erro
 // TopologicalSort returns the vertexes of the graph, respecting topological ordering first,
 // and preserving order of nodes within each "depth" of the topological ordering.
 func (d *DirectedAcyclicGraph[T]) TopologicalSort() ([]T, error) {
-	remainingDeps := make(map[T]int, len(d.Vertices))
-	dependents := make(map[T][]T, len(d.Vertices))
-	ready := make(topoHeap[T], 0, len(d.Vertices))
-
-	for id, vertex := range d.Vertices {
-		remainingDeps[id] = len(vertex.DependsOn)
-		if len(vertex.DependsOn) == 0 {
-			ready = append(ready, topoHeapItem[T]{
-				ID:    id,
-				Order: vertex.Order,
-			})
-		}
-		for dependency := range vertex.DependsOn {
-			dependents[dependency] = append(dependents[dependency], id)
-		}
-	}
-
-	heap.Init(&ready)
+	traversal := newTopologicalTraversal(d, dependenciesFirst)
 
 	order := make([]T, 0, len(d.Vertices))
-	for ready.Len() > 0 {
-		current := heap.Pop(&ready).(topoHeapItem[T])
+	for traversal.ready.Len() > 0 {
+		current := traversal.popReady()
 		order = append(order, current.ID)
-
-		for _, dependent := range dependents[current.ID] {
-			remainingDeps[dependent]--
-			if remainingDeps[dependent] == 0 {
-				heap.Push(&ready, topoHeapItem[T]{
-					ID:    dependent,
-					Order: d.Vertices[dependent].Order,
-				})
-			}
-		}
+		traversal.advance(current.ID)
 	}
 
 	if len(order) == len(d.Vertices) {
@@ -214,6 +258,45 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSort() ([]T, error) {
 	hasCycle, cycle := d.hasCycle()
 	if !hasCycle {
 		// Unexpected!
+		return nil, &CycleError[T]{}
+	}
+	return nil, &CycleError[T]{
+		Cycle: cycle,
+	}
+}
+
+// ReverseTopologicalLayers returns vertices grouped into layers with dependents
+// before their dependencies. Vertices in the same layer have no dependency
+// ordering between them and can be processed concurrently. Original vertex
+// order is preserved within each layer where possible.
+func (d *DirectedAcyclicGraph[T]) ReverseTopologicalLayers() ([][]T, error) {
+	traversal := newTopologicalTraversal(d, dependentsFirst)
+	layers := make([][]T, 0)
+	processed := 0
+
+	for traversal.ready.Len() > 0 {
+		layerSize := traversal.ready.Len()
+		items := make([]topoHeapItem[T], 0, layerSize)
+		layer := make([]T, 0, layerSize)
+		for range layerSize {
+			item := traversal.popReady()
+			items = append(items, item)
+			layer = append(layer, item.ID)
+		}
+
+		for _, item := range items {
+			traversal.advance(item.ID)
+		}
+		layers = append(layers, layer)
+		processed += len(layer)
+	}
+
+	if processed == len(d.Vertices) {
+		return layers, nil
+	}
+
+	hasCycle, cycle := d.hasCycle()
+	if !hasCycle {
 		return nil, &CycleError[T]{}
 	}
 	return nil, &CycleError[T]{

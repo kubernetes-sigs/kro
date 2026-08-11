@@ -299,7 +299,6 @@ func newControllerAndDeletionContext(
 		controller.reconcileConfig,
 		instance.DeepCopy(),
 	)
-	dcx.Watcher = dynamiccontroller.NoopInstanceWatcher{}
 
 	return controller, dcx, raw
 }

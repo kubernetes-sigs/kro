@@ -76,7 +76,6 @@ type DeletionContext struct {
 
 	Mark         *ConditionsMarker
 	StateManager *StateManager
-	Watcher      dynamiccontroller.InstanceWatcher
 }
 
 // NewReconcileContext constructs a ReconcileContext for a single reconciliation cycle.

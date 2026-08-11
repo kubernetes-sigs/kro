@@ -234,7 +234,6 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 			ctx, log, c.gvr, c.namespaced, c.client.Dynamic(), c.client.RESTMapper(),
 			c.reconcileConfig, inst,
 		)
-		dcx.Watcher = watcher
 		if err := c.reconcileDeletion(dcx); err != nil {
 			_ = c.updateDeletionStatus(dcx)
 			return err

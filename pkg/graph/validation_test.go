@@ -890,12 +890,25 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 			wantErr: "selector must be a Kubernetes LabelSelector object or a CEL expression that resolves to one",
 		},
 		{
-			// Operator validity is enforced by LabelSelectorAsSelector on list.
-			name: "structurally valid selector with a bad operator is accepted",
+			name: "literal selector with a bad operator is invalid",
 			metadata: v1alpha1.ExternalRefMetadata{
 				Selector: toRawExtension(t, map[string]any{
 					"matchExpressions": []map[string]any{{
 						"key":      "app",
+						"operator": "InvalidOperator",
+					}},
+				}),
+			},
+			wantErr: "invalid label selector",
+		},
+		{
+			// The CEL value is unknown until reconcile, so operator validity is
+			// left to LabelSelectorAsSelector on list.
+			name: "CEL-bearing selector with a bad operator is accepted",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchExpressions": []map[string]any{{
+						"key":      "${schema.spec.key}",
 						"operator": "InvalidOperator",
 					}},
 				}),
@@ -1007,13 +1020,35 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 			wantErr: "expected string type for path metadata.selector.matchExpressions[0].values[0]",
 		},
 		{
-			// Label syntax is enforced by LabelSelectorAsSelector on list.
-			name: "malformed label key is accepted; syntax is enforced at list time",
+			name: "malformed label key in a literal selector is invalid",
 			metadata: v1alpha1.ExternalRefMetadata{
 				Selector: toRawExtension(t, map[string]any{
 					"matchLabels": map[string]any{"bad key!": "demo"},
 				}),
 			},
+			wantErr: "invalid label selector",
+		},
+		{
+			// Label syntax is only checked for fully literal selectors; here the
+			// key sits next to a CEL value, so it is enforced on list instead.
+			name: "malformed label key alongside a CEL value is accepted",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchLabels": map[string]any{"bad key!": "${schema.spec.tier}"},
+				}),
+			},
+		},
+		{
+			name: "literal matchExpressions In operator without values is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: toRawExtension(t, map[string]any{
+					"matchExpressions": []map[string]any{{
+						"key":      "app",
+						"operator": "In",
+					}},
+				}),
+			},
+			wantErr: "invalid label selector",
 		},
 	}
 

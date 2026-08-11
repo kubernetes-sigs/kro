@@ -20,8 +20,11 @@ import (
 	"regexp"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	metav1validation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
@@ -284,8 +287,7 @@ func validateExternalRefMetadata(metadata v1alpha1.ExternalRefMetadata) error {
 
 // validateSelector validates the structure of externalRef.metadata.selector.
 // The field is schemaless, so it may hold either a literal LabelSelector or a
-// CEL expression that resolves to one. Label syntax and operator validity are
-// left to LabelSelectorAsSelector when the collection is listed.
+// CEL expression that resolves to one.
 func validateSelector(raw []byte) error {
 	var decoded interface{}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
@@ -303,12 +305,44 @@ func validateSelector(raw []byte) error {
 		}
 		return nil
 	case map[string]interface{}:
-		_, err := parser.New(schema.NewCache()).
+		expressions, err := parser.New(schema.NewCache()).
 			ParseResourceAtPath(selector, &schema.LabelSelectorSchema, "metadata.selector")
-		return err
+		if err != nil {
+			return err
+		}
+		if len(expressions) > 0 {
+			// Some values are only known at instance reconcile time, so label
+			// syntax and operator validity are left to LabelSelectorAsSelector
+			// when the collection is listed.
+			return nil
+		}
+		return validateLiteralSelector(raw)
 	default:
 		return errSelectorShape
 	}
+}
+
+// validateLiteralSelector applies Kubernetes' own LabelSelector validation to a
+// selector that holds no CEL expressions. Everything it checks — operator
+// validity, values matching the operator, label key and value syntax — is known
+// statically, so it is reported when the RGD is admitted rather than deferred to
+// LabelSelectorAsSelector at list time.
+func validateLiteralSelector(raw []byte) error {
+	var selector metav1.LabelSelector
+	if err := json.Unmarshal(raw, &selector); err != nil {
+		return fmt.Errorf("invalid selector object: %w", err)
+	}
+
+	errs := metav1validation.ValidateLabelSelector(
+		&selector,
+		metav1validation.LabelSelectorValidationOptions{},
+		field.NewPath("metadata", "selector"),
+	)
+	if len(errs) != 0 {
+		return fmt.Errorf("invalid label selector: %v", errs)
+	}
+
+	return nil
 }
 
 var errSelectorShape = fmt.Errorf(

@@ -385,6 +385,32 @@ var _ = Describe("Validation", func() {
 			expectRGDInactiveWithError(ctx, rgd, "schema not found for field bogusField")
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
+
+		It("should reject an external collection with an invalid literal selector operator", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-invalid-external-selector-operator",
+				generator.WithSchema(
+					"TestInvalidExternalSelectorOperator", "v1alpha1",
+					map[string]interface{}{},
+					nil,
+				),
+				generator.WithExternalRef("extconfigs", &krov1alpha1.ExternalRef{
+					APIVersion: "v1",
+					Kind:       "ConfigMap",
+					Metadata: krov1alpha1.ExternalRefMetadata{
+						Selector: toRawExtension(map[string]interface{}{
+							"matchExpressions": []map[string]interface{}{{
+								"key":      "team",
+								"operator": "NotARealOperator",
+							}},
+						}),
+					},
+				}, nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			expectRGDInactiveWithError(ctx, rgd, "invalid label selector")
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
 	})
 
 	Context("ForEach Collections", func() {

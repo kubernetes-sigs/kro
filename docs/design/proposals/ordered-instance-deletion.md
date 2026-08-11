@@ -70,6 +70,14 @@ Both `kro.run/` and `internal.kro.run/` are reserved label prefixes in resource
 templates. RGD authors therefore cannot override the node identity or deletion
 order owned by the controller.
 
+The write that first installs the instance finalizer also creates a valid empty
+ApplySet inventory when none exists. If the instance already has valid
+inventory, that write preserves it; partial or malformed inventory prevents
+finalizer installation rather than being replaced with an empty scope. An
+automatic replacement could hide previously managed children and orphan them
+during deletion. Recovery therefore requires repairing the metadata, or
+removing it only after confirming that no managed members remain.
+
 #### Deletion inventory
 
 The instance is already the ApplySet parent. Its annotations persist the union

@@ -31,6 +31,7 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
@@ -400,6 +401,16 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	// Fast path: if everything is already correct → no patch
 	hasFinalizer := metadata.HasInstanceFinalizer(obj)
 	needFinalizer := !hasFinalizer
+	hasInventoryMetadata := hasApplySetInventoryMetadata(obj)
+	if needFinalizer && hasInventoryMetadata {
+		if err := applyset.ValidateParentInventory(obj); err != nil {
+			return nil, fmt.Errorf(
+				"cannot install finalizer with invalid ApplySet inventory; repair the metadata, "+
+					"or remove it only after confirming no managed members remain: %w",
+				err,
+			)
+		}
+	}
 
 	wantLabels := c.instanceLabeler.Labels()
 	haveLabels := obj.GetLabels()
@@ -424,7 +435,19 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	// Label + finalizers patch
 	// we patch together here because otherwise we could revert a previous patch
 	// result if only one of finalizers or labels change.
-	patch.SetLabels(maps.Clone(wantLabels))
+	patchLabels := maps.Clone(wantLabels)
+	if needFinalizer && !hasInventoryMetadata {
+		// Install a valid empty inventory in the same write as the finalizer.
+		// This guarantees that deletion can make progress even if normal
+		// reconciliation stops before projecting the first set of children.
+		emptyInventory := applyset.Metadata{
+			ID:      applyset.ID(obj),
+			Tooling: applyset.ToolingID(),
+		}
+		maps.Copy(patchLabels, emptyInventory.Labels())
+		patch.SetAnnotations(emptyInventory.Annotations())
+	}
+	patch.SetLabels(patchLabels)
 	metadata.SetInstanceFinalizer(patch)
 
 	patched, err := rcx.InstanceClient().Apply(
@@ -441,4 +464,22 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	}
 
 	return patched, nil
+}
+
+func hasApplySetInventoryMetadata(obj metav1.Object) bool {
+	if _, found := obj.GetLabels()[applyset.ApplySetParentIDLabel]; found {
+		return true
+	}
+	annotations := obj.GetAnnotations()
+	for _, key := range []string{
+		applyset.ApplySetToolingAnnotation,
+		applyset.ApplySetGKsAnnotation,
+		applyset.ApplySetAdditionalNamespacesAnnotation,
+		applyset.ApplySetInventoryHashAnnotation,
+	} {
+		if _, found := annotations[key]; found {
+			return true
+		}
+	}
+	return false
 }

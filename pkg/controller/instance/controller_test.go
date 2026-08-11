@@ -34,6 +34,7 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	clientfake "github.com/kubernetes-sigs/kro/pkg/client/fake"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -46,8 +47,12 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 		name            string
 		presetFinalizer bool
 		presetLabels    bool
+		presetInventory bool
 		wantActions     int
 		wantPatched     bool
+		wantInventory   bool
+		wantGroupKinds  string
+		wantNamespaces  string
 	}{
 		{
 			name:            "no patch needed returns nil",
@@ -55,9 +60,20 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 			presetLabels:    true,
 		},
 		{
-			name:        "patches missing finalizer and labels",
-			wantActions: 1,
-			wantPatched: true,
+			name:          "patches missing finalizer and labels",
+			wantActions:   1,
+			wantPatched:   true,
+			wantInventory: true,
+		},
+		{
+			name:            "preserves inventory when adding finalizer",
+			presetLabels:    true,
+			presetInventory: true,
+			wantActions:     1,
+			wantPatched:     true,
+			wantInventory:   true,
+			wantGroupKinds:  "Deployment.apps",
+			wantNamespaces:  "other",
 		},
 	}
 
@@ -69,6 +85,9 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 			}
 			if tt.presetLabels {
 				metadata.NewKROMetaLabeler().ApplyLabels(instance)
+			}
+			if tt.presetInventory {
+				addDeletionScope(instance, controllerTestDeployGVK, "other")
 			}
 
 			controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
@@ -86,8 +105,31 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 			for key, value := range metadata.NewKROMetaLabeler().Labels() {
 				assert.Equal(t, value, patched.GetLabels()[key])
 			}
+			if tt.wantInventory {
+				require.NoError(t, applyset.ValidateParentInventory(patched))
+				assert.Equal(t, tt.wantGroupKinds, patched.GetAnnotations()[applyset.ApplySetGKsAnnotation])
+				assert.Equal(t, tt.wantNamespaces,
+					patched.GetAnnotations()[applyset.ApplySetAdditionalNamespacesAnnotation])
+			} else {
+				require.Error(t, applyset.ValidateParentInventory(patched))
+			}
 		})
 	}
+}
+
+func TestApplyManagedFinalizerAndLabelsRejectsPartialInventory(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	instance.SetLabels(map[string]string{
+		applyset.ApplySetParentIDLabel: applyset.ID(instance),
+	})
+	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
+
+	patched, err := controller.applyManagedFinalizerAndLabels(rcx)
+	require.Error(t, err)
+	assert.Nil(t, patched)
+	assert.Contains(t, err.Error(), "invalid ApplySet inventory")
+	assert.Empty(t, raw.Actions())
+	assert.False(t, metadata.HasInstanceFinalizer(instance))
 }
 
 func TestApplyManagedFinalizerAndLabelsError(t *testing.T) {

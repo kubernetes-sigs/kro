@@ -2205,6 +2205,52 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			// Regression test: readyWhen on multiple forEach collections must type-check
+			// "each" against each collection's own template kind, not whichever
+			// collection's schema happened to populate the cache first. VPC.status has
+			// vpcID but no subnetID, Subnet.status has subnetID but no vpcID, so neither
+			// is a superset of the other.
+			name: "readyWhen on multiple forEach collections with different template kinds",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"names": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("vpcs", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "${name}-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"name": "${schema.spec.names}"},
+					},
+					[]string{"${each.status.vpcID != \"\"}"}, nil),
+				generator.WithResourceCollection("subnets", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "${name}-subnet",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "10.0.1.0/24",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"name": "${schema.spec.names}"},
+					},
+					[]string{"${each.status.subnetID != \"\"}"}, nil),
+			},
+			wantErr: false,
+		},
+		{
 			name: "ConfigMap.data type mismatch - list where string expected",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(

@@ -161,12 +161,40 @@ func TestReconcileStatusPaths(t *testing.T) {
 		wantState           string
 		wantConditionType   string
 		wantConditionStatus metav1.ConditionStatus
+		wantConditionReason string
 	}{
 		{
 			name:                "empty graph converges to active",
 			wantState:           string(v1alpha1.InstanceStateActive),
 			wantConditionType:   Ready,
 			wantConditionStatus: metav1.ConditionTrue,
+		},
+		{
+			name: "suspended instance sets ResourcesReady=False",
+			instanceAnnotations: map[string]string{
+				v1alpha1.InstanceReconcileAnnotation: v1alpha1.ReconcileSuspended,
+			},
+			wantConditionType:   ResourcesReady,
+			wantConditionStatus: metav1.ConditionFalse,
+			wantConditionReason: "ReconciliationSuspended",
+		},
+		{
+			name: "suspended instance sets Ready=False",
+			instanceAnnotations: map[string]string{
+				v1alpha1.InstanceReconcileAnnotation: v1alpha1.ReconcileSuspended,
+			},
+			wantConditionType:   Ready,
+			wantConditionStatus: metav1.ConditionFalse,
+			wantConditionReason: "ReconciliationSuspended",
+		},
+		{
+			name: "legacy disabled annotation sets Ready=False",
+			instanceAnnotations: map[string]string{
+				v1alpha1.InstanceReconcileAnnotation: v1alpha1.ReconcileLegacyDisabled,
+			},
+			wantConditionType:   Ready,
+			wantConditionStatus: metav1.ConditionFalse,
+			wantConditionReason: "ReconciliationSuspended",
 		},
 	}
 
@@ -183,11 +211,17 @@ func TestReconcileStatusPaths(t *testing.T) {
 			require.NoError(t, err)
 
 			stored := getStoredParentObject(t, raw)
-			state, found, err := unstructured.NestedString(stored.Object, "status", "state")
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, tt.wantState, state)
-			assert.Equal(t, tt.wantConditionStatus, conditionByType(t, stored, tt.wantConditionType).Status)
+			if tt.wantState != "" {
+				state, found, err := unstructured.NestedString(stored.Object, "status", "state")
+				require.NoError(t, err)
+				require.True(t, found)
+				assert.Equal(t, tt.wantState, state)
+			}
+			cond := conditionByType(t, stored, tt.wantConditionType)
+			assert.Equal(t, tt.wantConditionStatus, cond.Status)
+			if tt.wantConditionReason != "" {
+				assert.Equal(t, tt.wantConditionReason, *cond.Reason)
+			}
 		})
 	}
 }

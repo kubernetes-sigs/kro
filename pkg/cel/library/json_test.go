@@ -193,6 +193,23 @@ func TestJSONMarshal(t *testing.T) {
 			expr:     `json.marshal(json.unmarshal('{"name":"test","count":42}'))`,
 			expected: `{"count":42,"name":"test"}`,
 		},
+		{
+			// encoding/json base64-encodes []byte, so json.marshal can
+			// represent bytes directly even though they aren't safe to
+			// place in a resource template or status field (see
+			// conversion.EnsureJSONSafe, which only guards that path).
+			name:     "marshal bytes",
+			expr:     `json.marshal(b"hello")`,
+			expected: `"aGVsbG8="`,
+		},
+		{
+			// encoding/json represents uint64 natively, so json.marshal
+			// isn't limited to the int64 range apimachinery's unstructured
+			// deep-copy requires.
+			name:     "marshal uint beyond int64 range",
+			expr:     `json.marshal(18446744073709551615u)`,
+			expected: `18446744073709551615`,
+		},
 	}
 
 	for _, tc := range testCases {

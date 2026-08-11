@@ -108,6 +108,10 @@ func TestGoNativeType_ComplexNested(t *testing.T) {
 }
 
 func TestGoNativeType_Bytes(t *testing.T) {
+	// GoNativeType itself has no JSON-safety restriction: some callers (e.g.
+	// json.marshal, via encoding/json) can handle []byte directly. Callers
+	// that feed apimachinery's unstructured deep-copy must additionally call
+	// EnsureJSONSafe; see TestEnsureJSONSafe_Bytes.
 	env, err := cel.NewEnv()
 	require.NoError(t, err)
 
@@ -122,16 +126,82 @@ func TestGoNativeType_Bytes(t *testing.T) {
 
 	native, err := GoNativeType(val)
 	require.NoError(t, err)
+	assert.Equal(t, []byte("hello world"), native)
+}
 
-	// Check type
-	bytes, ok := native.([]byte)
-	require.True(t, ok, "Expected []byte, got %T", native)
-	assert.Equal(t, []byte("hello world"), bytes)
+func TestGoNativeType_Uint(t *testing.T) {
+	env, err := cel.NewEnv()
+	require.NoError(t, err)
+
+	ast, issues := env.Compile(`uint(42)`)
+	require.NoError(t, issues.Err())
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	val, _, err := prog.Eval(map[string]interface{}{})
+	require.NoError(t, err)
+
+	native, err := GoNativeType(val)
+	require.NoError(t, err)
+
+	// GoNativeType returns the raw uint64; JSON-safety normalization (to
+	// int64, for callers that need it) is EnsureJSONSafe's job, not this
+	// function's - see TestEnsureJSONSafe_Uint.
+	u, ok := native.(uint64)
+	require.True(t, ok, "Expected uint64, got %T", native)
+	assert.Equal(t, uint64(42), u)
 
 	// Check JSON marshalling
 	marshalled, err := json.Marshal(native)
 	assert.NoError(t, err, "Should be JSON marshallable")
 	assert.NotEmpty(t, marshalled)
+}
+
+func TestEnsureJSONSafe_Bytes(t *testing.T) {
+	// Raw bytes have no JSON-safe representation (apimachinery's unstructured
+	// deep-copy panics on []byte), so EnsureJSONSafe must reject them with an
+	// actionable error instead of returning a value that later panics.
+	_, err := EnsureJSONSafe([]byte("hello world"))
+	require.ErrorIs(t, err, ErrUnsupportedType)
+}
+
+func TestEnsureJSONSafe_Uint(t *testing.T) {
+	safe, err := EnsureJSONSafe(uint64(42))
+	require.NoError(t, err)
+
+	// EnsureJSONSafe converts uint64 to int64 so it survives apimachinery's
+	// unstructured deep-copy, which only accepts int64 (not uint64).
+	i, ok := safe.(int64)
+	require.True(t, ok, "Expected int64, got %T", safe)
+	assert.Equal(t, int64(42), i)
+
+	marshalled, err := json.Marshal(safe)
+	assert.NoError(t, err, "Should be JSON marshallable")
+	assert.NotEmpty(t, marshalled)
+}
+
+func TestEnsureJSONSafe_UintOverflow(t *testing.T) {
+	_, err := EnsureJSONSafe(uint64(18446744073709551615)) // math.MaxUint64
+	require.ErrorIs(t, err, ErrUnsupportedType)
+}
+
+func TestEnsureJSONSafe_NestedList(t *testing.T) {
+	safe, err := EnsureJSONSafe([]interface{}{uint64(42), "ok"})
+	require.NoError(t, err)
+	assert.Equal(t, []interface{}{int64(42), "ok"}, safe)
+
+	_, err = EnsureJSONSafe([]interface{}{[]byte("bad")})
+	require.ErrorIs(t, err, ErrUnsupportedType)
+}
+
+func TestEnsureJSONSafe_NestedMap(t *testing.T) {
+	safe, err := EnsureJSONSafe(map[string]interface{}{"n": uint64(42)})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]interface{}{"n": int64(42)}, safe)
+
+	_, err = EnsureJSONSafe(map[string]interface{}{"b": []byte("bad")})
+	require.ErrorIs(t, err, ErrUnsupportedType)
 }
 
 func TestConvertMap_DeepCopiesRawMap(t *testing.T) {

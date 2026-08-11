@@ -17,6 +17,7 @@ package conversion
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"time"
 
@@ -76,6 +77,50 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 		}
 		// For types we can't convert, return as is with an error
 		return v.Value(), fmt.Errorf("%w: %v", ErrUnsupportedType, v.Type())
+	}
+}
+
+// EnsureJSONSafe recursively validates and normalizes the output of
+// GoNativeType for callers whose result flows into apimachinery's
+// unstructured deep-copy (runtime.DeepCopyJSONValue, used by
+// unstructured.Unstructured.DeepCopy() for resource templates and by
+// unstructured.NestedMap/DeepCopyJSON for status). That deep-copy only
+// accepts string, int64, bool, float64, nil, map[string]interface{} and
+// []interface{} - it panics on the uint64 and []byte values GoNativeType
+// returns for CEL uint and bytes. Other consumers of GoNativeType (e.g.
+// json.marshal, which goes through encoding/json) don't have this
+// restriction and should call GoNativeType directly instead.
+func EnsureJSONSafe(v interface{}) (interface{}, error) {
+	switch val := v.(type) {
+	case uint64:
+		if val > math.MaxInt64 {
+			return nil, fmt.Errorf("%w: uint value %d overflows int64; convert it explicitly, e.g. string(...)", ErrUnsupportedType, val)
+		}
+		return int64(val), nil
+	case []byte:
+		return nil, fmt.Errorf("%w: bytes value cannot be used directly in a resource template or status field; encode it explicitly, e.g. base64.encode(...)", ErrUnsupportedType)
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(val))
+		for k, elem := range val {
+			safe, err := EnsureJSONSafe(elem)
+			if err != nil {
+				return nil, err
+			}
+			result[k] = safe
+		}
+		return result, nil
+	case []interface{}:
+		result := make([]interface{}, len(val))
+		for i, elem := range val {
+			safe, err := EnsureJSONSafe(elem)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = safe
+		}
+		return result, nil
+	default:
+		return v, nil
 	}
 }
 

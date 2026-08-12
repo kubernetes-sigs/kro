@@ -117,6 +117,9 @@ spec:
               value: {{ .Values.config.leaderElectionRenewDeadline | quote }}
             - name: KRO_LEADER_ELECTION_RETRY_PERIOD
               value: {{ .Values.config.leaderElectionRetryPeriod | quote }}
+          {{- with .Values.deployment.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           args:
             {{- if .Values.config.allowCRDDeletion }}
             - --allow-crd-deletion

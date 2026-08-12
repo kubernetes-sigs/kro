@@ -181,12 +181,16 @@ func (c *Controller) deleteTarget(
 		return nil
 	}
 
+	// Background must be explicit: an unspecified policy falls back to the
+	// type's default GC policy, which for batch/v1 Jobs orphans their Pods.
+	propagationPolicy := metav1.DeletePropagationBackground
+
 	// Track whether any delete request was accepted. a successful Delete does NOT
 	// mean the object is gone yet, just that deletion is in progress.
 	anyDeleted := false
 	for _, target := range targets {
 		rc := resourceClientFor(rcx, node.Spec.Meta, target.GetNamespace())
-		err := rc.Delete(rcx.Ctx, target.GetName(), metav1.DeleteOptions{})
+		err := rc.Delete(rcx.Ctx, target.GetName(), metav1.DeleteOptions{PropagationPolicy: &propagationPolicy})
 		if apierrors.IsNotFound(err) {
 			// Already gone: leave anyDeleted as is and keep checking others.
 			continue

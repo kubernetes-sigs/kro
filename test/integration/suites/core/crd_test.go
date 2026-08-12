@@ -236,12 +236,20 @@ var _ = Describe("CRD", func() {
 			// Delete ResourceGraphDefinition
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
-			// Verify CRD is deleted
+			// On numerous occasions when the apiserver is overloaded the deletion
+			// just doesn't appear to be happening quickly enough.
+			// Therefore, here we increase the time a bit and log the finalizer,
+			// the deletion timestamp and the condition to make it easier to debug this.
+			// The deletion was issued by Kro correctly, it just didn't happen.
+			// https://github.com/kubernetes-sigs/kro/pull/1350
+			// The above link contains a related kro test run failure.
 			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName},
-					&apiextensionsv1.CustomResourceDefinition{})
-				g.Expect(err).To(MatchError(errors.IsNotFound, "crd should be deleted"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+				crd := &apiextensionsv1.CustomResourceDefinition{}
+				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+				g.Expect(err).To(MatchError(errors.IsNotFound, "crd should be deleted"),
+					"crd still present: deletionTimestamp=%v finalizers=%v conditions=%v",
+					crd.DeletionTimestamp, crd.Finalizers, crd.Status.Conditions)
+			}, time.Minute, time.Second).WithContext(ctx).Should(Succeed())
 		})
 	})
 

@@ -28,7 +28,6 @@ kro includes a rich set of CEL function libraries from three sources: kro's own 
 | CIDR                        | kubernetes | [kro](#cidr), [Go doc](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#CIDR), [k8s.io](https://kubernetes.io/docs/reference/using-api/cel/#kubernetes-cidr-library) |
 | Semver                      | kubernetes | [kro](#semver), [Go doc](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#SemverLib), [k8s.io](https://kubernetes.io/docs/reference/using-api/cel/#kubernetes-semver-library) |
 
-
 ## kro Libraries
 
 ### Hash
@@ -36,7 +35,7 @@ kro includes a rich set of CEL function libraries from three sources: kro's own 
 Cryptographic and non-cryptographic hash functions. All return raw bytes; use `"%x".format(...)` for hex or `base64.encode()` for base64.
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `hash.fnv64a(string)` | `bytes` | FNV-1a 64-bit hash. Fast, non-cryptographic. Recommended for most use cases. |
 | `hash.sha256(string)` | `bytes` | SHA-256 cryptographic hash. |
 | `hash.md5(string)` | `bytes` | MD5 hash. |
@@ -59,7 +58,7 @@ encoded: ${base64.encode(hash.fnv64a(schema.metadata.uid))}
 Parse and serialize JSON strings.
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `json.unmarshal(string)` | `dyn` | Parse a JSON string into a CEL value (map, list, string, number, bool, or null). |
 | `json.marshal(dyn)` | `string` | Serialize a CEL value to a JSON string. |
 
@@ -81,7 +80,7 @@ configJson: ${json.marshal({"name": schema.spec.name, "replicas": schema.spec.re
 Deterministic random generation seeded by a stable value (e.g. resource UID), so results are reproducible across reconcile loops.
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `random.seededString(int, string)` | `string` | Random alphanumeric string of given length, seeded by the second argument. |
 | `random.seededInt(int, int, string)` | `int` | Random integer in `[min, max)`, seeded by the third argument. |
 
@@ -100,8 +99,9 @@ port: ${random.seededInt(30000, 32768, schema.metadata.uid)}
 Map manipulation functions.
 
 | Function | Returns | Description |
-|---|---|---|
-| `<map>.merge(map)` | `map` | Merge two maps. Keys from the second map overwrite keys in the first. Keys must be strings. |
+| --- | --- | --- |
+| `<map>.merge(map)` | `map` | Merge two maps. Keys from the second map overwrite keys in the first. Keys must be strings; value types must match. |
+| `<map>.deepMerge(map)` | `dyn` | Like `merge`, but nested maps are merged recursively. Lists and scalars are replaced. Accepts `object`-typed values. |
 
 **Examples:**
 
@@ -111,6 +111,10 @@ labels: ${{"app": schema.spec.name, "managed-by": "kro"}.merge(schema.spec.extra
 
 # Layer overrides on top of defaults
 config: ${{"timeout": "30s", "retries": "3"}.merge(schema.spec.overrides)}
+
+# Layer nested defaults under a user-supplied object.
+# Preserves securityContext.fsGroup from podSpec and adds runAsNonRoot.
+spec: ${{"securityContext": {"runAsNonRoot": true}}.deepMerge(schema.spec.podSpec)}
 ```
 
 ### Index Mutation
@@ -118,7 +122,7 @@ config: ${{"timeout": "30s", "retries": "3"}.merge(schema.spec.overrides)}
 Pure list functions that return a new list without modifying the input.
 
 | Function | Signature | Description |
-|---|---|---|
+| --- | --- | --- |
 | `lists.setAtIndex` | `list(T), int, T -> list(T)` | Replace the element at `index`. Index must be in `[0, size(list))`. |
 | `lists.insertAtIndex` | `list(T), int, T -> list(T)` | Insert `value` before `index`. Use `index == size(list)` to append. Index must be in `[0, size(list)]`. |
 | `lists.removeAtIndex` | `list(T), int -> list(T)` | Remove the element at `index`. Index must be in `[0, size(list))`. |
@@ -164,7 +168,7 @@ The `runtime` variable builds and reads instance status conditions. It is only
 available in the schema's `status.conditions` block.
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `runtime.newCondition({type, status, reason, message})` | `Condition` | Builds a condition. `type` and `status` are required; `status` must be `True`, `False`, or `Unknown`. |
 | `runtime.condition(schema, type)` | `Condition` | Reads kro's internal value for a built-in condition type (`Ready`, `InstanceManaged`, `GraphResolved`, `ResourcesReady`). |
 
@@ -180,7 +184,6 @@ available in the schema's `status.conditions` block.
 
 See [Custom Status Conditions](./06-status-conditions.md) for details.
 
-
 ## cel-go Libraries
 
 ### Strings
@@ -188,7 +191,7 @@ See [Custom Status Conditions](./06-status-conditions.md) for details.
 Extended string manipulation functions from [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Strings).
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `<string>.charAt(int)` | `string` | Character at position. |
 | `<string>.indexOf(string)` | `int` | Index of first occurrence, or `-1`. |
 | `<string>.indexOf(string, int)` | `int` | Same, starting search from offset. |
@@ -246,7 +249,7 @@ checksum: ${"%x".format([hash.sha256(schema.spec.data)])}
 Extended list manipulation functions from [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Lists).
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `<list>.slice(int, int)` | `list` | Sub-list from start (inclusive) to end (exclusive). |
 | `<list>.flatten()` | `list` | Flatten nested lists one level deep. |
 | `<list>.flatten(int)` | `list` | Flatten up to N levels. |
@@ -280,7 +283,7 @@ flat: ${schema.spec.nestedPorts.flatten()}
 Base64 encoding and decoding from [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders).
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `base64.encode(bytes)` | `string` | Encode bytes to base64 string. |
 | `base64.decode(string)` | `bytes` | Decode base64 string to bytes. |
 
@@ -302,7 +305,7 @@ decoded: ${string(base64.decode(schema.spec.encodedValue))}
 Two-variable versions of list/map comprehension macros from [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#TwoVarComprehensions). These provide access to both the key/index and value in each iteration.
 
 | Macro | Description |
-|---|---|
+| --- | --- |
 | `<list\|map>.all(k, v, predicate)` | True if all entries satisfy the predicate. |
 | `<list\|map>.exists(k, v, predicate)` | True if any entry satisfies the predicate. |
 | `<list\|map>.existsOne(k, v, predicate)` | True if exactly one entry satisfies the predicate. |
@@ -340,7 +343,6 @@ envVars: ${{ "APP": "nginx", "PORT": "8080" }.transformList(k, v, k + "=" + v)}
 allDifferent: ${{ "hello": "world", "taco": "bell" }.all(k, v, k != v)}
 ```
 
-
 ## Kubernetes Libraries
 
 ### URLs
@@ -348,7 +350,7 @@ allDifferent: ${{ "hello": "world", "taco": "bell" }.all(k, v, k != v)}
 Parse and inspect URLs. The URL must be an absolute URI or an absolute path.
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `url(string)` | `URL` | Parse a string into a URL. Errors if invalid. |
 | `isURL(string)` | `bool` | Returns true if the string is a valid URL. |
 | `<URL>.getScheme()` | `string` | Returns the URL scheme (e.g. `https`). Empty string if absent. |
@@ -376,7 +378,7 @@ port: ${url(database.status.endpoint).getPort()}
 Regular expression matching and extraction via [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex).
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `<string>.find(string)` | `string` | Returns the first regex match, or empty string. |
 | `<string>.findAll(string)` | `list(string)` | Returns all non-overlapping matches. |
 | `<string>.findAll(string, int)` | `list(string)` | Returns up to N matches. |
@@ -403,7 +405,7 @@ version: ${schema.spec.image.find('[0-9]+\\.[0-9]+\\.[0-9]+')}
 Work with [Kubernetes resource quantities](https://pkg.go.dev/k8s.io/apimachinery/pkg/api/resource#Quantity) (e.g. `100m`, `1Gi`, `500Mi`).
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `quantity(string)` | `Quantity` | Parse a Kubernetes quantity string. |
 | `isQuantity(string)` | `bool` | True if the string is a valid quantity. |
 | `<Quantity>.add(Quantity\|int)` | `Quantity` | Sum of two quantities. |
@@ -438,7 +440,7 @@ megabytes: ${quantity(schema.spec.storageSize).asInteger()}
 Kubernetes-specific list utility functions from [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Lists).
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `<list>.isSorted()` | `bool` | True if elements are in sorted order. |
 | `<list>.sum()` | `T` | Sum of numeric or duration elements. Returns `0` for empty lists. |
 | `<list>.min()` | `T` | Minimum element. Errors on empty list. |
@@ -468,7 +470,7 @@ idx: ${schema.spec.tags.indexOf("production")}
 Parse and inspect IPv4 and IPv6 addresses. IPv4-mapped IPv6 addresses and addresses with zones are not allowed.
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `ip(string)` | `IP` | Parse a string into an IP address. Errors if invalid. |
 | `isIP(string)` | `bool` | Returns true if the string is a valid IPv4 or IPv6 address. |
 | `ip.isCanonical(string)` | `bool` | Returns true if the string is in canonical IP form. |
@@ -501,7 +503,7 @@ canonical: ${ip.isCanonical(schema.spec.ipv6Addr)}
 Parse and inspect CIDR subnet notation. Works with both IPv4 and IPv6.
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `cidr(string)` | `CIDR` | Parse a CIDR string (e.g. `192.168.0.0/24`). Errors if invalid. |
 | `isCIDR(string)` | `bool` | Returns true if the string is valid CIDR notation. |
 | `<CIDR>.containsIP(string\|IP)` | `bool` | True if the CIDR contains the given IP. |
@@ -532,7 +534,7 @@ isSubnet: ${cidr('10.0.0.0/8').containsCIDR(schema.spec.vpcCIDR)}
 Parse and compare [semantic versions](https://semver.org). Supports optional normalization to handle common non-strict formats like `v1.0` or `01.02.03`.
 
 | Function | Returns | Description |
-|---|---|---|
+| --- | --- | --- |
 | `semver(string)` | `Semver` | Parse a strict semver string (e.g. `1.2.3`). |
 | `semver(string, bool)` | `Semver` | Parse with normalization (strips `v` prefix, fills missing parts, removes leading zeros). |
 | `isSemver(string)` | `bool` | Returns true if the string is a valid semver. |

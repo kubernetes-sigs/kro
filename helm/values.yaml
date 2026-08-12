@@ -96,6 +96,8 @@ deployment:
   extraVolumes: []
   # Additional volume mount settings for Pods
   extraVolumeMounts: []
+  # Additional environment variables for the kro container
+  extraEnv: []
 
 # Debugging configuration settings
 # WARNING: pprof profiling endpoints expose sensitive performance data.

@@ -113,6 +113,31 @@ type ForEachDimension struct {
 	Expression *krocel.Expression
 }
 
+// ConditionDependency is one condition type an entry looks up via
+// runtime.condition(schema, 'X'), with the entries that could declare it
+type ConditionDependency struct {
+	Type string
+
+	// DeclaredBy is empty for a kro built-in and for an unknown type, so it never
+	// blocks evaluation. The build cannot tell which computed type will produce a
+	// given name, so every entry that could is listed.
+	DeclaredBy []int
+}
+
+// ConditionEntry is one entry of the author-defined `conditions:` block.
+type ConditionEntry struct {
+	Expr *krocel.Expression
+
+	// EvalRank orders evaluation, ascending and stable within equal ranks. Slice
+	// order stays declaration order, which is what reaches status.conditions[].
+	// Evaluation order does not leak onto the wire. All-zero ranks sort to
+	// declaration order, so the zero value is safe.
+	EvalRank int
+
+	// DependsOn is what this entry must have available before it is evaluated.
+	DependsOn []ConditionDependency
+}
+
 // Node is the immutable node spec produced by the builder.
 // It contains the template, variables, and conditions for a resource.
 // No CRD/schema references are kept here - schemas are only used
@@ -140,9 +165,9 @@ type Node struct {
 	// nil or empty means this is not a collection.
 	ForEach []ForEachDimension
 
-	// Conditions holds the compiled expressions of the author-defined
-	// `conditions:` block (NodeTypeInstance only; nil for resource nodes).
-	Conditions []*krocel.Expression
+	// Conditions holds the entries of the author-defined `conditions:` block
+	// (NodeTypeInstance only; nil for resource nodes).
+	Conditions []ConditionEntry
 }
 
 // DeepCopy creates a deep copy of the Node.
@@ -164,7 +189,21 @@ func (n *Node) DeepCopy() *Node {
 		IncludeWhen: slices.Clone(n.IncludeWhen),
 		ReadyWhen:   slices.Clone(n.ReadyWhen),
 		ForEach:     slices.Clone(n.ForEach),
-		Conditions:  slices.Clone(n.Conditions),
+	}
+
+	if n.Conditions != nil {
+		cp.Conditions = make([]ConditionEntry, len(n.Conditions))
+		for i, e := range n.Conditions {
+			deps := make([]ConditionDependency, len(e.DependsOn))
+			for j, d := range e.DependsOn {
+				deps[j] = ConditionDependency{Type: d.Type, DeclaredBy: slices.Clone(d.DeclaredBy)}
+			}
+			cp.Conditions[i] = ConditionEntry{
+				Expr:      e.Expr,
+				EvalRank:  e.EvalRank,
+				DependsOn: deps,
+			}
+		}
 	}
 
 	if n.Template != nil {

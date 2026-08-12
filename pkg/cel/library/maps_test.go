@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types/ref"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMaps(t *testing.T) {
@@ -37,32 +39,357 @@ func TestMaps(t *testing.T) {
 	env := testMapsEnv(t)
 	for i, tc := range mapsTests {
 		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
-			asts := make([]*cel.Ast, 0, 2)
-			pAst, iss := env.Parse(tc.expr)
-			if iss.Err() != nil {
-				t.Fatalf("env.Parse(%v) failed: %v", tc.expr, iss.Err())
-			}
-			asts = append(asts, pAst)
-			cAst, iss := env.Check(pAst)
-			if iss.Err() != nil {
-				t.Fatalf("env.Check(%v) failed: %v", tc.expr, iss.Err())
-			}
-			asts = append(asts, cAst)
-
-			for _, ast := range asts {
-				prg, err := env.Program(ast)
-				if err != nil {
-					t.Fatalf("env.Program() failed: %v", err)
-				}
-				out, _, err := prg.Eval(cel.NoVars())
-				if err != nil {
-					t.Fatal(err)
-				} else if out.Value() != true {
-					t.Errorf("got %v, wanted true for expr: %s", out.Value(), tc.expr)
-				}
-			}
+			evalTrue(t, env, tc.expr)
 		})
 	}
+}
+
+func TestDeepMerge(t *testing.T) {
+	// expr is the call under test; want is the expected CEL value.
+	// Comparison uses CEL equality so nested map/list shapes stay consistent.
+	// notEqual=true asserts expr != want (negative expectation).
+	deepMergeTests := []struct {
+		name     string
+		expr     string
+		want     string
+		notEqual bool
+	}{
+		// empty maps (and empty-side fast paths)
+		{name: "both empty", expr: `{}.deepMerge({})`, want: `{}`},
+		{name: "empty rhs returns lhs", expr: `{'a': 1}.deepMerge({})`, want: `{'a': 1}`},
+		{name: "empty lhs returns rhs", expr: `{}.deepMerge({'a': 1})`, want: `{'a': 1}`},
+
+		// top-level shape
+		{name: "disjoint keys union", expr: `{'a': 1}.deepMerge({'b': 2})`, want: `{'a': 1, 'b': 2}`},
+		{name: "shallow leaf: rhs wins", expr: `{'a': 1}.deepMerge({'a': 2})`, want: `{'a': 2}`},
+		{name: "shallow leaf: lhs does not win", expr: `{'a': 1}.deepMerge({'a': 2})`, want: `{'a': 1}`, notEqual: true},
+		{name: "lhs-only key preserved", expr: `{'a': {'x': 1}, 'keep': 7}.deepMerge({'a': {'y': 2}})`, want: `{'a': {'x': 1, 'y': 2}, 'keep': 7}`},
+		{name: "rhs-only key added", expr: `{'a': 1}.deepMerge({'a': 1, 'b': 2})`, want: `{'a': 1, 'b': 2}`},
+
+		// nested maps — the core deepMerge behavior vs shallow merge
+		{
+			name: "nested merge keeps lhs-only and rhs-only leaves; rhs wins shared leaf",
+			expr: `{'a': {'x': 1, 'y': 2}}.deepMerge({'a': {'y': 3, 'z': 4}})`,
+			want: `{'a': {'x': 1, 'y': 3, 'z': 4}}`,
+		},
+		{
+			name: "nested merge is not shallow replace",
+			// shallow merge would yield this and drop x
+			expr:     `{'a': {'x': 1, 'y': 2}}.deepMerge({'a': {'y': 3, 'z': 4}})`,
+			want:     `{'a': {'y': 3, 'z': 4}}`,
+			notEqual: true,
+		},
+		{
+			name: "shallow merge still replaces nested maps wholesale",
+			expr: `{'a': {'x': 1, 'y': 2}}.merge({'a': {'y': 3, 'z': 4}})`,
+			want: `{'a': {'y': 3, 'z': 4}}`,
+		},
+		{
+			name: "3-level nesting rhs wins deepest shared leaf",
+			expr: `{'a': {'b': {'c': 1, 'd': 2}}}.deepMerge({'a': {'b': {'d': 9, 'e': 5}}})`,
+			want: `{'a': {'b': {'c': 1, 'd': 9, 'e': 5}}}`,
+		},
+
+		// type-crossing at a key: rhs always wins (no attempt to coerce)
+		{name: "scalar rhs replaces map lhs", expr: `{'a': {'x': 1}}.deepMerge({'a': 5})`, want: `{'a': 5}`},
+		{name: "map rhs replaces scalar lhs", expr: `{'a': 5}.deepMerge({'a': {'x': 1}})`, want: `{'a': {'x': 1}}`},
+		{name: "list rhs replaces list lhs wholesale", expr: `{'a': [1, 2]}.deepMerge({'a': [3]})`, want: `{'a': [3]}`},
+		{name: "list rhs does not concatenate", expr: `{'a': [1, 2]}.deepMerge({'a': [3]})`, want: `{'a': [1, 2, 3]}`, notEqual: true},
+		{
+			name: "list rhs does not deep-merge list elements",
+			expr: `{'a': [{'n': 'x', 'v': 1}]}.deepMerge({'a': [{'n': 'x', 'v': 2}]})`,
+			want: `{'a': [{'n': 'x', 'v': 2}]}`,
+		},
+
+		// key types
+		{name: "int keys merge with rhs leaf win", expr: `{1: 'a', 2: 'b'}.deepMerge({2: 'c', 3: 'd'})`, want: `{1: 'a', 2: 'c', 3: 'd'}`},
+
+		// inverse priority is just swapped operands (no deepMergeLeft)
+		{
+			name: "swapped operands invert leaf priority",
+			expr: `{'a': {'y': 3, 'z': 4}}.deepMerge({'a': {'x': 1, 'y': 2}})`,
+			want: `{'a': {'x': 1, 'y': 2, 'z': 4}}`,
+		},
+
+		// issue #1343 shape
+		{
+			name: "securedpod defaults under user podSpec",
+			expr: `{'securityContext': {'runAsNonRoot': true}}.deepMerge({'containers': [{'name': 'app'}], 'securityContext': {'fsGroup': 2000}})`,
+			want: `{'containers': [{'name': 'app'}], 'securityContext': {'runAsNonRoot': true, 'fsGroup': 2000}}`,
+		},
+	}
+
+	env := testMapsEnv(t)
+	for _, tc := range deepMergeTests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := evalCEL(t, env, tc.expr)
+			want := evalCEL(t, env, tc.want)
+			eq := got.Equal(want)
+			if tc.notEqual {
+				require.Equal(t, false, eq.Value(), "expr=%s\nwant(not)=%s\ngot=%v", tc.expr, tc.want, got)
+				return
+			}
+			require.Equal(t, true, eq.Value(), "expr=%s\nwant=%s\ngot=%v", tc.expr, tc.want, got)
+		})
+	}
+
+	// Immutability: deepMerge must not mutate the receiver literal's observable value.
+	t.Run("inputs are not mutated", func(t *testing.T) {
+		base := `{'a': {'x': 1}}`
+		merged := evalCEL(t, env, base+`.deepMerge({'a': {'y': 2}})`)
+		wantMerged := evalCEL(t, env, `{'a': {'x': 1, 'y': 2}}`)
+		require.Equal(t, true, merged.Equal(wantMerged).Value())
+
+		// Re-evaluate the original base expression; it must be unchanged.
+		baseVal := evalCEL(t, env, base)
+		wantBase := evalCEL(t, env, `{'a': {'x': 1}}`)
+		require.Equal(t, true, baseVal.Equal(wantBase).Value())
+	})
+}
+
+// TestDeepMergeNonMapArgErrors verifies runtime errors for non-map operands.
+// With a dyn overload, non-map args type-check but must fail at eval time.
+func TestDeepMergeNonMapArgErrors(t *testing.T) {
+	env := testMapsEnv(t)
+	cases := []struct {
+		name string
+		expr string
+	}{
+		{name: "rhs list", expr: `{'a': 1}.deepMerge([1, 2, 3])`},
+		{name: "lhs list", expr: `[1, 2].deepMerge({'a': 1})`},
+		{name: "rhs string", expr: `{'a': 1}.deepMerge('nope')`},
+		{name: "lhs string", expr: `'nope'.deepMerge({'a': 1})`},
+		{name: "both non-map", expr: `1.deepMerge(2)`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ast, iss := env.Compile(tc.expr)
+			require.NoError(t, iss.Err(), "compile %q", tc.expr)
+			prg, err := env.Program(ast)
+			require.NoError(t, err)
+			_, _, err = prg.Eval(cel.NoVars())
+			require.Error(t, err, "expected eval error for %q", tc.expr)
+		})
+	}
+}
+
+// TestDeepMergeObjectTypeCompiles verifies the #1343 type-check regression:
+// deepMerge accepts an opaque object-typed RHS that plain merge rejects.
+func TestDeepMergeObjectTypeCompiles(t *testing.T) {
+	env := testMapsEnv(t, cel.Variable("podSpec", cel.ObjectType("podspec")))
+
+	deepExpr := `{"securityContext": {"runAsNonRoot": true}}.deepMerge(podSpec)`
+	pAst, iss := env.Parse(deepExpr)
+	require.NoError(t, iss.Err())
+	_, iss = env.Check(pAst)
+	require.NoError(t, iss.Err(), "deepMerge must type-check against object-typed field")
+
+	// Control: the same shape with merge must still fail type-checking.
+	mergeExpr := `{"securityContext": {"runAsNonRoot": true}}.merge(podSpec)`
+	mpAst, iss := env.Parse(mergeExpr)
+	require.NoError(t, iss.Err())
+	_, iss = env.Check(mpAst)
+	require.Error(t, iss.Err(), "expected merge to reject object-typed RHS")
+}
+
+// TestDeepMergeRuntimeUnstructured is the end-to-end regression test for
+// GitHub issue #1343. RHS is a dyn variable bound to native
+// map[string]interface{} — the shape kro gets from unstructured object fields.
+func TestDeepMergeRuntimeUnstructured(t *testing.T) {
+	env := testMapsEnv(t, cel.Variable("podSpec", cel.DynType))
+
+	const expr = `{"securityContext": {"runAsNonRoot": true}}.deepMerge(podSpec)`
+	const want = `{
+		"containers": [{"name": "app", "image": "nginx:latest"}],
+		"securityContext": {"runAsNonRoot": true, "fsGroup": 2000}
+	}`
+
+	podSpecVal := map[string]interface{}{
+		"containers": []interface{}{
+			map[string]interface{}{"name": "app", "image": "nginx:latest"},
+		},
+		"securityContext": map[string]interface{}{
+			"fsGroup": int64(2000),
+		},
+	}
+
+	got := evalCELWithVars(t, env, expr, map[string]interface{}{"podSpec": podSpecVal})
+	wantVal := evalCEL(t, env, want)
+	require.Equal(t, true, got.Equal(wantVal).Value(), "got=%v want=%v", got, wantVal)
+}
+
+// TestDeepMergeOperandOrder documents priority via operand order (no Left/Right API).
+//
+// deepMerge is always RHS-wins. The two common call patterns are:
+//
+//	defaults.deepMerge(user)  → user wins shared leaves; defaults fill gaps  (SecuredPod)
+//	user.deepMerge(defaults)  → defaults win shared leaves; user fills gaps
+//
+// Swapping operands inverts who wins on conflict; it is not a left-biased merge
+// of the original argument order.
+func TestDeepMergeOperandOrder(t *testing.T) {
+	env := testMapsEnv(t,
+		cel.Variable("podUser", cel.DynType),
+		cel.Variable("defaults", cel.DynType),
+	)
+
+	input := map[string]interface{}{
+		"podUser": map[string]interface{}{
+			"containers": []interface{}{
+				map[string]interface{}{"name": "app"},
+			},
+			"securityContext": map[string]interface{}{
+				"runAsNonRoot": false,
+				"fsGroup":      int64(2000),
+			},
+		},
+		"defaults": map[string]interface{}{
+			"securityContext": map[string]interface{}{
+				"runAsNonRoot": true,
+			},
+		},
+	}
+
+	cases := []struct {
+		name     string
+		expr     string
+		want     string
+		notEqual bool
+	}{
+		{
+			name: "defaults.deepMerge(user): user wins shared leaf",
+			expr: `defaults.deepMerge(podUser)`,
+			want: `{
+				"containers": [{"name": "app"}],
+				"securityContext": {"runAsNonRoot": false, "fsGroup": 2000}
+			}`,
+		},
+		{
+			name: "user.deepMerge(defaults): defaults win shared leaf",
+			expr: `podUser.deepMerge(defaults)`,
+			want: `{
+				"containers": [{"name": "app"}],
+				"securityContext": {"runAsNonRoot": true, "fsGroup": 2000}
+			}`,
+		},
+		{
+			name:     "the two call orders are not equal when a leaf conflicts",
+			expr:     `defaults.deepMerge(podUser)`,
+			want:     `podUser.deepMerge(defaults)`,
+			notEqual: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := evalCELWithVars(t, env, tc.expr, input)
+			want := evalCELWithVars(t, env, tc.want, input)
+			eq := got.Equal(want)
+			if tc.notEqual {
+				require.Equal(t, false, eq.Value(), "expr=%s\nwant(not)=%s\ngot=%v", tc.expr, tc.want, got)
+				return
+			}
+			require.Equal(t, true, eq.Value(), "expr=%s\nwant=%s\ngot=%v", tc.expr, tc.want, got)
+		})
+	}
+}
+
+// BenchmarkDeepMerge measures the cost of deepMerge on a ~3-level nested map
+// with ~20 keys to provide a stable baseline for future optimisation work.
+func BenchmarkDeepMerge(b *testing.B) {
+	env, err := cel.NewEnv(Maps())
+	require.NoError(b, err)
+	const expr = `{
+		'meta': {'name': 'foo', 'namespace': 'bar', 'labels': {'app': 'myapp', 'env': 'prod'}},
+		'spec': {
+			'replicas': 3,
+			'selector': {'matchLabels': {'app': 'myapp'}},
+			'template': {
+				'spec': {
+					'containers': [{'name': 'main', 'image': 'nginx:1'}],
+					'security': {'runAsNonRoot': true, 'fsGroup': 2000}
+				}
+			}
+		}
+	}.deepMerge({
+		'meta': {'name': 'foo', 'labels': {'tier': 'backend'}},
+		'spec': {
+			'replicas': 5,
+			'template': {
+				'spec': {
+					'security': {'runAsNonRoot': false, 'supplementalGroups': [1000, 2000]}
+				}
+			}
+		},
+		'status': {'phase': 'Running'}
+	})`
+	ast, iss := env.Compile(expr)
+	require.NoError(b, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(b, err)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, err := prg.Eval(cel.NoVars())
+		require.NoError(b, err)
+	}
+}
+
+// evalCEL compiles and evaluates a CEL expression with no variables.
+func evalCEL(t *testing.T, env *cel.Env, expr string) ref.Val {
+	t.Helper()
+	return evalCELWithVars(t, env, expr, cel.NoVars())
+}
+
+// evalCELWithVars compiles and evaluates a CEL expression against vars.
+func evalCELWithVars(t *testing.T, env *cel.Env, expr string, vars any) ref.Val {
+	t.Helper()
+	ast, iss := env.Compile(expr)
+	require.NoError(t, iss.Err(), "compile %q", expr)
+	prg, err := env.Program(ast)
+	require.NoError(t, err, "program %q", expr)
+	out, _, err := prg.Eval(vars)
+	require.NoError(t, err, "eval %q", expr)
+	return out
+}
+
+// evalTrue parses, type-checks, and evaluates expr, requiring the result to be true
+// under both the parse-only and checked programs.
+func evalTrue(t *testing.T, env *cel.Env, expr string) {
+	t.Helper()
+	evalTrueWithVars(t, env, expr, nil)
+}
+
+// evalTrueWithVars compiles expr and requires it to evaluate to true against vars.
+// When vars is nil, both parse-only and type-checked programs are evaluated.
+func evalTrueWithVars(t *testing.T, env *cel.Env, expr string, vars any) {
+	t.Helper()
+
+	if vars == nil {
+		vars = cel.NoVars()
+		pAst, iss := env.Parse(expr)
+		require.NoError(t, iss.Err(), "parse %q", expr)
+		cAst, iss := env.Check(pAst)
+		require.NoError(t, iss.Err(), "check %q", expr)
+
+		for _, tc := range []struct {
+			label string
+			ast   *cel.Ast
+		}{
+			{label: "parse", ast: pAst},
+			{label: "check", ast: cAst},
+		} {
+			prg, err := env.Program(tc.ast)
+			require.NoError(t, err, "program(%s) %q", tc.label, expr)
+			out, _, err := prg.Eval(vars)
+			require.NoError(t, err, "eval(%s) %q", tc.label, expr)
+			require.Equal(t, true, out.Value(), "eval(%s) %q", tc.label, expr)
+		}
+		return
+	}
+
+	out := evalCELWithVars(t, env, expr, vars)
+	require.Equal(t, true, out.Value(), "eval %q", expr)
 }
 
 func testMapsEnv(t *testing.T, opts ...cel.EnvOption) *cel.Env {
@@ -71,8 +398,6 @@ func testMapsEnv(t *testing.T, opts ...cel.EnvOption) *cel.Env {
 		Maps(),
 	}
 	env, err := cel.NewEnv(append(baseOpts, opts...)...)
-	if err != nil {
-		t.Fatalf("cel.NewEnv(Maps()) failed: %v", err)
-	}
+	require.NoError(t, err)
 	return env
 }

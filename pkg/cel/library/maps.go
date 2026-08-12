@@ -41,6 +41,19 @@ import (
 //	{'a': 1}.merge({}) == {'a': 1}`},
 //	{'a': 1}.merge({'b': 2}) == {'a': 1, 'b': 2}`},
 //	{'a': 1}.merge({'a': 2, 'b': 2}) == {'a': 2, 'b': 2}`},
+//
+// # DeepMerge
+//
+// Recursively merges two maps. Keys from the second map overwrite keys in the
+// first; nested maps are merged rather than replaced. Lists and scalars are
+// replaced. Unlike merge, accepts dyn/object-typed values.
+//
+//	dyn.deepMerge(dyn) -> dyn
+//
+// Examples:
+//
+//	{'a': {'x': 1}}.deepMerge({'a': {'y': 2}}) == {'a': {'x': 1, 'y': 2}}
+//	{'a': {'x': 1}}.deepMerge({'a': {'x': 9}}) == {'a': {'x': 9}}
 func Maps(options ...MapsOption) cel.EnvOption {
 	l := &mapsLib{version: math.MaxUint32}
 	for _, o := range options {
@@ -87,6 +100,13 @@ func (lib mapsLib) CompileOptions() []cel.EnvOption {
 				cel.BinaryBinding(mergeVals),
 			),
 		),
+		cel.Function("deepMerge",
+			cel.MemberOverload("dyn_deepmerge_dyn",
+				[]*cel.Type{cel.DynType, cel.DynType},
+				cel.DynType,
+				cel.BinaryBinding(deepMergeVals),
+			),
+		),
 	}
 	return opts
 }
@@ -116,6 +136,50 @@ func merge(self, other traits.Mapper) traits.Mapper {
 		}
 	}
 	return result.ToImmutableMap()
+}
+
+func deepMergeVals(lhs, rhs ref.Val) ref.Val {
+	lm, lok := lhs.(traits.Mapper)
+	if !lok {
+		return types.MaybeNoSuchOverloadErr(lhs)
+	}
+	rm, rok := rhs.(traits.Mapper)
+	if !rok {
+		return types.MaybeNoSuchOverloadErr(rhs)
+	}
+	return deepMerge(lm, rm)
+}
+
+// deepMerge merges other onto self. Nested maps are merged recursively;
+// otherwise other wins. Inputs are not modified.
+func deepMerge(self, other traits.Mapper) ref.Val {
+	// CEL maps are immutable, so empty-side results can share the other input.
+	if other.Size() == types.IntZero {
+		return self
+	}
+	if self.Size() == types.IntZero {
+		return other
+	}
+
+	merged := make(map[ref.Val]ref.Val, int(self.Size().(types.Int))+int(other.Size().(types.Int)))
+	for it := self.Iterator(); it.HasNext().(types.Bool); {
+		k := it.Next()
+		merged[k] = self.Get(k)
+	}
+	for it := other.Iterator(); it.HasNext().(types.Bool); {
+		k := it.Next()
+		ov := other.Get(k)
+		if sv, found := merged[k]; found {
+			if sm, ok1 := sv.(traits.Mapper); ok1 {
+				if om, ok2 := ov.(traits.Mapper); ok2 {
+					merged[k] = deepMerge(sm, om)
+					continue
+				}
+			}
+		}
+		merged[k] = ov
+	}
+	return types.NewRefValMap(types.DefaultTypeAdapter, merged)
 }
 
 // mapperTraitToMutableMapper copies a traits.Mapper into a MutableMap.

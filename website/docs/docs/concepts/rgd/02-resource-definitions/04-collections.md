@@ -787,26 +787,35 @@ creates multiple resources at runtime, but dependencies treat it as one unit.
 
 ## Collection Labels
 
-kro automatically applies labels to each resource in a collection to track
-membership and ordering. These labels are part of kro's public API and can be
+kro automatically applies labels and annotations to each resource in a collection to track
+membership and ordering. These are part of kro's public API and can be 
 used for querying or debugging:
+
+**Labels:**
 
 | Label | Description | Example |
 |-------|-------------|---------|
-| `kro.run/node-id` | The resource ID from the RGD | `workerPods` |
+| `kro.run/node-id` | FNV-64a hash of the node identifier from the RGD (16-char hex) | `39edeed848ad0ddc` |
 | `kro.run/collection-index` | Position in the collection (0-indexed) | `0`, `1`, `2` |
 | `kro.run/collection-size` | Total number of items in the collection | `3` |
 | `kro.run/instance-id` | UID of the instance that owns this resource | `a1b2c3...` |
 
-These labels enable:
-- **Querying**: Find all items in a collection with `kubectl get pods -l kro.run/node-id=workerPods`
-- **Ordering**: Understand item position via `collection-index`
-- **Debugging**: Trace resources back to their source instance and RGD
+
+**Annotations:**
+
+| Annotation | Description | Example |
+|------------|-------------|---------|
+| `internal.kro.run/node` | A human-readable node identifier from the RGD | `workerPods` |
+
+The `kro.run/node-id` label stores a deterministic hash rather than the raw
+resource ID because Kubernetes limits label values to 63 characters. The
+original ID is preserved in the `internal.kro.run/node` annotation for
+traceability and debugging.
 
 :::note
 The combination of `instance-id` + `node-id` + `collection-index` uniquely
-identifies each collection item. These labels are managed by kro - do not
-modify them manually.
+identifies each collection item. These labels and annotations are managed by
+kro - do not modify them manually.
 :::
 
 See [Constraints & Gotchas](#constraints--gotchas) for label management notes.

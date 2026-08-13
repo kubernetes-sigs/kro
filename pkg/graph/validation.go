@@ -366,7 +366,7 @@ func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]inter
 	}
 
 	for key := range labelsMap {
-		for _, prefix := range []string{metadata.LabelKROPrefix, metadata.InternalLabelKROPrefix} {
+		for _, prefix := range []string{metadata.KROPrefix, metadata.InternalKROPrefix} {
 			if strings.HasPrefix(key, prefix) {
 				return fmt.Errorf("invalid label for resource %q. labels with prefix %q are reserved for internal use", resourceID, prefix)
 			}
@@ -390,7 +390,7 @@ func validateNoKROOwnedAnnotations(resourceID string, resourceObject map[string]
 	}
 
 	for key := range annotationsMap {
-		for _, prefix := range []string{metadata.AnnotationKROPrefix, metadata.InternalAnnotationKROPrefix} {
+		for _, prefix := range []string{metadata.KROPrefix, metadata.InternalKROPrefix} {
 			if strings.HasPrefix(key, prefix) {
 				return fmt.Errorf(
 					"invalid annotation for resource %q. annotations with prefix %q are reserved for internal use",

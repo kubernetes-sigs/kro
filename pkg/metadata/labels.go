@@ -24,50 +24,41 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
-
-	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 const (
-	// LabelKROPrefix is the label key prefix used to identify KRO owned resources.
-	LabelKROPrefix = v1alpha1.KRODomainName + "/"
-	// AnnotationKROPrefix is the annotation key prefix reserved for KRO.
-	AnnotationKROPrefix = v1alpha1.KRODomainName + "/"
-	// InternalLabelKROPrefix is reserved for controller-internal metadata.
-	InternalLabelKROPrefix = "internal." + LabelKROPrefix
-	// InternalAnnotationKROPrefix is reserved for controller-internal metadata.
-	InternalAnnotationKROPrefix = "internal." + AnnotationKROPrefix
+	// LabelKROPrefix is retained for compatibility.
+	// Deprecated: use KROPrefix.
+	LabelKROPrefix = KROPrefix
 )
 
 const (
-	NodeIDLabel = LabelKROPrefix + "node-id"
-	// ApplyOrderAnnotation persists a managed resource's reverse topological deletion wave.
-	ApplyOrderAnnotation = InternalAnnotationKROPrefix + "apply-order"
+	NodeIDLabel = KROPrefix + "node-id"
 
 	// Collection labels for tracking collection membership and position.
 	// These enable querying collection resources and understanding their position.
-	CollectionIndexLabel = LabelKROPrefix + "collection-index"
-	CollectionSizeLabel  = LabelKROPrefix + "collection-size"
+	CollectionIndexLabel = KROPrefix + "collection-index"
+	CollectionSizeLabel  = KROPrefix + "collection-size"
 
-	OwnedLabel      = LabelKROPrefix + "owned"
-	KROVersionLabel = LabelKROPrefix + "kro-version"
+	OwnedLabel      = KROPrefix + "owned"
+	KROVersionLabel = KROPrefix + "kro-version"
 
 	ManagedByLabelKey = "app.kubernetes.io/managed-by"
 	ManagedByKROValue = "kro"
 
-	InstanceIDLabel        = LabelKROPrefix + "instance-id"
-	InstanceLabel          = LabelKROPrefix + "instance-name"
-	InstanceNamespaceLabel = LabelKROPrefix + "instance-namespace"
-	InstanceGroupLabel     = LabelKROPrefix + "instance-group"
-	InstanceVersionLabel   = LabelKROPrefix + "instance-version"
-	InstanceKindLabel      = LabelKROPrefix + "instance-kind"
+	InstanceIDLabel        = KROPrefix + "instance-id"
+	InstanceLabel          = KROPrefix + "instance-name"
+	InstanceNamespaceLabel = KROPrefix + "instance-namespace"
+	InstanceGroupLabel     = KROPrefix + "instance-group"
+	InstanceVersionLabel   = KROPrefix + "instance-version"
+	InstanceKindLabel      = KROPrefix + "instance-kind"
 
-	ResourceGraphDefinitionIDLabel        = LabelKROPrefix + "resource-graph-definition-id"
-	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"
-	ResourceGraphDefinitionNamespaceLabel = LabelKROPrefix + "resource-graph-definition-namespace"
-	ResourceGraphDefinitionVersionLabel   = LabelKROPrefix + "resource-graph-definition-version"
+	ResourceGraphDefinitionIDLabel        = KROPrefix + "resource-graph-definition-id"
+	ResourceGraphDefinitionNameLabel      = KROPrefix + "resource-graph-definition-name"
+	ResourceGraphDefinitionNamespaceLabel = KROPrefix + "resource-graph-definition-namespace"
+	ResourceGraphDefinitionVersionLabel   = KROPrefix + "resource-graph-definition-version"
 	// GraphRevisionHashLabel stores a label-safe representation of the GraphRevision spec hash.
-	GraphRevisionHashLabel = LabelKROPrefix + "graph-revision-hash"
+	GraphRevisionHashLabel = KROPrefix + "graph-revision-hash"
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.

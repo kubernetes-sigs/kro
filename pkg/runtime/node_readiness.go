@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
@@ -55,28 +57,39 @@ func (n *Node) checkObservedReadiness() error {
 
 func (n *Node) checkSingleResourceReadiness() error {
 	if len(n.observed) == 0 {
-		return fmt.Errorf("node %q: no observed state: %w", n.Spec.Meta.ID, ErrWaitingForReadiness)
+		return newWaitingForReadinessError("node %q: no observed state", n.Spec.Meta.ID)
 	}
 	if len(n.readyWhenExprs) == 0 {
 		return nil
 	}
 
 	nodeID := n.Spec.Meta.ID
-	ctx := map[string]any{nodeID: n.observed[0].Object}
+	observed := n.observed[0]
+	ctx := map[string]any{nodeID: observed.Object}
 
 	for _, expr := range n.readyWhenExprs {
 		result, err := evalBoolExpr(expr, ctx)
 		if err != nil {
 			if isCELDataPending(err) {
-				return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), ErrWaitingForReadiness)
+				return newWaitingForReadinessError("node %q: failed to evaluate readyWhen expression: %q", n.Spec.Meta.ID, expr.Expression.UserExpression())
 			}
 			return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), err)
 		}
 		if !result {
-			return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.UserExpression(), ErrWaitingForReadiness)
+			return newWaitingForReadinessError("readyWhen condition evaluated to false: %q (resource: %s)", expr.Expression.UserExpression(), resourceIdentity(observed))
 		}
 	}
 	return nil
+}
+
+// resourceIdentity formats group/version/kind and namespace/name for a
+// resource so readiness messages can point directly at the object being
+// waited on, without requiring knowledge of the RGD's internal node IDs.
+func resourceIdentity(obj *unstructured.Unstructured) string {
+	if ns := obj.GetNamespace(); ns != "" {
+		return fmt.Sprintf("%s %s/%s", obj.GroupVersionKind().String(), ns, obj.GetName())
+	}
+	return fmt.Sprintf("%s %s", obj.GroupVersionKind().String(), obj.GetName())
 }
 
 func (n *Node) checkCollectionReadiness() error {
@@ -89,13 +102,13 @@ func (n *Node) checkCollectionReadiness() error {
 	} else {
 		// Use nil check (not len==0) to distinguish "not computed" from "empty collection".
 		if n.desired == nil {
-			return fmt.Errorf("node %q: collection not computed (%w)", n.Spec.Meta.ID, ErrWaitingForReadiness)
+			return newWaitingForReadinessError("node %q: collection not computed", n.Spec.Meta.ID)
 		}
 		if len(n.desired) == 0 {
 			return nil
 		}
 		if len(n.observed) < len(n.desired) {
-			return fmt.Errorf("node %q: collection not ready: observed %d but desired %d (%w)", n.Spec.Meta.ID, len(n.observed), len(n.desired), ErrWaitingForReadiness)
+			return newWaitingForReadinessError("node %q: collection not ready: observed %d but desired %d", n.Spec.Meta.ID, len(n.observed), len(n.desired))
 		}
 		if len(n.readyWhenExprs) == 0 {
 			return nil
@@ -112,7 +125,7 @@ func (n *Node) checkCollectionReadiness() error {
 			val, err := expr.Expression.Eval(ctx)
 			if err != nil {
 				if isCELDataPending(err) {
-					return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d) (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), i, ErrWaitingForReadiness)
+					return newWaitingForReadinessError("node %q: failed to evaluate readyWhen %q (item %d)", n.Spec.Meta.ID, expr.Expression.UserExpression(), i)
 				}
 				return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d): %w", n.Spec.Meta.ID, expr.Expression.UserExpression(), i, err)
 			}
@@ -121,7 +134,7 @@ func (n *Node) checkCollectionReadiness() error {
 				return fmt.Errorf("readyWhen %q did not return bool", expr.Expression.UserExpression())
 			}
 			if !result {
-				return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.UserExpression(), ErrWaitingForReadiness)
+				return newWaitingForReadinessError("readyWhen condition evaluated to false: %q (resource: %s)", expr.Expression.UserExpression(), resourceIdentity(obj))
 			}
 		}
 	}

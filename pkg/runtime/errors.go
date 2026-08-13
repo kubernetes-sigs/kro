@@ -37,7 +37,7 @@ type waitingForReadinessError struct {
 
 func (e *waitingForReadinessError) Error() string { return e.msg }
 
-func (e *waitingForReadinessError) Is(target error) bool { return target == ErrWaitingForReadiness }
+func (e *waitingForReadinessError) Unwrap() error { return ErrWaitingForReadiness }
 
 // newWaitingForReadinessError builds an error matching ErrWaitingForReadiness
 // via errors.Is, with a message composed solely of format/args.

@@ -34,6 +34,7 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	clientfake "github.com/kubernetes-sigs/kro/pkg/client/fake"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -46,8 +47,12 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 		name            string
 		presetFinalizer bool
 		presetLabels    bool
+		presetInventory bool
 		wantActions     int
 		wantPatched     bool
+		wantInventory   bool
+		wantGroupKinds  string
+		wantNamespaces  string
 	}{
 		{
 			name:            "no patch needed returns nil",
@@ -55,9 +60,20 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 			presetLabels:    true,
 		},
 		{
-			name:        "patches missing finalizer and labels",
-			wantActions: 1,
-			wantPatched: true,
+			name:          "patches missing finalizer and labels",
+			wantActions:   1,
+			wantPatched:   true,
+			wantInventory: true,
+		},
+		{
+			name:            "preserves inventory when adding finalizer",
+			presetLabels:    true,
+			presetInventory: true,
+			wantActions:     1,
+			wantPatched:     true,
+			wantInventory:   true,
+			wantGroupKinds:  "Deployment.apps",
+			wantNamespaces:  "other",
 		},
 	}
 
@@ -69,6 +85,9 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 			}
 			if tt.presetLabels {
 				metadata.NewKROMetaLabeler().ApplyLabels(instance)
+			}
+			if tt.presetInventory {
+				addDeletionScope(instance, controllerTestDeployGVK, "other")
 			}
 
 			controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
@@ -86,8 +105,31 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 			for key, value := range metadata.NewKROMetaLabeler().Labels() {
 				assert.Equal(t, value, patched.GetLabels()[key])
 			}
+			if tt.wantInventory {
+				require.NoError(t, applyset.ValidateParentInventory(patched))
+				assert.Equal(t, tt.wantGroupKinds, patched.GetAnnotations()[applyset.ApplySetGKsAnnotation])
+				assert.Equal(t, tt.wantNamespaces,
+					patched.GetAnnotations()[applyset.ApplySetAdditionalNamespacesAnnotation])
+			} else {
+				require.Error(t, applyset.ValidateParentInventory(patched))
+			}
 		})
 	}
+}
+
+func TestApplyManagedFinalizerAndLabelsRejectsPartialInventory(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	instance.SetLabels(map[string]string{
+		applyset.ApplySetParentIDLabel: applyset.ID(instance),
+	})
+	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
+
+	patched, err := controller.applyManagedFinalizerAndLabels(rcx)
+	require.Error(t, err)
+	assert.Nil(t, patched)
+	assert.Contains(t, err.Error(), "invalid ApplySet inventory")
+	assert.Empty(t, raw.Actions())
+	assert.False(t, metadata.HasInstanceFinalizer(instance))
 }
 
 func TestApplyManagedFinalizerAndLabelsError(t *testing.T) {
@@ -533,6 +575,7 @@ func TestReconcileSkipsNoopStatusWriteForWholeNumbers(t *testing.T) {
 
 func TestReconcileDeletionRemovesFinalizer(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
+	addEmptyDeletionScope(instance)
 	metadata.SetInstanceFinalizer(instance)
 	instance.SetDeletionTimestamp(new(metav1.NewTime(time.Now())))
 
@@ -547,6 +590,76 @@ func TestReconcileDeletionRemovesFinalizer(t *testing.T) {
 	stored := getStoredParentObject(t, raw)
 	assert.False(t, metadata.HasInstanceFinalizer(stored))
 	assert.Equal(t, metav1.ConditionUnknown, conditionByType(t, stored, ResourcesReady).Status)
+}
+
+func TestReconcileDeletionPreservesAuthorStatusWithoutRuntime(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	addEmptyDeletionScope(instance)
+	metadata.SetInstanceFinalizer(instance)
+	instance.SetDeletionTimestamp(new(metav1.NewTime(time.Now())))
+	require.NoError(t, unstructured.SetNestedMap(instance.Object, map[string]interface{}{
+		"state":    string(v1alpha1.InstanceStateActive),
+		"endpoint": "https://example.test",
+		"conditions": []interface{}{map[string]interface{}{
+			"type":               "AuthorHealthy",
+			"status":             "True",
+			"reason":             "Healthy",
+			"lastTransitionTime": "2026-01-01T00:00:00Z",
+		}},
+	}, "status"))
+
+	raw := newControllerTestDynamicClient(t, instance.DeepCopy())
+	controller, _ := newControllerUnderTest(t, raw, newTestGraph())
+	controller.reconcileConfig.HasAuthorConditions = true
+
+	require.NoError(t, controller.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: instance.GetName(), Namespace: instance.GetNamespace()},
+	}))
+
+	stored := getStoredParentObject(t, raw)
+	assert.False(t, metadata.HasInstanceFinalizer(stored))
+	assert.Equal(t, "https://example.test", stored.Object["status"].(map[string]interface{})["endpoint"])
+	conditions := conditionsFromInstance(stored)
+	require.Len(t, conditions, 2)
+	authorHealthy := conditionByType(t, stored, "AuthorHealthy")
+	require.NotNil(t, authorHealthy.LastTransitionTime)
+	assert.Equal(t, "2026-01-01T00:00:00Z", authorHealthy.LastTransitionTime.UTC().Format(time.RFC3339))
+	resourcesReady := conditionByType(t, stored, ResourcesReady)
+	assert.Equal(t, metav1.ConditionUnknown, resourcesReady.Status)
+	assert.Equal(t, new("UnderDeletion"), resourcesReady.Reason)
+}
+
+func TestReconcileDeletionSurfacesErrorsWithAuthorConditions(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	metadata.SetInstanceFinalizer(instance)
+	instance.SetDeletionTimestamp(new(metav1.NewTime(time.Now())))
+	require.NoError(t, unstructured.SetNestedMap(instance.Object, map[string]interface{}{
+		"state": string(v1alpha1.InstanceStateActive),
+		"conditions": []interface{}{map[string]interface{}{
+			"type":               "AuthorHealthy",
+			"status":             "True",
+			"reason":             "Healthy",
+			"lastTransitionTime": "2026-01-01T00:00:00Z",
+		}},
+	}, "status"))
+
+	raw := newControllerTestDynamicClient(t, instance.DeepCopy())
+	controller, _ := newControllerUnderTest(t, raw, newTestGraph())
+	controller.reconcileConfig.HasAuthorConditions = true
+
+	err := controller.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: instance.GetName(), Namespace: instance.GetNamespace()},
+	})
+	require.Error(t, err)
+
+	stored := getStoredParentObject(t, raw)
+	assert.True(t, metadata.HasInstanceFinalizer(stored))
+	assert.Equal(t, metav1.ConditionTrue, conditionByType(t, stored, "AuthorHealthy").Status)
+	resourcesReady := conditionByType(t, stored, ResourcesReady)
+	assert.Equal(t, metav1.ConditionUnknown, resourcesReady.Status)
+	require.NotNil(t, resourcesReady.Message)
+	assert.Contains(t, *resourcesReady.Message, "deletion blocked")
+	assert.Contains(t, *resourcesReady.Message, applyset.ApplySetParentIDLabel)
 }
 
 func TestReconcileResourceMutationRequestsRequeue(t *testing.T) {

@@ -31,6 +31,7 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
@@ -204,11 +205,14 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	// Events and metrics are gated behind separate feature flags so operators
 	// can enable them independently.
 	var rcx *ReconcileContext
+	var dcx *DeletionContext
 	if c.eventsEnabled || c.metricsEnabled {
 		initialConditions := conditionsFromInstance(inst)
 		defer func() {
 			obj := inst
-			if rcx != nil {
+			if dcx != nil {
+				obj = dcx.Instance
+			} else if rcx != nil {
 				obj = rcx.Instance
 			}
 			finalConditions := conditionsFromInstance(obj)
@@ -222,7 +226,24 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 
 	//--------------------------------------------------------------
-	// 2. Create a fresh runtime for this reconciliation
+	// 2. Handle deletion before graph resolution
+	//--------------------------------------------------------------
+	// Deletion must not depend on resolving the current GraphRevision or CEL.
+	// Build a context without a runtime and use persisted ApplySet inventory.
+	if inst.GetDeletionTimestamp() != nil {
+		dcx = NewDeletionContext(
+			ctx, log, c.gvr, c.namespaced, c.client.Dynamic(), c.client.RESTMapper(),
+			c.reconcileConfig, inst,
+		)
+		if err := c.reconcileDeletion(dcx); err != nil {
+			_ = c.updateDeletionStatus(dcx)
+			return err
+		}
+		return c.updateDeletionStatus(dcx)
+	}
+
+	//--------------------------------------------------------------
+	// 3. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
 	compiledGraph, err := c.resolveCompiledGraph()
 	if err != nil {
@@ -239,9 +260,14 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		log.Error(err, "failed to create runtime")
 		return err
 	}
+	if runtimeObj == nil {
+		err := errors.New("runtime creation returned nil without an error")
+		log.Error(err, "failed to create runtime")
+		return err
+	}
 
 	//--------------------------------------------------------------
-	// 3. Build reconciliation context (clients, mapper, labeler, runtime)
+	// 4. Build reconciliation context (clients, mapper, labeler, runtime)
 	//--------------------------------------------------------------
 	rcx = NewReconcileContext(
 		ctx, log, c.gvr,
@@ -254,17 +280,6 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		inst,
 	)
 	rcx.Watcher = watcher
-
-	//--------------------------------------------------------------
-	// 4. Handle deletion: clean up children and status
-	//--------------------------------------------------------------
-	if inst.GetDeletionTimestamp() != nil {
-		if err := c.reconcileDeletion(rcx); err != nil {
-			_ = c.updateStatus(rcx)
-			return err
-		}
-		return c.updateStatus(rcx)
-	}
 
 	//--------------------------------------------------------------
 	// 5. Ensure finalizer + management labels before mutating children
@@ -386,6 +401,16 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	// Fast path: if everything is already correct → no patch
 	hasFinalizer := metadata.HasInstanceFinalizer(obj)
 	needFinalizer := !hasFinalizer
+	hasInventoryMetadata := hasAnyApplySetInventoryMetadata(obj)
+	if needFinalizer && hasInventoryMetadata {
+		if err := applyset.ValidateParentInventory(obj); err != nil {
+			return nil, fmt.Errorf(
+				"cannot install finalizer with invalid ApplySet inventory; repair the metadata, "+
+					"or remove it only after confirming no managed members remain: %w",
+				err,
+			)
+		}
+	}
 
 	wantLabels := c.instanceLabeler.Labels()
 	haveLabels := obj.GetLabels()
@@ -410,7 +435,19 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	// Label + finalizers patch
 	// we patch together here because otherwise we could revert a previous patch
 	// result if only one of finalizers or labels change.
-	patch.SetLabels(maps.Clone(wantLabels))
+	patchLabels := maps.Clone(wantLabels)
+	if needFinalizer && !hasInventoryMetadata {
+		// Install a valid empty inventory in the same write as the finalizer.
+		// This guarantees that deletion can make progress even if normal
+		// reconciliation stops before projecting the first set of children.
+		emptyInventory := applyset.Metadata{
+			ID:      applyset.ID(obj),
+			Tooling: applyset.ToolingID(),
+		}
+		maps.Copy(patchLabels, emptyInventory.Labels())
+		patch.SetAnnotations(emptyInventory.Annotations())
+	}
+	patch.SetLabels(patchLabels)
 	metadata.SetInstanceFinalizer(patch)
 
 	patched, err := rcx.InstanceClient().Apply(
@@ -427,4 +464,25 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	}
 
 	return patched, nil
+}
+
+// hasAnyApplySetInventoryMetadata deliberately detects partial inventory. If
+// any field exists, the caller validates the complete inventory instead of
+// replacing it with an empty one, which could hide and orphan managed members.
+func hasAnyApplySetInventoryMetadata(obj metav1.Object) bool {
+	if _, found := obj.GetLabels()[applyset.ApplySetParentIDLabel]; found {
+		return true
+	}
+	annotations := obj.GetAnnotations()
+	for _, key := range []string{
+		applyset.ApplySetToolingAnnotation,
+		applyset.ApplySetGKsAnnotation,
+		applyset.ApplySetAdditionalNamespacesAnnotation,
+		applyset.ApplySetInventoryHashAnnotation,
+	} {
+		if _, found := annotations[key]; found {
+			return true
+		}
+	}
+	return false
 }

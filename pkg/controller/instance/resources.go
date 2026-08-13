@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
@@ -195,7 +196,16 @@ func (c *Controller) processNodes(
 
 	var firstUnresolvedErr error
 	for _, node := range nodes {
-		resourcesToAdd, err := c.processNode(rcx, node)
+		applyOrder, ok := rcx.Runtime.ApplyOrder(node.Spec.Meta.ID)
+		if !ok {
+			rcx.Log.Error(
+				fmt.Errorf("apply-order wave missing for node %q", node.Spec.Meta.ID),
+				"using fallback apply order",
+				"nodeID", node.Spec.Meta.ID,
+			)
+			applyOrder = fallbackDeletionOrder
+		}
+		resourcesToAdd, err := c.processNode(rcx, node, applyOrder)
 		if err != nil {
 			if !runtime.IsDataPending(err) {
 				return nil, err
@@ -337,6 +347,7 @@ func (c *Controller) createApplySet(rcx *ReconcileContext) *applyset.ApplySet {
 func (c *Controller) processNode(
 	rcx *ReconcileContext,
 	node *runtime.Node,
+	applyOrder int,
 ) ([]applyset.Resource, error) {
 	id := node.Spec.Meta.ID
 	rcx.Log.V(3).Info("Preparing resource", "id", id)
@@ -381,9 +392,9 @@ func (c *Controller) processNode(
 	case graph.NodeTypeExternalCollection:
 		nodeState, err = c.processExternalCollectionNode(rcx, node, desired)
 	case graph.NodeTypeCollection:
-		resources, nodeState, err = c.processCollectionNode(rcx, node, desired)
+		resources, nodeState, err = c.processCollectionNode(rcx, node, desired, applyOrder)
 	case graph.NodeTypeResource:
-		resources, nodeState, err = c.processRegularNode(rcx, node, desired)
+		resources, nodeState, err = c.processRegularNode(rcx, node, desired, applyOrder)
 	case graph.NodeTypeInstance:
 		panic("instance node should not be processed for apply")
 	default:
@@ -400,6 +411,7 @@ func (c *Controller) processRegularNode(
 	rcx *ReconcileContext,
 	node *runtime.Node,
 	desiredList []*unstructured.Unstructured,
+	applyOrder int,
 ) ([]applyset.Resource, NodeState, error) {
 	id := node.Spec.Meta.ID
 	nodeMeta := node.Spec.Meta
@@ -436,7 +448,7 @@ func (c *Controller) processRegularNode(
 	}
 
 	// Apply decorator labels to desired object
-	c.applyDecoratorLabels(rcx, desired, id, nil)
+	c.applyDecoratorMetadata(rcx, desired, id, applyOrder, nil)
 
 	resource := applyset.Resource{
 		ID:      id,
@@ -447,11 +459,12 @@ func (c *Controller) processRegularNode(
 	return []applyset.Resource{resource}, inProgressState(), nil
 }
 
-// applyDecoratorLabels merges tool labels and adds node/collection identifiers.
-func (c *Controller) applyDecoratorLabels(
+// applyDecoratorMetadata adds controller-owned labels and annotations.
+func (c *Controller) applyDecoratorMetadata(
 	rcx *ReconcileContext,
 	obj *unstructured.Unstructured,
 	nodeID string,
+	applyOrder int,
 	collectionInfo *CollectionInfo,
 ) {
 	labels := obj.GetLabels()
@@ -477,7 +490,7 @@ func (c *Controller) applyDecoratorLabels(
 		labels[k] = v
 	}
 
-	// Add node ID label
+	// Add searchable identity labels and persist deletion order as an annotation.
 	labels[metadata.NodeIDLabel] = nodeID
 
 	// Add collection labels if applicable
@@ -487,6 +500,13 @@ func (c *Controller) applyDecoratorLabels(
 	}
 
 	obj.SetLabels(labels)
+
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[metadata.ApplyOrderAnnotation] = strconv.Itoa(applyOrder)
+	obj.SetAnnotations(annotations)
 }
 
 // patchInstanceWithApplySetMetadata applies applyset metadata to the parent instance.

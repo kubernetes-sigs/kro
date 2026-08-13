@@ -97,6 +97,23 @@ func newTestRESTMapper() meta.RESTMapper {
 	return mapper
 }
 
+type resettableTestRESTMapper struct {
+	meta.RESTMapper
+	restMapping func(schema.GroupKind, ...string) (*meta.RESTMapping, error)
+	resetCount  int
+}
+
+func (m *resettableTestRESTMapper) RESTMapping(
+	gk schema.GroupKind,
+	versions ...string,
+) (*meta.RESTMapping, error) {
+	return m.restMapping(gk, versions...)
+}
+
+func (m *resettableTestRESTMapper) Reset() {
+	m.resetCount++
+}
+
 func newConfigMap(name, namespace string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -611,6 +628,115 @@ func TestPrune(t *testing.T) {
 				t.Errorf("Prune() pruned %d resources, want %d", len(pruned), tt.wantPruned)
 			}
 		})
+	}
+}
+
+func TestListOrphansRefreshesNoMatchErrors(t *testing.T) {
+	gk := schema.GroupKind{Kind: "ConfigMap"}
+	delegate := newTestRESTMapper()
+	mapper := &resettableTestRESTMapper{RESTMapper: delegate}
+	mapper.restMapping = func(gk schema.GroupKind, versions ...string) (*meta.RESTMapping, error) {
+		if mapper.resetCount == 0 {
+			return nil, &meta.NoKindMatchError{GroupKind: gk}
+		}
+		return delegate.RESTMapping(gk, versions...)
+	}
+
+	applier := New(Config{
+		Client:          newFakeDynamicClient(),
+		RESTMapper:      mapper,
+		Log:             logr.Discard(),
+		ParentNamespace: "default",
+	}, newTestParent(schema.GroupVersionKind{
+		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
+	}))
+
+	candidates, err := applier.ListOrphans(t.Context(), PruneOptions{
+		KeepUIDs: sets.New[types.UID](),
+		Scope: &PruneScope{
+			GroupKinds: sets.New(gk),
+			Namespaces: sets.New("default"),
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("ListOrphans() error = %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("ListOrphans() returned %d candidates, want 0", len(candidates))
+	}
+	if mapper.resetCount != 1 {
+		t.Fatalf("REST mapper reset %d times, want 1", mapper.resetCount)
+	}
+}
+
+func TestListOrphansSkipsPersistentlyMissingTypes(t *testing.T) {
+	parent := newTestParent(schema.GroupVersionKind{
+		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
+	})
+	orphan := newConfigMap("orphan", "default")
+	orphan.SetLabels(map[string]string{ApplysetPartOfLabel: ID(parent)})
+
+	delegate := newTestRESTMapper()
+	mapper := &resettableTestRESTMapper{RESTMapper: delegate}
+	mapper.restMapping = delegate.RESTMapping
+	applier := New(Config{
+		Client:          newFakeDynamicClient(orphan),
+		RESTMapper:      mapper,
+		Log:             logr.Discard(),
+		ParentNamespace: "default",
+	}, parent)
+
+	candidates, err := applier.ListOrphans(t.Context(), PruneOptions{
+		KeepUIDs: sets.New[types.UID](),
+		Scope: &PruneScope{
+			GroupKinds: sets.New(
+				schema.GroupKind{Kind: "ConfigMap"},
+				schema.GroupKind{Group: "example.com", Kind: "RemovedKind"},
+			),
+			Namespaces: sets.New("default"),
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("ListOrphans() error = %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Object.GetName() != "orphan" {
+		t.Fatalf("ListOrphans() candidates = %#v, want orphan ConfigMap", candidates)
+	}
+	if mapper.resetCount != 1 {
+		t.Fatalf("REST mapper reset %d times, want 1", mapper.resetCount)
+	}
+}
+
+func TestListOrphansReturnsOtherMappingErrors(t *testing.T) {
+	wantErr := errors.New("discovery unavailable")
+	mapper := &resettableTestRESTMapper{RESTMapper: newTestRESTMapper()}
+	mapper.restMapping = func(schema.GroupKind, ...string) (*meta.RESTMapping, error) {
+		return nil, wantErr
+	}
+	applier := New(Config{
+		Client:          newFakeDynamicClient(),
+		RESTMapper:      mapper,
+		Log:             logr.Discard(),
+		ParentNamespace: "default",
+	}, newTestParent(schema.GroupVersionKind{
+		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
+	}))
+
+	_, err := applier.ListOrphans(t.Context(), PruneOptions{
+		KeepUIDs: sets.New[types.UID](),
+		Scope: &PruneScope{
+			GroupKinds: sets.New(schema.GroupKind{Kind: "ConfigMap"}),
+			Namespaces: sets.New("default"),
+		},
+	})
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ListOrphans() error = %v, want %v", err, wantErr)
+	}
+	if mapper.resetCount != 0 {
+		t.Fatalf("REST mapper reset %d times, want 0", mapper.resetCount)
 	}
 }
 
@@ -1445,8 +1571,8 @@ func TestMetadata_Annotations(t *testing.T) {
 
 	annotations := m.Annotations()
 
-	if len(annotations) != 3 {
-		t.Errorf("Annotations() returned %d annotations, want 3", len(annotations))
+	if len(annotations) != 4 {
+		t.Errorf("Annotations() returned %d annotations, want 4", len(annotations))
 	}
 
 	if got := annotations[ApplySetToolingAnnotation]; got != "kro/v1.0.0" {
@@ -1459,6 +1585,9 @@ func TestMetadata_Annotations(t *testing.T) {
 
 	if got := annotations[ApplySetAdditionalNamespacesAnnotation]; got != "default" {
 		t.Errorf("Annotations()[%s] = %q, want %q", ApplySetAdditionalNamespacesAnnotation, got, "default")
+	}
+	if got := annotations[ApplySetInventoryHashAnnotation]; got == "" {
+		t.Errorf("Annotations()[%s] is empty", ApplySetInventoryHashAnnotation)
 	}
 }
 

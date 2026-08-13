@@ -299,8 +299,11 @@ func validateTemplateConstraints(
 		}
 	}
 
-	// Validate that users don't set KRO-owned labels
+	// Validate that users don't set KRO-owned metadata.
 	if err := validateNoKROOwnedLabels(rgResource.ID, resourceObject); err != nil {
+		return err
+	}
+	if err := validateNoKROOwnedAnnotations(rgResource.ID, resourceObject); err != nil {
 		return err
 	}
 
@@ -349,10 +352,10 @@ func isRequiredIdentityField(path string, resourceNamespaced, instanceNamespaced
 	}
 }
 
-// validateNoKROOwnedLabels enforces that the resource template doesn't define any label with
-// LabelKROPrefix (kro.run/). These labels are reserved for internal use ONLY.
+// validateNoKROOwnedLabels enforces that resource templates do not define
+// labels in either controller-owned namespace.
 func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]interface{}) error {
-	labelsRaw, found, err := unstructured.NestedFieldCopy(resourceObject, "metadata", "labels")
+	labelsRaw, found, err := unstructured.NestedFieldNoCopy(resourceObject, "metadata", "labels")
 	if err != nil || !found {
 		return nil
 	}
@@ -363,8 +366,38 @@ func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]inter
 	}
 
 	for key := range labelsMap {
-		if strings.HasPrefix(key, metadata.LabelKROPrefix) {
-			return fmt.Errorf("invalid label for resource %q. labels with prefix %q are reserved for internal use", resourceID, metadata.LabelKROPrefix)
+		for _, prefix := range []string{metadata.KROPrefix, metadata.InternalKROPrefix} {
+			if strings.HasPrefix(key, prefix) {
+				return fmt.Errorf("invalid label for resource %q. labels with prefix %q are reserved for internal use", resourceID, prefix)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateNoKROOwnedAnnotations prevents resource templates from overriding
+// annotations used as persisted controller state.
+func validateNoKROOwnedAnnotations(resourceID string, resourceObject map[string]interface{}) error {
+	annotationsRaw, found, err := unstructured.NestedFieldNoCopy(resourceObject, "metadata", "annotations")
+	if err != nil || !found {
+		return nil
+	}
+
+	annotationsMap, ok := annotationsRaw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	for key := range annotationsMap {
+		for _, prefix := range []string{metadata.KROPrefix, metadata.InternalKROPrefix} {
+			if strings.HasPrefix(key, prefix) {
+				return fmt.Errorf(
+					"invalid annotation for resource %q. annotations with prefix %q are reserved for internal use",
+					resourceID,
+					prefix,
+				)
+			}
 		}
 	}
 

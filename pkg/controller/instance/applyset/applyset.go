@@ -150,6 +150,7 @@ func (m Metadata) Annotations() map[string]string {
 		ApplySetToolingAnnotation:              m.Tooling,
 		ApplySetGKsAnnotation:                  m.GroupKindsString(),
 		ApplySetAdditionalNamespacesAnnotation: m.NamespacesString(),
+		ApplySetInventoryHashAnnotation:        inventoryHash(m.ID, m.GroupKinds, m.AdditionalNamespaces),
 	}
 }
 
@@ -244,7 +245,10 @@ func (a *ApplySet) Project(resources []Resource) (Metadata, error) {
 	}
 
 	// Union with parent annotations (memory from previous reconciles)
-	parentGKs, parentNamespaces := a.parentAnnotationSets()
+	parentGKs, parentNamespaces, err := a.parentAnnotationSets()
+	if err != nil {
+		return Metadata{}, err
+	}
 	for gk := range parentGKs {
 		gks.Insert(gk)
 	}
@@ -453,14 +457,41 @@ func (a *ApplySet) ListOrphans(ctx context.Context, opts PruneOptions) ([]Orphan
 
 	mappings := make([]*meta.RESTMapping, 0, len(scopeGKs))
 	for gk := range scopeGKs {
-		mapping, err := a.restMapper.RESTMapping(gk)
+		mapping, err := a.restMappingForPrune(gk)
 		if err != nil {
 			return nil, fmt.Errorf("RESTMapping failed for %v: %w", gk, err)
+		}
+		if mapping == nil {
+			continue
 		}
 		mappings = append(mappings, mapping)
 	}
 
 	return a.listOrphans(ctx, mappings, scopeNamespaces, opts.KeepUIDs)
+}
+
+// restMappingForPrune refreshes stale discovery once before concluding that a
+// resource type no longer exists. A persistently missing type cannot have live
+// objects to list, so it no longer belongs in the prune search space. Other
+// mapping failures remain fatal because they do not establish that absence.
+func (a *ApplySet) restMappingForPrune(gk schema.GroupKind) (*meta.RESTMapping, error) {
+	mapping, err := a.restMapper.RESTMapping(gk)
+	if err == nil {
+		return mapping, nil
+	} else if !meta.IsNoMatchError(err) {
+		return nil, err
+	}
+
+	meta.MaybeResetRESTMapper(a.restMapper)
+	mapping, err = a.restMapper.RESTMapping(gk)
+	if meta.IsNoMatchError(err) {
+		a.log.V(2).Info("skipping prune for missing resource type", "groupKind", gk)
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	return mapping, nil
 }
 
 // DeleteOrphan deletes a single orphan candidate using a UID precondition
@@ -571,43 +602,8 @@ func (a *ApplySet) listOrphans(
 	return candidates, nil
 }
 
-func (a *ApplySet) parentAnnotationSets() (sets.Set[schema.GroupKind], sets.Set[string]) {
-	gks := sets.New[schema.GroupKind]()
-	namespaces := sets.New[string]()
-
-	if len(a.parentAnnotations) == 0 {
-		return gks, namespaces
-	}
-
-	// Parse GKs from standard KEP annotation
-	if raw := a.parentAnnotations[ApplySetGKsAnnotation]; raw != "" {
-		for _, entry := range strings.Split(raw, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry == "" {
-				continue
-			}
-			parts := strings.SplitN(entry, ".", 2)
-			gk := schema.GroupKind{Kind: parts[0]}
-			if len(parts) == 2 {
-				gk.Group = parts[1]
-			}
-			if gk.Kind != "" {
-				gks.Insert(gk)
-			}
-		}
-	}
-
-	if raw := a.parentAnnotations[ApplySetAdditionalNamespacesAnnotation]; raw != "" {
-		for _, entry := range strings.Split(raw, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry == "" {
-				continue
-			}
-			namespaces.Insert(entry)
-		}
-	}
-
-	return gks, namespaces
+func (a *ApplySet) parentAnnotationSets() (sets.Set[schema.GroupKind], sets.Set[string], error) {
+	return parseParentAnnotationSets(a.parentAnnotations)
 }
 
 func (a *ApplySet) buildMetadata(

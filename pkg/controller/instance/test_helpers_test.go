@@ -45,6 +45,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
@@ -277,6 +278,32 @@ func newControllerAndContext(
 	return controller, rcx, raw
 }
 
+func newControllerAndDeletionContext(
+	t *testing.T,
+	instance *unstructured.Unstructured,
+	g *graph.Graph,
+	extraObjs ...apimachineryruntime.Object,
+) (*Controller, *DeletionContext, *dynamicfake.FakeDynamicClient) {
+	t.Helper()
+
+	objs := append([]apimachineryruntime.Object{instance.DeepCopy()}, extraObjs...)
+	raw := newControllerTestDynamicClient(t, objs...)
+	controller, clientSet := newControllerUnderTest(t, raw, g)
+
+	dcx := NewDeletionContext(
+		context.Background(),
+		controller.log,
+		controllerTestParentGVR,
+		instance.GetNamespace() != "",
+		clientSet.Dynamic(),
+		clientSet.RESTMapper(),
+		controller.reconcileConfig,
+		instance.DeepCopy(),
+	)
+
+	return controller, dcx, raw
+}
+
 func newInstanceObject(name, namespace string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -364,6 +391,7 @@ func newTestGraph(nodes ...*graph.Node) *graph.Graph {
 
 func newTestGraphWithInstance(instanceNode *graph.Node, nodes ...*graph.Node) *graph.Graph {
 	nodeMap := make(map[string]*graph.Node, len(nodes))
+	dependencyGraph := dag.NewDirectedAcyclicGraph[string]()
 	resourceSchemas := map[string]*spec.Schema{
 		graph.InstanceNodeID: nil,
 	}
@@ -372,13 +400,33 @@ func newTestGraphWithInstance(instanceNode *graph.Node, nodes ...*graph.Node) *g
 		nodeMap[node.Meta.ID] = node
 		resourceSchemas[node.Meta.ID] = nil
 		order = append(order, node.Meta.ID)
+		if err := dependencyGraph.AddVertex(node.Meta.ID, node.Meta.Index); err != nil {
+			panic(fmt.Sprintf("adding test graph vertex %q: %v", node.Meta.ID, err))
+		}
+	}
+	for _, node := range nodes {
+		if err := dependencyGraph.AddDependencies(node.Meta.ID, node.Meta.Dependencies); err != nil {
+			panic(fmt.Sprintf("adding test graph dependencies for %q: %v", node.Meta.ID, err))
+		}
+	}
+	layers, err := dependencyGraph.ReverseTopologicalLayers()
+	if err != nil {
+		panic(fmt.Sprintf("calculating test graph apply orders: %v", err))
+	}
+	applyOrders := make(map[string]int, len(nodes))
+	for i, layer := range layers {
+		for _, nodeID := range layer {
+			applyOrders[nodeID] = len(layers) - i
+		}
 	}
 
 	return &graph.Graph{
+		DAG:              dependencyGraph,
 		Instance:         instanceNode,
 		Nodes:            nodeMap,
 		Resources:        nodeMap,
 		TopologicalOrder: order,
+		ApplyOrders:      applyOrders,
 		ResourceSchemas:  resourceSchemas,
 	}
 }

@@ -457,14 +457,41 @@ func (a *ApplySet) ListOrphans(ctx context.Context, opts PruneOptions) ([]Orphan
 
 	mappings := make([]*meta.RESTMapping, 0, len(scopeGKs))
 	for gk := range scopeGKs {
-		mapping, err := a.restMapper.RESTMapping(gk)
+		mapping, err := a.restMappingForPrune(gk)
 		if err != nil {
 			return nil, fmt.Errorf("RESTMapping failed for %v: %w", gk, err)
+		}
+		if mapping == nil {
+			continue
 		}
 		mappings = append(mappings, mapping)
 	}
 
 	return a.listOrphans(ctx, mappings, scopeNamespaces, opts.KeepUIDs)
+}
+
+// restMappingForPrune refreshes stale discovery once before concluding that a
+// resource type no longer exists. A persistently missing type cannot have live
+// objects to list, so it no longer belongs in the prune search space. Other
+// mapping failures remain fatal because they do not establish that absence.
+func (a *ApplySet) restMappingForPrune(gk schema.GroupKind) (*meta.RESTMapping, error) {
+	mapping, err := a.restMapper.RESTMapping(gk)
+	if err == nil {
+		return mapping, nil
+	} else if !meta.IsNoMatchError(err) {
+		return nil, err
+	}
+
+	meta.MaybeResetRESTMapper(a.restMapper)
+	mapping, err = a.restMapper.RESTMapping(gk)
+	if meta.IsNoMatchError(err) {
+		a.log.V(2).Info("skipping prune for missing resource type", "groupKind", gk)
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	return mapping, nil
 }
 
 // DeleteOrphan deletes a single orphan candidate using a UID precondition

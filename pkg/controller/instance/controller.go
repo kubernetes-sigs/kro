@@ -401,7 +401,7 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	// Fast path: if everything is already correct → no patch
 	hasFinalizer := metadata.HasInstanceFinalizer(obj)
 	needFinalizer := !hasFinalizer
-	hasInventoryMetadata := hasApplySetInventoryMetadata(obj)
+	hasInventoryMetadata := hasAnyApplySetInventoryMetadata(obj)
 	if needFinalizer && hasInventoryMetadata {
 		if err := applyset.ValidateParentInventory(obj); err != nil {
 			return nil, fmt.Errorf(
@@ -466,7 +466,10 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	return patched, nil
 }
 
-func hasApplySetInventoryMetadata(obj metav1.Object) bool {
+// hasAnyApplySetInventoryMetadata deliberately detects partial inventory. If
+// any field exists, the caller validates the complete inventory instead of
+// replacing it with an empty one, which could hide and orphan managed members.
+func hasAnyApplySetInventoryMetadata(obj metav1.Object) bool {
 	if _, found := obj.GetLabels()[applyset.ApplySetParentIDLabel]; found {
 		return true
 	}

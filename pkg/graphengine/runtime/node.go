@@ -206,7 +206,7 @@ func (n *Node) CheckReadiness() error {
 	// reconciler requeues.
 	if n.observed == nil {
 		metrics.NodeNotReadyTotal.Inc()
-		return fmt.Errorf("node %q: no observed state: %w", n.spec.ID, ErrWaitingForReadiness)
+		return newWaitingForReadinessError("node %q: no observed state", n.spec.ID)
 	}
 
 	// Collections evaluate readyWhen per element with `each` bound to the
@@ -223,7 +223,7 @@ func (n *Node) CheckReadiness() error {
 		if err != nil {
 			if IsCELDataPending(err) {
 				metrics.NodeNotReadyTotal.Inc()
-				return fmt.Errorf("node %q: readyWhen %q: %w (%w)", n.spec.ID, expr.UserExpression(), err, ErrWaitingForReadiness)
+				return newWaitingForReadinessError("node %q: readyWhen %q: %v", n.spec.ID, expr.UserExpression(), err)
 			}
 			return fmt.Errorf("node %q: readyWhen %q: %w", n.spec.ID, expr.UserExpression(), err)
 		}
@@ -233,10 +233,20 @@ func (n *Node) CheckReadiness() error {
 		}
 		if !b {
 			metrics.NodeNotReadyTotal.Inc()
-			return fmt.Errorf("node %q: readyWhen %q is false: %w", n.spec.ID, expr.UserExpression(), ErrWaitingForReadiness)
+			return newWaitingForReadinessError("node %q: readyWhen %q is false (resource: %s)", n.spec.ID, expr.UserExpression(), resourceIdentity(n.observed[0]))
 		}
 	}
 	return nil
+}
+
+// resourceIdentity formats group/version/kind and namespace/name for a
+// resource so readiness messages can point directly at the object being
+// waited on, without requiring knowledge of the RGD's internal node IDs.
+func resourceIdentity(obj *unstructured.Unstructured) string {
+	if ns := obj.GetNamespace(); ns != "" {
+		return fmt.Sprintf("%s %s/%s", obj.GroupVersionKind().String(), ns, obj.GetName())
+	}
+	return fmt.Sprintf("%s %s", obj.GroupVersionKind().String(), obj.GetName())
 }
 
 // checkCollectionReadiness evaluates a collection node's readyWhen list
@@ -272,7 +282,7 @@ func (n *Node) checkCollectionReadiness() error {
 			v, err := expr.Eval(scope)
 			if err != nil {
 				if IsCELDataPending(err) {
-					return fmt.Errorf("node %q: readyWhen %q (item %d): %w (%w)", n.spec.ID, expr.UserExpression(), i, err, ErrWaitingForReadiness)
+					return newWaitingForReadinessError("node %q: readyWhen %q (item %d): %v", n.spec.ID, expr.UserExpression(), i, err)
 				}
 				return fmt.Errorf("node %q: readyWhen %q (item %d): %w", n.spec.ID, expr.UserExpression(), i, err)
 			}
@@ -282,7 +292,7 @@ func (n *Node) checkCollectionReadiness() error {
 			}
 			if !b {
 				metrics.NodeNotReadyTotal.Inc()
-				return fmt.Errorf("node %q: readyWhen %q (item %d) is false: %w", n.spec.ID, expr.UserExpression(), i, ErrWaitingForReadiness)
+				return newWaitingForReadinessError("node %q: readyWhen %q (item %d) is false (resource: %s)", n.spec.ID, expr.UserExpression(), i, resourceIdentity(obj))
 			}
 		}
 	}

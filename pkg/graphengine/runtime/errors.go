@@ -16,6 +16,7 @@ package runtime
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 )
@@ -29,6 +30,24 @@ var ErrDataPending = errors.New("data pending")
 // ErrWaitingForReadiness indicates a node has been applied but its
 // readyWhen conditions are not satisfied yet. The reconciler requeues.
 var ErrWaitingForReadiness = errors.New("waiting for readiness")
+
+// waitingForReadinessError formats a readiness-wait message that satisfies
+// errors.Is(err, ErrWaitingForReadiness) without appending the sentinel's own
+// "waiting for readiness" text, which duplicates the NodeState/condition
+// reason and adds no value for users reading the message.
+type waitingForReadinessError struct {
+	msg string
+}
+
+func (e *waitingForReadinessError) Error() string { return e.msg }
+
+func (e *waitingForReadinessError) Is(target error) bool { return target == ErrWaitingForReadiness }
+
+// newWaitingForReadinessError builds an error matching ErrWaitingForReadiness
+// via errors.Is, with a message composed solely of format/args.
+func newWaitingForReadinessError(format string, args ...any) error {
+	return &waitingForReadinessError{msg: fmt.Sprintf(format, args...)}
+}
 
 // IsDataPending reports whether an error indicates a retryable
 // data-not-yet-available condition.

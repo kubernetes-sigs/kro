@@ -300,6 +300,36 @@ func TestNode_CheckReadiness(t *testing.T) {
 	}
 }
 
+// TestNode_CheckReadiness_MessageIdentifiesResource verifies that a
+// readyWhen-false error names the actual resource being waited on (group,
+// version, kind, namespace, name) instead of only the internal node ID, and
+// that it no longer carries the redundant "waiting for readiness" suffix
+// that ErrWaitingForReadiness's own Error() text used to append via %w.
+func TestNode_CheckReadiness_MessageIdentifiesResource(t *testing.T) {
+	t.Parallel()
+	g := generator.NewGraph("g",
+		generator.WithTemplate("vpc", map[string]any{
+			"apiVersion": "v1", "kind": "Pod",
+			"metadata": map[string]any{"namespace": "team-a", "name": "db-config"},
+			"spec":      map[string]any{"containers": []any{map[string]any{"name": "c", "image": "nginx"}}},
+			"status":    map[string]any{"phase": "Pending"},
+		}),
+		generator.WithReadyWhen("${vpc.status.phase == 'Running'}"),
+	)
+	prog := compileGraph(t, g)
+	rt := New(prog, g)
+	objs, err := rt.Node("vpc").Resolve()
+	require.NoError(t, err)
+	rt.Set("vpc", objs[0].Object)
+	rt.Node("vpc").SetObserved(objs, objs)
+
+	readyErr := rt.Node("vpc").CheckReadiness()
+	require.ErrorIs(t, readyErr, ErrWaitingForReadiness)
+	assert.Contains(t, readyErr.Error(), "Pod")
+	assert.Contains(t, readyErr.Error(), "team-a/db-config")
+	assert.NotContains(t, readyErr.Error(), "waiting for readiness")
+}
+
 func TestNode_Resolve(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

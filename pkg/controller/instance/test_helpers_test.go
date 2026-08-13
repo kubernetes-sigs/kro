@@ -409,6 +409,16 @@ func newTestGraphWithInstance(instanceNode *graph.Node, nodes ...*graph.Node) *g
 			panic(fmt.Sprintf("adding test graph dependencies for %q: %v", node.Meta.ID, err))
 		}
 	}
+	layers, err := dependencyGraph.ReverseTopologicalLayers()
+	if err != nil {
+		panic(fmt.Sprintf("calculating test graph apply orders: %v", err))
+	}
+	applyOrders := make(map[string]int, len(nodes))
+	for i, layer := range layers {
+		for _, nodeID := range layer {
+			applyOrders[nodeID] = len(layers) - i
+		}
+	}
 
 	return &graph.Graph{
 		DAG:              dependencyGraph,
@@ -416,6 +426,7 @@ func newTestGraphWithInstance(instanceNode *graph.Node, nodes ...*graph.Node) *g
 		Nodes:            nodeMap,
 		Resources:        nodeMap,
 		TopologicalOrder: order,
+		ApplyOrders:      applyOrders,
 		ResourceSchemas:  resourceSchemas,
 	}
 }

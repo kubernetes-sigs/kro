@@ -40,6 +40,10 @@ type Graph struct {
 	// This excludes the instance node.
 	TopologicalOrder []string
 
+	// ApplyOrders maps node IDs to their one-based reverse topological layer.
+	// Nodes in the same layer can be deleted in the same wave.
+	ApplyOrders map[string]int
+
 	// CRD is the generated CustomResourceDefinition for the instance.
 	CRD *extv1.CustomResourceDefinition
 
@@ -47,4 +51,22 @@ type Graph struct {
 	// Includes resource schemas (keyed by resource ID) and the instance schema
 	// (keyed by InstanceNodeID). Used at runtime for schema-aware CEL value conversion.
 	ResourceSchemas map[string]*spec.Schema
+}
+
+func applyOrdersForDAG(
+	dependencyGraph *dag.DirectedAcyclicGraph[string],
+) (map[string]int, error) {
+	layers, err := dependencyGraph.ReverseTopologicalLayers()
+	if err != nil {
+		return nil, err
+	}
+
+	orders := make(map[string]int, len(dependencyGraph.Vertices))
+	for i, layer := range layers {
+		order := len(layers) - i
+		for _, nodeID := range layer {
+			orders[nodeID] = order
+		}
+	}
+	return orders, nil
 }

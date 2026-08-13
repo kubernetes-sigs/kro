@@ -15,14 +15,12 @@
 package runtime
 
 import (
-	"fmt"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
-	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
@@ -62,16 +60,12 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 		metrics.RuntimeCreationDuration.Observe(duration.Seconds())
 		metrics.RuntimeCreationTotal.Inc()
 	}()
-	applyOrders, err := applyOrdersForDAG(g.DAG)
-	if err != nil {
-		return nil, fmt.Errorf("calculate apply-order waves: %w", err)
-	}
 	instanceObj := instance.DeepCopy()
 
 	rt := &Runtime{
 		order:       g.TopologicalOrder,
 		nodes:       make(map[string]*Node),
-		applyOrders: applyOrders,
+		applyOrders: g.ApplyOrders,
 		rgdConfig:   rgdConfig,
 	}
 
@@ -205,22 +199,4 @@ func (r *Runtime) Instance() *Node {
 func (r *Runtime) ApplyOrder(nodeID string) (int, bool) {
 	order, ok := r.applyOrders[nodeID]
 	return order, ok
-}
-
-func applyOrdersForDAG(
-	dependencyGraph *dag.DirectedAcyclicGraph[string],
-) (map[string]int, error) {
-	layers, err := dependencyGraph.ReverseTopologicalLayers()
-	if err != nil {
-		return nil, err
-	}
-
-	orders := make(map[string]int, len(dependencyGraph.Vertices))
-	for i, layer := range layers {
-		order := len(layers) - i
-		for _, nodeID := range layer {
-			orders[nodeID] = order
-		}
-	}
-	return orders, nil
 }

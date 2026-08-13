@@ -1017,6 +1017,11 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 
 				// Validate topological order
 				assert.Equal(t, []string{"vpc", "clusterpolicy", "clusterrole", "subnet1", "subnet2", "cluster"}, g.TopologicalOrder)
+				assert.Equal(t, map[string]int{
+					"vpc": 1, "clusterpolicy": 1,
+					"clusterrole": 2, "subnet1": 2, "subnet2": 2,
+					"cluster": 3,
+				}, g.ApplyOrders)
 			},
 		},
 		{

@@ -277,6 +277,10 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	if err != nil {
 		return nil, fmt.Errorf("failed to get topological order: %w", err)
 	}
+	applyOrders, err := applyOrdersForDAG(dag)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get apply-order waves: %w", err)
+	}
 
 	// Validate that omit() is not used on resource identity fields.
 	// Only needed when omit() is enabled — if the gate is off, the builder
@@ -385,6 +389,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		Nodes:            nodes,
 		Resources:        nodes,
 		TopologicalOrder: topologicalOrder,
+		ApplyOrders:      applyOrders,
 		CRD:              instanceCRD,
 		ResourceSchemas:  resourceSchemas,
 	}

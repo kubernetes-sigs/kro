@@ -289,29 +289,6 @@ func TestFromGraph_InstanceWithDependencies(t *testing.T) {
 	assert.Len(t, inst.templateExprs, 1)
 }
 
-func TestFromGraphComputesApplyOrderWaves(t *testing.T) {
-	g := &graph.Graph{
-		TopologicalOrder: []string{"a", "b", "c", "d"},
-		Nodes: map[string]*graph.Node{
-			"a": {Meta: graph.NodeMeta{ID: "a"}},
-			"b": {Meta: graph.NodeMeta{ID: "b", Dependencies: []string{"a"}}},
-			"c": {Meta: graph.NodeMeta{ID: "c", Dependencies: []string{"a"}}},
-			"d": {Meta: graph.NodeMeta{ID: "d", Dependencies: []string{"b", "c"}}},
-		},
-		Instance: &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID}},
-	}
-	withTestDAG(g)
-
-	rt, err := FromGraph(g, testInstance("test"), graph.RGDConfig{})
-	require.NoError(t, err)
-
-	for nodeID, want := range map[string]int{"a": 1, "b": 2, "c": 2, "d": 3} {
-		got, ok := rt.ApplyOrder(nodeID)
-		assert.True(t, ok)
-		assert.Equal(t, want, got)
-	}
-}
-
 func withTestDAG(g *graph.Graph) *graph.Graph {
 	dependencyGraph := dag.NewDirectedAcyclicGraph[string]()
 	for i, nodeID := range g.TopologicalOrder {

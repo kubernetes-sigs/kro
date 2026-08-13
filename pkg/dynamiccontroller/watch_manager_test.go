@@ -401,6 +401,10 @@ func TestEnsureWatch_SyncTimeout_RetrySucceeds(t *testing.T) {
 	// Second call: lists succeed → should create fresh informer and sync.
 	failList.Store(false)
 	wm.SyncTimeout = 5 * time.Second
+	// Clear the failures cache so we bypass the cooldown/backoff in this test
+	wm.mu.Lock()
+	delete(wm.failures, gvr)
+	wm.mu.Unlock()
 	err = wm.EnsureWatch(gvr, "test")
 	assert.NoError(t, err)
 	assert.Equal(t, 1, wm.ActiveWatchCount(), "retry should succeed with fresh informer")
@@ -607,4 +611,54 @@ func TestShutdown_HandlerRemoved(t *testing.T) {
 	assert.NoError(t, wm.EnsureWatch(gvr, "test"))
 	wm.Shutdown()
 	assert.Equal(t, 0, wm.ActiveWatchCount())
+}
+
+func TestEnsureWatch_FailureCooldown(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1.AddMetaToScheme(scheme)
+	client := fake.NewSimpleMetadataClient(scheme)
+	// Fail all list calls so the informer cannot sync.
+	client.PrependReactor("list", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated list error")
+	})
+
+	wm := NewWatchManager(client, 1*time.Hour, func(Event) {}, noopLogger())
+	wm.SyncTimeout = 100 * time.Millisecond
+
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+
+	// First attempt: should block 100ms and fail.
+	start := time.Now()
+	err := wm.EnsureWatch(gvr, "test")
+	duration := time.Since(start)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cache sync timeout")
+	assert.GreaterOrEqual(t, duration, 100*time.Millisecond)
+
+	// Second attempt: should fail-fast immediately because of active cooldown.
+	start = time.Now()
+	err = wm.EnsureWatch(gvr, "test")
+	duration = time.Since(start)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cooldown active")
+	assert.Less(t, duration, 10*time.Millisecond)
+
+	// Verify cooldown backed off exponentially.
+	wm.mu.Lock()
+	failure := wm.failures[gvr]
+	assert.NotNil(t, failure)
+	assert.Equal(t, 5*time.Second, failure.cooldown)
+	wm.mu.Unlock()
+
+	// Third attempt: still in cooldown, should fail fast.
+	err = wm.EnsureWatch(gvr, "test")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cooldown active")
+
+	// Triggering another failure manually to check exponential backoff.
+	wm.recordFailure(gvr)
+	wm.mu.Lock()
+	failure = wm.failures[gvr]
+	assert.Equal(t, 10*time.Second, failure.cooldown)
+	wm.mu.Unlock()
 }

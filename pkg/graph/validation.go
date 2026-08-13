@@ -355,7 +355,7 @@ func isRequiredIdentityField(path string, resourceNamespaced, instanceNamespaced
 // validateNoKROOwnedLabels enforces that resource templates do not define
 // labels in either controller-owned namespace.
 func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]interface{}) error {
-	labelsRaw, found, err := unstructured.NestedFieldCopy(resourceObject, "metadata", "labels")
+	labelsRaw, found, err := unstructured.NestedFieldNoCopy(resourceObject, "metadata", "labels")
 	if err != nil || !found {
 		return nil
 	}
@@ -379,7 +379,7 @@ func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]inter
 // validateNoKROOwnedAnnotations prevents resource templates from overriding
 // annotations used as persisted controller state.
 func validateNoKROOwnedAnnotations(resourceID string, resourceObject map[string]interface{}) error {
-	annotationsRaw, found, err := unstructured.NestedFieldCopy(resourceObject, "metadata", "annotations")
+	annotationsRaw, found, err := unstructured.NestedFieldNoCopy(resourceObject, "metadata", "annotations")
 	if err != nil || !found {
 		return nil
 	}

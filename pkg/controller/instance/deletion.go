@@ -17,218 +17,130 @@ package instance
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
 // reconcileDeletion drives deletion workflow for an instance.
-func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
-	rcx.StateManager.State = v1alpha1.InstanceStateDeleting
-	rcx.Mark.ResourcesUnderDeletion("deleting resources")
+func (c *Controller) reconcileDeletion(dcx *DeletionContext) error {
+	dcx.StateManager.State = v1alpha1.InstanceStateDeleting
+	dcx.Mark.ResourcesUnderDeletion("deleting resources")
 
-	deletionNode, err := c.planNodesForDeletion(rcx)
+	candidates, applier, err := c.discoverDeletionInventory(dcx)
 	if err != nil {
+		dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
 		return err
 	}
 
-	if deletionNode != nil {
-		state := rcx.StateManager.NodeStates[deletionNode.Spec.Meta.ID]
-		if err := c.deleteTarget(rcx, deletionNode, state); err != nil {
+	if len(candidates) == 0 {
+		return c.removeFinalizer(dcx)
+	}
+
+	wave, highest := highestDeletionWave(candidates)
+
+	conflict := false
+	for _, candidate := range wave {
+		if candidate.Object.GetDeletionTimestamp() != nil {
+			continue
+		}
+
+		result, err := applier.DeleteOrphan(dcx.Ctx, candidate)
+		if err != nil {
+			dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
 			return err
 		}
-		// Deletion is in progress; requeue.
-		return rcx.delayedRequeue(fmt.Errorf("deleting resource %s", deletionNode.Spec.Meta.ID))
+		conflict = conflict || result.Conflict
 	}
 
-	return c.removeFinalizer(rcx)
-}
-
-// planNodesForDeletion resolves identities and observes existing objects to
-// select the last deletable node (topologically).
-func (c *Controller) planNodesForDeletion(
-	rcx *ReconcileContext,
-) (*runtime.Node, error) {
-	var deletionNode *runtime.Node
-
-	// Loop through nodes in topological order and try to observe their state.
-	// stop at the first node that can't be observed (e.g. due to pending data).
-	for _, node := range rcx.Runtime.Nodes() {
-		rid := node.Spec.Meta.ID
-		nodeMeta := node.Spec.Meta
-
-		state := rcx.StateManager.NewNodeState(rid)
-
-		// 1/ check if the node is ignored.
-		ignored, err := node.IsIgnored()
-		if err != nil {
-			state.SetError(err)
-			return nil, err
-		}
-		if ignored {
-			state.SetSkipped()
-			continue
-		}
-
-		isExternal := nodeMeta.Type == graph.NodeTypeExternal || nodeMeta.Type == graph.NodeTypeExternalCollection
-
-		// Resolve identity without readiness gating. External nodes use this to
-		// locate the resource for observation; managed nodes use it as the deletion target.
-		desired, err := node.GetDesiredIdentity()
-		if err != nil {
-			if !isExternal && runtime.IsDataPending(err) {
-				// Identity depends on a resource that lost its data. Treat as deleted —
-				// there is no better mechanism today for tracking identity across data loss.
-				state.SetDeleted()
-				continue
-			}
-			state.SetError(err)
-			return nil, err
-		}
-
-		// External nodes are never deleted by the controller. Observe them so
-		// downstream managed nodes can resolve their identity from the CEL context.
-		if isExternal {
-			if len(desired) > 0 {
-				if err := c.observeExternal(rcx, node, desired[0]); err != nil {
-					state.SetError(err)
-					return nil, err
-				}
-			}
-			state.SetSkipped()
-			continue
-		}
-
-		if len(desired) == 0 {
-			state.SetDeleted()
-			continue
-		}
-
-		// At this point, identity is resolvable and we can safely observe (GET/LIST)
-		// to find the next deletable node.
-		switch nodeMeta.Type {
-
-		case graph.NodeTypeInstance:
-			panic(fmt.Sprintf("unexpected instance node in deletion: %s", rid))
-
-		case graph.NodeTypeCollection:
-			// Collections are label-selected and can span namespaces; LIST once and
-			// set observed so runtime can compute delete targets in desired order.
-			//
-			// Differently from single resources, we do not do GETs per-item here because
-			// that would be inefficient and cause many API calls during deletion.
-			items, err := c.listCollectionItems(rcx, nodeMeta.GVR, rid)
-			if err != nil {
-				state.SetError(err)
-				return nil, fmt.Errorf("failed to list collection items for %s: %w", rid, err)
-			}
-			if len(items) == 0 {
-				state.SetDeleted()
-				continue
-			}
-			node.SetObserved(items)
-			state.SetInProgress()
-			deletionNode = node
-
-		case graph.NodeTypeResource:
-			// Single resources delete by identity; GET the object to mark observed and
-			// allow DeleteTargets to return the correct target.
-			obj := desired[0]
-			rc := resourceClientFor(rcx, nodeMeta, obj.GetNamespace())
-			observed, err := rc.Get(rcx.Ctx, obj.GetName(), metav1.GetOptions{})
-			if err != nil {
-				if apierrors.IsNotFound(err) {
-					state.SetDeleted()
-					continue
-				}
-				state.SetError(err)
-				return nil, err
-			}
-			node.SetObserved([]*unstructured.Unstructured{observed})
-			state.SetInProgress()
-			deletionNode = node
-
-		default:
-			panic(fmt.Sprintf("unknown node type: %v", nodeMeta.Type))
-		}
+	if conflict {
+		err := fmt.Errorf("deletion encountered UID conflicts; retrying")
+		dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
+		return dcx.delayedRequeue(err)
 	}
-
-	return deletionNode, nil
+	return dcx.delayedRequeue(fmt.Errorf("deleting apply-order wave %d", highest))
 }
 
-// deleteTarget issues delete requests for the node's delete targets and updates state.
-func (c *Controller) deleteTarget(
-	rcx *ReconcileContext,
-	node *runtime.Node,
-	state *NodeState,
-) error {
-	targets, err := node.DeleteTargets()
+// discoverDeletionInventory reconstructs the deletion search scope solely from
+// the parent ApplySet metadata. It does not evaluate the current graph or CEL.
+func (c *Controller) discoverDeletionInventory(
+	dcx *DeletionContext,
+) ([]applyset.OrphanCandidate, *applyset.ApplySet, error) {
+	if err := applyset.ValidateParentInventory(dcx.Instance); err != nil {
+		return nil, nil, fmt.Errorf("validate deletion inventory: %w", err)
+	}
+	applier := applyset.New(applyset.Config{
+		Client:          dcx.Client,
+		RESTMapper:      dcx.RestMapper,
+		Log:             dcx.Log,
+		ParentNamespace: dcx.Instance.GetNamespace(),
+	}, dcx.Instance)
+	inventory, err := applier.Project(nil)
 	if err != nil {
-		state.SetError(err)
-		return err
+		return nil, nil, fmt.Errorf("project deletion inventory: %w", err)
 	}
-	if len(targets) == 0 {
-		state.SetDeleted()
-		return nil
+	candidates, err := applier.ListOrphans(dcx.Ctx, applyset.PruneOptions{
+		KeepUIDs: sets.New[types.UID](),
+		Scope:    inventory.PruneScope(),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("list deletion inventory: %w", err)
 	}
+	return candidates, applier, nil
+}
 
-	// Track whether any delete request was accepted. a successful Delete does NOT
-	// mean the object is gone yet, just that deletion is in progress.
-	anyDeleted := false
-	for _, target := range targets {
-		rc := resourceClientFor(rcx, node.Spec.Meta, target.GetNamespace())
-		err := rc.Delete(rcx.Ctx, target.GetName(), metav1.DeleteOptions{})
-		if apierrors.IsNotFound(err) {
-			// Already gone: leave anyDeleted as is and keep checking others.
-			continue
+const fallbackDeletionOrder = 0
+
+// highestDeletionWave returns only candidates in the highest remaining order.
+// Resources without a valid positive order share the fallback wave, which runs
+// after every ordered wave has disappeared.
+func highestDeletionWave(candidates []applyset.OrphanCandidate) ([]applyset.OrphanCandidate, int) {
+	highest := fallbackDeletionOrder
+	wave := make([]applyset.OrphanCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		raw := candidate.Object.GetAnnotations()[metadata.ApplyOrderAnnotation]
+		order, err := strconv.Atoi(raw)
+		if err != nil || order <= 0 {
+			order = fallbackDeletionOrder
 		}
-		if err != nil {
-			state.SetError(err)
-			return err
+		if order > highest {
+			highest = order
+			wave = wave[:0]
 		}
-
-		// at least one delete call was accepted by the API server.
-		anyDeleted = true
+		if order == highest {
+			wave = append(wave, candidate)
+		}
 	}
-
-	if !anyDeleted {
-		// All targets were NotFound, so the node is fully deleted.
-		state.SetDeleted()
-		return nil
-	}
-
-	// At least one delete call succeeded; resources may still be terminating.
-	state.SetDeleting()
-	return nil
+	return wave, highest
 }
 
 // removeFinalizer clears managed state on the instance after deletions complete.
-func (c *Controller) removeFinalizer(rcx *ReconcileContext) error {
+func (c *Controller) removeFinalizer(dcx *DeletionContext) error {
 	// Clean up coordinator watch requests before removing the finalizer.
 	c.coordinator.RemoveInstance(c.gvr, types.NamespacedName{
-		Name:      rcx.Instance.GetName(),
-		Namespace: rcx.Instance.GetNamespace(),
+		Name:      dcx.Instance.GetName(),
+		Namespace: dcx.Instance.GetNamespace(),
 	})
 
-	patched, err := c.setUnmanaged(rcx, rcx.Instance)
+	patched, err := c.setUnmanaged(dcx, dcx.Instance)
 	if err != nil {
-		rcx.Mark.InstanceNotManaged("failed removing finalizer: %v", err)
+		dcx.Mark.InstanceNotManaged("failed removing finalizer: %v", err)
 		return err
 	}
 	if patched != nil {
-		rcx.rebindInstance(patched)
-		rcx.Runtime.Instance().SetObserved([]*unstructured.Unstructured{patched})
+		dcx.rebindInstance(patched)
 	}
-	rcx.Mark.ResourcesUnderDeletion("deleting resources")
+	dcx.Mark.ResourcesUnderDeletion("deleting resources")
 	return nil
 }
 
@@ -248,16 +160,16 @@ func resourceClientFor(
 // Uses merge patch (not SSA) to avoid field manager ownership blocking finalizer removal.
 // Returns the server's response, or nil when the finalizer was already absent
 // and no request was made (callers must only rebind on a non-nil return).
-func (c *Controller) setUnmanaged(rcx *ReconcileContext, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+func (c *Controller) setUnmanaged(dcx *DeletionContext, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if exist := metadata.HasInstanceFinalizer(obj); !exist {
 		return nil, nil
 	}
-	rcx.Log.Info("Removing managed state", "name", obj.GetName(), "namespace", obj.GetNamespace())
+	dcx.Log.Info("Removing managed state", "name", obj.GetName(), "namespace", obj.GetNamespace())
 
 	var updated *unstructured.Unstructured
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		// Re-fetch fresh object on each retry attempt
-		current, err := rcx.InstanceClient().Get(rcx.Ctx, obj.GetName(), metav1.GetOptions{})
+		current, err := dcx.InstanceClient().Get(dcx.Ctx, obj.GetName(), metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
@@ -281,8 +193,8 @@ func (c *Controller) setUnmanaged(rcx *ReconcileContext, obj *unstructured.Unstr
 			return fmt.Errorf("failed to marshal finalizer patch: %w", err)
 		}
 
-		updated, err = rcx.InstanceClient().Patch(
-			rcx.Ctx,
+		updated, err = dcx.InstanceClient().Patch(
+			dcx.Ctx,
 			current.GetName(),
 			types.MergePatchType,
 			patchData,

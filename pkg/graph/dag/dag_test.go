@@ -98,6 +98,12 @@ func TestDAGHasCycle(t *testing.T) {
 	} else if AsCycleError[string](err) == nil {
 		t.Errorf("TopologicalSort returned unexpected error: %T %v", err, err)
 	}
+
+	if _, err := d.ReverseTopologicalLayers(); err == nil {
+		t.Errorf("ReverseTopologicalLayers failed to detect cycle")
+	} else if AsCycleError[string](err) == nil {
+		t.Errorf("ReverseTopologicalLayers returned unexpected error: %T %v", err, err)
+	}
 }
 
 func TestDAGTopologicalSort(t *testing.T) {
@@ -148,6 +154,73 @@ func TestDAGTopologicalSort(t *testing.T) {
 			}
 
 			checkValidTopologicalOrder(t, d, order)
+		})
+	}
+}
+
+func TestDAGReverseTopologicalLayers(t *testing.T) {
+	tests := []struct {
+		name  string
+		nodes string
+		edges string
+		want  [][]string
+	}{
+		{
+			name: "empty graph",
+			want: [][]string{},
+		},
+		{
+			name:  "independent vertices",
+			nodes: "A,B,C",
+			want:  [][]string{{"A", "B", "C"}},
+		},
+		{
+			name:  "chain",
+			nodes: "A,B,C",
+			edges: "A->B,B->C",
+			want:  [][]string{{"C"}, {"B"}, {"A"}},
+		},
+		{
+			name:  "diamond",
+			nodes: "A,B,C,D",
+			edges: "A->B,A->C,B->D,C->D",
+			want:  [][]string{{"D"}, {"B", "C"}, {"A"}},
+		},
+		{
+			name:  "uneven independent branches",
+			nodes: "A,B,C,D,E",
+			edges: "A->B,A->C,B->D",
+			want:  [][]string{{"C", "D", "E"}, {"B"}, {"A"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDirectedAcyclicGraph[string]()
+			if tt.nodes != "" {
+				for i, node := range strings.Split(tt.nodes, ",") {
+					if err := d.AddVertex(node, i); err != nil {
+						t.Fatalf("adding vertex: %v", err)
+					}
+				}
+			}
+
+			if tt.edges != "" {
+				for _, edge := range strings.Split(tt.edges, ",") {
+					tokens := strings.SplitN(edge, "->", 2)
+					if err := d.AddDependencies(tokens[1], []string{tokens[0]}); err != nil {
+						t.Fatalf("adding edge %q: %v", edge, err)
+					}
+				}
+			}
+
+			got, err := d.ReverseTopologicalLayers()
+			if err != nil {
+				t.Fatalf("building reverse topological layers: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("unexpected reverse topological layers: got %v, want %v", got, tt.want)
+			}
 		})
 	}
 }

@@ -279,6 +279,18 @@ spec:
                             x-kubernetes-validations:
                             - message: apiVersion is immutable
                               rule: self == oldSelf
+                          categories:
+                            description: |-
+                              Categories is a list of grouped resources this custom resource belongs to.
+                              Resources in a category can be retrieved together with `kubectl get <category>`.
+                              Example: ["kro"] makes instances appear in `kubectl get kro`.
+                            items:
+                              maxLength: 63
+                              pattern: ^[a-z]([-a-z0-9]*[a-z0-9])?$
+                              type: string
+                            maxItems: 32
+                            type: array
+                            x-kubernetes-list-type: set
                           group:
                             default: kro.run
                             description: |-
@@ -328,6 +340,17 @@ spec:
                             x-kubernetes-validations:
                             - message: scope is immutable
                               rule: self == oldSelf
+                          shortNames:
+                            description: |-
+                              ShortNames are aliases for the generated CRD that can be used with kubectl.
+                              Example: ["wa", "webapp"] allows `kubectl get wa` or `kubectl get webapp` instead of `kubectl get webapplications`.
+                            items:
+                              maxLength: 63
+                              pattern: ^[a-z]([-a-z0-9]*[a-z0-9])?$
+                              type: string
+                            maxItems: 32
+                            type: array
+                            x-kubernetes-list-type: set
                           spec:
                             description: |-
                               Spec defines the schema for the instance's spec section using SimpleSchema syntax.

@@ -108,6 +108,27 @@ type Schema struct {
 	// +kubebuilder:validation:Optional
 	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
 
+	// ShortNames are aliases for the generated CRD that can be used with kubectl.
+	// Example: ["wa", "webapp"] allows `kubectl get wa` or `kubectl get webapp` instead of `kubectl get webapplications`.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:items:Pattern=`^[a-z]([-a-z0-9]*[a-z0-9])?$`
+	// +listType=set
+	ShortNames []string `json:"shortNames,omitempty"`
+
+	// Categories is a list of grouped resources this custom resource belongs to.
+	// Resources in a category can be retrieved together with `kubectl get <category>`.
+	// Example: ["kro"] makes instances appear in `kubectl get kro`.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:items:Pattern=`^[a-z]([-a-z0-9]*[a-z0-9])?$`
+	// +listType=set
+	Categories []string `json:"categories,omitempty"`
+
 	// Metadata to apply to the generated CRD
 	// +kubebuilder:validation:Optional
 	Metadata *CRDMetadata `json:"metadata,omitempty"`

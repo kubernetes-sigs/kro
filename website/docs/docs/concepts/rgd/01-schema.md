@@ -16,6 +16,7 @@ The schema section specifies:
 - **Status fields**: What runtime information kro surfaces from managed resources
 - **Custom types**: Reusable type definitions for complex schemas
 - **Additional printer columns**: Custom columns for `kubectl get` output
+- **Short names and categories**: Optional kubectl aliases and grouping for the generated API
 
 ## Basic Structure
 
@@ -105,6 +106,37 @@ resources:
 :::note
 The `scope` field is immutable after creation.
 :::
+
+### Short Names and Categories
+
+`shortNames` adds kubectl aliases for the generated CRD, and `categories` makes instances show up when users list a category.
+
+```yaml
+schema:
+  apiVersion: v1alpha1
+  kind: WebApplication
+  shortNames:
+    - wa
+    - webapp
+  categories:
+    - kro
+```
+
+This lets users run:
+
+```bash
+kubectl get wa
+kubectl get webapp
+kubectl get kro
+```
+
+instead of the full plural resource name:
+
+```bash
+kubectl get webapplications
+```
+
+Short names and categories must be valid [RFC 1035 label names](https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#rfc-1035-label-names). Duplicate entries are rejected.
 
 ## The spec Section
 

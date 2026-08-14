@@ -35,16 +35,20 @@ type Interface interface {
 
 	// Instance returns the instance node.
 	Instance() *Node
+
+	// ApplyOrder returns the deletion-wave value to persist for a node.
+	ApplyOrder(nodeID string) (int, bool)
 }
 
 // Runtime is the execution context for a single reconciliation.
 // It holds nodes in topological order and provides access to the instance node.
 // Expression deduplication is done during FromGraph construction via a local cache.
 type Runtime struct {
-	order     []string
-	nodes     map[string]*Node
-	instance  *Node
-	rgdConfig graph.RGDConfig
+	order       []string
+	nodes       map[string]*Node
+	instance    *Node
+	applyOrders map[string]int
+	rgdConfig   graph.RGDConfig
 }
 
 // FromGraph creates a new Runtime from a Graph and instance.
@@ -59,9 +63,10 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 	instanceObj := instance.DeepCopy()
 
 	rt := &Runtime{
-		order:     g.TopologicalOrder,
-		nodes:     make(map[string]*Node),
-		rgdConfig: rgdConfig,
+		order:       g.TopologicalOrder,
+		nodes:       make(map[string]*Node),
+		applyOrders: g.ApplyOrders,
+		rgdConfig:   rgdConfig,
 	}
 
 	// Expression cache for non-iteration expressions only.
@@ -188,4 +193,10 @@ func (r *Runtime) Nodes() []*Node {
 // Instance returns the instance node.
 func (r *Runtime) Instance() *Node {
 	return r.instance
+}
+
+// ApplyOrder returns the deletion-wave value to persist for a node.
+func (r *Runtime) ApplyOrder(nodeID string) (int, bool) {
+	order, ok := r.applyOrders[nodeID]
+	return order, ok
 }

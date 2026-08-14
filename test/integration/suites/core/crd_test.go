@@ -162,6 +162,57 @@ var _ = Describe("CRD", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
+		It("should update CRD short names and categories", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-crd-names",
+				generator.WithSchema(
+					"TestNames", "v1alpha1",
+					map[string]interface{}{
+						"field": "string",
+					},
+					nil,
+				),
+			)
+			rgd.Spec.Schema.ShortNames = []string{"tn", "tname"}
+			rgd.Spec.Schema.Categories = []string{"kro", "platform"}
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "testnames.kro.run"}, crd)).To(Succeed())
+				g.Expect(crd.Spec.Names.ShortNames).To(ConsistOf("tn", "tname"))
+				g.Expect(crd.Spec.Names.Categories).To(ConsistOf("kro", "platform"))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
+				rgd.Spec.Schema.ShortNames = []string{"tn2"}
+				rgd.Spec.Schema.Categories = []string{"platform"}
+				g.Expect(env.Client.Update(ctx, rgd)).To(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "testnames.kro.run"}, crd)).To(Succeed())
+				g.Expect(crd.Spec.Names.ShortNames).To(ConsistOf("tn2"))
+				g.Expect(crd.Spec.Names.Categories).To(ConsistOf("platform"))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
+				rgd.Spec.Schema.ShortNames = nil
+				rgd.Spec.Schema.Categories = nil
+				g.Expect(env.Client.Update(ctx, rgd)).To(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "testnames.kro.run"}, crd)).To(Succeed())
+				g.Expect(crd.Spec.Names.ShortNames).To(BeEmpty())
+				g.Expect(crd.Spec.Names.Categories).To(BeEmpty())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
 		It("should delete CRD when ResourceGraphDefinition is deleted", func(ctx SpecContext) {
 			// Create ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd-delete",
@@ -185,7 +236,16 @@ var _ = Describe("CRD", func() {
 			// Delete ResourceGraphDefinition
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
-			// Verify CRD is deleted
+			// Wait for the RGD to be fully gone — this proves the controller
+			// processed the deletion, removed its finalizer (which includes
+			// issuing the CRD Delete), and the object was garbage collected.
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Now verify the CRD is also gone (may take a moment for the
+			// apiserver's customresourcecleanup finalizer to clear).
 			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})
@@ -751,16 +811,20 @@ var _ = Describe("CRD", func() {
 			// trigger a reconciliation of the owning RGD, which calls crdManager.Ensure()
 			// to recreate the CRD.
 			//
-			// Without the fix (DeleteFunc returning false in the CRD watch predicate),
-			// this would timeout because the delete event would be silently filtered
-			// out, leaving the CRD permanently deleted.
+			// The old CRD may linger briefly with a customresourcecleanup finalizer
+			// while the apiserver garbage-collects stored CR data; skip polls where
+			// the old UID is still present with a deletionTimestamp.
 			recreatedCRD := &apiextensionsv1.CustomResourceDefinition{}
 			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, recreatedCRD)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				// A different UID proves this is a new object, not the original
-				g.Expect(recreatedCRD.UID).NotTo(Equal(originalUID))
+				g.Expect(
+					recreatedCRD.UID != originalUID ||
+						recreatedCRD.DeletionTimestamp != nil,
+				).To(BeTrue(), "old CRD still present without deletionTimestamp — waiting for new CRD")
+				g.Expect(recreatedCRD.UID).ToNot(Equal(originalUID),
+					"old CRD still terminating (customresourcecleanup finalizer)")
 
 				g.Expect(metadata.IsKROOwned(&recreatedCRD.ObjectMeta)).To(BeTrue())
 				g.Expect(recreatedCRD.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal(rgdName))

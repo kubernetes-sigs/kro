@@ -48,14 +48,14 @@ func compileConditionExpr(t *testing.T, expr string) *krocel.Expression {
 }
 
 func graphWithConditions(conditions []*krocel.Expression) *graph.Graph {
-	return &graph.Graph{
+	return withTestDAG(&graph.Graph{
 		TopologicalOrder: []string{},
 		Nodes:            map[string]*graph.Node{},
 		Instance: &graph.Node{
 			Meta:       graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance},
 			Conditions: conditions,
 		},
-	}
+	})
 }
 
 func TestEvaluateConditions_NoConditions(t *testing.T) {

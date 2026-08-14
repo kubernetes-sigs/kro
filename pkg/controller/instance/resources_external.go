@@ -25,23 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 
-	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
-
-// observeExternal observes an external node (ref or collection)
-// so that downstream CEL expressions can reference its fields.
-func (c *Controller) observeExternal(
-	rcx *ReconcileContext,
-	node *runtime.Node,
-	desired *unstructured.Unstructured,
-) error {
-	if node.Spec.Meta.Type == graph.NodeTypeExternalCollection {
-		return c.observeExternalCollection(rcx, node, desired)
-	}
-	_, err := c.observeExternalRef(rcx, node, desired)
-	return err
-}
 
 // observeExternalRef fetches the external ref and calls SetObserved on the node
 // so that downstream CEL expressions can reference its fields.

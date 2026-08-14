@@ -43,6 +43,14 @@ import (
 	krt "github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
+type runtimeWithoutApplyOrders struct {
+	krt.Interface
+}
+
+func (runtimeWithoutApplyOrders) ApplyOrder(string) (int, bool) {
+	return 0, false
+}
+
 func TestProcessNodesReturnsDataPending(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	pendingNode := &graph.Node{
@@ -71,6 +79,74 @@ func TestProcessNodesReturnsDataPending(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, krt.IsDataPending(err))
 	assert.Empty(t, resources)
+}
+
+func TestProcessNodesLabelsReverseTopologicalWaves(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	newNode := func(id string, dependencies ...string) *graph.Node {
+		return &graph.Node{
+			Meta: graph.NodeMeta{
+				ID:           id,
+				Type:         graph.NodeTypeResource,
+				GVR:          controllerTestCMGVR,
+				Namespaced:   true,
+				Dependencies: dependencies,
+			},
+			Template: newConfigMapObject(id, ""),
+		}
+	}
+
+	// Diamond topology: A -> B,C -> D. B and C can be deleted together.
+	controller, rcx, _ := newControllerAndContext(
+		t,
+		instance,
+		newTestGraph(
+			newNode("a"),
+			newNode("b", "a"),
+			newNode("c", "a"),
+			newNode("d", "b", "c"),
+		),
+		newConfigMapObject("a", "default"),
+		newConfigMapObject("b", "default"),
+		newConfigMapObject("c", "default"),
+		newConfigMapObject("d", "default"),
+	)
+
+	resources, err := controller.processNodes(rcx)
+	require.NoError(t, err)
+	require.Len(t, resources, 4)
+
+	orders := make(map[string]string, len(resources))
+	for _, resource := range resources {
+		orders[resource.ID] = resource.Object.GetAnnotations()[metadata.ApplyOrderAnnotation]
+	}
+	assert.Equal(t, map[string]string{
+		"a": "1",
+		"b": "2",
+		"c": "2",
+		"d": "3",
+	}, orders)
+}
+
+func TestProcessNodesFallsBackWhenApplyOrderIsMissing(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	node := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "config",
+			Type:       graph.NodeTypeResource,
+			GVR:        controllerTestCMGVR,
+			Namespaced: true,
+		},
+		Template: newConfigMapObject("config", ""),
+	}
+
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(node))
+	rcx.Runtime = runtimeWithoutApplyOrders{Interface: rcx.Runtime}
+
+	resources, err := controller.processNodes(rcx)
+	require.NoError(t, err)
+	require.Len(t, resources, 1)
+	assert.Equal(t, "0", resources[0].Object.GetAnnotations()[metadata.ApplyOrderAnnotation])
 }
 
 func TestReconcileNodesPaths(t *testing.T) {
@@ -313,7 +389,7 @@ func TestProcessNodePaths(t *testing.T) {
 				})
 			}
 
-			resources, err := controller.processNode(rcx, rcx.Runtime.Nodes()[0])
+			resources, err := controller.processNode(rcx, rcx.Runtime.Nodes()[0], 1)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -324,6 +400,9 @@ func TestProcessNodePaths(t *testing.T) {
 			assert.Len(t, resources, tt.wantResources)
 			if tt.wantResources > 0 {
 				assert.Equal(t, tt.wantSkipApply, resources[0].SkipApply)
+				if resources[0].Object != nil {
+					assert.Equal(t, "1", resources[0].Object.GetAnnotations()[metadata.ApplyOrderAnnotation])
+				}
 			}
 
 			assert.Equal(t, tt.wantState, rcx.StateManager.NodeStates[tt.node.Meta.ID].State)
@@ -347,14 +426,16 @@ func TestProcessNodeCollectionTypes(t *testing.T) {
 	currentExternal.SetLabels(map[string]string{"app": "demo"})
 
 	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(collectionNode, externalCollection), currentCollection, currentExternal)
-	resources, err := controller.processNode(rcx, rcx.Runtime.Nodes()[0])
+	resources, err := controller.processNode(rcx, rcx.Runtime.Nodes()[0], 1)
 	require.NoError(t, err)
 	require.Len(t, resources, 1)
 	assert.Equal(t, "configs-0", resources[0].ID)
+	assert.Equal(t, "1", resources[0].Object.GetAnnotations()[metadata.ApplyOrderAnnotation])
 
-	resources, err = controller.processNode(rcx, rcx.Runtime.Nodes()[1])
+	resources, err = controller.processNode(rcx, rcx.Runtime.Nodes()[1], 2)
 	require.NoError(t, err)
 	assert.Nil(t, resources)
+	assert.Empty(t, externalCollection.Template.GetAnnotations()[metadata.ApplyOrderAnnotation])
 	assert.Equal(t, v1alpha1.NodeStateSynced, rcx.StateManager.NodeStates["external-configs"].State)
 }
 
@@ -423,13 +504,15 @@ func TestCollectionAndExternalCollectionProcessing(t *testing.T) {
 	collectionRuntimeNode := rcx.Runtime.Nodes()[0]
 	desired, err := collectionRuntimeNode.GetDesired()
 	require.NoError(t, err)
-	resources, nodeState, err := controller.processCollectionNode(rcx, collectionRuntimeNode, desired)
+	resources, nodeState, err := controller.processCollectionNode(rcx, collectionRuntimeNode, desired, 1)
 	require.NoError(t, err)
 	require.Len(t, resources, 2)
 	assert.Equal(t, "one", resources[0].Object.GetName())
 	assert.NotNil(t, resources[0].Current)
 	assert.Equal(t, "0", resources[0].Object.GetLabels()[metadata.CollectionIndexLabel])
 	assert.Equal(t, "2", resources[0].Object.GetLabels()[metadata.CollectionSizeLabel])
+	assert.Equal(t, "1", resources[0].Object.GetAnnotations()[metadata.ApplyOrderAnnotation])
+	assert.Equal(t, "1", resources[1].Object.GetAnnotations()[metadata.ApplyOrderAnnotation])
 	_ = nodeState // state registered by caller
 
 	extState, err := controller.processExternalCollectionNode(
@@ -641,10 +724,11 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 
 	obj := newConfigMapObject("demo", "default")
 	obj.SetLabels(map[string]string{"keep": "yes"})
-	controller.applyDecoratorLabels(rcx, obj, "configs", &CollectionInfo{Index: 1, Size: 3})
+	controller.applyDecoratorMetadata(rcx, obj, "configs", 4, &CollectionInfo{Index: 1, Size: 3})
 
 	assert.Equal(t, "yes", obj.GetLabels()["keep"])
 	assert.Equal(t, "configs", obj.GetLabels()[metadata.NodeIDLabel])
+	assert.Equal(t, "4", obj.GetAnnotations()[metadata.ApplyOrderAnnotation])
 	assert.Equal(t, "1", obj.GetLabels()[metadata.CollectionIndexLabel])
 	assert.Equal(t, string(instance.GetUID()), obj.GetLabels()[metadata.InstanceIDLabel])
 	assert.Empty(t, obj.GetLabels()[metadata.ManagedByLabelKey])
@@ -657,6 +741,31 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 	}))
 	stored := getStoredParentObject(t, raw)
 	assert.Equal(t, "demo", stored.GetLabels()[applyset.ApplySetParentIDLabel])
+}
+
+func TestReconcileNodesBackfillsApplyOrderOnExistingResource(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	node := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "deploy",
+			Type:       graph.NodeTypeResource,
+			GVR:        controllerTestDeployGVR,
+			Namespaced: true,
+		},
+		Template: newDeploymentObject("demo", ""),
+	}
+	existing := newDeploymentObject("demo", "default")
+	existing.SetUID("deploy-uid")
+	existing.SetResourceVersion("1")
+
+	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(node), existing)
+	err := controller.reconcileNodes(rcx)
+	var retryAfter *requeue.RequeueNeededAfter
+	require.ErrorAs(t, err, &retryAfter)
+
+	stored, err := raw.Tracker().Get(controllerTestDeployGVR, "default", "demo")
+	require.NoError(t, err)
+	assert.Equal(t, "1", stored.(*unstructured.Unstructured).GetAnnotations()[metadata.ApplyOrderAnnotation])
 }
 
 func TestPruneOrphansPaths(t *testing.T) {

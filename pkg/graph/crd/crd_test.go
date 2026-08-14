@@ -40,6 +40,8 @@ func TestSynthesizeCRD(t *testing.T) {
 		expectedScope        extv1.ResourceScope
 		expectedLabels       map[string]string
 		expectedAnnotations  map[string]string
+		expectedShortNames   []string
+		expectedCategories   []string
 	}{
 		{
 			name:                 "standard group and kind - namespaced",
@@ -131,6 +133,25 @@ func TestSynthesizeCRD(t *testing.T) {
 			expectedGroup: "kro.com",
 			expectedScope: extv1.NamespaceScoped,
 		},
+		{
+			name:                 "with short names and categories",
+			group:                "kro.com",
+			apiVersion:           "v1",
+			kind:                 "WebApplication",
+			spec:                 extv1.JSONSchemaProps{Type: "object"},
+			status:               extv1.JSONSchemaProps{Type: "object"},
+			statusFieldsOverride: true,
+			scope:                extv1.NamespaceScoped,
+			schema: &v1alpha1.Schema{
+				ShortNames: []string{"wa"},
+				Categories: []string{"platform"},
+			},
+			expectedName:       "webapplications.kro.com",
+			expectedGroup:      "kro.com",
+			expectedScope:      extv1.NamespaceScoped,
+			expectedShortNames: []string{"wa"},
+			expectedCategories: []string{"platform"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -141,6 +162,8 @@ func TestSynthesizeCRD(t *testing.T) {
 			assert.Equal(t, tt.expectedGroup, crd.Spec.Group)
 			assert.Equal(t, tt.kind, crd.Spec.Names.Kind)
 			assert.Equal(t, tt.kind+"List", crd.Spec.Names.ListKind)
+			assert.Equal(t, tt.expectedShortNames, crd.Spec.Names.ShortNames)
+			assert.Equal(t, tt.expectedCategories, crd.Spec.Names.Categories)
 
 			require.Len(t, crd.Spec.Versions, 1)
 			version := crd.Spec.Versions[0]
@@ -182,12 +205,16 @@ func TestNewCRD(t *testing.T) {
 		kind                   string
 		scope                  extv1.ResourceScope
 		printerColumns         []extv1.CustomResourceColumnDefinition
+		shortNames             []string
+		categories             []string
 		expectedName           string
 		expectedKind           string
 		expectedPlural         string
 		expectedSingular       string
 		expectedScope          extv1.ResourceScope
 		expectedPrinterColumns []extv1.CustomResourceColumnDefinition
+		expectedShortNames     []string
+		expectedCategories     []string
 	}{
 		{
 			name:                   "basic example - namespaced",
@@ -291,12 +318,46 @@ func TestNewCRD(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:                   "short names",
+			group:                  "kro.com",
+			apiVersion:             "v1",
+			kind:                   "WebApplication",
+			scope:                  extv1.NamespaceScoped,
+			shortNames:             []string{"wa", "webapp"},
+			expectedName:           "webapplications.kro.com",
+			expectedKind:           "WebApplication",
+			expectedPlural:         "webapplications",
+			expectedSingular:       "webapplication",
+			expectedScope:          extv1.NamespaceScoped,
+			expectedPrinterColumns: defaultAdditionalPrinterColumns,
+			expectedShortNames:     []string{"wa", "webapp"},
+		},
+		{
+			name:                   "categories",
+			group:                  "kro.com",
+			apiVersion:             "v1",
+			kind:                   "WebApplication",
+			scope:                  extv1.NamespaceScoped,
+			categories:             []string{"all", "kro"},
+			expectedName:           "webapplications.kro.com",
+			expectedKind:           "WebApplication",
+			expectedPlural:         "webapplications",
+			expectedSingular:       "webapplication",
+			expectedScope:          extv1.NamespaceScoped,
+			expectedPrinterColumns: defaultAdditionalPrinterColumns,
+			expectedCategories:     []string{"all", "kro"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			schema := &extv1.JSONSchemaProps{Type: "object"}
-			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.scope, tt.printerColumns, nil)
+			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.scope, &v1alpha1.Schema{
+				AdditionalPrinterColumns: tt.printerColumns,
+				ShortNames:               tt.shortNames,
+				Categories:               tt.categories,
+			})
 
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.group, crd.Spec.Group)
@@ -304,6 +365,8 @@ func TestNewCRD(t *testing.T) {
 			assert.Equal(t, tt.expectedKind+"List", crd.Spec.Names.ListKind)
 			assert.Equal(t, tt.expectedPlural, crd.Spec.Names.Plural)
 			assert.Equal(t, tt.expectedSingular, crd.Spec.Names.Singular)
+			assert.Equal(t, tt.expectedShortNames, crd.Spec.Names.ShortNames)
+			assert.Equal(t, tt.expectedCategories, crd.Spec.Names.Categories)
 
 			assert.Equal(t, tt.expectedScope, crd.Spec.Scope)
 

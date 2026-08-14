@@ -15,6 +15,8 @@
 package instance
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -22,7 +24,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -203,8 +204,17 @@ func resolveExternalCollectionSelector(id string, desired *unstructured.Unstruct
 	if err != nil || !found {
 		return labels.Everything(), nil
 	}
+	raw, err := json.Marshal(selectorRaw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert selector for %s: %w", id, err)
+	}
+	// Decode strictly: unknown fields (a misspelled "matchLabel", bare label
+	// pairs, ...) must hard-fail. Dropping them silently would yield an empty
+	// LabelSelector that matches every object in scope.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
 	ls := &metav1.LabelSelector{}
-	if err := apimachineryruntime.DefaultUnstructuredConverter.FromUnstructured(selectorRaw, ls); err != nil {
+	if err := dec.Decode(ls); err != nil {
 		return nil, fmt.Errorf("failed to convert selector for %s: %w", id, err)
 	}
 	selector, err := metav1.LabelSelectorAsSelector(ls)

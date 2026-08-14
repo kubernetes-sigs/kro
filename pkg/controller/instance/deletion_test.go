@@ -486,8 +486,8 @@ func TestPlanNodesForDeletionObservesExternalCollectionRootBeforeManagedNode(t *
 				"apiVersion": controllerTestCMGVK.GroupVersion().String(),
 				"kind":       controllerTestCMGVK.Kind,
 				"metadata": map[string]interface{}{
-					"namespace": "default",
-					"selector":  map[string]interface{}{"app": "source"},
+				"namespace": "default",
+				"selector":  map[string]interface{}{"matchLabels": map[string]interface{}{"app": "source"}},
 				},
 			},
 		},

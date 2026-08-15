@@ -70,23 +70,9 @@ type ReconcileConfig struct {
 
 // GraphRevisionResolver resolves compiled graph revisions for a single RGD.
 //
-// Implementations are already scoped to one RGD's graph revisions. Callers do
-// not pass an RGD identifier on each method call; they only ask for the newest
-// issued revision or a specific revision number for that RGD.
-type GraphRevisionResolver interface {
-	// GetLatestRevision returns the newest issued revision currently present in
-	// the in-memory registry for this resolver's RGD.
-	//
-	// The boolean return is false when no revision is currently cached for that
-	// RGD, for example before warmup completes or after pruning.
-	GetLatestRevision() (revisions.Entry, bool)
-	// GetGraphRevision returns a specific revision from the in-memory registry
-	// for this resolver's RGD.
-	//
-	// The boolean return is false when that revision is not present in cache,
-	// for example because it has not been warmed yet or has already been pruned.
-	GetGraphRevision(revision int64) (revisions.Entry, bool)
-}
+// Deprecated: use revisions.Resolver, the shared contract owned by the producer
+// package. Kept as an alias so existing references keep compiling.
+type GraphRevisionResolver = revisions.Resolver
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,
 // / it is responsible for reconciling the instance and its sub-resources.

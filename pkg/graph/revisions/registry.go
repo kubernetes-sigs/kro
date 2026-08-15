@@ -39,11 +39,16 @@ const (
 	RevisionStateFailed RevisionState = "Failed"
 )
 
-// Entry is a single cached revision record for an RGD name.
+// OwnerKey is the logical ownership key that groups revisions. Today it is an
+// RGD name; a future graph consumer keys by its own object name. It is an alias
+// of string so existing callers are unaffected.
+type OwnerKey = string
+
+// Entry is a single cached revision record for an owner (an RGD name today).
 type Entry struct {
-	// RGDName is the logical ownership key. Revisions are grouped by name so a
-	// re-created RGD can still reuse existing GraphRevisions.
-	RGDName string
+	// RGDName is the logical ownership key (see OwnerKey). Revisions are grouped
+	// by it so a re-created owner can still reuse existing GraphRevisions.
+	RGDName OwnerKey
 	// Revision is the monotonic revision number under RGDName.
 	Revision int64
 	// SpecHash is copied from GraphRevision spec and used by callers for

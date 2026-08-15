@@ -113,47 +113,49 @@ func validateResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, rgdC
 	if !isValidKindName(rgd.Spec.Schema.Kind) {
 		return fmt.Errorf("%s: kind '%s' is not a valid KRO kind name: must be UpperCamelCase", ErrNamingConvention, rgd.Spec.Schema.Kind)
 	}
-	err := validateResourceIDs(rgd)
-	if err != nil {
+
+	ids := make([]string, 0, len(rgd.Spec.Resources))
+	for _, res := range rgd.Spec.Resources {
+		ids = append(ids, res.ID)
+	}
+	if err := validateResourceIDs(ids); err != nil {
 		return fmt.Errorf("%s: %w", ErrNamingConvention, err)
 	}
 
 	// Validate forEach iterators after collecting all resource IDs
-	resourceIDs := sets.NewString()
+	resourceIDs := sets.NewString(ids...)
 	for _, res := range rgd.Spec.Resources {
-		resourceIDs.Insert(res.ID)
-	}
-	for _, res := range rgd.Spec.Resources {
-		if err := validateForEachDimensions(res, resourceIDs, rgdConfig); err != nil {
+		dims := make([]map[string]string, len(res.ForEach))
+		for i, d := range res.ForEach {
+			dims[i] = d
+		}
+		if err := validateForEachDimensions(res.ID, dims, resourceIDs, rgdConfig.MaxCollectionDimensionSize); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// validateResource performs basic validation on a given resourcegraphdefinition.
-// It checks that there are no duplicate resource ids and that the
-// resource ids are conformant to the KRO naming convention.
-//
-// The KRO naming convention is as follows:
+// validateResourceIDs checks that resource ids are unique and conform to the
+// KRO naming convention:
 // - The id should start with a lowercase letter.
 // - The id should only contain alphanumeric characters.
 // - Does not contain any special characters, underscores, or hyphens.
-func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
+func validateResourceIDs(ids []string) error {
 	seen := make(map[string]struct{})
-	for _, res := range rgd.Spec.Resources {
-		if isKROReservedWord(res.ID) {
-			return fmt.Errorf("id %s is a reserved keyword in KRO", res.ID)
+	for _, id := range ids {
+		if isKROReservedWord(id) {
+			return fmt.Errorf("id %s is a reserved keyword in KRO", id)
 		}
 
-		if !isValidResourceID(res.ID) {
-			return fmt.Errorf("id %s is not a valid KRO resource id: must be lower camelCase", res.ID)
+		if !isValidResourceID(id) {
+			return fmt.Errorf("id %s is not a valid KRO resource id: must be lower camelCase", id)
 		}
 
-		if _, ok := seen[res.ID]; ok {
-			return fmt.Errorf("found duplicate resource IDs %s", res.ID)
+		if _, ok := seen[id]; ok {
+			return fmt.Errorf("found duplicate resource IDs %s", id)
 		}
-		seen[res.ID] = struct{}{}
+		seen[id] = struct{}{}
 	}
 
 	return nil
@@ -165,37 +167,37 @@ func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
 // - Iterator names are not reserved keywords
 // - Iterator names do not conflict with resource IDs
 // - Iterator names are unique within the same resource
-func validateForEachDimensions(res *v1alpha1.Resource, resourceIDs sets.String, rgdConfig Config) error {
-	if len(res.ForEach) > rgdConfig.MaxCollectionDimensionSize {
+func validateForEachDimensions(resourceID string, forEach []map[string]string, resourceIDs sets.String, maxDimensions int) error {
+	if len(forEach) > maxDimensions {
 		return fmt.Errorf("resource %q: forEach cannot have more "+
-			"than %d dimensions, got %d", res.ID, rgdConfig.MaxCollectionDimensionSize, len(res.ForEach))
+			"than %d dimensions, got %d", resourceID, maxDimensions, len(forEach))
 	}
 
-	if len(res.ForEach) == 0 {
+	if len(forEach) == 0 {
 		return nil
 	}
 
 	seenIterators := sets.NewString()
-	for _, iterMap := range res.ForEach {
+	for _, iterMap := range forEach {
 		for iterName := range iterMap {
 			// Check if iterator name is a valid identifier
 			if !isValidResourceID(iterName) {
-				return fmt.Errorf("resource %q: forEach iterator name %q is not valid: must be lowerCamelCase", res.ID, iterName)
+				return fmt.Errorf("resource %q: forEach iterator name %q is not valid: must be lowerCamelCase", resourceID, iterName)
 			}
 
 			// Check if iterator name is a reserved keyword
 			if isKROReservedWord(iterName) {
-				return fmt.Errorf("resource %q: forEach iterator name %q is a reserved keyword", res.ID, iterName)
+				return fmt.Errorf("resource %q: forEach iterator name %q is a reserved keyword", resourceID, iterName)
 			}
 
 			// Check if iterator name conflicts with a resource ID
 			if resourceIDs.Has(iterName) {
-				return fmt.Errorf("resource %q: forEach iterator name %q conflicts with resource ID", res.ID, iterName)
+				return fmt.Errorf("resource %q: forEach iterator name %q conflicts with resource ID", resourceID, iterName)
 			}
 
 			// Check for duplicate iterator names within the same resource
 			if seenIterators.Has(iterName) {
-				return fmt.Errorf("resource %q: duplicate forEach iterator name %q", res.ID, iterName)
+				return fmt.Errorf("resource %q: duplicate forEach iterator name %q", resourceID, iterName)
 			}
 			seenIterators.Insert(iterName)
 		}
@@ -251,18 +253,15 @@ func validateKubernetesVersion(version string) error {
 
 // validateCombinableResourceFields checks that certain fields in a resource
 // are not used together in an invalid combination, and that required fields are present.
-func validateCombinableResourceFields(res *v1alpha1.Resource) error {
-	hasTemplate := len(res.Template.Raw) > 0 // Template is runtime.RawExtension (struct)
-	hasExternalRef := res.ExternalRef != nil // ExternalRef is a pointer
-
+func validateCombinableResourceFields(id string, hasTemplate, hasExternalRef bool, forEachLen int) error {
 	if !hasTemplate && !hasExternalRef {
-		return fmt.Errorf("resource %q: exactly one of template or externalRef must be provided", res.ID)
+		return fmt.Errorf("resource %q: exactly one of template or externalRef must be provided", id)
 	}
 	if hasExternalRef && hasTemplate {
-		return fmt.Errorf("resource %q: cannot use externalRef with template", res.ID)
+		return fmt.Errorf("resource %q: cannot use externalRef with template", id)
 	}
-	if hasExternalRef && len(res.ForEach) > 0 {
-		return fmt.Errorf("resource %q: cannot use externalRef with forEach", res.ID)
+	if hasExternalRef && forEachLen > 0 {
+		return fmt.Errorf("resource %q: cannot use externalRef with forEach", id)
 	}
 	return nil
 }
@@ -270,40 +269,40 @@ func validateCombinableResourceFields(res *v1alpha1.Resource) error {
 // validateTemplateConstraints enforces template-level constraints before parsing expressions.
 // Keep this small and focused on invariants that must hold regardless of CEL.
 func validateTemplateConstraints(
-	rgResource *v1alpha1.Resource,
+	id string,
+	isExternalCollection bool,
 	resourceObject map[string]interface{},
 	resourceNamespaced bool,
 	instanceNamespaced bool,
 ) error {
 	namespaceValue, found, err := unstructured.NestedFieldNoCopy(resourceObject, "metadata", "namespace")
 	if err != nil {
-		return fmt.Errorf("resource %q has invalid metadata.namespace: %w", rgResource.ID, err)
+		return fmt.Errorf("resource %q has invalid metadata.namespace: %w", id, err)
 	}
 
 	if !resourceNamespaced {
 		if found {
-			return fmt.Errorf("resource %q is cluster-scoped and must not set metadata.namespace", rgResource.ID)
+			return fmt.Errorf("resource %q is cluster-scoped and must not set metadata.namespace", id)
 		}
 	}
 	if resourceNamespaced && !instanceNamespaced {
 		// External collection refs (selector-based) are allowed to omit namespace
 		// on cluster-scoped instances — this means "list across all namespaces".
-		isExternalCollection := rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.Selector != nil
 		if !isExternalCollection {
 			if !found {
-				return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", rgResource.ID)
+				return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", id)
 			}
 			if ns, ok := namespaceValue.(string); !ok || strings.TrimSpace(ns) == "" {
-				return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", rgResource.ID)
+				return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", id)
 			}
 		}
 	}
 
 	// Validate that users don't set KRO-owned metadata.
-	if err := validateNoKROOwnedLabels(rgResource.ID, resourceObject); err != nil {
+	if err := validateNoKROOwnedLabels(id, resourceObject); err != nil {
 		return err
 	}
-	if err := validateNoKROOwnedAnnotations(rgResource.ID, resourceObject); err != nil {
+	if err := validateNoKROOwnedAnnotations(id, resourceObject); err != nil {
 		return err
 	}
 

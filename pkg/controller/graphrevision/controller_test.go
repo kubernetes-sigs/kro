@@ -71,7 +71,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantOrder:       []string{"config", "deploy"},
 			wantResourceIDs: []string{"deploy"},
 			wantRegistry: &revisions.Entry{
-				RGDName:       "demo-rgd",
+				OwnerKey:      "demo-rgd",
 				Revision:      1,
 				SpecHash:      expectedHash,
 				State:         revisions.RevisionStateActive,
@@ -88,7 +88,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantVerified:    new(metav1.ConditionFalse),
 			wantReady:       new(metav1.ConditionFalse),
 			wantRegistry: &revisions.Entry{
-				RGDName:  "demo-rgd",
+				OwnerKey: "demo-rgd",
 				Revision: 1,
 				SpecHash: expectedHash,
 				State:    revisions.RevisionStateFailed,
@@ -110,7 +110,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantErrContains: []string{"status patch failed"},
 			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
-				RGDName:  "demo-rgd",
+				OwnerKey: "demo-rgd",
 				Revision: 1,
 				SpecHash: expectedHash,
 				State:    revisions.RevisionStatePending,
@@ -128,7 +128,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			},
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
-					RGDName:       revision.Spec.Snapshot.Name,
+					OwnerKey:      revision.Spec.Snapshot.Name,
 					Revision:      revision.Spec.Revision,
 					SpecHash:      expectedHash,
 					State:         revisions.RevisionStateActive,
@@ -141,7 +141,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantErrContains: []string{"status patch failed"},
 			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
-				RGDName:       "demo-rgd",
+				OwnerKey:      "demo-rgd",
 				Revision:      1,
 				SpecHash:      expectedHash,
 				State:         revisions.RevisionStateActive,
@@ -156,7 +156,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			},
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
-					RGDName:       revision.Spec.Snapshot.Name,
+					OwnerKey:      revision.Spec.Snapshot.Name,
 					Revision:      revision.Spec.Revision,
 					State:         revisions.RevisionStateActive,
 					CompiledGraph: &graph.Graph{},
@@ -178,7 +178,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			},
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
-					RGDName:       revision.Spec.Snapshot.Name,
+					OwnerKey:      revision.Spec.Snapshot.Name,
 					Revision:      revision.Spec.Revision,
 					State:         revisions.RevisionStateActive,
 					CompiledGraph: &graph.Graph{},
@@ -188,7 +188,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantErrContains: []string{"patch failed"},
 			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
-				RGDName:       "demo-rgd",
+				OwnerKey:      "demo-rgd",
 				Revision:      1,
 				State:         revisions.RevisionStateActive,
 				CompiledGraph: &graph.Graph{},
@@ -221,7 +221,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantErrContains: []string{"graph compile failed", "status patch failed"},
 			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
-				RGDName:  "demo-rgd",
+				OwnerKey: "demo-rgd",
 				Revision: 1,
 				SpecHash: expectedHash,
 				State:    revisions.RevisionStateFailed,
@@ -231,7 +231,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			name: "recompile failure downgrades an active revision to failed",
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
-					RGDName:       revision.Spec.Snapshot.Name,
+					OwnerKey:      revision.Spec.Snapshot.Name,
 					Revision:      revision.Spec.Revision,
 					SpecHash:      mustSpecHash(t, revision.Spec.Snapshot.Spec),
 					State:         revisions.RevisionStateActive,
@@ -246,7 +246,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantVerified:    new(metav1.ConditionFalse),
 			wantReady:       new(metav1.ConditionFalse),
 			wantRegistry: &revisions.Entry{
-				RGDName:  "demo-rgd",
+				OwnerKey: "demo-rgd",
 				Revision: 1,
 				SpecHash: expectedHash,
 				State:    revisions.RevisionStateFailed,
@@ -598,7 +598,7 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 		registry := revisions.NewRegistry()
 		compiled := testCompiledGraph()
 		registry.Put(revisions.Entry{
-			RGDName:       revision.Spec.Snapshot.Name,
+			OwnerKey:      revision.Spec.Snapshot.Name,
 			Revision:      revision.Spec.Revision,
 			SpecHash:      mustSpecHash(t, revision.Spec.Snapshot.Spec),
 			State:         revisions.RevisionStateActive,
@@ -720,7 +720,7 @@ func assertRegistryState(t *testing.T, registry *revisions.Registry, want *revis
 	}
 	require.NotNil(t, want)
 	require.True(t, ok)
-	assert.Equal(t, want.RGDName, entry.RGDName)
+	assert.Equal(t, want.OwnerKey, entry.OwnerKey)
 	assert.Equal(t, want.Revision, entry.Revision)
 	assert.Equal(t, want.SpecHash, entry.SpecHash)
 	assert.Equal(t, want.State, entry.State)

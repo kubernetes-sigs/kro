@@ -28,11 +28,11 @@ func TestRegistryMetricsTrackEntriesTransitionsAndEvictions(t *testing.T) {
 	resetRegistryMetrics()
 
 	reg := NewRegistry()
-	reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStatePending})
+	reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStatePending})
 	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("pending")))
 
 	reg.Put(Entry{
-		RGDName:       "demo-rgd",
+		OwnerKey:      "demo-rgd",
 		Revision:      1,
 		State:         RevisionStateActive,
 		CompiledGraph: &graph.Graph{},
@@ -41,7 +41,7 @@ func TestRegistryMetricsTrackEntriesTransitionsAndEvictions(t *testing.T) {
 	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("active")))
 	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryTransitions.WithLabelValues("pending", "active")))
 
-	reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateFailed})
+	reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateFailed})
 	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("active")))
 	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("failed")))
 	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryTransitions.WithLabelValues("active", "failed")))
@@ -55,18 +55,18 @@ func TestRegistryMetricsTrackBulkEvictions(t *testing.T) {
 	resetRegistryMetrics()
 
 	reg := NewRegistry()
-	reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: &graph.Graph{}})
-	reg.Put(Entry{RGDName: "demo-rgd", Revision: 2, State: RevisionStatePending})
-	reg.Put(Entry{RGDName: "other-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: &graph.Graph{}})
+	reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: &graph.Graph{}})
+	reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 2, State: RevisionStatePending})
+	reg.Put(Entry{OwnerKey: "other-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: &graph.Graph{}})
 
 	reg.DeleteAll("demo-rgd")
 	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("active")))
 	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("pending")))
 	assert.Equal(t, 2.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEvictions.WithLabelValues()))
 
-	reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateFailed})
-	reg.Put(Entry{RGDName: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: &graph.Graph{}})
-	reg.Put(Entry{RGDName: "demo-rgd", Revision: 3, State: RevisionStatePending})
+	reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateFailed})
+	reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: &graph.Graph{}})
+	reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 3, State: RevisionStatePending})
 
 	reg.DeleteRevisionsBefore("demo-rgd", 3)
 	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("active")))

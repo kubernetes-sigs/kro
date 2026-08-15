@@ -91,7 +91,7 @@ func TestReconcileMetricsTrackDeferredActivationAndFinalizerEviction(t *testing.
 	deleteClient := fake.NewClientBuilder().WithScheme(graphRevisionTestScheme(t)).WithObjects(deleting.DeepCopy()).Build()
 	registry := revisions.NewRegistry()
 	registry.Put(revisions.Entry{
-		RGDName:       deleting.Spec.Snapshot.Name,
+		OwnerKey:      deleting.Spec.Snapshot.Name,
 		Revision:      deleting.Spec.Revision,
 		State:         revisions.RevisionStateActive,
 		CompiledGraph: &graph.Graph{},

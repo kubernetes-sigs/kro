@@ -286,7 +286,7 @@ func TestReconcileGraphResolutionFailureMarksCondition(t *testing.T) {
 			name:      "pending revision marks GraphResolved false",
 			hasLatest: true,
 			entry: revisions.Entry{
-				RGDName:  "webapps",
+				OwnerKey: "webapps",
 				Revision: 3,
 				State:    revisions.RevisionStatePending,
 			},
@@ -297,7 +297,7 @@ func TestReconcileGraphResolutionFailureMarksCondition(t *testing.T) {
 			name:      "failed revision marks GraphResolved false",
 			hasLatest: true,
 			entry: revisions.Entry{
-				RGDName:  "webapps",
+				OwnerKey: "webapps",
 				Revision: 5,
 				State:    revisions.RevisionStateFailed,
 			},

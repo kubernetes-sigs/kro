@@ -217,7 +217,7 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 	clientSet.SetRESTMapper(buildControllerTestRESTMapper())
 	registry := revisions.NewRegistry()
 	registry.Put(revisions.Entry{
-		RGDName:       controllerTestParentGVR.Resource,
+		OwnerKey:      controllerTestParentGVR.Resource,
 		Revision:      1,
 		State:         revisions.RevisionStateActive,
 		CompiledGraph: g,

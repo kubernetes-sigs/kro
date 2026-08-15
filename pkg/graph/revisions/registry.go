@@ -46,10 +46,10 @@ type OwnerKey = string
 
 // Entry is a single cached revision record for an owner (an RGD name today).
 type Entry struct {
-	// RGDName is the logical ownership key (see OwnerKey). Revisions are grouped
-	// by it so a re-created owner can still reuse existing GraphRevisions.
-	RGDName OwnerKey
-	// Revision is the monotonic revision number under RGDName.
+	// OwnerKey is the logical ownership key. Revisions are grouped by it so a
+	// re-created owner can still reuse existing GraphRevisions.
+	OwnerKey OwnerKey
+	// Revision is the monotonic revision number under OwnerKey.
 	Revision int64
 	// SpecHash is copied from GraphRevision spec and used by callers for
 	// issuance decisions.
@@ -91,7 +91,7 @@ func NewRegistry() *Registry {
 // Put inserts or replaces a revision entry.
 //
 // Behavior:
-// - idempotent overwrite for the same (RGDName, Revision)
+// - idempotent overwrite for the same (OwnerKey, Revision)
 // - advances latest pointer only when a strictly newer revision is written
 //
 // Contract:
@@ -100,12 +100,12 @@ func (r *Registry) Put(entry Entry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	bucket, ok := r.byRGD[entry.RGDName]
+	bucket, ok := r.byRGD[entry.OwnerKey]
 	if !ok {
 		bucket = &rgdBucket{
 			entries: make(map[int64]Entry),
 		}
-		r.byRGD[entry.RGDName] = bucket
+		r.byRGD[entry.OwnerKey] = bucket
 	}
 
 	if existing, ok := bucket.entries[entry.Revision]; ok {
@@ -126,7 +126,7 @@ func (r *Registry) Put(entry Entry) {
 	}
 }
 
-// Get returns the entry for a specific (RGDName, Revision) pair.
+// Get returns the entry for a specific (OwnerKey, Revision) pair.
 func (r *Registry) Get(rgdName string, revision int64) (Entry, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

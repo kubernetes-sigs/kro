@@ -284,7 +284,7 @@ func TestCreateGraphRevision_DoesNotOverwriteExistingRegistryEntry(t *testing.T)
 	registry := revisions.NewRegistry()
 	compiledGraph := &graph.Graph{TopologicalOrder: []string{"deploy"}}
 	registry.Put(revisions.Entry{
-		RGDName:       "demo",
+		OwnerKey:      "demo",
 		Revision:      3,
 		SpecHash:      "hash-3",
 		State:         revisions.RevisionStateActive,
@@ -364,7 +364,7 @@ func TestGetLatestGraphRevisionView(t *testing.T) {
 		// Warm the cache for all revisions present in graphRevisions.
 		for _, gr := range graphRevisions {
 			reconciler.revisionsRegistry.Put(revisions.Entry{
-				RGDName:  "demo",
+				OwnerKey: "demo",
 				Revision: gr.Spec.Revision,
 				SpecHash: fmt.Sprintf("hash-%d", gr.Spec.Revision),
 				State:    revisions.RevisionStatePending,
@@ -386,7 +386,7 @@ func TestGetLatestGraphRevisionView(t *testing.T) {
 		// matters for serving.
 		reg := revisions.NewRegistry()
 		reg.Put(revisions.Entry{
-			RGDName:  "demo",
+			OwnerKey: "demo",
 			Revision: 3,
 			SpecHash: "hash-3",
 			State:    revisions.RevisionStateActive,
@@ -406,7 +406,7 @@ func TestGetLatestGraphRevisionView(t *testing.T) {
 		// Revision 1 is in the registry but revision 3 (the latest) is not.
 		reg := revisions.NewRegistry()
 		reg.Put(revisions.Entry{
-			RGDName:  "demo",
+			OwnerKey: "demo",
 			Revision: 1,
 			SpecHash: "hash-1",
 			State:    revisions.RevisionStateActive,
@@ -1061,7 +1061,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				)
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:  rgd.Name,
+					OwnerKey: rgd.Name,
 					Revision: 1,
 					SpecHash: currentSpecHash,
 					State:    revisions.RevisionStateActive,
@@ -1108,7 +1108,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, 3, currentSpecHash))
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:       rgd.Name,
+					OwnerKey:      rgd.Name,
 					Revision:      3,
 					SpecHash:      currentSpecHash,
 					State:         revisions.RevisionStateActive,
@@ -1170,7 +1170,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, 4, currentSpecHash))
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:  rgd.Name,
+					OwnerKey: rgd.Name,
 					Revision: 4,
 					SpecHash: currentSpecHash,
 					State:    revisions.RevisionStatePending,
@@ -1223,7 +1223,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, 5, currentSpecHash))
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:  rgd.Name,
+					OwnerKey: rgd.Name,
 					Revision: 5,
 					SpecHash: currentSpecHash,
 					State:    revisions.RevisionStateFailed,
@@ -1272,7 +1272,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, 9, "old-hash"))
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:  rgd.Name,
+					OwnerKey: rgd.Name,
 					Revision: 9,
 					SpecHash: "old-hash",
 					State:    revisions.RevisionStateActive,
@@ -1337,7 +1337,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				cl := newTestClient(t, interceptor.Funcs{})
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:       rgd.Name,
+					OwnerKey:      rgd.Name,
 					Revision:      5,
 					SpecHash:      "old-hash",
 					State:         revisions.RevisionStateActive,
@@ -1496,7 +1496,7 @@ func TestResolveGraphRevisions_RequeuesWhenRevisionStateIsUnknown(t *testing.T) 
 		RevisionNumber: 6,
 		Revision:       revision,
 		RuntimeEntry: &revisions.Entry{
-			RGDName:  rgd.Name,
+			OwnerKey: rgd.Name,
 			Revision: 6,
 			SpecHash: "same-hash",
 			State:    revisions.RevisionState("Unknown"),
@@ -1522,7 +1522,7 @@ func TestReconcileResourceGraphDefinition_RecreateWithEmptyLiveListClearsStaleRe
 	cl := newTestClient(t, interceptor.Funcs{})
 	registry := revisions.NewRegistry()
 	registry.Put(revisions.Entry{
-		RGDName:       rgd.Name,
+		OwnerKey:      rgd.Name,
 		Revision:      2,
 		SpecHash:      "old-hash",
 		State:         revisions.RevisionStateActive,
@@ -1627,7 +1627,7 @@ func TestReconcileResourceGraphDefinition_TerminatingRevisionsBlockReconcile(t *
 			registry := revisions.NewRegistry()
 			for _, rev := range tt.staleRegistry {
 				registry.Put(revisions.Entry{
-					RGDName:       rgd.Name,
+					OwnerKey:      rgd.Name,
 					Revision:      rev,
 					SpecHash:      fmt.Sprintf("hash-%d", rev),
 					State:         revisions.RevisionStateActive,
@@ -1710,7 +1710,7 @@ func TestReconcileResourceGraphDefinitionRecoversWhenLatestFailedBecomesActiveWi
 	cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, revision, currentSpecHash))
 	registry := revisions.NewRegistry()
 	registry.Put(revisions.Entry{
-		RGDName:  rgd.Name,
+		OwnerKey: rgd.Name,
 		Revision: revision,
 		SpecHash: currentSpecHash,
 		State:    revisions.RevisionStateFailed,
@@ -1743,7 +1743,7 @@ func TestReconcileResourceGraphDefinitionRecoversWhenLatestFailedBecomesActiveWi
 	assert.Equal(t, revision, rgd.Status.LastIssuedRevision)
 
 	registry.Put(revisions.Entry{
-		RGDName:       rgd.Name,
+		OwnerKey:      rgd.Name,
 		Revision:      revision,
 		SpecHash:      currentSpecHash,
 		State:         revisions.RevisionStateActive,
@@ -1779,7 +1779,7 @@ func TestGarbageCollectGraphRevisionsPrunesObjects(t *testing.T) {
 	registry := revisions.NewRegistry()
 	for revision := int64(1); revision <= 4; revision++ {
 		registry.Put(revisions.Entry{
-			RGDName:  rgd.Name,
+			OwnerKey: rgd.Name,
 			Revision: revision,
 			SpecHash: "hash",
 			State:    revisions.RevisionStateActive,

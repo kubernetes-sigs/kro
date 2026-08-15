@@ -155,7 +155,7 @@ func (r *GraphRevisionReconciler) reconcileGraphRevision(
 	// Re-reconcile should preserve the existing runtime state until compile finishes.
 	if _, exists := r.registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision); !exists {
 		r.registry.Put(revisions.Entry{
-			RGDName:  revision.Spec.Snapshot.Name,
+			OwnerKey: revision.Spec.Snapshot.Name,
 			Revision: revision.Spec.Revision,
 			SpecHash: specHash,
 			State:    revisions.RevisionStatePending,
@@ -168,7 +168,7 @@ func (r *GraphRevisionReconciler) reconcileGraphRevision(
 		// Keep failed state in-memory for this revision number so callers stop
 		// waiting on it and can surface a terminal result.
 		r.registry.Put(revisions.Entry{
-			RGDName:  revision.Spec.Snapshot.Name,
+			OwnerKey: revision.Spec.Snapshot.Name,
 			Revision: revision.Spec.Revision,
 			SpecHash: specHash,
 			State:    revisions.RevisionStateFailed,
@@ -180,7 +180,7 @@ func (r *GraphRevisionReconciler) reconcileGraphRevision(
 	// Return the desired Active entry to the caller, which only publishes it
 	// after status has been written successfully.
 	return compiledGraph.TopologicalOrder, resourcesInfo, &revisions.Entry{
-		RGDName:       revision.Spec.Snapshot.Name,
+		OwnerKey:      revision.Spec.Snapshot.Name,
 		Revision:      revision.Spec.Revision,
 		SpecHash:      specHash,
 		State:         revisions.RevisionStateActive,

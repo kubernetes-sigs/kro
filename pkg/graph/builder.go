@@ -119,17 +119,22 @@ func WithRESTMapper(rm meta.RESTMapper) BuilderOption {
 	return func(b *Builder) { b.restMapper = rm }
 }
 
-// RGDConfig holds RGD runtime configuration parameters.
-type RGDConfig struct {
+// Config holds runtime configuration parameters shared by every graph consumer.
+type Config struct {
 	MaxCollectionSize          int
 	MaxCollectionDimensionSize int
 }
+
+// RGDConfig is a compatibility alias for Config.
+//
+// Deprecated: use Config.
+type RGDConfig = Config
 
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
 // CRD. The ResourceGraphDefinition object is a fully processed and validated representation
 // of the resource graph definition CRD, it's underlying resources, and the relationships between
 // the resources.
-func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphDefinition, rgdConfig RGDConfig) (*Graph, error) {
+func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphDefinition, rgdConfig Config) (*Graph, error) {
 	// Before anything else, let's copy the resource graph definition to avoid modifying the
 	// original object.
 	rgd := originalCR.DeepCopy()

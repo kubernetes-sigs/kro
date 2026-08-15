@@ -48,12 +48,12 @@ type Runtime struct {
 	nodes       map[string]*Node
 	instance    *Node
 	applyOrders map[string]int
-	rgdConfig   graph.RGDConfig
+	config      graph.Config
 }
 
 // FromGraph creates a new Runtime from a Graph and instance.
 // This is called at the start of each reconciliation.
-func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig graph.RGDConfig) (*Runtime, error) {
+func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, config graph.Config) (*Runtime, error) {
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
@@ -66,7 +66,7 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 		order:       g.TopologicalOrder,
 		nodes:       make(map[string]*Node),
 		applyOrders: g.ApplyOrders,
-		rgdConfig:   rgdConfig,
+		config:      config,
 	}
 
 	// Expression cache for non-iteration expressions only.
@@ -102,7 +102,7 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 		rt.nodes[id] = &Node{
 			Spec:           g.Nodes[id].DeepCopy(),
 			deps:           make(map[string]*Node),
-			rgdConfig:      rgdConfig,
+			config:         config,
 			resourceSchema: g.ResourceSchemas[id],
 		}
 	}
@@ -111,7 +111,7 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 	instNode := &Node{
 		Spec:           g.Instance.DeepCopy(),
 		deps:           make(map[string]*Node),
-		rgdConfig:      rgdConfig,
+		config:         config,
 		resourceSchema: g.ResourceSchemas[graph.InstanceNodeID],
 	}
 	instNode.SetObserved([]*unstructured.Unstructured{instanceObj})

@@ -109,7 +109,7 @@ func isKROReservedWord(word string) bool {
 // validateResourceGraphDefinition validates the naming conventions of
 // the given resource graph definition, the resources defined in them, and the constraints
 // defined in rgdConfig for resource collections.
-func validateResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, rgdConfig RGDConfig) error {
+func validateResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, rgdConfig Config) error {
 	if !isValidKindName(rgd.Spec.Schema.Kind) {
 		return fmt.Errorf("%s: kind '%s' is not a valid KRO kind name: must be UpperCamelCase", ErrNamingConvention, rgd.Spec.Schema.Kind)
 	}
@@ -165,7 +165,7 @@ func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
 // - Iterator names are not reserved keywords
 // - Iterator names do not conflict with resource IDs
 // - Iterator names are unique within the same resource
-func validateForEachDimensions(res *v1alpha1.Resource, resourceIDs sets.String, rgdConfig RGDConfig) error {
+func validateForEachDimensions(res *v1alpha1.Resource, resourceIDs sets.String, rgdConfig Config) error {
 	if len(res.ForEach) > rgdConfig.MaxCollectionDimensionSize {
 		return fmt.Errorf("resource %q: forEach cannot have more "+
 			"than %d dimensions, got %d", res.ID, rgdConfig.MaxCollectionDimensionSize, len(res.ForEach))

@@ -252,7 +252,7 @@ func (n *Node) evaluateForEach() ([]map[string]any, error) {
 		dimensions[i] = evaluatedDimension{name: dim.Name, values: values}
 	}
 
-	product, err := cartesianProduct(dimensions, n.rgdConfig.MaxCollectionSize)
+	product, err := cartesianProduct(dimensions, n.config.MaxCollectionSize)
 	if err != nil {
 		return nil, err
 	}

@@ -37,6 +37,7 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
@@ -4094,9 +4095,7 @@ func TestBuildInstanceNode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			node, err := buildInstanceNode(
-				"example.com",
-				"v1alpha1",
-				"Test",
+				metadata.GetResourceGraphDefinitionInstanceGVR("example.com", "v1alpha1", "Test"),
 				true, // namespaced (default)
 				tt.variables,
 				tt.template,
@@ -4731,9 +4730,7 @@ func TestBuildInstanceNodeFoldsConditionDeps(t *testing.T) {
 	require.Len(t, conditions, 1)
 
 	node, err := buildInstanceNode(
-		"example.com",
-		"v1alpha1",
-		"Test",
+		metadata.GetResourceGraphDefinitionInstanceGVR("example.com", "v1alpha1", "Test"),
 		true,
 		nil,
 		map[string]interface{}{},

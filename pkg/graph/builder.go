@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	k8sschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
@@ -366,10 +367,9 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	crd.SetCRDStatus(instanceCRD, *statusSchema, true)
 
 	// Create the instance node with status variables for runtime patching.
+	instanceGVR := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
 	instance, err := buildInstanceNode(
-		rgd.Spec.Schema.Group,
-		rgd.Spec.Schema.APIVersion,
-		rgd.Spec.Schema.Kind,
+		instanceGVR,
 		instanceNamespaced,
 		statusVariables,
 		statusTemplate,
@@ -747,14 +747,13 @@ func extractForEachDependencies(
 // This is called after spec schema, status schema, and CRD have been built separately.
 // Uses the shared inspectorEnv for AST inspection.
 func buildInstanceNode(
-	group, apiVersion, kind string,
+	gvr k8sschema.GroupVersionResource,
 	namespaced bool,
 	statusVariables []variable.FieldDescriptor,
 	statusTemplate map[string]interface{},
 	conditions []*krocel.Expression,
 	inspector *ast.Inspector,
 ) (*Node, error) {
-	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(group, apiVersion, kind)
 
 	// Collect dependencies for instance status fields
 	var instanceDeps []string

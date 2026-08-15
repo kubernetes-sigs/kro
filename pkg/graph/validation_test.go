@@ -86,7 +86,11 @@ func TestValidateRGResourceNames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateResourceIDs(tt.rgd)
+			ids := make([]string, 0, len(tt.rgd.Spec.Resources))
+			for _, res := range tt.rgd.Spec.Resources {
+				ids = append(ids, res.ID)
+			}
+			err := validateResourceIDs(ids)
 			if (err != nil) != tt.expectError {
 				t.Errorf("validateRGResourceIDs() error = %v, expectError %v", err, tt.expectError)
 			}
@@ -612,7 +616,11 @@ func TestValidateForEachDimensions(t *testing.T) {
 			}
 			var err error
 			for _, res := range tt.rgd.Spec.Resources {
-				err = errors.Join(err, validateForEachDimensions(res, resourceIDs, tt.rgdConfig))
+				dims := make([]map[string]string, len(res.ForEach))
+				for i, d := range res.ForEach {
+					dims[i] = d
+				}
+				err = errors.Join(err, validateForEachDimensions(res.ID, dims, resourceIDs, tt.rgdConfig.MaxCollectionDimensionSize))
 			}
 			if (err != nil) != tt.expectError {
 				t.Errorf("validateResourceIDs() error = %v, expectError %v", err, tt.expectError)
@@ -828,7 +836,7 @@ func TestValidateCombinableResourceFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateCombinableResourceFields(tt.res)
+			err := validateCombinableResourceFields(tt.res.ID, len(tt.res.Template.Raw) > 0, tt.res.ExternalRef != nil, len(tt.res.ForEach))
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 				return
@@ -947,7 +955,8 @@ func TestValidateTemplateConstraints(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateTemplateConstraints(tt.resource, tt.object, tt.namespaced, tt.instanceNamespaced)
+			isExternalCollection := tt.resource.ExternalRef != nil && tt.resource.ExternalRef.Metadata.Selector != nil
+			err := validateTemplateConstraints(tt.resource.ID, isExternalCollection, tt.object, tt.namespaced, tt.instanceNamespaced)
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 				return

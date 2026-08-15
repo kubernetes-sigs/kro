@@ -425,7 +425,7 @@ func (b *Builder) buildRGResource(
 	instanceNamespaced bool,
 ) (*Node, *spec.Schema, error) {
 	// 1. Validate resource field combinations.
-	if err := validateCombinableResourceFields(rgResource); err != nil {
+	if err := validateCombinableResourceFields(rgResource.ID, len(rgResource.Template.Raw) > 0, rgResource.ExternalRef != nil, len(rgResource.ForEach)); err != nil {
 		return nil, nil, fmt.Errorf("invalid combination of resource fields: %w", err)
 	}
 
@@ -466,7 +466,8 @@ func (b *Builder) buildRGResource(
 		return nil, nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rgResource.ID, err)
 	}
 	if err := validateTemplateConstraints(
-		rgResource,
+		rgResource.ID,
+		rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.Selector != nil,
 		resourceObject,
 		mapping.Scope.Name() == meta.RESTScopeNameNamespace,
 		instanceNamespaced,

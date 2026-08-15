@@ -241,7 +241,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		}
 		return err
 	}
-	runtimeObj, err := runtime.FromGraph(compiledGraph, inst, c.reconcileConfig.RGDConfig)
+	runtimeObj, err := runtime.FromGraph(compiledGraph, c.reconcileConfig.RGDConfig, runtime.WithInstance(inst))
 	if err != nil {
 		log.Error(err, "failed to create runtime")
 		return err

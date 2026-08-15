@@ -238,7 +238,7 @@ func TestFromGraph(t *testing.T) {
 				origIncludeLen = len(node.IncludeWhen)
 			}
 
-			rt, err := FromGraph(tt.graph, tt.instance, graph.RGDConfig{MaxCollectionSize: 1000})
+			rt, err := FromGraph(tt.graph, graph.RGDConfig{MaxCollectionSize: 1000}, WithInstance(tt.instance))
 			require.NoError(t, err)
 
 			tt.validate(t, rt)
@@ -279,7 +279,7 @@ func TestFromGraph_InstanceWithDependencies(t *testing.T) {
 	}
 	withTestDAG(g)
 
-	rt, err := FromGraph(g, testInstance("test"), graph.RGDConfig{MaxCollectionSize: 1000})
+	rt, err := FromGraph(g, graph.RGDConfig{MaxCollectionSize: 1000}, WithInstance(testInstance("test")))
 	require.NoError(t, err)
 
 	inst := rt.Instance()
@@ -302,7 +302,7 @@ func TestRuntime_ApplyOrder(t *testing.T) {
 	}
 	withTestDAG(g)
 
-	rt, err := FromGraph(g, testInstance("test"), graph.RGDConfig{MaxCollectionSize: 1000})
+	rt, err := FromGraph(g, graph.RGDConfig{MaxCollectionSize: 1000}, WithInstance(testInstance("test")))
 	require.NoError(t, err)
 
 	for id, want := range g.ApplyOrders {
@@ -329,7 +329,7 @@ func TestFromGraph_MinimalConsumer(t *testing.T) {
 	}
 	withTestDAG(g)
 
-	rt, err := FromGraph(g, testInstance("test"), graph.RGDConfig{})
+	rt, err := FromGraph(g, graph.RGDConfig{}, WithInstance(testInstance("test")))
 	require.NoError(t, err)
 	require.Len(t, rt.Nodes(), 1)
 	assert.Equal(t, "only", rt.Nodes()[0].Spec.Meta.ID)
@@ -366,4 +366,22 @@ func testInstance(name string) *unstructured.Unstructured {
 			"metadata":   map[string]any{"name": name, "namespace": "default"},
 		},
 	}
+}
+
+func TestFromGraph_WithMaxCollectionSize(t *testing.T) {
+	g := &graph.Graph{
+		TopologicalOrder: []string{"a"},
+		Nodes:            map[string]*graph.Node{"a": {Meta: graph.NodeMeta{ID: "a", Type: graph.NodeTypeResource}}},
+		Instance:         &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance}},
+	}
+	withTestDAG(g)
+
+	rt, err := FromGraph(g, graph.Config{MaxCollectionSize: 10}, WithInstance(testInstance("t")), WithMaxCollectionSize(99))
+	require.NoError(t, err)
+	assert.Equal(t, 99, rt.config.MaxCollectionSize, "WithMaxCollectionSize must override Config")
+
+	// Compile-only construction without an instance is allowed.
+	rt2, err := FromGraph(g, graph.Config{})
+	require.NoError(t, err)
+	assert.Nil(t, rt2.Instance().observed, "no WithInstance => instance node has no observed state")
 }

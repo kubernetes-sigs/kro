@@ -413,27 +413,22 @@ func (b *Builder) buildExternalRefResource(
 	return result, nil
 }
 
-// buildRGResource builds a node from the given resource definition.
-// It provides a high-level understanding of the resource, by extracting the
-// OpenAPI schema, emulating the resource and extracting the cel expressions
-// from the schema.
-// Returns the Node and the OpenAPI schema (schema is only needed during build for CEL validation).
+// buildRGResource projects an RGD resource into a ResourceSpec and delegates to
+// buildResourceNode. It resolves the template object (user YAML or external ref)
+// and validates field combinations before handing off.
 func (b *Builder) buildRGResource(
 	p *parser.Parser,
 	rgResource *v1alpha1.Resource,
 	order int,
 	instanceNamespaced bool,
 ) (*Node, *spec.Schema, error) {
-	// 1. Validate resource field combinations.
 	if err := validateCombinableResourceFields(rgResource.ID, len(rgResource.Template.Raw) > 0, rgResource.ExternalRef != nil, len(rgResource.ForEach)); err != nil {
 		return nil, nil, fmt.Errorf("invalid combination of resource fields: %w", err)
 	}
 
-	// 2. Unmarshal the resource into a map[string]interface{}.
 	resourceObject := map[string]interface{}{}
 	if len(rgResource.Template.Raw) > 0 {
-		err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
-		if err != nil {
+		if err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject); err != nil {
 			return nil, nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
 		}
 	} else {
@@ -443,62 +438,84 @@ func (b *Builder) buildRGResource(
 		}
 	}
 
-	// 3. Check if it looks like a valid Kubernetes resource.
-	err := validateKubernetesObjectStructure(resourceObject)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resource %s is not a valid Kubernetes object: %v", rgResource.ID, err)
+	forEach := make([]map[string]string, len(rgResource.ForEach))
+	for i, d := range rgResource.ForEach {
+		forEach[i] = d
 	}
 
-	// 4. Extract the GVK from the resource.
-	gvk, err := metadata.ExtractGVKFromUnstructured(resourceObject)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to extract GVK from resource %s: %w", rgResource.ID, err)
+	return b.buildResourceNode(p, ResourceSpec{
+		ID:          rgResource.ID,
+		Object:      resourceObject,
+		ExternalRef: rgResource.ExternalRef != nil,
+		Collection:  rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.Selector != nil,
+		ReadyWhen:   rgResource.ReadyWhen,
+		IncludeWhen: rgResource.IncludeWhen,
+		ForEach:     forEach,
+		Order:       order,
+	}, instanceNamespaced)
+}
+
+// buildResourceNode builds a node from a schema-agnostic ResourceSpec: it
+// resolves the GVK/schema/REST mapping, validates template constraints, extracts
+// CEL field descriptors, and assembles the Node. Returns the Node and the
+// OpenAPI schema (used during build for CEL validation only).
+func (b *Builder) buildResourceNode(
+	p *parser.Parser,
+	rs ResourceSpec,
+	instanceNamespaced bool,
+) (*Node, *spec.Schema, error) {
+	if err := validateKubernetesObjectStructure(rs.Object); err != nil {
+		return nil, nil, fmt.Errorf("resource %s is not a valid Kubernetes object: %v", rs.ID, err)
 	}
 
-	// 5. Load the OpenAPI schema for the resource.
+	gvk, err := metadata.ExtractGVKFromUnstructured(rs.Object)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to extract GVK from resource %s: %w", rs.ID, err)
+	}
+
 	resourceSchema, err := b.schemaResolver.ResolveSchema(gvk)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.ID, err)
+		return nil, nil, fmt.Errorf("failed to get schema for resource %s: %w", rs.ID, err)
 	}
 
 	mapping, err := b.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rgResource.ID, err)
+		return nil, nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rs.ID, err)
 	}
 	if err := validateTemplateConstraints(
-		rgResource.ID,
-		rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.Selector != nil,
-		resourceObject,
+		rs.ID,
+		rs.Collection,
+		rs.Object,
 		mapping.Scope.Name() == meta.RESTScopeNameNamespace,
 		instanceNamespaced,
 	); err != nil {
 		return nil, nil, err
 	}
 
-	// 6. Extract CEL fieldDescriptors from the resource.
+	// Extract CEL fieldDescriptors from the resource.
 	var fieldDescriptors []variable.FieldDescriptor
-	if rgResource.ExternalRef != nil {
+	if rs.ExternalRef {
 		// External ref templates are synthetic (not user YAML), so use the
 		// schemaless parser for the entire resource uniformly.
-		fieldDescriptors, _, err = parser.ParseSchemalessResource(resourceObject)
+		fieldDescriptors, _, err = parser.ParseSchemalessResource(rs.Object)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse external ref resource %s: %w", rgResource.ID, err)
+			return nil, nil, fmt.Errorf("failed to parse external ref resource %s: %w", rs.ID, err)
 		}
 	} else if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
-		fieldDescriptors, _, err = parser.ParseSchemalessResource(resourceObject)
+		fieldDescriptors, _, err = parser.ParseSchemalessResource(rs.Object)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
+			return nil, nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rs.ID, err)
 		}
 
 		for _, expr := range fieldDescriptors {
 			if !strings.HasPrefix(expr.Path, "metadata.") {
-				return nil, nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, rgResource.ID)
+				return nil, nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, rs.ID)
 			}
 		}
 	} else {
-		fieldDescriptors, err = p.ParseResource(resourceObject, resourceSchema)
+		fieldDescriptors, err = p.ParseResource(rs.Object, resourceSchema)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
+			return nil, nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rs.ID, err)
 		}
 	}
 
@@ -511,28 +528,25 @@ func (b *Builder) buildRGResource(
 		})
 	}
 
-	// 7. Parse ReadyWhen expressions
-	readyWhen, err := parser.UnwrapExpressions(rgResource.ReadyWhen)
+	readyWhen, err := parser.UnwrapExpressions(rs.ReadyWhen)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
 	}
 
-	// 8. Parse condition expressions
-	includeWhen, err := parser.UnwrapExpressions(rgResource.IncludeWhen)
+	includeWhen, err := parser.UnwrapExpressions(rs.IncludeWhen)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
 	}
 
-	// 9. Parse forEach dimensions
-	forEachDimensions, err := parseForEachDimensions(rgResource.ForEach)
+	forEachDimensions, err := parseForEachDimensions(rs.ForEach)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
 	}
 
 	// Determine node type.
 	nodeType := NodeTypeResource
-	if rgResource.ExternalRef != nil {
-		if rgResource.ExternalRef.Metadata.Selector != nil {
+	if rs.ExternalRef {
+		if rs.Collection {
 			nodeType = NodeTypeExternalCollection
 		} else {
 			nodeType = NodeTypeExternal
@@ -544,14 +558,14 @@ func (b *Builder) buildRGResource(
 	// Note that dependencies are not set here - they're extracted later in buildDependencyGraph.
 	node := &Node{
 		Meta: NodeMeta{
-			ID:         rgResource.ID,
-			Index:      order,
+			ID:         rs.ID,
+			Index:      rs.Order,
 			Type:       nodeType,
 			GVR:        mapping.Resource,
 			Namespaced: mapping.Scope.Name() == meta.RESTScopeNameNamespace,
 			// Dependencies will be set by buildDependencyGraph
 		},
-		Template:    &unstructured.Unstructured{Object: resourceObject},
+		Template:    &unstructured.Unstructured{Object: rs.Object},
 		Variables:   templateVariables,
 		IncludeWhen: includeWhen,
 		ReadyWhen:   readyWhen,
@@ -862,7 +876,25 @@ func buildStatusSchema(
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
 	}
+	return inferStatusSchema(bc, unstructuredStatus, nodeNames, inspector)
+}
 
+// inferStatusSchema infers the instance status schema from CEL expressions in a
+// pre-unmarshalled status map. Author-defined conditions are extracted first,
+// remaining fields are type-checked and converted to an OpenAPI schema.
+// Returns: (schema, fieldDescriptors, statusTemplate, conditionExprs, error).
+func inferStatusSchema(
+	bc *buildContext,
+	unstructuredStatus map[string]interface{},
+	nodeNames []string,
+	inspector *ast.Inspector,
+) (
+	*extv1.JSONSchemaProps,
+	[]variable.FieldDescriptor,
+	map[string]interface{},
+	[]string,
+	error,
+) {
 	// Extract author-defined conditions before running CEL inference: the
 	// `conditions:` expressions return Condition values, so inferring their
 	// types would produce a wrong CRD schema. Removing the key leaves the
@@ -1175,10 +1207,9 @@ func validateConditionReferences(expressions []*krocel.Expression, allowedIdenti
 	return nil
 }
 
-// parseForEachDimensions converts API forEach dimensions (map[string]string) to
-// ForEachDimension structs. Each API dimension is a single-entry map where
-// the key is the variable name and the value is the CEL expression.
-func parseForEachDimensions(apiDimensions []v1alpha1.ForEachDimension) ([]ForEachDimension, error) {
+// parseForEachDimensions converts forEach dimensions (single-entry {name: expr}
+// maps) to ForEachDimension structs.
+func parseForEachDimensions(apiDimensions []map[string]string) ([]ForEachDimension, error) {
 	if len(apiDimensions) == 0 {
 		return nil, nil
 	}

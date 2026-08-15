@@ -4884,3 +4884,26 @@ func TestGraphBuilder_RuntimeOutsideConditionsRejected(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildResourceNode_DirectSpec proves a non-RGD consumer can build a node
+// straight from a ResourceSpec, with no v1alpha1 type involved.
+func TestBuildResourceNode_DirectSpec(t *testing.T) {
+	testParser := parser.New(graphschema.NewCache())
+	builder := newUnitTestBuilder()
+
+	node, schema, err := builder.buildResourceNode(testParser, ResourceSpec{
+		ID: "cm",
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": "demo", "namespace": "default"},
+		},
+		Order: 3,
+	}, true)
+	require.NoError(t, err)
+	require.NotNil(t, schema)
+	assert.Equal(t, "cm", node.Meta.ID)
+	assert.Equal(t, 3, node.Meta.Index)
+	assert.Equal(t, NodeTypeResource, node.Meta.Type)
+	assert.Equal(t, "configmaps", node.Meta.GVR.Resource)
+}

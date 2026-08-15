@@ -192,9 +192,9 @@ func TestCleanupPreservesRegistryEntries(t *testing.T) {
 	require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
 
 	registry := revisions.NewRegistry()
-	registry.Put(revisions.Entry{RGDName: rgd.Name, Revision: 1, SpecHash: "aaa", State: revisions.RevisionStateActive})
-	registry.Put(revisions.Entry{RGDName: rgd.Name, Revision: 2, SpecHash: "bbb", State: revisions.RevisionStateActive})
-	registry.Put(revisions.Entry{RGDName: "other-rgd", Revision: 1, SpecHash: "ccc", State: revisions.RevisionStateActive})
+	registry.Put(revisions.Entry{OwnerKey: rgd.Name, Revision: 1, SpecHash: "aaa", State: revisions.RevisionStateActive})
+	registry.Put(revisions.Entry{OwnerKey: rgd.Name, Revision: 2, SpecHash: "bbb", State: revisions.RevisionStateActive})
+	registry.Put(revisions.Entry{OwnerKey: "other-rgd", Revision: 1, SpecHash: "ccc", State: revisions.RevisionStateActive})
 
 	reconciler := &ResourceGraphDefinitionReconciler{
 		dynamicController: dc,

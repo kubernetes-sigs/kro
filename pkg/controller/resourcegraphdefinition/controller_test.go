@@ -506,7 +506,7 @@ func newActiveGraphRevisionFixture(
 	require.NoError(t, err)
 
 	return newListedGraphRevision(rgd, revision, specHash), revisions.Entry{
-		RGDName:       rgd.Name,
+		OwnerKey:      rgd.Name,
 		Revision:      revision,
 		SpecHash:      specHash,
 		State:         revisions.RevisionStateActive,

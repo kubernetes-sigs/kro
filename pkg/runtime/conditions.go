@@ -61,10 +61,11 @@ func (n *Node) EvaluateConditions(logger logr.Logger, kroBuiltins []v1alpha1.Con
 		return nil, false, nil
 	}
 
+	builtins := kroBuiltinConditionsFrom(kroBuiltins)
 	ctx := n.buildContext()
 	// The instance is not its own graph dependency, so buildContext provides
 	// neither schema nor runtime; bind them here.
-	ctx[graph.SchemaVarName] = n.schemaForConditions(kroBuiltins)
+	ctx[graph.SchemaVarName] = n.schemaForConditions(builtins)
 	ctx[library.RuntimeVarName] = library.RuntimeSingleton
 
 	var out []library.Condition
@@ -107,12 +108,36 @@ func (n *Node) EvaluateConditions(logger logr.Logger, kroBuiltins []v1alpha1.Con
 	return out, incomplete, nil
 }
 
+// KroBuiltinCondition is the runtime-local, API-type-free view of a kro
+// built-in condition consumed when evaluating author conditions.
+type KroBuiltinCondition struct {
+	Type    string
+	Status  string
+	Reason  string
+	Message string
+}
+
+func kroBuiltinConditionsFrom(conds []v1alpha1.Condition) []KroBuiltinCondition {
+	out := make([]KroBuiltinCondition, 0, len(conds))
+	for _, c := range conds {
+		kb := KroBuiltinCondition{Type: string(c.Type), Status: string(c.Status)}
+		if c.Reason != nil {
+			kb.Reason = *c.Reason
+		}
+		if c.Message != nil {
+			kb.Message = *c.Message
+		}
+		out = append(out, kb)
+	}
+	return out
+}
+
 // schemaForConditions builds the value bound to the `schema` CEL variable
 // when evaluating author conditions: the instance's spec/metadata (status
 // stripped, matching every other CEL eval path) plus a synthesized
 // status.conditions[] holding kro's built-in conditions for
 // runtime.condition(schema, _) lookups.
-func (n *Node) schemaForConditions(kroBuiltins []v1alpha1.Condition) any {
+func (n *Node) schemaForConditions(kroBuiltins []KroBuiltinCondition) any {
 	if len(n.observed) == 0 {
 		return map[string]any{
 			"status": map[string]any{
@@ -136,20 +161,14 @@ func (n *Node) schemaForConditions(kroBuiltins []v1alpha1.Condition) any {
 
 // kroBuiltinsAsList converts built-in conditions to plain maps carrying the
 // fields runtime.condition exposes, so they take the conditionFromMap path.
-func kroBuiltinsAsList(conds []v1alpha1.Condition) []any {
+func kroBuiltinsAsList(conds []KroBuiltinCondition) []any {
 	out := make([]any, 0, len(conds))
 	for _, c := range conds {
 		entry := map[string]any{
-			"type":    string(c.Type),
-			"status":  string(c.Status),
-			"reason":  "",
-			"message": "",
-		}
-		if c.Reason != nil {
-			entry["reason"] = *c.Reason
-		}
-		if c.Message != nil {
-			entry["message"] = *c.Message
+			"type":    c.Type,
+			"status":  c.Status,
+			"reason":  c.Reason,
+			"message": c.Message,
 		}
 		out = append(out, entry)
 	}

@@ -388,3 +388,16 @@ func TestEvaluateConditions_FatalErrorInOneExpressionSkippedNotAborted(t *testin
 	assert.Equal(t, "Good", conds[0].ConditionType,
 		"the well-formed condition must still surface even when a sibling expression fails")
 }
+
+func TestKroBuiltinConditionsFrom_ConversionFidelity(t *testing.T) {
+	reason := "R"
+	msg := "M"
+	in := []v1alpha1.Condition{
+		{Type: "Ready", Status: "True", Reason: &reason, Message: &msg},
+		{Type: "Synced", Status: "False"},
+	}
+	got := kroBuiltinConditionsFrom(in)
+	require.Len(t, got, 2)
+	assert.Equal(t, KroBuiltinCondition{Type: "Ready", Status: "True", Reason: "R", Message: "M"}, got[0])
+	assert.Equal(t, KroBuiltinCondition{Type: "Synced", Status: "False"}, got[1])
+}

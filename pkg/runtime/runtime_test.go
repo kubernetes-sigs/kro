@@ -289,6 +289,53 @@ func TestFromGraph_InstanceWithDependencies(t *testing.T) {
 	assert.Len(t, inst.templateExprs, 1)
 }
 
+func TestRuntime_ApplyOrder(t *testing.T) {
+	g := &graph.Graph{
+		TopologicalOrder: []string{"a", "b", "c"},
+		Nodes: map[string]*graph.Node{
+			"a": {Meta: graph.NodeMeta{ID: "a", Type: graph.NodeTypeResource}},
+			"b": {Meta: graph.NodeMeta{ID: "b", Type: graph.NodeTypeResource}},
+			"c": {Meta: graph.NodeMeta{ID: "c", Type: graph.NodeTypeResource}},
+		},
+		Instance:    &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance}},
+		ApplyOrders: map[string]int{"a": 1, "b": 2, "c": 2},
+	}
+	withTestDAG(g)
+
+	rt, err := FromGraph(g, testInstance("test"), graph.RGDConfig{MaxCollectionSize: 1000})
+	require.NoError(t, err)
+
+	for id, want := range g.ApplyOrders {
+		got, ok := rt.ApplyOrder(id)
+		assert.Truef(t, ok, "ApplyOrder(%q) should be present", id)
+		assert.Equalf(t, want, got, "ApplyOrder(%q)", id)
+	}
+
+	_, ok := rt.ApplyOrder("missing")
+	assert.False(t, ok, "unknown node must report ok=false")
+}
+
+// TestFromGraph_MinimalConsumer pins that the runtime constructs from a graph
+// carrying no RGD-specific shape beyond the shared engine fields: any consumer
+// (RGD today, Graph later) can build a Runtime from topological order + nodes +
+// an instance node without supplying conditions, variables, or a CRD.
+func TestFromGraph_MinimalConsumer(t *testing.T) {
+	g := &graph.Graph{
+		TopologicalOrder: []string{"only"},
+		Nodes: map[string]*graph.Node{
+			"only": {Meta: graph.NodeMeta{ID: "only", Type: graph.NodeTypeResource}},
+		},
+		Instance: &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance}},
+	}
+	withTestDAG(g)
+
+	rt, err := FromGraph(g, testInstance("test"), graph.RGDConfig{})
+	require.NoError(t, err)
+	require.Len(t, rt.Nodes(), 1)
+	assert.Equal(t, "only", rt.Nodes()[0].Spec.Meta.ID)
+	assert.NotNil(t, rt.Instance())
+}
+
 func withTestDAG(g *graph.Graph) *graph.Graph {
 	dependencyGraph := dag.NewDirectedAcyclicGraph[string]()
 	for i, nodeID := range g.TopologicalOrder {

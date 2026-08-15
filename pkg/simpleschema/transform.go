@@ -17,6 +17,7 @@ package simpleschema
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
@@ -156,6 +157,11 @@ func (t *transformer) buildSchema(spec map[string]interface{}) (*extv1.JSONSchem
 	if len(schema.Required) == 0 && childHasDefault && schema.Default == nil {
 		schema.Default = &extv1.JSON{Raw: []byte("{}")}
 	}
+
+	// Field iteration above ranges over a map, so the required list is built in
+	// nondeterministic order. Sort it to keep the synthesized CRD stable across
+	// builds (avoids spurious server-side-apply diffs on re-reconcile).
+	sort.Strings(schema.Required)
 
 	return schema, nil
 }

@@ -1534,10 +1534,6 @@ func validateAndCompileForEach(bc *buildContext, node *Node, inspector *ast.Insp
 }
 
 // getSchemaWithoutStatus extracts a spec.Schema from a CRD for CEL validation.
-// It includes spec and metadata but excludes status, since status references
-// are not allowed in RGD expressions. Cluster-scoped instance CRDs also omit
-// metadata.namespace so CEL cannot type-check references to a field that does
-// not exist at runtime.
 func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
 	if len(crd.Spec.Versions) != 1 {
 		return nil, fmt.Errorf("expected CRD to have exactly one version, got %d versions", len(crd.Spec.Versions))
@@ -1545,9 +1541,16 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 	if crd.Spec.Versions[0].Schema == nil {
 		return nil, fmt.Errorf("expected CRD version to have schema defined")
 	}
+	return stripStatusFromSchema(crd.Spec.Versions[0].Schema.OpenAPIV3Schema, crd.Spec.Scope == extv1.ClusterScoped)
+}
 
-	// Copy the schema and remove status
-	openAPISchema := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.DeepCopy()
+// stripStatusFromSchema converts an instance OpenAPI schema to a spec.Schema for
+// CEL validation: status is dropped (status references are not allowed in RGD
+// expressions) and a full ObjectMeta schema is added. Cluster-scoped instances
+// omit metadata.namespace so CEL cannot type-check a field absent at runtime.
+// The input is not mutated.
+func stripStatusFromSchema(openAPI *extv1.JSONSchemaProps, isClusterScoped bool) (*spec.Schema, error) {
+	openAPISchema := openAPI.DeepCopy()
 	delete(openAPISchema.Properties, "status")
 
 	specSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(openAPISchema)
@@ -1555,12 +1558,11 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 		return nil, err
 	}
 
-	// Add full ObjectMeta schema for CEL validation
 	if specSchema.Properties == nil {
 		specSchema.Properties = make(map[string]spec.Schema)
 	}
 	metadataSchema := schema.ObjectMetaSchema
-	if crd.Spec.Scope == extv1.ClusterScoped {
+	if isClusterScoped {
 		metadataSchema = schema.NamespacelessObjectMetaSchema
 	}
 	specSchema.Properties["metadata"] = metadataSchema

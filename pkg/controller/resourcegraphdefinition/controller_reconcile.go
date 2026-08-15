@@ -201,7 +201,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 			HasAuthorConditions:       len(processedRGD.Instance.Conditions) > 0,
 		},
 		gvr,
-		r.revisionsRegistry.ResolverForRGD(rgd.Name),
+		r.revisionsRegistry.ResolverFor(rgd.Name),
 		processedRGD.Instance.Meta.Namespaced,
 		r.clientSet,
 		instanceLabeler,

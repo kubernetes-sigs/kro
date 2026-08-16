@@ -10,6 +10,7 @@ A **Platform Administrator** wants to give end users in their organization self-
 * StorageBucket
 
 It also defines these Kubernetes resources that use the GCP resources:
+
 * ServiceAccount (annotation)
 * Job
 * Deployment
@@ -74,9 +75,10 @@ Setup Kubectl to target the cluster
 gcloud container clusters get-credentials ${CLUSTER_NAME} --project ${PROJECT_ID} --location ${REGION}
 ```
 
-#### Install KCC 
+#### Install KCC
 
 Install KCC from manifests
+
 ```bash
 gcloud storage cp gs://configconnector-operator/latest/release-bundle.tar.gz release-bundle.tar.gz
 tar zxvf release-bundle.tar.gz
@@ -133,6 +135,7 @@ EOF
 #### Setup Team namespace
 
 Create a namespace for KCC resources
+
 ```bash
 export NAMESPACE=config-connector # or team-a
 # from here: https://cloud.google.com/config-connector/docs/how-to/install-manually#specify
@@ -143,6 +146,7 @@ kubectl annotate namespace ${NAMESPACE} cnrm.cloud.google.com/project-id=${PROJE
 ```
 
 Verify KCC Installation
+
 ```bash
 # wait for namespace reconcilers to be created
 kubectl get pods -n cnrm-system
@@ -188,7 +192,7 @@ export KRO_VERSION=$(curl -sL \
   )
 echo $KRO_VERSION
 
-helm install kro oci://ghcr.io/kro-run/kro/kro \
+helm install kro oci://registry.k8s.io/kro/charts/kro \
   --namespace kro \
   --create-namespace \
   --version=${KRO_VERSION}
@@ -197,9 +201,11 @@ helm -n kro list
 
 kubectl wait -n kro --for=condition=Ready pod --all
 ```
+
 ### 3. Model Registry access
 
 #### Kaggle API access
+
 * **Kaggle Account:** You need a Kaggle account.
 * **Accept Gemma License:** You must accept the Gemma model license terms and usage policy on Kaggle for the specific model version you intend to use.
 * **Kaggle API Credentials:**

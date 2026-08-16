@@ -5,7 +5,7 @@
   "version": "0.0.1",
   "license": "Apache-2.0",
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.91.0"
   },
   "categories": [
     "Programming Languages"
@@ -61,11 +61,11 @@
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
-    "@types/vscode": "^1.74.0",
-    "@types/node": "16.x",
-    "typescript": "^4.9.4"
+    "@types/vscode": "^1.125.0",
+    "@types/node": "26.x",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
-    "vscode-languageclient": "^8.1.0"
+    "vscode-languageclient": "^10.1.0"
   }
 }

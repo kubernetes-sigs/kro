@@ -4,6 +4,7 @@
     "target": "ES2020",
     "outDir": "out",
     "lib": ["ES2020"],
+    "types": ["node", "vscode"],
     "sourceMap": true,
     "rootDir": "src",
     "strict": true

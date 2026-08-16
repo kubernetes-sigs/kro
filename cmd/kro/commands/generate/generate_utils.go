@@ -20,9 +20,10 @@ import (
 
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 
+	"gopkg.in/yaml.v2"
+
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
-	"gopkg.in/yaml.v2"
 )
 
 func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, error) {
@@ -38,7 +39,10 @@ func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, er
 		return nil, fmt.Errorf("failed to create graph builder: %w", err)
 	}
 
-	rgdGraph, err := builder.NewResourceGraphDefinition(rgd)
+	rgdGraph, err := builder.NewResourceGraphDefinition(rgd, graph.RGDConfig{
+		MaxCollectionSize:          1000,
+		MaxCollectionDimensionSize: 10,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create resource graph definition: %w", err)
 	}

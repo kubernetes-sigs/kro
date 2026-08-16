@@ -18,9 +18,9 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
-	"github.com/kro-run/kro/api/v1alpha1"
-	"github.com/kro-run/kro/pkg/graph"
-	"github.com/kro-run/kro/tools/lsp/server/parser"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/tools/lsp/server/parser"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/yaml"
@@ -60,7 +60,16 @@ func NewValidationManager(logger logr.Logger, clientConfig *rest.Config) (*Valid
 
 	// Try to create KRO Builder for online validation
 	// This enables CRD schema validation and CEL expression evaluation
-	builder, err := graph.NewBuilder(clientConfig)
+	httpClient, err := rest.HTTPClientFor(clientConfig)
+	if err != nil {
+		return &ValidationManager{
+			logger:     logger,
+			yamlParser: yamlParser,
+			builder:    nil, // Offline mode fallback — could not build HTTP client
+		}, nil
+	}
+
+	builder, err := graph.NewBuilder(clientConfig, httpClient)
 	if err != nil {
 		// If builder creation fails, gracefully fall back to offline mode
 		return &ValidationManager{
@@ -133,7 +142,10 @@ func (vm *ValidationManager) ValidateDocument(content string) ValidationResult {
 		// - CEL expression validation with cluster context
 		// - Cross-resource dependency validation
 		// - Field type validation against OpenAPI schemas
-		_, err := vm.builder.NewResourceGraphDefinition(rgd)
+		_, err := vm.builder.NewResourceGraphDefinition(rgd, graph.RGDConfig{
+			MaxCollectionSize:          1000,
+			MaxCollectionDimensionSize: 10,
+		})
 		if err != nil {
 			diagnostic := vm.createErrorDiagnostic(0, 0, fmt.Sprintf("KRO validation failed: %s", err.Error()))
 			result.Diagnostics = append(result.Diagnostics, diagnostic)

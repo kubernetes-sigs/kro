@@ -7,7 +7,7 @@ import styles from './footer.module.css';
 
 type Props = WrapperProps<typeof FooterType>;
 
-export default function FooterWrapper(props) {
+export default function FooterWrapper(props: Props) {
   return (
     <>
       <section className={styles.kroFooter}>

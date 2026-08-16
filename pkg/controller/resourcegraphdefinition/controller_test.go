@@ -192,6 +192,21 @@ func (stubHandlerRegistration) HasSynced() bool {
 	return true
 }
 
+func (stubHandlerRegistration) HasSyncedChecker() toolscache.DoneChecker {
+	return stubDoneChecker{}
+}
+
+// stubDoneChecker satisfies toolscache.DoneChecker with an immediately-closed
+// channel; used to satisfy the interface added in client-go v0.36.
+type stubDoneChecker struct{}
+
+func (stubDoneChecker) Name() string { return "stub" }
+func (stubDoneChecker) Done() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
 func (s *stubInformer) AddEventHandler(handler toolscache.ResourceEventHandler) (toolscache.ResourceEventHandlerRegistration, error) {
 	return s.AddEventHandlerWithOptions(handler, toolscache.HandlerOptions{})
 }

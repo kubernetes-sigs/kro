@@ -167,6 +167,12 @@ test-coverage: ## Run all tests and report coverage
 	@echo "Combined:    $$(go tool cover -func=combined-cover.out | grep total | awk '{print $$NF}')"
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
+# NB: golangci-lint 2.12.x publishes an SBOM alongside the tarball
+# (foo-linux-amd64.tar.gz.sbom.json). The bundled install.sh does a substring
+# grep against the checksums file and matches both entries, causing a spurious
+# checksum-mismatch error. Stay on 2.11.4 until the install script is fixed
+# upstream. See https://github.com/golangci/golangci-lint/blob/HEAD/install.sh
+# hash_sha256_verify().
 GOLANGCI_LINT_VERSION ?= v2.11.4
 golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || { \
@@ -209,10 +215,10 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 CHAINSAW ?= $(LOCALBIN)/chainsaw
 
 ## Tool Versions
-KO_VERSION ?= v0.18.1
-KUSTOMIZE_VERSION ?= v5.8.0
-CONTROLLER_TOOLS_VERSION ?= v0.20.0
-CHAINSAW_VERSION ?= v0.2.14
+KO_VERSION ?= v0.19.1
+KUSTOMIZE_VERSION ?= v5.8.1
+CONTROLLER_TOOLS_VERSION ?= v0.21.0
+CHAINSAW_VERSION ?= v0.2.15
 
 .PHONY: chainsaw
 chainsaw: $(CHAINSAW) ## Download chainsaw locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -223,7 +229,7 @@ $(CHAINSAW): $(LOCALBIN)
 	fi
 	test -s $(LOCALBIN)/chainsaw || GOBIN=$(LOCALBIN) GO111MODULE=on go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
 
-ENVTEST_VERSION ?= 1.35.x
+ENVTEST_VERSION ?= 1.36.x
 
 .PHONY: ko
 ko: $(KO) ## Download ko locally if necessary. If wrong version is installed, it will be removed before downloading.

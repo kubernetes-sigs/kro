@@ -196,16 +196,21 @@ func (stubHandlerRegistration) HasSyncedChecker() toolscache.DoneChecker {
 	return stubDoneChecker{}
 }
 
+// stubDoneCh is a package-scoped closed channel shared by every
+// stubDoneChecker.Done() call. A closed channel is safe to share across
+// receivers and avoids allocating on every invocation.
+var stubDoneCh = func() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}()
+
 // stubDoneChecker satisfies toolscache.DoneChecker with an immediately-closed
 // channel; used to satisfy the interface added in client-go v0.36.
 type stubDoneChecker struct{}
 
-func (stubDoneChecker) Name() string { return "stub" }
-func (stubDoneChecker) Done() <-chan struct{} {
-	ch := make(chan struct{})
-	close(ch)
-	return ch
-}
+func (stubDoneChecker) Name() string          { return "stub" }
+func (stubDoneChecker) Done() <-chan struct{} { return stubDoneCh }
 
 func (s *stubInformer) AddEventHandler(handler toolscache.ResourceEventHandler) (toolscache.ResourceEventHandlerRegistration, error) {
 	return s.AddEventHandlerWithOptions(handler, toolscache.HandlerOptions{})

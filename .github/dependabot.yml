@@ -1,28 +1,70 @@
 version: 2
 updates:
+  # Go modules. The repository contains four of them, and Dependabot only looks
+  # at the directories listed here — a module that is absent gets neither
+  # version nor security updates. /cmd/kro in particular builds a released
+  # binary.
   - package-ecosystem: "gomod"
     directories:
       - "/"
+      - "/cmd/kro"
+      - "/tools/krep-crawl"
+      - "/tools/lsp/server"
     schedule:
       interval: "weekly"
-    # Keep Go PR noise limited to grouped security fixes unless version updates
-    # are explicitly enabled later.
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
     groups:
       go-security-updates:
         applies-to: security-updates
         patterns:
           - "*"
+      # Batch routine minor/patch bumps into one pull request. Majors are
+      # deliberately excluded so each arrives on its own and is reviewed on its
+      # own merits.
+      go-version-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # The Kubernetes libraries move as a set with each upstream release, and
+      # controller-runtime is pinned to a matching minor. Patch updates (CVE and
+      # bugfix backports) are welcome; minor and major bumps need to be a
+      # coordinated change across every module at once, not one bot PR at a time.
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  # npm: the documentation site and the LSP client extension.
   - package-ecosystem: "npm"
     directories:
       - "/tools/lsp/client"
       - "/website"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
     groups:
       npm-security-updates:
         applies-to: security-updates
         patterns:
           - "*"
-
+      npm-version-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

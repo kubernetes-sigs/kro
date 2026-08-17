@@ -15,15 +15,21 @@
 package graph
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	metav1validation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
+	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
+	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -267,6 +273,81 @@ func validateCombinableResourceFields(res *v1alpha1.Resource) error {
 	return nil
 }
 
+func validateExternalRefMetadata(metadata v1alpha1.ExternalRefMetadata) error {
+	if metadata.HasName() == metadata.HasSelector() {
+		return fmt.Errorf("exactly one of name or selector must be provided")
+	}
+
+	if !metadata.HasSelector() {
+		return nil
+	}
+
+	return validateSelector(metadata.Selector.Raw)
+}
+
+// validateSelector validates the structure of externalRef.metadata.selector.
+// The field is schemaless, so it may hold either a literal LabelSelector or a
+// CEL expression that resolves to one.
+func validateSelector(raw []byte) error {
+	var decoded interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return fmt.Errorf("invalid selector: %w", err)
+	}
+
+	switch selector := decoded.(type) {
+	case string:
+		standalone, err := parser.IsStandaloneExpression(selector)
+		if err != nil {
+			return fmt.Errorf("invalid selector expression: %w", err)
+		}
+		if !standalone {
+			return errSelectorShape
+		}
+		return nil
+	case map[string]interface{}:
+		expressions, err := parser.New(schema.NewCache()).
+			ParseResourceAtPath(selector, &schema.LabelSelectorSchema, "metadata.selector")
+		if err != nil {
+			return err
+		}
+		if len(expressions) > 0 {
+			// Some values are only known at instance reconcile time, so label
+			// syntax and operator validity are left to LabelSelectorAsSelector
+			// when the collection is listed.
+			return nil
+		}
+		return validateLiteralSelector(raw)
+	default:
+		return errSelectorShape
+	}
+}
+
+// validateLiteralSelector applies Kubernetes' own LabelSelector validation to a
+// selector that holds no CEL expressions. Everything it checks — operator
+// validity, values matching the operator, label key and value syntax — is known
+// statically, so it is reported when the RGD is admitted rather than deferred to
+// LabelSelectorAsSelector at list time.
+func validateLiteralSelector(raw []byte) error {
+	var selector metav1.LabelSelector
+	if err := json.Unmarshal(raw, &selector); err != nil {
+		return fmt.Errorf("invalid selector object: %w", err)
+	}
+
+	errs := metav1validation.ValidateLabelSelector(
+		&selector,
+		metav1validation.LabelSelectorValidationOptions{},
+		field.NewPath("metadata", "selector"),
+	)
+	if len(errs) != 0 {
+		return fmt.Errorf("invalid label selector: %v", errs)
+	}
+
+	return nil
+}
+
+var errSelectorShape = fmt.Errorf(
+	"selector must be a Kubernetes LabelSelector object or a CEL expression that resolves to one")
+
 // validateTemplateConstraints enforces template-level constraints before parsing expressions.
 // Keep this small and focused on invariants that must hold regardless of CEL.
 func validateTemplateConstraints(
@@ -288,7 +369,7 @@ func validateTemplateConstraints(
 	if resourceNamespaced && !instanceNamespaced {
 		// External collection refs (selector-based) are allowed to omit namespace
 		// on cluster-scoped instances — this means "list across all namespaces".
-		isExternalCollection := rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.Selector != nil
+		isExternalCollection := rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.HasSelector()
 		if !isExternalCollection {
 			if !found {
 				return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", rgResource.ID)

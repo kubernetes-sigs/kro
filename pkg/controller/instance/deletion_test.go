@@ -739,3 +739,99 @@ func TestRemoveFinalizerMarksInstanceNotManagedOnError(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, rcx.Instance, InstanceManaged).Status)
 }
+
+// TestReconcileDeletionLeavesExternalRefUntouched verifies that when a managed
+// resource depends on an external ref, deletion removes the managed resource
+// without observing or deleting the external ref.
+func TestReconcileDeletionLeavesExternalRefUntouched(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+
+	externalNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "external",
+			Type:       graph.NodeTypeExternal,
+			GVR:        controllerTestCMGVR,
+			Namespaced: true,
+		},
+		Template: newConfigMapObject("source-configmap", "default"),
+	}
+	managedNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:           "deploy",
+			Type:         graph.NodeTypeResource,
+			GVR:          controllerTestDeployGVR,
+			Namespaced:   true,
+			Dependencies: []string{"external"},
+		},
+		Template: newDeploymentObject("managed-deploy", "default"),
+	}
+
+	sourceCM := newConfigMapObject("source-configmap", "default")
+	managed := newManagedObject(newDeploymentObject("managed-deploy", "default"), instance, "deploy", 1)
+
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(externalNode, managedNode), sourceCM, managed)
+
+	err := controller.reconcileDeletion(rcx)
+	var retryAfter *requeue.RequeueNeededAfter
+	require.ErrorAs(t, err, &retryAfter)
+
+	_, getErr := raw.Tracker().Get(controllerTestDeployGVR, "default", "managed-deploy")
+	require.Error(t, getErr, "managed resource must be selected for deletion, not treated as already deleted")
+	_, getErr = raw.Tracker().Get(controllerTestCMGVR, "default", "source-configmap")
+	require.NoError(t, getErr, "external ref must remain untouched")
+}
+
+// TestReconcileDeletionLeavesExternalCollectionUntouched verifies the same
+// invariant for an external collection root: items matching the selector are
+// never deletion candidates, while the managed dependent is removed.
+func TestReconcileDeletionLeavesExternalCollectionUntouched(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+
+	externalColNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "external",
+			Type:       graph.NodeTypeExternalCollection,
+			GVR:        controllerTestCMGVR,
+			Namespaced: true,
+		},
+		Template: &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": controllerTestCMGVK.GroupVersion().String(),
+				"kind":       controllerTestCMGVK.Kind,
+				"metadata": map[string]interface{}{
+					"namespace": "default",
+					"selector":  map[string]interface{}{"matchLabels": map[string]interface{}{"app": "source"}},
+				},
+			},
+		},
+	}
+	managedNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:           "deploy",
+			Type:         graph.NodeTypeResource,
+			GVR:          controllerTestDeployGVR,
+			Namespaced:   true,
+			Dependencies: []string{"external"},
+		},
+		Template: newDeploymentObject("managed-deploy", "default"),
+	}
+
+	cm1 := newConfigMapObject("source-1", "default")
+	cm1.SetLabels(map[string]string{"app": "source"})
+	cm2 := newConfigMapObject("source-2", "default")
+	cm2.SetLabels(map[string]string{"app": "source"})
+	managed := newManagedObject(newDeploymentObject("managed-deploy", "default"), instance, "deploy", 1)
+
+	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(externalColNode, managedNode), cm1, cm2, managed)
+
+	err := controller.reconcileDeletion(rcx)
+	var retryAfter *requeue.RequeueNeededAfter
+	require.ErrorAs(t, err, &retryAfter)
+
+	_, getErr := raw.Tracker().Get(controllerTestDeployGVR, "default", "managed-deploy")
+	require.Error(t, getErr, "managed resource must be selected for deletion")
+	for _, name := range []string{"source-1", "source-2"} {
+		_, getErr = raw.Tracker().Get(controllerTestCMGVR, "default", name)
+		require.NoError(t, getErr, "external collection item %q must remain untouched", name)
+	}
+}

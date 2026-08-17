@@ -228,7 +228,7 @@ func TestIsOneShotExpression(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := isStandaloneExpression(tt.input)
+			got, err := IsStandaloneExpression(tt.input)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("isOneShotExpression() error = %v, wantErr %v", err, tt.wantErr)
 				return

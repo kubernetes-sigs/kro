@@ -34,7 +34,7 @@ func UnwrapExpressions(conditions []string) ([]*krocel.Expression, error) {
 	expressions := make([]*krocel.Expression, 0, len(conditions))
 
 	for _, e := range conditions {
-		ok, err := isStandaloneExpression(e)
+		ok, err := IsStandaloneExpression(e)
 		if err != nil {
 			return nil, err
 		}

@@ -68,3 +68,31 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  # GitHub Actions. Every action in .github/workflows is pinned to a full commit
+  # SHA, which is the right supply-chain posture but makes a stale pin invisible
+  # — nobody reads a SHA and notices it is two years old. GitHub also retires
+  # action runtimes (node16 -> node20 -> ...), which breaks a frozen workflow
+  # outright rather than degrading it. Dependabot understands SHA pins and bumps
+  # the SHA along with its version comment.
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      actions-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      actions-version-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

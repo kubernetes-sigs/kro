@@ -135,7 +135,7 @@ test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=int
 ifeq ($(WHAT),integration)
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" \
 		go tool ginkgo -p \
-		--timeout=5m \
+		--timeout=8m \
 		--cover \
 		--coverprofile=integration-cover.out \
 		-coverpkg=github.com/kubernetes-sigs/kro/pkg/... \

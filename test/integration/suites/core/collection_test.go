@@ -100,7 +100,7 @@ var _ = Describe("ForEach Collections", func() {
 				}
 			}
 			g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-multi-cm"
 		instance := &unstructured.Unstructured{
@@ -129,7 +129,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range []string{"alpha", "beta", "gamma"} {
 			cm := &corev1.ConfigMap{}
@@ -140,7 +140,7 @@ var _ = Describe("ForEach Collections", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal(value))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -151,7 +151,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
@@ -160,7 +160,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should handle cartesian product with multiple forEach iterators", func(ctx SpecContext) {
@@ -201,7 +201,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-cartesian"
 		instance := &unstructured.Unstructured{
@@ -231,7 +231,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		expectedCombinations := []struct {
 			region string
@@ -253,7 +253,7 @@ var _ = Describe("ForEach Collections", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["region"]).To(Equal(combo.region))
 				g.Expect(cm.Data["tier"]).To(Equal(combo.tier))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -264,7 +264,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
@@ -273,7 +273,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should create collection with includeWhen condition", func(ctx SpecContext) {
@@ -314,7 +314,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Test 1: Create instance with enabled=false - no ConfigMaps should be created
 		name := "test-disabled"
@@ -345,7 +345,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range []string{"alpha", "beta"} {
 			cm := &corev1.ConfigMap{}
@@ -355,7 +355,7 @@ var _ = Describe("ForEach Collections", func() {
 					Namespace: namespace,
 				}, cm)
 				g.Expect(errors.IsNotFound(err)).To(BeTrue())
-			}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -365,7 +365,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -373,7 +373,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	// Test: includeWhen toggling from false to true
@@ -417,7 +417,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Phase 1: Create instance with enabled=false - no ConfigMaps should be created
 		name := "test-toggle"
@@ -448,7 +448,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range []string{"alpha", "beta"} {
 			cm := &corev1.ConfigMap{}
@@ -458,7 +458,7 @@ var _ = Describe("ForEach Collections", func() {
 					Namespace: namespace,
 				}, cm)
 				g.Expect(errors.IsNotFound(err)).To(BeTrue())
-			}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Phase 2: Toggle enabled to true - ConfigMaps should be created
@@ -474,7 +474,7 @@ var _ = Describe("ForEach Collections", func() {
 
 			err = env.Client.Update(ctx, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range []string{"alpha", "beta"} {
 			cm := &corev1.ConfigMap{}
@@ -485,7 +485,7 @@ var _ = Describe("ForEach Collections", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal(value))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Phase 3: Toggle enabled back to false - ConfigMaps should be deleted
@@ -501,7 +501,7 @@ var _ = Describe("ForEach Collections", func() {
 
 			err = env.Client.Update(ctx, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range []string{"alpha", "beta"} {
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -511,7 +511,7 @@ var _ = Describe("ForEach Collections", func() {
 					Namespace: namespace,
 				}, cm)
 				g.Expect(err).To(MatchError(errors.IsNotFound, "ConfigMap should be deleted"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -521,7 +521,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -529,7 +529,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should create collection with dependency on regular resource", func(ctx SpecContext) {
@@ -580,7 +580,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-dep"
 		instance := &unstructured.Unstructured{
@@ -609,7 +609,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		baseCM := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -619,7 +619,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, baseCM)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(baseCM.Data["version"]).To(Equal("v1.0.0"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range []string{"one", "two"} {
 			cm := &corev1.ConfigMap{}
@@ -631,7 +631,7 @@ var _ = Describe("ForEach Collections", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal(value))
 				g.Expect(cm.Data["version"]).To(Equal("v1.0.0"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -641,7 +641,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -649,7 +649,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should handle collection chaining with dynamic forEach expression", func(ctx SpecContext) {
@@ -705,7 +705,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-chaining"
 		instance := &unstructured.Unstructured{
@@ -734,7 +734,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		baseCM := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -745,7 +745,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(baseCM.Data["enabled"]).To(Equal("true"))
 			g.Expect(baseCM.Data["prefix"]).To(Equal("chained"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range []string{"one", "two"} {
 			cm := &corev1.ConfigMap{}
@@ -757,7 +757,7 @@ var _ = Describe("ForEach Collections", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal(value))
 				g.Expect(cm.Data["prefix"]).To(Equal("chained"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -767,7 +767,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -775,7 +775,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should handle collection-to-collection chaining", func(ctx SpecContext) {
@@ -837,7 +837,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-c2c"
 		instance := &unstructured.Unstructured{
@@ -866,7 +866,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range []string{"alpha", "beta"} {
 			cm := &corev1.ConfigMap{}
@@ -878,7 +878,7 @@ var _ = Describe("ForEach Collections", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal(value))
 				g.Expect(cm.Data["source"]).To(Equal("first-collection"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Second collection ConfigMaps are created by iterating over first collection
@@ -893,7 +893,7 @@ var _ = Describe("ForEach Collections", func() {
 				g.Expect(cm.Data["originalKey"]).To(Equal(value))
 				g.Expect(cm.Data["originalSource"]).To(Equal("first-collection"))
 				g.Expect(cm.Data["source"]).To(Equal("second-collection"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -903,7 +903,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -911,7 +911,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should handle empty collection list gracefully", func(ctx SpecContext) {
@@ -949,7 +949,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-empty"
 		instance := &unstructured.Unstructured{
@@ -979,7 +979,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 
@@ -989,7 +989,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
@@ -998,7 +998,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	// Deep chaining: BaseConfig -> Collection1 -> Collection2 -> SummaryConfig -> FinalPods
@@ -1108,7 +1108,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 15*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 15*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-deep"
 		instance := &unstructured.Unstructured{
@@ -1145,7 +1145,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(level1Count).To(Equal("2"), "status.level1Count should be 2")
 			g.Expect(level2Count).To(Equal("2"), "status.level2Count should be 2")
 			g.Expect(podCount).To(Equal("2"), "status.podCount should be 2")
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		baseConfig := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -1156,7 +1156,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(baseConfig.Data["prefix"]).To(Equal("test"))
 			g.Expect(baseConfig.Data["itemCount"]).To(Equal("2"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, item := range []string{"a", "b"} {
 			cm := &corev1.ConfigMap{}
@@ -1169,7 +1169,7 @@ var _ = Describe("ForEach Collections", func() {
 				g.Expect(cm.Data["entry"]).To(Equal(item))
 				g.Expect(cm.Data["prefix"]).To(Equal("test"))
 				g.Expect(cm.Data["level"]).To(Equal("1"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		for _, item := range []string{"a", "b"} {
@@ -1183,7 +1183,7 @@ var _ = Describe("ForEach Collections", func() {
 				g.Expect(cm.Data["sourceEntry"]).To(Equal(item))
 				g.Expect(cm.Data["sourcePrefix"]).To(Equal("test"))
 				g.Expect(cm.Data["level"]).To(Equal("2"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		summaryConfig := &corev1.ConfigMap{}
@@ -1195,7 +1195,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(summaryConfig.Data["level1Count"]).To(Equal("2"))
 			g.Expect(summaryConfig.Data["level2Count"]).To(Equal("2"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, item := range []string{"a", "b"} {
 			pod := &corev1.Pod{}
@@ -1206,7 +1206,7 @@ var _ = Describe("ForEach Collections", func() {
 				}, pod)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(pod.Spec.Containers[0].Name).To(Equal("worker"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// SCALE UP: add item "c"
@@ -1223,7 +1223,7 @@ var _ = Describe("ForEach Collections", func() {
 
 			err = env.Client.Update(ctx, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			cm := &corev1.ConfigMap{}
@@ -1233,7 +1233,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, cm)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cm.Data["entry"]).To(Equal("c"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			cm := &corev1.ConfigMap{}
@@ -1243,7 +1243,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, cm)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cm.Data["sourceEntry"]).To(Equal("c"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -1253,7 +1253,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(summaryConfig.Data["level1Count"]).To(Equal("3"))
 			g.Expect(summaryConfig.Data["level2Count"]).To(Equal("3"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		for _, item := range []string{"a", "b", "c"} {
 			Eventually(func(g Gomega, ctx SpecContext) {
 				pod := &corev1.Pod{}
@@ -1263,7 +1263,7 @@ var _ = Describe("ForEach Collections", func() {
 				}, pod)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(pod.Spec.Containers[0].Name).To(Equal("worker"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Validate instance status reflects scaled up collection sizes (3 items: a, b, c)
@@ -1279,7 +1279,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(level1Count).To(Equal("3"), "status.level1Count should be 3 after scale up")
 			g.Expect(level2Count).To(Equal("3"), "status.level2Count should be 3 after scale up")
 			g.Expect(podCount).To(Equal("3"), "status.podCount should be 3 after scale up")
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// SCALE DOWN: remove item "b"
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -1295,7 +1295,7 @@ var _ = Describe("ForEach Collections", func() {
 
 			err = env.Client.Update(ctx, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			cm := &corev1.ConfigMap{}
@@ -1304,7 +1304,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, cm)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "l1-b should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			cm := &corev1.ConfigMap{}
@@ -1313,7 +1313,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, cm)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "l2-b should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			pod := &corev1.Pod{}
@@ -1322,7 +1322,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, pod)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "pod-b should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      fmt.Sprintf("%s-summary", name),
@@ -1331,7 +1331,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(summaryConfig.Data["level1Count"]).To(Equal("2"))
 			g.Expect(summaryConfig.Data["level2Count"]).To(Equal("2"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, item := range []string{"a", "c"} {
 			cm := &corev1.ConfigMap{}
@@ -1366,7 +1366,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(level1Count).To(Equal("2"), "status.level1Count should be 2 after scale down")
 			g.Expect(level2Count).To(Equal("2"), "status.level2Count should be 2 after scale down")
 			g.Expect(podCount).To(Equal("2"), "status.podCount should be 2 after scale down")
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -1375,7 +1375,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -1383,7 +1383,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	// Collection readyWhen blocks dependents until ALL items satisfy the condition.
@@ -1445,7 +1445,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-dag"
 		workers := []string{"alpha", "beta", "gamma"}
@@ -1473,7 +1473,7 @@ var _ = Describe("ForEach Collections", func() {
 					Namespace: namespace,
 				}, pod)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Instance stays IN_PROGRESS while workers not ready
@@ -1487,7 +1487,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(status).To(Equal("IN_PROGRESS"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Coordinator blocked until workers are Running
 		coordinatorName := fmt.Sprintf("%s-coordinator", name)
@@ -1498,7 +1498,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, cm)
 			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "coordinator should NOT be created while workers are not Running")
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Patch only 2 of 3 pods to Running - not enough
 		for _, worker := range workers[:2] {
@@ -1520,7 +1520,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, cm)
 			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "coordinator should NOT be created until ALL workers are Running")
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Patch last worker to Running
 		pod := &corev1.Pod{}
@@ -1542,7 +1542,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cm.Data["workerCount"]).To(Equal("3"))
 			g.Expect(cm.Data["firstWorker"]).To(ContainSubstring("worker-alpha"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      name,
@@ -1553,7 +1553,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(status).To(Equal("ACTIVE"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -1562,7 +1562,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -1570,7 +1570,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	// readyWhen with `each` keyword for per-item checks
@@ -1611,7 +1611,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-ready"
 		instance := &unstructured.Unstructured{
@@ -1640,7 +1640,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range []string{"one", "two", "three"} {
 			cm := &corev1.ConfigMap{}
@@ -1652,7 +1652,7 @@ var _ = Describe("ForEach Collections", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal(value))
 				g.Expect(cm.Data["ready"]).To(Equal("true"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -1662,7 +1662,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -1670,7 +1670,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	// Collections without readyWhen are ready once all items are created
@@ -1709,7 +1709,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-no-ready"
 		instance := &unstructured.Unstructured{
@@ -1738,7 +1738,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range []string{"a", "b", "c"} {
 			cm := &corev1.ConfigMap{}
@@ -1749,7 +1749,7 @@ var _ = Describe("ForEach Collections", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal(value))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -1759,7 +1759,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -1767,7 +1767,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	// Instance deletion triggers cleanup of ALL collection resources
@@ -1806,7 +1806,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-deletion"
 		values := []string{"one", "two", "three"}
@@ -1836,7 +1836,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range values {
 			cm := &corev1.ConfigMap{}
@@ -1847,7 +1847,7 @@ var _ = Describe("ForEach Collections", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal(value))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -1858,7 +1858,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Collection resources must be cleaned up
 		for _, value := range values {
@@ -1869,7 +1869,7 @@ var _ = Describe("ForEach Collections", func() {
 					Namespace: namespace,
 				}, cm)
 				g.Expect(err).To(MatchError(errors.IsNotFound, fmt.Sprintf("ConfigMap %s-%s should be deleted", name, value)))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
@@ -1878,7 +1878,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	// Drift detection: manually modified collection resources are restored
@@ -1919,7 +1919,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
@@ -1954,7 +1954,7 @@ var _ = Describe("ForEach Collections", func() {
 				g.Expect(cm.Data["entry"]).To(Equal(item))
 				g.Expect(cm.Data["prefix"]).To(Equal("original"))
 				g.Expect(cm.Data["static"]).To(Equal("unchanged"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Simulate drift
@@ -1980,7 +1980,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(cm.Data["prefix"]).To(Equal("original"))
 			g.Expect(cm.Data["entry"]).To(Equal("alpha"))
 			g.Expect(cm.Data["static"]).To(Equal("unchanged"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -1989,7 +1989,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -1997,7 +1997,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	// Collection readyWhen without dependents: instance stays IN_PROGRESS until satisfied
@@ -2039,7 +2039,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-standalone"
 		instance := &unstructured.Unstructured{
@@ -2069,7 +2069,7 @@ var _ = Describe("ForEach Collections", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal(value))
 				g.Expect(cm.Data["ready"]).To(Equal("false"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -2082,7 +2082,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(status).To(Equal("IN_PROGRESS"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Consistently(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -2092,7 +2092,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			status, _, _ := unstructured.NestedString(instance.Object, "status", "state")
 			g.Expect(status).To(Equal("IN_PROGRESS"), "instance should stay IN_PROGRESS while collection items are not ready")
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		err := env.Client.Get(ctx, types.NamespacedName{
 			Name:      name,
@@ -2111,7 +2111,7 @@ var _ = Describe("ForEach Collections", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["ready"]).To(Equal("true"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -2124,7 +2124,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(status).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -2133,7 +2133,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -2141,7 +2141,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should delete collection resources across multiple namespaces", func(ctx SpecContext) {
@@ -2193,7 +2193,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-cross-ns"
 		instance := &unstructured.Unstructured{
@@ -2223,7 +2223,7 @@ var _ = Describe("ForEach Collections", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["index"]).To(Equal(fmt.Sprintf("%d", idx)))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		for _, idx := range []int{1, 3, 5} {
@@ -2235,7 +2235,7 @@ var _ = Describe("ForEach Collections", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["index"]).To(Equal(fmt.Sprintf("%d", idx)))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -2248,7 +2248,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(status).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 
@@ -2258,7 +2258,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Cross-namespace deletion
 		for _, idx := range []int{0, 2, 4} {
@@ -2269,7 +2269,7 @@ var _ = Describe("ForEach Collections", func() {
 					Namespace: namespace,
 				}, cm)
 				g.Expect(err).To(MatchError(errors.IsNotFound, "ConfigMap in primary namespace should be deleted"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		for _, idx := range []int{1, 3, 5} {
@@ -2280,7 +2280,7 @@ var _ = Describe("ForEach Collections", func() {
 					Namespace: altNamespace,
 				}, cm)
 				g.Expect(err).To(MatchError(errors.IsNotFound, "ConfigMap in alternate namespace should be deleted"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
@@ -2289,7 +2289,7 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	// Test for https://github.com/kubernetes-sigs/kro/issues/17#issuecomment-3843929563
@@ -2342,7 +2342,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance with EMPTY names array - this triggers the bug
 		name := "test-empty-dep"
@@ -2372,7 +2372,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify the summary ConfigMap was created with itemCount=0
 		summaryCM := &corev1.ConfigMap{}
@@ -2384,7 +2384,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(summaryCM.Data).To(HaveKey("itemCount"))
 			g.Expect(summaryCM.Data["itemCount"]).To(Equal("0"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -2393,7 +2393,7 @@ var _ = Describe("ForEach Collections", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -2401,6 +2401,6 @@ var _ = Describe("ForEach Collections", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

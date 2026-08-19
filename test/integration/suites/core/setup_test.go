@@ -16,6 +16,7 @@ package core_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -37,7 +38,13 @@ func TestCore(t *testing.T) {
 	}
 
 	RegisterFailHandler(Fail)
-	BeforeSuite(func() {
+
+	// SynchronizedBeforeSuite starts a SINGLE envtest control plane + controller
+	// manager on Ginkgo parallel process #1 and shares its apiserver connection
+	// with every other parallel process. This replaces the previous per-process
+	// BeforeSuite, which started one apiserver+etcd (and manager) per parallel
+	// process and caused envtest to stall under load.
+	SynchronizedBeforeSuite(func() []byte {
 		var err error
 		env, err = environment.New(t.Context(),
 			environment.ControllerConfig{
@@ -49,8 +56,37 @@ func TestCore(t *testing.T) {
 			},
 		)
 		Expect(err).NotTo(HaveOccurred())
+
+		data, err := environment.EncodeRESTConfig(env.ClientSet.RESTConfig())
+		Expect(err).NotTo(HaveOccurred())
+		return data
+	}, func(data []byte) {
+		// Runs on every process. Process #1 already holds the full environment
+		// (control plane + manager); only secondary processes need a thin client
+		// bound to the shared apiserver.
+		if env == nil {
+			cfg, err := environment.DecodeRESTConfig(data)
+			Expect(err).NotTo(HaveOccurred())
+			env, err = environment.NewShared(t.Context(), cfg)
+			Expect(err).NotTo(HaveOccurred())
+		}
+		// Give each parallel process its own virtual kro.run API group so that
+		// specs sharing a schema kind never collide on the shared apiserver's
+		// cluster-scoped CRDs.
+		env.Client = environment.NewGroupIsolatingClient(env.Client,
+			fmt.Sprintf("p%d", GinkgoParallelProcess()))
 	})
-	AfterSuite(func() {
+
+	SynchronizedAfterSuite(func() {
+		// Runs on every process. Secondary processes hold only thin clients and
+		// tear them down here. Process #1 must keep the shared control plane
+		// alive until all other processes finish, so it defers teardown to the
+		// second (process #1 only) function below.
+		if GinkgoParallelProcess() != 1 {
+			Expect(env.Stop()).To(Succeed())
+		}
+	}, func() {
+		// Runs on process #1 only, after all other processes have completed.
 		err := (func() (err error) {
 			// Need to sleep if the first stop fails due to a bug:
 			// https://github.com/kubernetes-sigs/controller-runtime/issues/1571

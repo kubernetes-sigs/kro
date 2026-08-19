@@ -127,7 +127,7 @@ var _ = Describe("Terminating Managed Resources", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
@@ -158,12 +158,12 @@ var _ = Describe("Terminating Managed Resources", func() {
 			err := env.Client.Get(ctx, configMapKey, configMap)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(configMap.Data["value"]).To(Equal("active"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, deploymentKey, &appsv1.Deployment{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "deployment should not be created before it becomes desired"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, instance)
@@ -172,7 +172,7 @@ var _ = Describe("Terminating Managed Resources", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(state).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Hold the ConfigMap in a terminating state so reconcile sees a live object with deletionTimestamp set.
 		DeferCleanup(func(ctx SpecContext) {
@@ -189,7 +189,7 @@ var _ = Describe("Terminating Managed Resources", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			configMap.Finalizers = append(configMap.Finalizers, blockingFinalizer)
 			g.Expect(env.Client.Update(ctx, configMap)).To(Succeed())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, configMap)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -197,7 +197,7 @@ var _ = Describe("Terminating Managed Resources", func() {
 			err := env.Client.Get(ctx, configMapKey, current)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(current.GetDeletionTimestamp()).ToNot(BeNil())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Make the downstream Deployment newly desired while the upstream ConfigMap is still terminating.
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -209,7 +209,7 @@ var _ = Describe("Terminating Managed Resources", func() {
 			spec["createDeployment"] = true
 			g.Expect(unstructured.SetNestedMap(instance.Object, spec, "spec")).To(Succeed())
 			g.Expect(env.Client.Update(ctx, instance)).To(Succeed())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, instance)
@@ -237,7 +237,7 @@ var _ = Describe("Terminating Managed Resources", func() {
 			g.Expect(resourcesReadyCondition["reason"]).To(Equal("ResourceDeleting"))
 			msg, _ := resourcesReadyCondition["message"].(string)
 			g.Expect(msg).To(ContainSubstring(fmt.Sprintf(`resource "%s/%s"`, namespace, configMapName)))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Consistently(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, deploymentKey, &appsv1.Deployment{})
@@ -252,7 +252,7 @@ var _ = Describe("Terminating Managed Resources", func() {
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, configMapKey, &corev1.ConfigMap{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "terminating configmap should be deleted after finalizer removal"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			current := &corev1.ConfigMap{}
@@ -260,7 +260,7 @@ var _ = Describe("Terminating Managed Resources", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(current.GetDeletionTimestamp()).To(BeNil())
 			g.Expect(current.Data["value"]).To(Equal("active"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			current := &appsv1.Deployment{}
@@ -269,7 +269,7 @@ var _ = Describe("Terminating Managed Resources", func() {
 			g.Expect(current.Spec.Template.Spec.Containers).ToNot(BeEmpty())
 			g.Expect(current.Spec.Template.Spec.Containers[0].Env).ToNot(BeEmpty())
 			g.Expect(current.Spec.Template.Spec.Containers[0].Env[0].Value).To(Equal("active"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, instance)
@@ -278,6 +278,6 @@ var _ = Describe("Terminating Managed Resources", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(state).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

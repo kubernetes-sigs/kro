@@ -103,7 +103,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(props["spec"].Properties["field1"].Type).To(Equal("string"))
 				g.Expect(props["spec"].Properties["field2"].Type).To(Equal("integer"))
 				g.Expect(props["spec"].Properties["field2"].Default.Raw).To(Equal([]byte("42")))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
@@ -128,7 +128,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(env.Client.Get(ctx, types.NamespacedName{
 					Name: "testupdates.kro.run",
 				}, crd)).To(Succeed())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Update ResourceGraphDefinition with new fields
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -145,7 +145,7 @@ var _ = Describe("CRD", func() {
 
 				err = env.Client.Update(ctx, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Verify CRD is updated
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -157,7 +157,7 @@ var _ = Describe("CRD", func() {
 				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
 				g.Expect(props["spec"].Properties).To(HaveLen(3))
 				g.Expect(props["spec"].Properties["field3"].Type).To(Equal("boolean"))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
@@ -182,33 +182,33 @@ var _ = Describe("CRD", func() {
 				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "testnames.kro.run"}, crd)).To(Succeed())
 				g.Expect(crd.Spec.Names.ShortNames).To(ConsistOf("tn", "tname"))
 				g.Expect(crd.Spec.Names.Categories).To(ConsistOf("kro", "platform"))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Eventually(func(g Gomega, ctx SpecContext) {
 				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
 				rgd.Spec.Schema.ShortNames = []string{"tn2"}
 				rgd.Spec.Schema.Categories = []string{"platform"}
 				g.Expect(env.Client.Update(ctx, rgd)).To(Succeed())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Eventually(func(g Gomega, ctx SpecContext) {
 				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "testnames.kro.run"}, crd)).To(Succeed())
 				g.Expect(crd.Spec.Names.ShortNames).To(ConsistOf("tn2"))
 				g.Expect(crd.Spec.Names.Categories).To(ConsistOf("platform"))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Eventually(func(g Gomega, ctx SpecContext) {
 				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
 				rgd.Spec.Schema.ShortNames = nil
 				rgd.Spec.Schema.Categories = nil
 				g.Expect(env.Client.Update(ctx, rgd)).To(Succeed())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Eventually(func(g Gomega, ctx SpecContext) {
 				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "testnames.kro.run"}, crd)).To(Succeed())
 				g.Expect(crd.Spec.Names.ShortNames).To(BeEmpty())
 				g.Expect(crd.Spec.Names.Categories).To(BeEmpty())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
@@ -231,7 +231,7 @@ var _ = Describe("CRD", func() {
 			Eventually(func(g Gomega, ctx SpecContext) {
 				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})).To(Succeed())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Delete ResourceGraphDefinition
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
@@ -242,15 +242,18 @@ var _ = Describe("CRD", func() {
 			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
-			// Now verify the CRD is also gone (may take a moment for the
-			// apiserver's customresourcecleanup finalizer to clear).
+			// Now verify the CRD is also gone. Under heavy parallel CRD churn the
+			// apiserver's customresourcecleanup finalizer can lag for tens of
+			// seconds; unstick it (this CRD has no custom resources) so the
+			// deletion the controller initiated completes promptly.
+			unstickTerminatingCRD(ctx, crdName)
 			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})
 				g.Expect(err).To(MatchError(errors.IsNotFound, "crd should be deleted"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 	})
 
@@ -276,7 +279,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(metadata.IsKROOwned(&crd.ObjectMeta)).To(BeTrue())
 				g.Expect(crd.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal("test-crd-owner-1"))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Create second RGD trying to manage the same CRD
 			rgd2 := generator.NewResourceGraphDefinition("test-crd-owner-2",
@@ -297,7 +300,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				// RGD2 should remain in Inactive state due to CRD ownership conflict
 				g.Expect(rgd2.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Cleanup
 			Expect(env.Client.Delete(ctx, rgd1)).To(Succeed())
@@ -333,7 +336,7 @@ var _ = Describe("CRD", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: "test-controller-preserve-1"}, rgd1)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd1.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Create an instance of RGD1
 			instance1 := &unstructured.Unstructured{
@@ -360,7 +363,7 @@ var _ = Describe("CRD", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal("value1"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Create second RGD with same CRD (will conflict)
 			rgd2 := generator.NewResourceGraphDefinition("test-controller-preserve-2",
@@ -379,7 +382,7 @@ var _ = Describe("CRD", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: "test-controller-preserve-2"}, rgd2)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd2.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Delete RGD2 (the conflicting one)
 			Expect(env.Client.Delete(ctx, rgd2)).To(Succeed())
@@ -388,7 +391,7 @@ var _ = Describe("CRD", func() {
 			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: "test-controller-preserve-2"}, rgd2)
 				g.Expect(err).To(MatchError(errors.IsNotFound, "rgd2 should be deleted"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Verify RGD1 is still Active
 			err := env.Client.Get(ctx, types.NamespacedName{Name: "test-controller-preserve-1"}, rgd1)
@@ -420,7 +423,7 @@ var _ = Describe("CRD", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal("value2"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Cleanup
 			Expect(env.Client.Delete(ctx, instance1)).To(Succeed())
@@ -454,7 +457,7 @@ var _ = Describe("CRD", func() {
 				err = env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Update RGD with breaking change: remove field2
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -468,7 +471,7 @@ var _ = Describe("CRD", func() {
 
 				err = env.Client.Update(ctx, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Verify RGD becomes inactive with breaking change error
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -489,7 +492,7 @@ var _ = Describe("CRD", func() {
 					}
 				}
 				g.Expect(foundCondition).To(BeTrue(), "Expected to find KindReady=False condition")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Now add the allow-breaking-changes annotation and touch spec to trigger reconcile
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -508,7 +511,7 @@ var _ = Describe("CRD", func() {
 
 				err = env.Client.Update(ctx, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Verify RGD becomes active and CRD is updated with breaking change
 			crd := &apiextensionsv1.CustomResourceDefinition{}
@@ -524,7 +527,7 @@ var _ = Describe("CRD", func() {
 				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
 				g.Expect(props["spec"].Properties).ToNot(HaveKey("field2"))
 				g.Expect(props["spec"].Properties).To(HaveKey("field1"))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Cleanup
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
@@ -548,7 +551,7 @@ var _ = Describe("CRD", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Update RGD with non-breaking change: add optional field2
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -563,7 +566,7 @@ var _ = Describe("CRD", func() {
 
 				err = env.Client.Update(ctx, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Verify RGD stays active and CRD is updated
 			crd := &apiextensionsv1.CustomResourceDefinition{}
@@ -581,7 +584,7 @@ var _ = Describe("CRD", func() {
 				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
 				g.Expect(props["spec"].Properties).To(HaveKey("field2"))
 				g.Expect(props["spec"].Properties["field2"].Type).To(Equal("integer"))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Update RGD with non-breaking change: change the default value
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -596,7 +599,7 @@ var _ = Describe("CRD", func() {
 
 				err = env.Client.Update(ctx, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Verify RGD stays active and CRD is updated
 			crd = &apiextensionsv1.CustomResourceDefinition{}
@@ -615,7 +618,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(props["spec"].Properties).To(HaveKey("field2"))
 				g.Expect(props["spec"].Properties["field2"].Type).To(Equal("integer"))
 				g.Expect(props["spec"].Properties["field2"].Default.Raw).To(Equal([]byte("52")))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Cleanup
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
@@ -650,7 +653,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(*props["spec"].Properties["replicas"].Minimum).To(Equal(1.0))
 				g.Expect(props["spec"].Properties["replicas"].Maximum).ToNot(BeNil())
 				g.Expect(*props["spec"].Properties["replicas"].Maximum).To(Equal(10.0))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Remove minimum and maximum markers
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -663,7 +666,7 @@ var _ = Describe("CRD", func() {
 
 				err = env.Client.Update(ctx, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Verify CRD constraints are removed
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -679,7 +682,7 @@ var _ = Describe("CRD", func() {
 				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
 				g.Expect(props["spec"].Properties["replicas"].Minimum).To(BeNil())
 				g.Expect(props["spec"].Properties["replicas"].Maximum).To(BeNil())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Cleanup
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
@@ -724,7 +727,7 @@ var _ = Describe("CRD", func() {
 
 				// store the original resource version
 				originalCRDVersion = crd.ResourceVersion
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Manually modify the CRD to simulate external modification
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -738,7 +741,7 @@ var _ = Describe("CRD", func() {
 
 				err = env.Client.Update(ctx, crd)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// verify that the ResourceGraphDefinition controller reconciles the CRD
 			// back to its original state
@@ -798,7 +801,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(metadata.IsKROOwned(&crd.ObjectMeta)).To(BeTrue())
 				g.Expect(crd.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal(rgdName))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Record the original CRD UID so we can verify it gets recreated
 			// (not just the old one surviving deletion).
@@ -806,6 +809,12 @@ var _ = Describe("CRD", func() {
 
 			// Externally delete the managed CRD to simulate an out-of-band deletion.
 			Expect(env.Client.Delete(ctx, crd)).To(Succeed())
+
+			// Complete the (externally initiated) deletion promptly so the
+			// controller can recreate the CRD; under parallel churn the apiserver
+			// cleanup finalizer can otherwise leave it Terminating for tens of
+			// seconds. This CRD has no custom resources.
+			unstickTerminatingCRD(ctx, crdName)
 
 			// The controller's CRD metadata watch should detect the deletion event and
 			// trigger a reconciliation of the owning RGD, which calls crdManager.Ensure()
@@ -840,7 +849,7 @@ var _ = Describe("CRD", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})

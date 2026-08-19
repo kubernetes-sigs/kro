@@ -76,7 +76,7 @@ var _ = Describe("Status schema references", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instanceName := "test-schema-only"
 		instance := &unstructured.Unstructured{
@@ -108,7 +108,7 @@ var _ = Describe("Status schema references", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue(), "status.echoHost should exist")
 			g.Expect(echoHost).To(Equal("example.com"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should populate status mixing resource field and schema spec field", func(ctx SpecContext) {
@@ -144,7 +144,7 @@ var _ = Describe("Status schema references", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instanceName := "test-schema-mixed"
 		instance := &unstructured.Unstructured{
@@ -176,7 +176,7 @@ var _ = Describe("Status schema references", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue(), "status.url should exist")
 			g.Expect(url).To(Equal("my-configmap/api/v1"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should reflect updated schema spec value in status", func(ctx SpecContext) {
@@ -209,7 +209,7 @@ var _ = Describe("Status schema references", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instanceName := "test-schema-update"
 		instance := &unstructured.Unstructured{
@@ -241,7 +241,7 @@ var _ = Describe("Status schema references", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(echoLabel).To(Equal("first"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Update spec.label and verify status tracks it.
 		Expect(unstructured.SetNestedField(instance.Object, "second", "spec", "label")).To(Succeed())
@@ -258,6 +258,6 @@ var _ = Describe("Status schema references", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(echoLabel).To(Equal("second"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

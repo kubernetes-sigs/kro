@@ -134,7 +134,8 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration, pass extra args after --
 ifeq ($(WHAT),integration)
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" \
-		go tool ginkgo -p -v \
+		go tool ginkgo -p \
+		--timeout=5m \
 		--cover \
 		--coverprofile=integration-cover.out \
 		-coverpkg=github.com/kubernetes-sigs/kro/pkg/... \

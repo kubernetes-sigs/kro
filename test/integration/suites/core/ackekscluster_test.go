@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ackekscluster_test
+package core_test
 
 import (
 	"fmt"
-	"strings"
-	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -31,34 +29,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
-
-var env *environment.Environment
-
-func TestEKSCluster(t *testing.T) {
-	RegisterFailHandler(Fail)
-	BeforeSuite(func() {
-		var err error
-		env, err = environment.New(t.Context(),
-			environment.ControllerConfig{
-				AllowCRDDeletion: true,
-				LogWriter:        GinkgoWriter,
-				ReconcileConfig: ctrlinstance.ReconcileConfig{
-					DefaultRequeueDuration: 3 * time.Second,
-				},
-			},
-		)
-		Expect(err).NotTo(HaveOccurred())
-	})
-	AfterSuite(func() {
-		Expect(env.Stop()).NotTo(HaveOccurred())
-	})
-
-	RunSpecs(t, "EKSCluster Suite")
-}
 
 var _ = Describe("EKSCluster", func() {
 	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func(ctx SpecContext) {
@@ -441,14 +413,44 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(clusterARN).To(Equal("arn:aws:eks:us-west-2:123456789012:cluster/test-instance"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		// Before deletion, check version update
-		// Store resource versions
-		latestResources := make(map[string]*unstructured.Unstructured)
-		for _, obj := range []*unstructured.Unstructured{
+		// Before deletion, verify that changing the instance version reconciles
+		// only the Cluster and leaves the other managed resources untouched.
+		//
+		// Capture a *settled* baseline first. On the shared, parallel control
+		// plane the creation cascade may still be writing these resources here,
+		// so wait until a full snapshot is stable across two consecutive polls
+		// before using it as the baseline — resourceVersion is monotonic, so a
+		// stale baseline could never re-match.
+		trackedResources := []*unstructured.Unstructured{
 			vpc, igw, rt, subnetA, subnetB, cluster, adminRole, eip, nat, nodeRole, nodeGroup, clusterRole,
-		} {
-			latestResources[fmt.Sprintf("%s/%s", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName())] = obj
 		}
+		resourceKey := func(o *unstructured.Unstructured) string {
+			return fmt.Sprintf("%s/%s", o.GetObjectKind().GroupVersionKind().Kind, o.GetName())
+		}
+		snapshotResourceVersions := func(ctx SpecContext) map[string]string {
+			rvs := make(map[string]string, len(trackedResources))
+			for _, ref := range trackedResources {
+				obj := &unstructured.Unstructured{}
+				obj.SetGroupVersionKind(ref.GetObjectKind().GroupVersionKind())
+				if err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      ref.GetName(),
+					Namespace: namespace,
+				}, obj); err != nil {
+					return nil
+				}
+				rvs[resourceKey(obj)] = obj.GetResourceVersion()
+			}
+			return rvs
+		}
+		baselineResourceVersions := map[string]string{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			current := snapshotResourceVersions(ctx)
+			prev := baselineResourceVersions
+			baselineResourceVersions = current
+			g.Expect(current).ToNot(BeNil())
+			g.Expect(current).To(Equal(prev),
+				"waiting for managed-resource resourceVersions to stabilize before the version bump")
+		}, 90*time.Second, 2*time.Second).WithContext(ctx).Should(Succeed())
 
 		// Update cluster version
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -464,27 +466,26 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		// Wait and verify only cluster was updated
-		time.Sleep(5 * time.Second)
+		// Verify the version change propagated to the Cluster and left every
+		// other managed resource at its settled resourceVersion.
 		Eventually(func(g Gomega, ctx SpecContext) {
-
-			for key, latestResource := range latestResources {
-				kind := strings.Split(key, "/")[0]
-				name := strings.Split(key, "/")[1]
+			for _, ref := range trackedResources {
+				kind := ref.GetObjectKind().GroupVersionKind().Kind
+				key := resourceKey(ref)
 
 				obj := &unstructured.Unstructured{}
-				obj.SetGroupVersionKind(latestResource.GetObjectKind().GroupVersionKind())
+				obj.SetGroupVersionKind(ref.GetObjectKind().GroupVersionKind())
 				err := env.Client.Get(ctx, types.NamespacedName{
-					Name:      name,
+					Name:      ref.GetName(),
 					Namespace: namespace,
 				}, obj)
 				g.Expect(err).ToNot(HaveOccurred())
 
 				if kind == "Cluster" {
-					g.Expect(obj.GetResourceVersion()).ToNot(Equal(latestResource.GetResourceVersion()),
+					g.Expect(obj.GetResourceVersion()).ToNot(Equal(baselineResourceVersions[key]),
 						"Cluster should be updated for version change")
 				} else {
-					g.Expect(obj.GetResourceVersion()).To(Equal(latestResource.GetResourceVersion()),
+					g.Expect(obj.GetResourceVersion()).To(Equal(baselineResourceVersions[key]),
 						"Resource %s should not be updated during version change", key)
 				}
 			}

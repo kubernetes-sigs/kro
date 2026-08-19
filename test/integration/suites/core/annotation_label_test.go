@@ -90,7 +90,7 @@ var _ = Describe("Labels and Annotations", func() {
 			}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		apiVersion, kind := schema.GroupVersionKind{
 			Group:   rgd.Spec.Schema.Group,
@@ -148,7 +148,7 @@ var _ = Describe("Labels and Annotations", func() {
 			g.Expect(instance.GetLabels()).ToNot(HaveKey(metadata.ManagedByLabelKey),
 				"instance should not have app.kubernetes.io/managed-by label it may be used by other application lifecycle tooling")
 
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		cfgMap := &corev1.ConfigMap{}
 		err := env.Client.Get(ctx, types.NamespacedName{

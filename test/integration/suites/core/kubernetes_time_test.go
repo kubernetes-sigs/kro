@@ -92,7 +92,7 @@ var _ = Describe("ResourceGraphDefinition Time Expressions", func() {
 			}, created)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(created.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating instance")
 		instance := &unstructured.Unstructured{
@@ -123,7 +123,7 @@ var _ = Describe("ResourceGraphDefinition Time Expressions", func() {
 
 			// Format RFC3339 exactly as returned by Kubernetes
 			secretCreationTS = secret.ObjectMeta.CreationTimestamp.Time.UTC().Format(time.RFC3339)
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("verifying instance becomes ACTIVE and timestamp matches secret")
 
@@ -141,6 +141,6 @@ var _ = Describe("ResourceGraphDefinition Time Expressions", func() {
 			status := obj.Object["status"].(map[string]any)
 			g.Expect(status).To(HaveKeyWithValue("state", Equal("ACTIVE")))
 			g.Expect(status).To(HaveKeyWithValue("creationTimestamp", Equal(secretCreationTS)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

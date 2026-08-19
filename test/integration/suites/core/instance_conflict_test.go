@@ -118,13 +118,13 @@ var _ = Describe("Instance Isolation", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd1.Name}, rgd1)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd1.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd2.Name}, rgd2)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd2.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Here we are purposefully creating 2 instances with the same name with different RGDs
 		// Both instances have the same name but are in 2 different namespaces
@@ -174,7 +174,7 @@ var _ = Describe("Instance Isolation", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(instanceState).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -187,7 +187,7 @@ var _ = Describe("Instance Isolation", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(instanceState).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		cfgMap1 := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -195,7 +195,7 @@ var _ = Describe("Instance Isolation", func() {
 				Name:      "shared-resource",
 				Namespace: namespace,
 			}, cfgMap1)).ToNot(HaveOccurred())
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		cfgMap2 := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -203,7 +203,7 @@ var _ = Describe("Instance Isolation", func() {
 				Name:      "shared-resource",
 				Namespace: namespace2,
 			}, cfgMap2)).ToNot(HaveOccurred())
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(cfgMap1.GetLabels()).To(SatisfyAll(
 			HaveKeyWithValue(metadata.InstanceLabel, "my-app"),
@@ -242,7 +242,7 @@ var _ = Describe("Instance Isolation", func() {
 			g.Expect(cfgMap1.Data).To(SatisfyAll(
 				HaveKeyWithValue("source", "app1"),
 			))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("Modify instance2 ConfigMap data to check if the data is changed back to original state")
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -256,7 +256,7 @@ var _ = Describe("Instance Isolation", func() {
 			err := env.Client.Update(ctx, cfgMap2)
 
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			cfgMap2 := &corev1.ConfigMap{}
@@ -268,6 +268,6 @@ var _ = Describe("Instance Isolation", func() {
 			g.Expect(cfgMap2.Data).To(SatisfyAll(
 				HaveKeyWithValue("source", "app2"),
 			), "ConfigMap should be reconciled back to original values by instance2 controller")
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

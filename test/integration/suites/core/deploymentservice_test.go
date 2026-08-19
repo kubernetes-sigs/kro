@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package deploymentservice_test
+package core_test
 
 import (
 	"fmt"
-	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -36,29 +35,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
-
-var env *environment.Environment
-
-func TestDeploymentservice(t *testing.T) {
-	RegisterFailHandler(Fail)
-	BeforeSuite(func() {
-		var err error
-		env, err = environment.New(t.Context(),
-			environment.ControllerConfig{
-				AllowCRDDeletion: true,
-				ReconcileConfig: ctrlinstance.ReconcileConfig{
-					DefaultRequeueDuration: 3 * time.Second,
-				},
-			},
-		)
-		Expect(err).NotTo(HaveOccurred())
-	})
-	AfterSuite(func() {
-		Expect(env.Stop()).NotTo(HaveOccurred())
-	})
-
-	RunSpecs(t, "DeploymentService Suite")
-}
 
 var _ = Describe("DeploymentService", func() {
 	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func(ctx SpecContext) {

@@ -120,7 +120,7 @@ var _ = Describe("Webhook Denial", func() {
 			createdRGD := &krov1alpha1.ResourceGraphDefinition{}
 			g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)).To(Succeed())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instanceName := "test-webhook-instance"
 		instance := &unstructured.Unstructured{
@@ -155,7 +155,7 @@ var _ = Describe("Webhook Denial", func() {
 			g.Expect(resourcesReady).ToNot(BeNil())
 			g.Expect(resourcesReady["status"]).To(Equal("False"))
 			g.Expect(resourcesReady["message"]).To(ContainSubstring("not allowed by webhook policy"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, binding)).To(Succeed())
 		Expect(env.Client.Delete(ctx, policy)).To(Succeed())
@@ -169,7 +169,7 @@ var _ = Describe("Webhook Denial", func() {
 			labels["trigger-reconcile"] = "true"
 			instance.SetLabels(labels)
 			g.Expect(env.Client.Update(ctx, instance)).To(Succeed())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, instance)).To(Succeed())
@@ -179,6 +179,6 @@ var _ = Describe("Webhook Denial", func() {
 			configMap := &corev1.ConfigMap{}
 			configMapName := types.NamespacedName{Name: instanceName, Namespace: namespace}
 			g.Expect(env.Client.Get(ctx, configMapName, configMap)).To(Succeed())
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

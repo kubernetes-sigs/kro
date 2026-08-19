@@ -85,7 +85,7 @@ var _ = Describe("Collection Watch", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create an instance with 3 values -> 3 ConfigMaps.
 		name := "test-coll-watch"
@@ -116,7 +116,7 @@ var _ = Describe("Collection Watch", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify all 3 ConfigMaps exist.
 		for _, value := range []string{"alpha", "beta", "gamma"} {
@@ -128,7 +128,7 @@ var _ = Describe("Collection Watch", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["key"]).To(Equal(value))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Wait for the requeue timer to fire and watches to stabilize.
@@ -171,7 +171,7 @@ var _ = Describe("Collection Watch", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -179,7 +179,7 @@ var _ = Describe("Collection Watch", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should not react to externally created resources after collection shrinks", func(ctx SpecContext) {
@@ -214,7 +214,7 @@ var _ = Describe("Collection Watch", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance with 3 items.
 		name := "test-coll-shrink"
@@ -243,7 +243,7 @@ var _ = Describe("Collection Watch", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			val, _, _ := unstructured.NestedString(instance.Object, "status", "state")
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, value := range []string{"alpha", "beta", "gamma"} {
 			cm := &corev1.ConfigMap{}
@@ -253,7 +253,7 @@ var _ = Describe("Collection Watch", func() {
 					Namespace: namespace,
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Shrink collection from 3 to 2 by removing "gamma".
@@ -274,7 +274,7 @@ var _ = Describe("Collection Watch", func() {
 				Namespace: namespace,
 			}, &corev1.ConfigMap{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "gamma should be pruned"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Wait for instance to re-stabilize as ACTIVE.
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -285,7 +285,7 @@ var _ = Describe("Collection Watch", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			val, _, _ := unstructured.NestedString(instance.Object, "status", "state")
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Let watches stabilize past the requeue timer.
 		time.Sleep(5 * time.Second)
@@ -329,7 +329,7 @@ var _ = Describe("Collection Watch", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -337,6 +337,6 @@ var _ = Describe("Collection Watch", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

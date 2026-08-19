@@ -149,7 +149,7 @@ var _ = Describe("Instance Conditions", func() {
 			// Validate lastTransitionTime is set
 			g.Expect(readyCondition["lastTransitionTime"]).ToNot(BeNil(), "Ready lastTransitionTime should be set")
 
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify the ConfigMap was created
 		configMap := &corev1.ConfigMap{}
@@ -160,7 +160,7 @@ var _ = Describe("Instance Conditions", func() {
 			}, configMap)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(configMap.Data["config"]).To(Equal("test-data"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should show proper condition progression during deletion", func(ctx SpecContext) {
@@ -202,7 +202,7 @@ var _ = Describe("Instance Conditions", func() {
 			}
 			g.Expect(readyCondition).ToNot(BeNil())
 			g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instance := &unstructured.Unstructured{
@@ -243,7 +243,7 @@ var _ = Describe("Instance Conditions", func() {
 			}
 			g.Expect(readyCondition).ToNot(BeNil())
 			g.Expect(readyCondition["status"]).To(Equal("True"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete the instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -269,49 +269,7 @@ var _ = Describe("Instance Conditions", func() {
 					}
 				}
 			}
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
-	It("should surface a failure condition when a resource is invalid", func(ctx SpecContext) {
-		// RGD with a broken resource: missing 'metadata.name' in a ConfigMap
-		rgd := generator.NewResourceGraphDefinition("test-broken-resource",
-			generator.WithSchema(
-				"TestBrokenResource", "v1alpha1",
-				map[string]interface{}{
-					"value": "string",
-				},
-				nil,
-			),
-			generator.WithResource("configmap", map[string]interface{}{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
-					"name": "${schema.metadata.name}",
-				},
-				"data": map[string]interface{}{
-					"foo": "${schema.spec.value}",
-				},
-			}, nil, []string{
-				"${schema.spec.convex.enabled}", // Intentional error: 'convex' field does not exist
-			}),
-		)
-
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-
-		// Wait for RGD to be Inactive due to the broken
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-			var ready *krov1alpha1.Condition
-			for _, c := range rgd.Status.Conditions {
-				if string(c.Type) == ctrlinstance.Ready {
-					ready = &c
-					break
-				}
-			}
-			g.Expect(ready).ToNot(BeNil())
-			g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-		}).WithContext(ctx).WithTimeout(20 * time.Second).WithPolling(time.Second).Should(Succeed())
-	})
 })

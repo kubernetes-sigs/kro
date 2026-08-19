@@ -85,7 +85,7 @@ var _ = Describe("Schema-aware CEL value conversion", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, obj)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(obj.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating instance with a known clientId value")
 		instance := &unstructured.Unstructured{
@@ -115,7 +115,7 @@ var _ = Describe("Schema-aware CEL value conversion", func() {
 			}, secret)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(secret.Data).To(HaveKey("clientId"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("verifying instance status has the decoded secret value")
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -133,6 +133,6 @@ var _ = Describe("Schema-aware CEL value conversion", func() {
 			g.Expect(ok).To(BeTrue(), "status should be a map")
 			g.Expect(status).To(HaveKeyWithValue("state", "ACTIVE"))
 			g.Expect(status).To(HaveKeyWithValue("decodedClientId", "my-secret-client"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

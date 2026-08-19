@@ -109,7 +109,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating instance")
 			instance := &unstructured.Unstructured{
@@ -173,7 +173,7 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplySetAdditionalNamespacesAnnotation,
 					"",
 				), "instance should have empty additional-namespaces annotation (parent ns is implicit)")
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying child resources have correct labels with exact values")
 			applySetID := applyset.ID(instance)
@@ -187,7 +187,7 @@ var _ = Describe("ApplySet", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				verifyChildResourceLabelsWithNodeID(g, cm.GetLabels(), applySetID, instance, "configMap")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Check Secret with exact node ID
 			secret := &corev1.Secret{}
@@ -198,7 +198,7 @@ var _ = Describe("ApplySet", func() {
 				}, secret)
 				g.Expect(err).ToNot(HaveOccurred())
 				verifyChildResourceLabelsWithNodeID(g, secret.GetLabels(), applySetID, instance, "secret")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Check ServiceAccount with exact node ID
 			sa := &corev1.ServiceAccount{}
@@ -209,7 +209,7 @@ var _ = Describe("ApplySet", func() {
 				}, sa)
 				g.Expect(err).ToNot(HaveOccurred())
 				verifyChildResourceLabelsWithNodeID(g, sa.GetLabels(), applySetID, instance, "serviceAccount")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 	})
 
@@ -257,7 +257,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating instance with includeSecret=true")
 			instance := &unstructured.Unstructured{
@@ -294,7 +294,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, secret)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying exact parent annotations with both types")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -331,7 +331,7 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplySetParentIDLabel,
 					expectedApplySetID,
 				), "instance should have exact applyset parent ID label")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("updating instance to set includeSecret=false")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -344,7 +344,7 @@ var _ = Describe("ApplySet", func() {
 				g.Expect(unstructured.SetNestedField(instance.Object, false, "spec", "includeSecret")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("waiting for secret to be pruned")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -354,7 +354,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, secret)
 				g.Expect(errors.IsNotFound(err)).To(BeTrue(), "secret should be pruned")
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying ConfigMap still exists")
 			cm := &corev1.ConfigMap{}
@@ -398,7 +398,7 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplySetParentIDLabel,
 					expectedApplySetID,
 				), "applyset parent ID should remain exact")
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 
 		It("should resolve includeWhen from upstream resources and prune when they flip", func(ctx SpecContext) {
@@ -443,7 +443,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			instance := &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -480,7 +480,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, dependent)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("updating the upstream-driving field to false")
 			Expect(retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -515,7 +515,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, dependent)
 				g.Expect(errors.IsNotFound(err)).To(BeTrue(), "dependent should be pruned once upstream condition flips")
-			}, 40*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 40*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 
 		It("should prune downstream dependents when a resource-backed includeWhen flips false", func(ctx SpecContext) {
@@ -569,7 +569,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			instance := &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -602,7 +602,7 @@ var _ = Describe("ApplySet", func() {
 					}, &corev1.ConfigMap{})
 					g.Expect(err).ToNot(HaveOccurred())
 				}
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(retry.RetryOnConflict(retry.DefaultRetry, func() error {
 				current := &unstructured.Unstructured{}
@@ -643,7 +643,7 @@ var _ = Describe("ApplySet", func() {
 						prunedName,
 					)
 				}
-			}, 40*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 40*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 
 		It("should prune status-backed includeWhen dependents when upstream status flips false", func(ctx SpecContext) {
@@ -706,7 +706,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			instance := &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -735,7 +735,7 @@ var _ = Describe("ApplySet", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(source.Spec.Replicas).ToNot(BeNil())
 				g.Expect(*source.Spec.Replicas).To(Equal(int32(1)))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Consistently(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{
@@ -743,7 +743,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, &corev1.ConfigMap{})
 				g.Expect(errors.IsNotFound(err)).To(BeTrue(), "dependent should wait until source status satisfies includeWhen")
-			}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			source.Status.Conditions = []appsv1.DeploymentCondition{
 				{
@@ -763,7 +763,7 @@ var _ = Describe("ApplySet", func() {
 				}, dependent)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(dependent.Data).To(HaveKeyWithValue("key", "status-backed"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{
@@ -773,7 +773,7 @@ var _ = Describe("ApplySet", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				status, _, _ := unstructured.NestedString(instance.Object, "status", "state")
 				g.Expect(status).To(Equal("ACTIVE"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			source.Status.Conditions[0].Status = corev1.ConditionFalse
 			source.Status.Conditions[0].Reason = "ProgressDeadlineExceeded"
@@ -789,7 +789,7 @@ var _ = Describe("ApplySet", func() {
 				g.Expect(errors.IsNotFound(err)).To(
 					BeTrue(), "dependent should be pruned once status-backed includeWhen flips false",
 				)
-			}, 40*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 40*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 	})
 
@@ -848,7 +848,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("PHASE 1: creating instance with only ConfigMap (no Secret, no SA)")
 			instance := &unstructured.Unstructured{
@@ -887,7 +887,7 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplySetGKsAnnotation,
 					"ConfigMap",
 				), "Phase 1: should have only ConfigMap in GKs")
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("PHASE 2: adding Secret (annotations should GROW)")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -900,7 +900,7 @@ var _ = Describe("ApplySet", func() {
 				g.Expect(unstructured.SetNestedField(instance.Object, true, "spec", "includeSecret")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("waiting for Secret to be created")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -910,7 +910,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, secret)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying GKs annotation grew to include Secret")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -926,7 +926,7 @@ var _ = Describe("ApplySet", func() {
 				sort.Strings(gks)
 				g.Expect(gks).To(Equal([]string{"ConfigMap", "Secret"}),
 					"Phase 2: GKs should have grown to include Secret")
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("PHASE 3: adding ServiceAccount (annotations should GROW more)")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -939,7 +939,7 @@ var _ = Describe("ApplySet", func() {
 				g.Expect(unstructured.SetNestedField(instance.Object, true, "spec", "includeSA")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("waiting for ServiceAccount to be created")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -949,7 +949,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, sa)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying GKs annotation grew to include all three types")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -965,7 +965,7 @@ var _ = Describe("ApplySet", func() {
 				sort.Strings(gks)
 				g.Expect(gks).To(Equal([]string{"ConfigMap", "Secret", "ServiceAccount"}),
 					"Phase 3: GKs should have all three types")
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("PHASE 4: removing Secret (annotations should SHRINK)")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -978,7 +978,7 @@ var _ = Describe("ApplySet", func() {
 				g.Expect(unstructured.SetNestedField(instance.Object, false, "spec", "includeSecret")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("waiting for Secret to be pruned")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -988,7 +988,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, secret)
 				g.Expect(errors.IsNotFound(err)).To(BeTrue(), "Secret should be pruned")
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying GKs annotation shrunk after successful prune")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -1004,7 +1004,7 @@ var _ = Describe("ApplySet", func() {
 				sort.Strings(gks)
 				g.Expect(gks).To(Equal([]string{"ConfigMap", "ServiceAccount"}),
 					"Phase 4: GKs should have shrunk (Secret removed)")
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("PHASE 5: removing ServiceAccount (annotations should SHRINK to just ConfigMap)")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -1017,7 +1017,7 @@ var _ = Describe("ApplySet", func() {
 				g.Expect(unstructured.SetNestedField(instance.Object, false, "spec", "includeSA")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("waiting for ServiceAccount to be pruned")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -1027,7 +1027,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, sa)
 				g.Expect(errors.IsNotFound(err)).To(BeTrue(), "ServiceAccount should be pruned")
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying GKs annotation shrunk back to just ConfigMap")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -1042,7 +1042,7 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplySetGKsAnnotation,
 					"ConfigMap",
 				), "Phase 5: GKs should be back to just ConfigMap")
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying ConfigMap still exists throughout all phases")
 			cm := &corev1.ConfigMap{}
@@ -1092,7 +1092,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating instance with 3 values")
 			instance := &unstructured.Unstructured{
@@ -1152,7 +1152,7 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplySetParentIDLabel,
 					expectedApplySetID,
 				), "instance should have exact applyset parent ID label")
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			applySetID := applyset.ID(instance)
 
@@ -1182,7 +1182,7 @@ var _ = Describe("ApplySet", func() {
 						metadata.CollectionSizeLabel,
 						"3",
 					), "collection item should have exact collection-size label")
-				}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+				}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 			}
 		})
 
@@ -1223,7 +1223,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating instance with 3 values")
 			instance := &unstructured.Unstructured{
@@ -1254,7 +1254,7 @@ var _ = Describe("ApplySet", func() {
 						Namespace: namespace,
 					}, secret)
 					g.Expect(err).ToNot(HaveOccurred())
-				}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+				}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 			}
 
 			By("updating instance to only have 1 value")
@@ -1268,7 +1268,7 @@ var _ = Describe("ApplySet", func() {
 				g.Expect(unstructured.SetNestedStringSlice(instance.Object, []string{"one"}, "spec", "values")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("waiting for 'two' and 'three' secrets to be pruned")
 			for _, value := range []string{"two", "three"} {
@@ -1279,7 +1279,7 @@ var _ = Describe("ApplySet", func() {
 						Namespace: namespace,
 					}, secret)
 					g.Expect(errors.IsNotFound(err)).To(BeTrue(), "secret %s should be pruned", value)
-				}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+				}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 			}
 
 			By("verifying 'one' secret still exists with updated collection labels (exact)")
@@ -1302,7 +1302,7 @@ var _ = Describe("ApplySet", func() {
 					"remaining item should have exact collection-index 0")
 				g.Expect(labels).To(HaveKeyWithValue(metadata.CollectionSizeLabel, "1"),
 					"remaining item should have exact collection-size 1 after pruning")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 	})
 
@@ -1366,7 +1366,7 @@ var _ = Describe("ApplySet", func() {
 					err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 					g.Expect(err).ToNot(HaveOccurred())
 					g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-				}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+				}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 			}
 
 			By("creating instance from RGD1")
@@ -1419,7 +1419,7 @@ var _ = Describe("ApplySet", func() {
 					g.Expect(err).ToNot(HaveOccurred())
 					status, _, _ := unstructured.NestedString(inst.Object, "status", "state")
 					g.Expect(status).To(Equal("ACTIVE"))
-				}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+				}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 			}
 
 			By("verifying both ConfigMaps exist with different ApplySet IDs")
@@ -1442,7 +1442,7 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplysetPartOfLabel,
 					applySetID1,
 				), "RGD1's ConfigMap should belong to instance1's ApplySet")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Check RGD2's ConfigMap
 			cm2 := &corev1.ConfigMap{}
@@ -1456,7 +1456,7 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplysetPartOfLabel,
 					applySetID2,
 				), "RGD2's ConfigMap should belong to instance2's ApplySet")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("triggering reconcile by updating instance1")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -1474,7 +1474,7 @@ var _ = Describe("ApplySet", func() {
 				instance1.SetAnnotations(annotations)
 				err = env.Client.Update(ctx, instance1)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying RGD2's ConfigMap was NOT pruned by RGD1's reconcile")
 			Consistently(func(g Gomega, ctx SpecContext) {
@@ -1488,7 +1488,7 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplysetPartOfLabel,
 					applySetID2,
 				), "ConfigMap should still belong to instance2's ApplySet")
-			}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 
 		It("should not prune resources from different instances of the same RGD", func(ctx SpecContext) {
@@ -1523,7 +1523,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating first instance")
 			instance1 := &unstructured.Unstructured{
@@ -1573,7 +1573,7 @@ var _ = Describe("ApplySet", func() {
 					g.Expect(err).ToNot(HaveOccurred())
 					status, _, _ := unstructured.NestedString(inst.Object, "status", "state")
 					g.Expect(status).To(Equal("ACTIVE"))
-				}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+				}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 			}
 
 			By("verifying both ConfigMaps exist with different ApplySet IDs")
@@ -1600,7 +1600,7 @@ var _ = Describe("ApplySet", func() {
 					metadata.InstanceLabel,
 					"instance-a",
 				), "ConfigMap should reference instance-a")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Check instance2's ConfigMap
 			cm2 := &corev1.ConfigMap{}
@@ -1618,7 +1618,7 @@ var _ = Describe("ApplySet", func() {
 					metadata.InstanceLabel,
 					"instance-b",
 				), "ConfigMap should reference instance-b")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("triggering reconcile by updating instance1")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -1636,7 +1636,7 @@ var _ = Describe("ApplySet", func() {
 				instance1.SetAnnotations(annotations)
 				err = env.Client.Update(ctx, instance1)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying instance2's ConfigMap was NOT pruned by instance1's reconcile")
 			Consistently(func(g Gomega, ctx SpecContext) {
@@ -1650,7 +1650,7 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplysetPartOfLabel,
 					applySetID2,
 				), "ConfigMap should still belong to instance2's ApplySet")
-			}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying both instances still have correct parent annotations")
 			for _, inst := range []*unstructured.Unstructured{instance1, instance2} {
@@ -1677,7 +1677,7 @@ var _ = Describe("ApplySet", func() {
 						applyset.ApplySetParentIDLabel,
 						expectedApplySetID,
 					), "instance should have exact applyset parent ID")
-				}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+				}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 			}
 		})
 	})
@@ -1715,7 +1715,7 @@ var _ = Describe("ApplySet", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating instance with custom labels and annotations")
 			instance := &unstructured.Unstructured{
@@ -1753,7 +1753,7 @@ var _ = Describe("ApplySet", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				status, _, _ := unstructured.NestedString(instance.Object, "status", "state")
 				g.Expect(status).To(Equal("ACTIVE"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying custom labels are preserved alongside ApplySet labels")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -1794,7 +1794,7 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplySetGKsAnnotation,
 					"ConfigMap",
 				), "ApplySet GKs annotation should be present")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("triggering another reconcile and verifying labels are still preserved")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -1810,7 +1810,7 @@ var _ = Describe("ApplySet", func() {
 				instance.SetAnnotations(annotations)
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying labels and annotations are still preserved after second reconcile")
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -1840,7 +1840,7 @@ var _ = Describe("ApplySet", func() {
 					"ApplySet parent ID should still be present")
 				g.Expect(annotations).To(HaveKey(applyset.ApplySetToolingAnnotation),
 					"ApplySet tooling should still be present")
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 	})
 })

@@ -85,7 +85,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating the external ConfigMap with replicas=1")
 		extCM := &corev1.ConfigMap{
@@ -129,7 +129,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			}, managedCM)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(managedCM.Data).To(HaveKeyWithValue("replicas", "1"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("updating external ConfigMap to replicas=3")
 		Expect(env.Client.Get(ctx, types.NamespacedName{
@@ -193,7 +193,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating ConfigMaps with label team=bravo")
 		cm1 := &corev1.ConfigMap{
@@ -256,7 +256,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(configCount).To(Equal("2"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("external collection watch reacts to new matching resources", func(ctx SpecContext) {
@@ -292,7 +292,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating first ConfigMap with label watch-test=reactive")
 		cm1 := &corev1.ConfigMap{
@@ -334,7 +334,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(configCount).To(Equal("1"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating a second ConfigMap with label watch-test=reactive")
 		cm2 := &corev1.ConfigMap{
@@ -402,7 +402,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating 3 ConfigMaps out of alphabetical/priority order with label app=sorttest")
 		cmCharlie := &corev1.ConfigMap{
@@ -465,7 +465,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(sortedNames).To(Equal("cm-charlie,cm-alpha,cm-bravo"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("external ref to a chained RGD keeps the producer instance reconciling after consumer deletion",
@@ -500,7 +500,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: producerRGD.Name}, producerRGD)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(producerRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating a producer instance and waiting for its managed ConfigMap")
 			producerInstance := &unstructured.Unstructured{
@@ -540,7 +540,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				}, producerCM)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(producerCM.Data).To(HaveKeyWithValue("value", "one"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating a consumer RGD that externalRefs the producer custom resource kind")
 			consumerRGD := generator.NewResourceGraphDefinition("test-chained-consumer",
@@ -577,7 +577,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: consumerRGD.Name}, consumerRGD)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(consumerRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating the consumer instance so it registers an externalRef watch on the producer kind")
 			consumerInstance := &unstructured.Unstructured{
@@ -608,7 +608,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				}, consumerCM)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(consumerCM.Data).To(HaveKeyWithValue("value", "one"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("deleting the consumer instance so its externalRef watch is cleaned up")
 			Expect(env.Client.Delete(ctx, consumerInstance)).To(Succeed())
@@ -618,7 +618,7 @@ var _ = Describe("ExternalRef Watch", func() {
 					Namespace: namespace,
 				}, consumerInstance)
 				return apierrors.IsNotFound(err)
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(BeTrue())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(BeTrue())
 
 			By("updating the producer instance after consumer deletion")
 			Expect(env.Client.Get(ctx, types.NamespacedName{

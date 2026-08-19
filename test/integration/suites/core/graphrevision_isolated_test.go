@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package graphrevisions_test
+package core_test
 
 import (
 	"fmt"
@@ -36,13 +36,19 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	graphhash "github.com/kubernetes-sigs/kro/pkg/graph/hash"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
 const isolatedGraphRevisionRetentionLimit = 5
 
-var _ = Describe("GraphRevision Integration", Serial, func() {
+// These specs each boot their own fully isolated envtest control plane
+// (dedicated apiserver + controller manager) with a per-spec MaxGraphRevisions
+// config and, in some cases, controller restarts. They no longer run Serial:
+// Ginkgo parallelism is process-based, each spec's control plane is fully
+// isolated on ephemeral ports, and every query is scoped to the spec's own
+// randomly-named RGD, so they are safe to run concurrently with the rest of
+// the core suite (bounded by GINKGO_PROCS).
+var _ = Describe("GraphRevision Integration", func() {
 	It("should retain only the newest revisions and keep issuing from the watermark", func(ctx SpecContext) {
 		testEnv := newIsolatedGraphRevisionEnv(ctx, isolatedGraphRevisionRetentionLimit)
 		rgdName := fmt.Sprintf("gv-retain-%s", rand.String(5))
@@ -65,7 +71,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 				g.Expect(fresh.Status.LastIssuedRevision).To(Equal(revision))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		Eventually(func(g Gomega) {
@@ -76,7 +82,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 					int64(isolatedGraphRevisionRetentionLimit + 1),
 				),
 			))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		updateRGDDataDefaultInEnv(
 			ctx,
@@ -100,7 +106,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 					int64(isolatedGraphRevisionRetentionLimit + 2),
 				),
 			))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should delete the oldest graph revision on each update past the retention limit", func(ctx SpecContext) {
@@ -147,7 +153,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 				g.Expect(graphRevisionNumbers(gvs)).To(ConsistOf(
 					expectedRetainedRevisionNumbers(revision),
 				))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 	})
 
@@ -195,7 +201,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 			err := testEnv.Client.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, cm)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cm.Data).To(HaveKeyWithValue("key", "sticky-value"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		const updatesPastRetention = 5
 		latestRevision := int64(isolatedGraphRevisionRetentionLimit + updatesPastRetention)
@@ -234,7 +240,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 				g.Expect(graphRevisionNumbers(gvs)).To(ConsistOf(
 					expectedRetainedRevisionNumbers(revision),
 				))
-			}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 	})
 
@@ -266,7 +272,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(selected.Items).To(HaveLen(1))
 			g.Expect(selected.Items[0].Spec.Revision).To(Equal(int64(1)))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(testEnv.RestartControllers()).To(Succeed())
 
@@ -287,7 +293,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(selected.Items).To(HaveLen(1))
 			g.Expect(selected.Items[0].Spec.Revision).To(Equal(int64(1)))
-		}, 15*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 15*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It(
@@ -337,7 +343,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 				err := testEnv.Client.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, configMap)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(configMap.Data).To(HaveKeyWithValue("key", "before-restart"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			updateRGDDataDefaultInEnv(ctx, testEnv, rgdName, "restart-value-2")
 			Eventually(func(g Gomega) {
@@ -347,13 +353,13 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 				g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 				g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(2)))
 				g.Expect(maxGraphRevisionNumber(listGraphRevisionsInEnv(ctx, testEnv, rgdName))).To(Equal(int64(2)))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(testEnv.RestartControllers()).To(Succeed())
 
 			Consistently(func(g Gomega) {
 				g.Expect(maxGraphRevisionNumber(listGraphRevisionsInEnv(ctx, testEnv, rgdName))).To(Equal(int64(2)))
-			}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			expectExactRGDConditionsInEnv(ctx, testEnv, rgdName, 100*time.Millisecond, exactRGDExpectationInEnv{
 				state:      krov1alpha1.ResourceGraphDefinitionStateActive,
@@ -389,13 +395,13 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 				current.Object["spec"] = map[string]interface{}{"data": "after-restart"}
 				err = testEnv.Client.Update(ctx, current)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Eventually(func(g Gomega) {
 				err := testEnv.Client.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, configMap)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(configMap.Data).To(HaveKeyWithValue("key", "after-restart"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			updateRGDDataDefaultInEnv(ctx, testEnv, rgdName, "restart-value-3")
 			Eventually(func(g Gomega) {
@@ -404,7 +410,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(3)))
 				g.Expect(maxGraphRevisionNumber(listGraphRevisionsInEnv(ctx, testEnv, rgdName))).To(Equal(int64(3)))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		},
 	)
 
@@ -453,7 +459,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 			currentHash, hashErr := graphhash.Spec(fresh.Spec)
 			g.Expect(hashErr).ToNot(HaveOccurred())
 			g.Expect(latestHash).To(Equal(currentHash))
-		}, 40*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 40*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should not issue phantom revisions across repeated restart and update cycles", func(ctx SpecContext) {
@@ -487,13 +493,13 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 				g.Expect(fresh.Status.LastIssuedRevision).To(Equal(expectedLatest))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(testEnv.RestartControllers()).To(Succeed())
 
 			Consistently(func(g Gomega) {
 				g.Expect(maxGraphRevisionNumber(listGraphRevisionsInEnv(ctx, testEnv, rgdName))).To(Equal(expectedLatest))
-			}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		instanceName := fmt.Sprintf("inst-%s", rand.String(5))
@@ -521,7 +527,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 			err := testEnv.Client.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, configMap)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(configMap.Data).To(HaveKeyWithValue("key", "post-restart"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		finalExpectedLatest := int64(cycles + 1)
 		Eventually(func(g Gomega) {
@@ -530,41 +536,11 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(finalExpectedLatest))
 			g.Expect(maxGraphRevisionNumber(listGraphRevisionsInEnv(ctx, testEnv, rgdName))).To(Equal(finalExpectedLatest))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })
 
 // Helpers — self-contained for this suite.
-
-func configmapRGD(name, kind string) *krov1alpha1.ResourceGraphDefinition {
-	return generator.NewResourceGraphDefinition(name,
-		generator.WithSchema(
-			kind, "v1alpha1",
-			map[string]interface{}{
-				"data": "string | default=hello",
-			},
-			nil,
-		),
-		generator.WithResource("configmap", map[string]interface{}{
-			"apiVersion": "v1",
-			"kind":       "ConfigMap",
-			"metadata": map[string]interface{}{
-				"name": "cm-${schema.metadata.name}",
-			},
-			"data": map[string]interface{}{
-				"key": "${schema.spec.data}",
-			},
-		}, nil, nil),
-	)
-}
-
-func mustComputeSpecHash(spec krov1alpha1.ResourceGraphDefinitionSpec) string {
-	h, err := graphhash.Spec(spec)
-	if err != nil {
-		panic(fmt.Sprintf("failed to compute spec hash: %v", err))
-	}
-	return h
-}
 
 func newIsolatedGraphRevisionEnv(ctx SpecContext, maxGraphRevisions int) *environment.Environment {
 	testEnv, err := environment.New(ctx, environment.ControllerConfig{
@@ -601,7 +577,7 @@ func waitForRGDActiveInEnv(ctx SpecContext, testEnv *environment.Environment, na
 		err := testEnv.Client.Get(ctx, types.NamespacedName{Name: name}, rgd)
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-	}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 }
 
 func listGraphRevisionsInEnv(
@@ -643,7 +619,7 @@ func updateRGDDataDefaultInEnv(ctx SpecContext, testEnv *environment.Environment
 		fresh.Spec.Schema.Spec.Raw = []byte(fmt.Sprintf(`{"data":"string | default=%s"}`, value))
 		err = testEnv.Client.Update(ctx, fresh)
 		g.Expect(err).ToNot(HaveOccurred())
-	}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 }
 
 func updateRGDTemplateLabelInEnv(ctx SpecContext, testEnv *environment.Environment, rgdName, label string) {
@@ -657,7 +633,7 @@ func updateRGDTemplateLabelInEnv(ctx SpecContext, testEnv *environment.Environme
 		fresh.Spec.Resources[0].Template.Raw = []byte(fmt.Sprintf(template, label))
 		err = testEnv.Client.Update(ctx, fresh)
 		g.Expect(err).ToNot(HaveOccurred())
-	}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 }
 
 func graphRevisionNumbers(gvs []internalv1alpha1.GraphRevision) []int64 {

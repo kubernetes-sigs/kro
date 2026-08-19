@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package networkingstack_test
+package core_test
 
 import (
 	"fmt"
@@ -45,11 +45,11 @@ func networkingStack(
 				},
 			},
 		),
-		generator.WithResource("vpc", vpcDef(), nil, nil),
+		generator.WithResource("vpc", nsVPCDef(), nil, nil),
 		generator.WithResource("securityGroup", securityGroupDef(), nil, nil),
-		generator.WithResource("subnetAZA", subnetDef("a", "us-west-2a", "192.168.0.0/18"), nil, nil),
-		generator.WithResource("subnetAZB", subnetDef("b", "us-west-2b", "192.168.64.0/18"), nil, nil),
-		generator.WithResource("subnetAZC", subnetDef("c", "us-west-2c", "192.168.128.0/18"), nil, nil),
+		generator.WithResource("subnetAZA", nsSubnetDef("a", "us-west-2a", "192.168.0.0/18"), nil, nil),
+		generator.WithResource("subnetAZB", nsSubnetDef("b", "us-west-2b", "192.168.64.0/18"), nil, nil),
+		generator.WithResource("subnetAZC", nsSubnetDef("c", "us-west-2c", "192.168.128.0/18"), nil, nil),
 	)
 
 	instanceGenerator := func(namespace, name string) *unstructured.Unstructured {
@@ -70,7 +70,7 @@ func networkingStack(
 	return resourcegraphdefinition, instanceGenerator
 }
 
-func vpcDef() map[string]interface{} {
+func nsVPCDef() map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "VPC",
@@ -87,7 +87,7 @@ func vpcDef() map[string]interface{} {
 	}
 }
 
-func subnetDef(suffix, az, cidr string) map[string]interface{} {
+func nsSubnetDef(suffix, az, cidr string) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "Subnet",

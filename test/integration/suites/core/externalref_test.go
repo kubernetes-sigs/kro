@@ -126,7 +126,7 @@ var _ = Describe("ExternalRef", func() {
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(2))
 			g.Expect(createdRGD.Status.TopologicalOrder).To(ContainElements("deployment1", "deployment"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating instance")
 		// Create instance
@@ -189,7 +189,7 @@ var _ = Describe("ExternalRef", func() {
 				Name:      deployment1.Name,
 				Namespace: deployment1.Namespace,
 			}, deployment1)).To(MatchError(errors.IsNotFound, "deployment should not be created yet"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("ensuring ResourceGraphDefinition becomes ready")
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -202,7 +202,7 @@ var _ = Describe("ExternalRef", func() {
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(2))
 			g.Expect(createdRGD.Status.TopologicalOrder).To(ContainElements("deployment1", "deployment"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating external ref dependency")
 		Expect(env.Client.Create(ctx, deployment1)).To(Succeed())
@@ -218,7 +218,7 @@ var _ = Describe("ExternalRef", func() {
 
 			g.Expect(instance.Object).To(HaveKey("status"))
 			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify Deployment is created with correct environment variables
 		By("ensuring dependent deployment is created with correct environment variables")
@@ -233,7 +233,7 @@ var _ = Describe("ExternalRef", func() {
 			// Verify deployment has the ConfigMap reference in envFrom
 			g.Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(2)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("patching the external deployment and ensuring the managed deployment reacts via watch")
 		Expect(env.Client.Get(ctx, types.NamespacedName{
@@ -343,7 +343,7 @@ var _ = Describe("ExternalRef", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 			g.Expect(createdRGD.Status.TopologicalOrder).To(ContainElements("crd"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating instance")
 
@@ -377,7 +377,7 @@ var _ = Describe("ExternalRef", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(observedPhase).To(Equal("pending"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("patching the referenced CRD annotation and ensuring instance status reacts via watch")
 		Expect(env.Client.Get(ctx, types.NamespacedName{Name: crdName}, testCRD)).To(Succeed())
@@ -467,7 +467,7 @@ var _ = Describe("ExternalRef", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating the instance")
 		instance := &unstructured.Unstructured{
@@ -506,7 +506,7 @@ var _ = Describe("ExternalRef", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(teamValues).To(Equal("value1,value2"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("patching a matched ConfigMap and ensuring the collection status reacts via watch")
 		Expect(env.Client.Get(ctx, types.NamespacedName{
@@ -599,7 +599,7 @@ var _ = Describe("ExternalRef", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating the instance in its own namespace")
 		instance := &unstructured.Unstructured{
@@ -629,7 +629,7 @@ var _ = Describe("ExternalRef", func() {
 			g.Expect(found).To(BeTrue())
 			g.Expect(configCount).To(Equal("3"),
 				"external collection without namespace should list across all namespaces, not just the instance namespace")
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())

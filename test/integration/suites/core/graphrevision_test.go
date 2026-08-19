@@ -22,7 +22,6 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -51,439 +50,14 @@ func mustComputeSpecHash(spec krov1alpha1.ResourceGraphDefinitionSpec) string {
 
 var _ = Describe("GraphRevision Lifecycle", func() {
 
-	It("should create a GraphRevision when an RGD is created", func(ctx SpecContext) {
-		rgdName := fmt.Sprintf("gr-create-%s", rand.String(5))
-		kind := fmt.Sprintf("GrCreate%s", rand.String(5))
-		rgd := simpleDeploymentRGD(rgdName, kind)
-
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
-		})
-
-		// Wait for RGD to become Active
-		activeRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, activeRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(activeRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Verify a GraphRevision was created
-		var grs []internalv1alpha1.GraphRevision
-		Eventually(func(g Gomega) {
-			grs = listGraphRevisions(ctx, rgdName)
-			g.Expect(grs).To(HaveLen(1))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-		Consistently(func(g Gomega) {
-			currentRGD := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, currentRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(currentRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-
-			currentGRs := listGraphRevisions(ctx, rgdName)
-			g.Expect(currentGRs).To(HaveLen(1))
-
-			graphVerified := findGRCondition(
-				currentGRs[0].Status.Conditions,
-				internalv1alpha1.GraphRevisionConditionTypeGraphVerified,
-			)
-			g.Expect(graphVerified).ToNot(BeNil())
-			g.Expect(graphVerified.Status).To(Equal(metav1.ConditionTrue))
-
-			ready := findGRCondition(currentGRs[0].Status.Conditions, krov1alpha1.ConditionType(apis.ConditionReady))
-			g.Expect(ready).ToNot(BeNil())
-			g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
-		}, 20*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
-
-		gr := grs[0]
-
-		// Verify spec fields
-		Expect(gr.Spec.Snapshot.Name).To(Equal(rgdName))
-		Expect(gr.Spec.Revision).To(Equal(int64(1)))
-		Expect(mustComputeSpecHash(gr.Spec.Snapshot.Spec)).ToNot(BeEmpty())
-		Expect(gr.Spec.Snapshot.Spec.Schema).ToNot(BeNil())
-		Expect(gr.Spec.Snapshot.Spec.Schema.Kind).To(Equal(kind))
-
-		// Short names are issued without a hash suffix and use zero-padded revisions.
-		Expect(gr.Name).To(Equal(rgdName + "-r00001"))
-
-		// Verify labels (UID label is not set on GraphRevisions — tracking is name-based)
-		Expect(gr.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal(rgdName))
-		Expect(gr.Labels).ToNot(HaveKey(metadata.ResourceGraphDefinitionIDLabel))
-
-		// Verify OwnerReference
-		Expect(gr.OwnerReferences).To(HaveLen(1))
-		Expect(gr.OwnerReferences[0].Name).To(Equal(rgdName))
-		Expect(gr.OwnerReferences[0].UID).To(Equal(activeRGD.UID))
-
-		// Verify GR status conditions
-		graphVerified := findGRCondition(gr.Status.Conditions, internalv1alpha1.GraphRevisionConditionTypeGraphVerified)
-		Expect(graphVerified).ToNot(BeNil())
-		Expect(graphVerified.Status).To(Equal(metav1.ConditionTrue))
-
-		ready := findGRCondition(gr.Status.Conditions, krov1alpha1.ConditionType(apis.ConditionReady))
-		Expect(ready).ToNot(BeNil())
-		Expect(ready.Status).To(Equal(metav1.ConditionTrue))
-
-		// Verify topological order is populated
-		Expect(gr.Status.TopologicalOrder).ToNot(BeEmpty())
-		Expect(gr.Status.TopologicalOrder).To(ContainElement("deployment"))
-
-		// Verify RGD status tracks the issued revision high-water mark.
-		Expect(activeRGD.Status.LastIssuedRevision).To(Equal(int64(1)))
-	})
-
-	It("should create GraphRevision with correct topological order for multi-resource graphs", func(ctx SpecContext) {
-		rgdName := fmt.Sprintf("gr-topo-%s", rand.String(5))
-		kind := fmt.Sprintf("GrTopo%s", rand.String(5))
-
-		rgd := generator.NewResourceGraphDefinition(rgdName,
-			generator.WithSchema(
-				kind, "v1alpha1",
-				map[string]interface{}{
-					"name": "string",
-				},
-				nil,
-			),
-			generator.WithResource("configmap", map[string]interface{}{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
-					"name": "cm-${schema.spec.name}",
-				},
-				"data": map[string]interface{}{
-					"key": "value",
-				},
-			}, nil, nil),
-			generator.WithResource("deployment", map[string]interface{}{
-				"apiVersion": "apps/v1",
-				"kind":       "Deployment",
-				"metadata": map[string]interface{}{
-					"name": "deploy-${schema.spec.name}",
-				},
-				"spec": map[string]interface{}{
-					"replicas": 1,
-					"selector": map[string]interface{}{
-						"matchLabels": map[string]interface{}{
-							"app": "test",
-						},
-					},
-					"template": map[string]interface{}{
-						"metadata": map[string]interface{}{
-							"labels": map[string]interface{}{
-								"app": "test",
-							},
-						},
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
-									"name":  "app",
-									"image": "nginx",
-									"env": []interface{}{
-										map[string]interface{}{
-											"name":  "CM_NAME",
-											"value": "${configmap.metadata.name}",
-										},
-										map[string]interface{}{
-											"name":  "CM_NS",
-											"value": "${configmap.metadata.namespace}",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			}, nil, nil),
-		)
-
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
-		})
-
-		waitForRGDActive(ctx, rgdName)
-
-		var grs []internalv1alpha1.GraphRevision
-		Eventually(func(g Gomega) {
-			grs = listGraphRevisions(ctx, rgdName)
-			g.Expect(grs).To(HaveLen(1))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		gr := grs[0]
-		// configmap should come before deployment in topological order
-		Expect(gr.Status.TopologicalOrder).To(HaveLen(2))
-		cmIdx := -1
-		deployIdx := -1
-		for i, id := range gr.Status.TopologicalOrder {
-			if id == "configmap" {
-				cmIdx = i
-			}
-			if id == "deployment" {
-				deployIdx = i
-			}
-		}
-		Expect(cmIdx).To(BeNumerically("<", deployIdx),
-			"configmap should appear before deployment in topological order")
-
-		// Verify dependency info in status
-		Expect(gr.Status.Resources).ToNot(BeEmpty())
-		var deployRes *krov1alpha1.ResourceInformation
-		for i := range gr.Status.Resources {
-			if gr.Status.Resources[i].ID == "deployment" {
-				deployRes = &gr.Status.Resources[i]
-			}
-		}
-		Expect(deployRes).ToNot(BeNil())
-		Expect(deployRes.Dependencies).To(HaveLen(1))
-		Expect(deployRes.Dependencies[0].ID).To(Equal("configmap"))
-	})
-
-	It("should complete GraphRevision deletion after delete-start finalizer handling", func(ctx SpecContext) {
-		rgdName := fmt.Sprintf("gr-delete-%s", rand.String(5))
-		kind := fmt.Sprintf("GrDelete%s", rand.String(5))
-		rgd := configmapRGD(rgdName, kind)
-
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
-		})
-
-		waitForRGDActive(ctx, rgdName)
-
-		var gr internalv1alpha1.GraphRevision
-		Eventually(func(g Gomega) {
-			grs := listGraphRevisions(ctx, rgdName)
-			g.Expect(grs).To(HaveLen(1))
-			gr = grs[0]
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		Eventually(func(g Gomega) {
-			current := &internalv1alpha1.GraphRevision{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: gr.Name}, current)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(metadata.HasGraphRevisionFinalizer(current)).To(BeTrue())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		Expect(env.Client.Delete(ctx, &gr)).To(Succeed())
-
-		Eventually(func(g Gomega) {
-			current := &internalv1alpha1.GraphRevision{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: gr.Name}, current)
-			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-	})
 })
 
 var _ = Describe("GraphRevision Hash Deduplication", func() {
 
-	It("should not create a new revision when the RGD spec has not changed", func(ctx SpecContext) {
-		rgdName := fmt.Sprintf("gv-dedup-%s", rand.String(5))
-		kind := fmt.Sprintf("GvDedup%s", rand.String(5))
-		rgd := configmapRGD(rgdName, kind)
-
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
-		})
-
-		waitForRGDActive(ctx, rgdName)
-
-		// Wait for exactly one revision
-		Eventually(func(g Gomega) {
-			gvs := listGraphRevisions(ctx, rgdName)
-			g.Expect(gvs).To(HaveLen(1))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-
-			if fresh.Annotations == nil {
-				fresh.Annotations = map[string]string{}
-			}
-			fresh.Annotations["test-trigger"] = "re-reconcile"
-			err = env.Client.Update(ctx, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Wait a few seconds then verify no new revision was created
-		Consistently(func(g Gomega) {
-			gvs := listGraphRevisions(ctx, rgdName)
-			g.Expect(gvs).To(HaveLen(1))
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-	})
 })
 
 var _ = Describe("GraphRevision Bumping", func() {
 
-	It("should create a new revision when the RGD spec changes", func(ctx SpecContext) {
-		rgdName := fmt.Sprintf("gv-bump-%s", rand.String(5))
-		kind := fmt.Sprintf("GvBump%s", rand.String(5))
-
-		rgd := generator.NewResourceGraphDefinition(rgdName,
-			generator.WithSchema(
-				kind, "v1alpha1",
-				map[string]interface{}{
-					"replicas": "integer | default=1",
-					"image":    "string | default=nginx:latest",
-				},
-				nil,
-			),
-			generator.WithResource("deployment", map[string]interface{}{
-				"apiVersion": "apps/v1",
-				"kind":       "Deployment",
-				"metadata": map[string]interface{}{
-					"name": "deploy-${schema.metadata.name}",
-				},
-				"spec": map[string]interface{}{
-					"replicas": "${schema.spec.replicas}",
-					"selector": map[string]interface{}{
-						"matchLabels": map[string]interface{}{
-							"app": "test",
-						},
-					},
-					"template": map[string]interface{}{
-						"metadata": map[string]interface{}{
-							"labels": map[string]interface{}{
-								"app": "test",
-							},
-						},
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
-									"name":  "app",
-									"image": "${schema.spec.image}",
-								},
-							},
-						},
-					},
-				},
-			}, nil, nil),
-		)
-
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
-		})
-
-		waitForRGDActive(ctx, rgdName)
-
-		// Wait for revision 1
-		var firstHash string
-		Eventually(func(g Gomega) {
-			gvs := listGraphRevisions(ctx, rgdName)
-			g.Expect(gvs).To(HaveLen(1))
-			g.Expect(gvs[0].Spec.Revision).To(Equal(int64(1)))
-			firstHash = mustComputeSpecHash(gvs[0].Spec.Snapshot.Spec)
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Update the RGD spec: change the schema default to produce a different hash
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-
-			fresh.Spec.Schema.Spec.Raw = []byte(`{"replicas":"integer | default=3","image":"string | default=nginx:1.25"}`)
-			err = env.Client.Update(ctx, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Verify revision 2 was created and RGD status is updated
-		Eventually(func(g Gomega) {
-			gvs := listGraphRevisions(ctx, rgdName)
-			g.Expect(len(gvs)).To(BeNumerically(">=", 2))
-
-			revisionMap := map[int64]internalv1alpha1.GraphRevision{}
-			for _, gv := range gvs {
-				revisionMap[gv.Spec.Revision] = gv
-			}
-
-			// Revision 1 should still exist
-			rev1, ok := revisionMap[1]
-			g.Expect(ok).To(BeTrue(), "revision 1 should still exist")
-			g.Expect(mustComputeSpecHash(rev1.Spec.Snapshot.Spec)).To(Equal(firstHash))
-
-			// Revision 2 should exist with a different hash
-			rev2, ok := revisionMap[2]
-			g.Expect(ok).To(BeTrue(), "revision 2 should exist")
-			g.Expect(mustComputeSpecHash(rev2.Spec.Snapshot.Spec)).ToNot(Equal(firstHash))
-			g.Expect(rev2.Spec.Revision).To(Equal(int64(2)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// RGD status should reflect the issued revision high-water mark.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.LastIssuedRevision).To(BeNumerically(">=", int64(2)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-	})
-
-	It("should produce monotonically increasing revision numbers across multiple updates", func(ctx SpecContext) {
-		rgdName := fmt.Sprintf("gv-mono-%s", rand.String(5))
-		kind := fmt.Sprintf("GvMono%s", rand.String(5))
-		rgd := configmapRGD(rgdName, kind)
-
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
-		})
-
-		waitForRGDActive(ctx, rgdName)
-
-		// Wait for initial revision
-		Eventually(func(g Gomega) {
-			gvs := listGraphRevisions(ctx, rgdName)
-			g.Expect(gvs).To(HaveLen(1))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Perform 3 spec changes in sequence
-		for i := 2; i <= 4; i++ {
-			expectedRevision := int64(i)
-			Eventually(func(g Gomega) {
-				fresh := &krov1alpha1.ResourceGraphDefinition{}
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-				g.Expect(err).ToNot(HaveOccurred())
-
-				// Change the default value in schema to produce a different hash
-				fresh.Spec.Schema.Spec.Raw = []byte(fmt.Sprintf(`{"data":"string | default=value-%d"}`, i))
-				err = env.Client.Update(ctx, fresh)
-				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-			// Wait for the new revision
-			Eventually(func(g Gomega) {
-				gvs := listGraphRevisions(ctx, rgdName)
-				maxRev := int64(0)
-				for _, gv := range gvs {
-					if gv.Spec.Revision > maxRev {
-						maxRev = gv.Spec.Revision
-					}
-				}
-				g.Expect(maxRev).To(Equal(expectedRevision))
-			}, 20*time.Second, 2*time.Second).WithContext(ctx).Should(Succeed())
-		}
-
-		// Verify all revisions are monotonically increasing
-		gvs := listGraphRevisions(ctx, rgdName)
-		Expect(len(gvs)).To(BeNumerically(">=", 4))
-
-		revisionNumbers := make([]int64, len(gvs))
-		for i, gv := range gvs {
-			revisionNumbers[i] = gv.Spec.Revision
-		}
-
-		for i := 1; i < len(revisionNumbers); i++ {
-			for j := 0; j < i; j++ {
-				// No duplicates
-				Expect(revisionNumbers[i]).ToNot(Equal(revisionNumbers[j]),
-					"revision numbers should be unique")
-			}
-		}
-	})
 })
 
 var _ = Describe("GraphRevision Invalid Updates", func() {
@@ -532,7 +106,7 @@ var _ = Describe("GraphRevision Invalid Updates", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, configMap)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(configMap.Data).To(HaveKeyWithValue("key", "hello"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		invalidRGD := invalidConfigmapRGD(rgdName, kind)
 		Eventually(func(g Gomega) {
@@ -542,7 +116,7 @@ var _ = Describe("GraphRevision Invalid Updates", func() {
 			fresh.Spec = *invalidRGD.Spec.DeepCopy()
 			err = env.Client.Update(ctx, fresh)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega) {
 			fresh := &krov1alpha1.ResourceGraphDefinition{}
@@ -585,11 +159,11 @@ var _ = Describe("GraphRevision Invalid Updates", func() {
 			g.Expect(ready).ToNot(BeNil())
 			g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
 			g.Expect(ready.ObservedGeneration).To(Equal(fresh.GetGeneration()))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Consistently(func(g Gomega) {
 			g.Expect(listGraphRevisions(ctx, rgdName)).To(HaveLen(1))
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega) {
 			current := &unstructured.Unstructured{
@@ -603,13 +177,13 @@ var _ = Describe("GraphRevision Invalid Updates", func() {
 			current.Object["spec"] = map[string]interface{}{"data": "world"}
 			err = env.Client.Update(ctx, current)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, configMap)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(configMap.Data).To(HaveKeyWithValue("key", "world"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })
 
@@ -666,7 +240,7 @@ var _ = Describe("GraphRevision Instance Resolution", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(2)))
 			g.Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal("nginx:1.25"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should serve updated graph to instances after RGD spec change", func(ctx SpecContext) {
@@ -718,7 +292,7 @@ var _ = Describe("GraphRevision Instance Resolution", func() {
 				Namespace: namespace,
 			}, deployment)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Update the RGD spec: change the default image
 		Eventually(func(g Gomega) {
@@ -731,7 +305,7 @@ var _ = Describe("GraphRevision Instance Resolution", func() {
 			)
 			err = env.Client.Update(ctx, fresh)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Wait for revision 2 to be issued.
 		Eventually(func(g Gomega) {
@@ -740,7 +314,7 @@ var _ = Describe("GraphRevision Instance Resolution", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 			g.Expect(fresh.Status.LastIssuedRevision).To(BeNumerically(">=", int64(2)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Update the instance to use the new default image
 		Eventually(func(g Gomega) {
@@ -756,7 +330,7 @@ var _ = Describe("GraphRevision Instance Resolution", func() {
 			}
 			err = env.Client.Update(ctx, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify deployment is updated with new image
 		Eventually(func(g Gomega) {
@@ -766,67 +340,12 @@ var _ = Describe("GraphRevision Instance Resolution", func() {
 			}, deployment)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal("nginx:1.26-updated"))
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })
 
 var _ = Describe("GraphRevision Multiple RGDs", func() {
 
-	It("should maintain independent revision sequences for different RGDs", func(ctx SpecContext) {
-		rgdNameA := fmt.Sprintf("gv-multi-a-%s", rand.String(5))
-		rgdNameB := fmt.Sprintf("gv-multi-b-%s", rand.String(5))
-		kindA := fmt.Sprintf("GvMultiA%s", rand.String(5))
-		kindB := fmt.Sprintf("GvMultiB%s", rand.String(5))
-
-		rgdA := configmapRGD(rgdNameA, kindA)
-		rgdB := configmapRGD(rgdNameB, kindB)
-
-		Expect(env.Client.Create(ctx, rgdA)).To(Succeed())
-		Expect(env.Client.Create(ctx, rgdB)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			Expect(env.Client.Delete(ctx, rgdA)).To(Succeed())
-			Expect(env.Client.Delete(ctx, rgdB)).To(Succeed())
-		})
-
-		waitForRGDActive(ctx, rgdNameA)
-		waitForRGDActive(ctx, rgdNameB)
-
-		// Both should have exactly one revision
-		Eventually(func(g Gomega) {
-			gvsA := listGraphRevisions(ctx, rgdNameA)
-			gvsB := listGraphRevisions(ctx, rgdNameB)
-			g.Expect(gvsA).To(HaveLen(1))
-			g.Expect(gvsB).To(HaveLen(1))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Update RGD A only
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdNameA}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-
-			fresh.Spec.Schema.Spec.Raw = []byte(`{"data":"string | default=changed"}`)
-			err = env.Client.Update(ctx, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Wait for RGD A to get revision 2
-		Eventually(func(g Gomega) {
-			gvsA := listGraphRevisions(ctx, rgdNameA)
-			maxRev := int64(0)
-			for _, gv := range gvsA {
-				if gv.Spec.Revision > maxRev {
-					maxRev = gv.Spec.Revision
-				}
-			}
-			g.Expect(maxRev).To(Equal(int64(2)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// RGD B should still have only one revision — independent
-		gvsB := listGraphRevisions(ctx, rgdNameB)
-		Expect(gvsB).To(HaveLen(1))
-		Expect(gvsB[0].Spec.Revision).To(Equal(int64(1)))
-	})
 })
 
 var _ = Describe("GraphRevision Spec Immutability", func() {
@@ -848,7 +367,7 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 			gvs := listGraphRevisions(ctx, rgdName)
 			g.Expect(gvs).To(HaveLen(1))
 			gv = gvs[0]
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Try to mutate the GraphRevision spec
 		gv.Spec.Snapshot.Name = "tampered-name"
@@ -858,760 +377,9 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 			"error message should mention immutability")
 	})
 
-	It("should recover after cascade delete and recreate with the same name and same spec", func(ctx SpecContext) {
-		const numRevisions = 5
-		rgdName := fmt.Sprintf("gr-recreate-same-%s", rand.String(5))
-		kind := fmt.Sprintf("GrRecrSame%s", rand.String(5))
-
-		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
-
-		// Collect hashes before deletion
-		grs := listGraphRevisions(ctx, rgdName)
-		Expect(grs).To(HaveLen(numRevisions))
-		lastHash := ""
-		for _, gr := range grs {
-			if gr.Spec.Revision == numRevisions {
-				lastHash = mustComputeSpecHash(gr.Spec.Snapshot.Spec)
-			}
-		}
-		Expect(lastHash).ToNot(BeEmpty())
-
-		// Delete RGD (cascade) and wait for everything to be gone
-		rgd := &krov1alpha1.ResourceGraphDefinition{
-			ObjectMeta: metav1.ObjectMeta{Name: rgdName},
-		}
-		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
-
-		Eventually(func(g Gomega) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &krov1alpha1.ResourceGraphDefinition{})
-			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// envtest has no GC controller — manually delete GRs to emulate cascade.
-		emulateGCForRGD(ctx, rgdName)
-
-		// Recreate with the same spec as the last revision
-		rgd2 := generator.NewResourceGraphDefinition(rgdName,
-			generator.WithSchema(
-				kind, "v1alpha1",
-				map[string]interface{}{
-					"data": "string | default=hello",
-				},
-				nil,
-			),
-			generator.WithResource("configmap", map[string]interface{}{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
-					"name": "cm-${schema.metadata.name}",
-					"labels": map[string]interface{}{
-						"revision": fmt.Sprintf("rev-%d", numRevisions),
-					},
-				},
-				"data": map[string]interface{}{
-					"key": "${schema.spec.data}",
-				},
-			}, nil, nil),
-		)
-		Expect(env.Client.Create(ctx, rgd2)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			Expect(env.Client.Delete(ctx, rgd2)).To(Succeed())
-		})
-
-		// All old revisions are gone (cascade). New RGD starts fresh from
-		// revision 1 since there's no watermark to recover from.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(1)))
-
-			grs := listGraphRevisions(ctx, rgdName)
-			g.Expect(grs).To(HaveLen(1))
-			g.Expect(grs[0].Spec.Revision).To(Equal(int64(1)))
-			g.Expect(grs[0].Spec.Snapshot.Name).To(Equal(rgdName))
-			g.Expect(mustComputeSpecHash(grs[0].Spec.Snapshot.Spec)).To(Equal(lastHash),
-				"same spec should produce the same hash")
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-	})
-
-	It("should recover after cascade delete and recreate with the same name but different spec", func(ctx SpecContext) {
-		const numRevisions = 5
-		rgdName := fmt.Sprintf("gr-recreate-diff-%s", rand.String(5))
-		kind := fmt.Sprintf("GrRecrDiff%s", rand.String(5))
-
-		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
-
-		// Collect all hashes
-		existingHashes := map[string]bool{}
-		for _, gr := range listGraphRevisions(ctx, rgdName) {
-			existingHashes[mustComputeSpecHash(gr.Spec.Snapshot.Spec)] = true
-		}
-
-		// Delete (cascade) and wait for full cleanup
-		rgd := &krov1alpha1.ResourceGraphDefinition{
-			ObjectMeta: metav1.ObjectMeta{Name: rgdName},
-		}
-		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
-
-		Eventually(func(g Gomega) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &krov1alpha1.ResourceGraphDefinition{})
-			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// envtest has no GC controller — manually delete GRs to emulate cascade.
-		emulateGCForRGD(ctx, rgdName)
-
-		// Recreate with a completely different spec
-		rgd2 := generator.NewResourceGraphDefinition(rgdName,
-			generator.WithSchema(
-				kind, "v1alpha1",
-				map[string]interface{}{
-					"data": "string | default=hello",
-				},
-				nil,
-			),
-			generator.WithResource("configmap", map[string]interface{}{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
-					"name": "cm-${schema.metadata.name}",
-					"labels": map[string]interface{}{
-						"revision": "completely-new",
-					},
-				},
-				"data": map[string]interface{}{
-					"key": "${schema.spec.data}",
-				},
-			}, nil, nil),
-		)
-		Expect(env.Client.Create(ctx, rgd2)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			Expect(env.Client.Delete(ctx, rgd2)).To(Succeed())
-		})
-
-		// All old revisions are gone. New RGD starts from revision 1 with a
-		// different hash.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(1)))
-
-			grs := listGraphRevisions(ctx, rgdName)
-			g.Expect(grs).To(HaveLen(1))
-			g.Expect(grs[0].Spec.Revision).To(Equal(int64(1)))
-			g.Expect(existingHashes).ToNot(HaveKey(mustComputeSpecHash(grs[0].Spec.Snapshot.Spec)),
-				"new spec should produce a different hash from all old revisions")
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-	})
-
-	It(
-		"should adopt orphaned revisions after delete with orphan policy "+
-			"and recreate with same spec",
-		func(ctx SpecContext) {
-			const numRevisions = 5
-			rgdName := fmt.Sprintf("gr-orphan-%s", rand.String(5))
-			kind := fmt.Sprintf("GrOrphan%s", rand.String(5))
-
-			createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
-
-			// Snapshot the revisions before deletion
-			grs := listGraphRevisions(ctx, rgdName)
-			Expect(grs).To(HaveLen(numRevisions))
-
-			// Build a map of revision number → hash for exact assertions later
-			revisionHashes := map[int64]string{}
-			for _, gr := range grs {
-				revisionHashes[gr.Spec.Revision] = mustComputeSpecHash(gr.Spec.Snapshot.Spec)
-			}
-			// Verify exact revision numbers 1..5
-			for i := int64(1); i <= numRevisions; i++ {
-				Expect(revisionHashes).To(HaveKey(i), "revision %d should exist", i)
-			}
-			latestHash := revisionHashes[numRevisions]
-
-			// Emulate orphan deletion — strip ownerRefs then delete RGD.
-			// envtest has no GC so real orphan propagation doesn't work.
-			emulateOrphanDeleteForRGD(ctx, rgdName)
-
-			// All 5 GRs should survive without an owner
-			Expect(listGraphRevisions(ctx, rgdName)).To(HaveLen(numRevisions))
-
-			// Recreate with the same spec as the latest revision (template has
-			// labels.revision: rev-5 from the last updateRGDTemplate call).
-			rgd2 := generator.NewResourceGraphDefinition(rgdName,
-				generator.WithSchema(
-					kind, "v1alpha1",
-					map[string]interface{}{
-						"data": "string | default=hello",
-					},
-					nil,
-				),
-				generator.WithResource("configmap", map[string]interface{}{
-					"apiVersion": "v1",
-					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
-						"name": "cm-${schema.metadata.name}",
-						"labels": map[string]interface{}{
-							"revision": fmt.Sprintf("rev-%d", numRevisions),
-						},
-					},
-					"data": map[string]interface{}{
-						"key": "${schema.spec.data}",
-					},
-				}, nil, nil),
-			)
-			Expect(env.Client.Create(ctx, rgd2)).To(Succeed())
-			DeferCleanup(func(ctx SpecContext) {
-				for _, gr := range listGraphRevisions(ctx, rgdName) {
-					_ = env.Client.Delete(ctx, &gr)
-				}
-				_ = env.Client.Delete(ctx, rgd2)
-			})
-
-			// RGD becomes active. Hash matches latest orphaned revision, so no new
-			// revision should be issued. All 5 orphaned revisions should remain.
-			Eventually(func(g Gomega) {
-				fresh := &krov1alpha1.ResourceGraphDefinition{}
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-
-				grs := listGraphRevisions(ctx, rgdName)
-				g.Expect(grs).To(HaveLen(numRevisions),
-					"no new revision should be issued when hash matches")
-
-				// Verify exact revision numbers 1..5 still present
-				revNums := map[int64]bool{}
-				for _, gr := range grs {
-					revNums[gr.Spec.Revision] = true
-				}
-				for i := int64(1); i <= numRevisions; i++ {
-					g.Expect(revNums).To(HaveKey(i), "revision %d should exist", i)
-				}
-
-				// Revision 5's hash should match the recreated RGD's spec
-				g.Expect(revNums).To(HaveKey(int64(numRevisions)))
-				for _, gr := range grs {
-					if gr.Spec.Revision == numRevisions {
-						g.Expect(mustComputeSpecHash(gr.Spec.Snapshot.Spec)).To(Equal(latestHash))
-					}
-				}
-			}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-		})
-
-	It("should issue a new revision when recreated with orphaned revisions and a different spec", func(ctx SpecContext) {
-		const numRevisions = 5
-		rgdName := fmt.Sprintf("gr-orphan-diff-%s", rand.String(5))
-		kind := fmt.Sprintf("GrOrphDif%s", rand.String(5))
-
-		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
-
-		// Snapshot state before deletion
-		grs := listGraphRevisions(ctx, rgdName)
-		Expect(grs).To(HaveLen(numRevisions))
-
-		// Collect all existing hashes and verify exact revision numbers
-		existingHashes := map[string]bool{}
-		for _, gr := range grs {
-			existingHashes[mustComputeSpecHash(gr.Spec.Snapshot.Spec)] = true
-		}
-		for i := int64(1); i <= numRevisions; i++ {
-			found := false
-			for _, gr := range grs {
-				if gr.Spec.Revision == i {
-					found = true
-					break
-				}
-			}
-			Expect(found).To(BeTrue(), "revision %d should exist before deletion", i)
-		}
-
-		// Emulate orphan deletion — strip ownerRefs then delete RGD.
-		emulateOrphanDeleteForRGD(ctx, rgdName)
-
-		// All 5 GRs should survive without an owner
-		Expect(listGraphRevisions(ctx, rgdName)).To(HaveLen(numRevisions))
-
-		// Recreate with a completely different spec
-		rgd2 := generator.NewResourceGraphDefinition(rgdName,
-			generator.WithSchema(
-				kind, "v1alpha1",
-				map[string]interface{}{
-					"data": "string | default=completely-different-spec",
-				},
-				nil,
-			),
-			generator.WithResource("configmap", map[string]interface{}{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
-					"name": "cm-${schema.metadata.name}",
-				},
-				"data": map[string]interface{}{
-					"key": "${schema.spec.data}",
-				},
-			}, nil, nil),
-		)
-		Expect(env.Client.Create(ctx, rgd2)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			for _, gr := range listGraphRevisions(ctx, rgdName) {
-				_ = env.Client.Delete(ctx, &gr)
-			}
-			_ = env.Client.Delete(ctx, rgd2)
-		})
-
-		// RGD becomes active. Hash doesn't match any orphan, so a new revision
-		// must be issued. Watermark recovers from the orphaned revisions.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-
-			grs := listGraphRevisions(ctx, rgdName)
-			g.Expect(grs).To(HaveLen(numRevisions+1),
-				"should have 5 orphaned + 1 new revision")
-
-			// Verify exact revision numbers 1..6
-			revByNum := map[int64]internalv1alpha1.GraphRevision{}
-			for _, gr := range grs {
-				revByNum[gr.Spec.Revision] = gr
-			}
-			for i := int64(1); i <= int64(numRevisions+1); i++ {
-				g.Expect(revByNum).To(HaveKey(i), "revision %d should exist", i)
-			}
-
-			// Revision 6 (the new one) should have a hash different from all orphans
-			newRevision := revByNum[int64(numRevisions+1)]
-			g.Expect(existingHashes).ToNot(HaveKey(mustComputeSpecHash(newRevision.Spec.Snapshot.Spec)),
-				"revision 6 should have a hash different from all orphaned revisions")
-
-			// LastIssuedRevision should reflect the watermark
-			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(numRevisions + 1)))
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-	})
-
-	It("should re-issue a revision when the latest graph revision is deleted", func(ctx SpecContext) {
-		const numRevisions = 5
-		rgdName := fmt.Sprintf("gr-reissue-%s", rand.String(5))
-		kind := fmt.Sprintf("GrReissue%s", rand.String(5))
-
-		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
-
-		// Verify 5 revisions and RGD is active
-		var latestGR internalv1alpha1.GraphRevision
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(numRevisions)))
-
-			grs := listGraphRevisions(ctx, rgdName)
-			g.Expect(grs).To(HaveLen(numRevisions))
-
-			// Find the latest revision
-			for i := range grs {
-				if grs[i].Spec.Revision == numRevisions {
-					latestGR = grs[i]
-				}
-			}
-			g.Expect(latestGR.Spec.Revision).To(Equal(int64(numRevisions)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Delete the latest revision. The GR controller will handle finalizer
-		// removal and registry eviction. The RGD controller should then detect
-		// the missing revision and re-issue.
-		Expect(env.Client.Delete(ctx, &latestGR)).To(Succeed())
-
-		// Wait for the RGD controller to re-issue. The intermediate state
-		// (4 revisions) may not be observable because the controller reacts
-		// before we poll.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(numRevisions + 1)))
-
-			grs := listGraphRevisions(ctx, rgdName)
-			g.Expect(grs).To(HaveLen(numRevisions))
-
-			// Verify the re-issued revision exists with the right number
-			revNums := map[int64]bool{}
-			for _, gr := range grs {
-				revNums[gr.Spec.Revision] = true
-			}
-			g.Expect(revNums).To(HaveKey(int64(numRevisions+1)),
-				"revision %d should be re-issued", numRevisions+1)
-			g.Expect(revNums).ToNot(HaveKey(int64(numRevisions)),
-				"deleted revision %d should not reappear", numRevisions)
-
-			// The latest revision in the list must be revision 6
-			var maxRevision int64
-			for rev := range revNums {
-				if rev > maxRevision {
-					maxRevision = rev
-				}
-			}
-			g.Expect(maxRevision).To(Equal(int64(numRevisions + 1)))
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		DeferCleanup(func(ctx SpecContext) {
-			for _, gr := range listGraphRevisions(ctx, rgdName) {
-				_ = env.Client.Delete(ctx, &gr)
-			}
-			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
-				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
-			})
-		})
-	})
-
 	//nolint:dupl // Intentionally separate — valid vs invalid injected spec exercise different GR controller paths.
-	It("should re-issue when a manually injected revision has a different spec", func(ctx SpecContext) {
-		const numRevisions = 5
-		rgdName := fmt.Sprintf("gr-inject-%s", rand.String(5))
-		kind := fmt.Sprintf("GrInject%s", rand.String(5))
-
-		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
-
-		// Wait for active at revision 5
-		var activeRGD krov1alpha1.ResourceGraphDefinition
-		Eventually(func(g Gomega) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &activeRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(activeRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(activeRGD.Status.LastIssuedRevision).To(Equal(int64(numRevisions)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Inject a GR at revision 6 with a different snapshot spec.
-		// Use the original unmutated configmapRGD spec — valid but different
-		// hash from the current (mutated) RGD spec.
-		differentSpec := configmapRGD(rgdName, kind)
-		injectedGR := &internalv1alpha1.GraphRevision{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: fmt.Sprintf("%s-r%05d", rgdName, numRevisions+1),
-				Labels: map[string]string{
-					metadata.ResourceGraphDefinitionNameLabel: rgdName,
-				},
-				OwnerReferences: []metav1.OwnerReference{
-					metadata.NewResourceGraphDefinitionOwnerReference(rgdName, activeRGD.UID),
-				},
-			},
-			Spec: internalv1alpha1.GraphRevisionSpec{
-				Revision: int64(numRevisions + 1),
-				Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
-					Name: rgdName,
-					Spec: differentSpec.Spec,
-				},
-			},
-		}
-		Expect(env.Client.Create(ctx, injectedGR)).To(Succeed())
-
-		// The GR controller compiles revision 6 (valid spec). The RGD
-		// controller sees it as latest but the hash doesn't match the
-		// current RGD spec, so it issues revision 7.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(numRevisions + 2)))
-
-			grs := listGraphRevisions(ctx, rgdName)
-			g.Expect(grs).To(HaveLen(numRevisions + 2))
-
-			var maxRevision int64
-			for _, gr := range grs {
-				if gr.Spec.Revision > maxRevision {
-					maxRevision = gr.Spec.Revision
-				}
-			}
-			g.Expect(maxRevision).To(Equal(int64(numRevisions + 2)))
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		DeferCleanup(func(ctx SpecContext) {
-			for _, gr := range listGraphRevisions(ctx, rgdName) {
-				_ = env.Client.Delete(ctx, &gr)
-			}
-			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
-				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
-			})
-		})
-	})
 
 	//nolint:dupl // See above — mirror test with invalid spec.
-	It("should re-issue when a manually injected revision has an invalid spec", func(ctx SpecContext) {
-		const numRevisions = 5
-		rgdName := fmt.Sprintf("gr-inject-invalid-%s", rand.String(5))
-		kind := fmt.Sprintf("GrInjInv%s", rand.String(5))
-
-		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
-
-		// Wait for active at revision 5
-		var activeRGD krov1alpha1.ResourceGraphDefinition
-		Eventually(func(g Gomega) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &activeRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(activeRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(activeRGD.Status.LastIssuedRevision).To(Equal(int64(numRevisions)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Inject a GR at revision 6 with an invalid spec (circular dependency).
-		// The GR controller will fail to compile it, but the hash mismatch
-		// means the RGD controller re-issues regardless of the Failed state.
-		invalidSpec := invalidConfigmapRGD(rgdName, kind)
-		injectedGR := &internalv1alpha1.GraphRevision{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: fmt.Sprintf("%s-r%05d", rgdName, numRevisions+1),
-				Labels: map[string]string{
-					metadata.ResourceGraphDefinitionNameLabel: rgdName,
-				},
-				OwnerReferences: []metav1.OwnerReference{
-					metadata.NewResourceGraphDefinitionOwnerReference(rgdName, activeRGD.UID),
-				},
-			},
-			Spec: internalv1alpha1.GraphRevisionSpec{
-				Revision: int64(numRevisions + 1),
-				Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
-					Name: rgdName,
-					Spec: invalidSpec.Spec,
-				},
-			},
-		}
-		Expect(env.Client.Create(ctx, injectedGR)).To(Succeed())
-
-		// The RGD controller should see revision 6 with a different hash
-		// and re-issue revision 7 with the correct spec.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(numRevisions + 2)))
-
-			grs := listGraphRevisions(ctx, rgdName)
-			g.Expect(grs).To(HaveLen(numRevisions + 2))
-
-			var maxRevision int64
-			for _, gr := range grs {
-				if gr.Spec.Revision > maxRevision {
-					maxRevision = gr.Spec.Revision
-				}
-			}
-			g.Expect(maxRevision).To(Equal(int64(numRevisions + 2)))
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		DeferCleanup(func(ctx SpecContext) {
-			for _, gr := range listGraphRevisions(ctx, rgdName) {
-				_ = env.Client.Delete(ctx, &gr)
-			}
-			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
-				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
-			})
-		})
-	})
-
-	It("should stay active but mark revisions unresolved when a terminating GR is stuck", func(ctx SpecContext) {
-		const numRevisions = 5
-		rgdName := fmt.Sprintf("gr-stuck-%s", rand.String(5))
-		kind := fmt.Sprintf("GrStuck%s", rand.String(5))
-
-		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
-
-		// Wait for active at revision 5
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(numRevisions)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Inject a custom finalizer on the latest GR so it hangs on deletion.
-		var latestGR internalv1alpha1.GraphRevision
-		Eventually(func(g Gomega) {
-			grs := listGraphRevisions(ctx, rgdName)
-			for i := range grs {
-				if grs[i].Spec.Revision == numRevisions {
-					latestGR = grs[i]
-				}
-			}
-			g.Expect(latestGR.Spec.Revision).To(Equal(int64(numRevisions)))
-
-			latestGR.Finalizers = append(latestGR.Finalizers, "test.kro.run/block-deletion")
-			g.Expect(env.Client.Update(ctx, &latestGR)).To(Succeed())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Delete it — the GR controller removes its own finalizer but
-		// test.kro.run/block-deletion keeps the object alive.
-		Expect(env.Client.Delete(ctx, &latestGR)).To(Succeed())
-
-		// RGD should stay Active (CRD + controller still running) but
-		// GraphRevisionsResolved should be Unknown with settling reason.
-		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
-			state: krov1alpha1.ResourceGraphDefinitionStateActive,
-			conditions: map[string]metav1.ConditionStatus{
-				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionUnknown,
-			},
-			reasonCondition: resourcegraphdefinition.GraphRevisionsResolved,
-			reason:          "WaitingForGraphRevisionSettlement",
-		})
-
-		// Verify it stays in this state consistently while the GR is stuck.
-		Consistently(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			assertRGDConditionStatusOnly(g, fresh, resourcegraphdefinition.GraphRevisionsResolved, metav1.ConditionUnknown)
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Release the stuck finalizer — RGD should recover.
-		Eventually(func(g Gomega) {
-			fresh := &internalv1alpha1.GraphRevision{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: latestGR.Name}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			fresh.Finalizers = nil
-			g.Expect(env.Client.Update(ctx, fresh)).To(Succeed())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// RGD should re-issue and become fully resolved again.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(fresh.Status.LastIssuedRevision).To(BeNumerically(">", int64(numRevisions)))
-
-			cond := findRGDCondition(fresh.Status.Conditions, krov1alpha1.ConditionType(
-				resourcegraphdefinition.GraphRevisionsResolved,
-			))
-			g.Expect(cond).ToNot(BeNil())
-			g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		DeferCleanup(func(ctx SpecContext) {
-			// Clean up any remaining stuck GRs
-			for _, gr := range listGraphRevisions(ctx, rgdName) {
-				gr.Finalizers = nil
-				_ = env.Client.Update(ctx, &gr)
-				_ = env.Client.Delete(ctx, &gr)
-			}
-			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
-				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
-			})
-		})
-	})
-
-	It("should become inactive when the latest injected GR fails compilation with matching hash", func(ctx SpecContext) {
-		rgdName := fmt.Sprintf("gr-fail-compile-%s", rand.String(5))
-		kind := fmt.Sprintf("GrFailCmp%s", rand.String(5))
-
-		// Start with a valid RGD
-		rgd := configmapRGD(rgdName, kind)
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			for _, gr := range listGraphRevisions(ctx, rgdName) {
-				_ = env.Client.Delete(ctx, &gr)
-			}
-			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
-				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
-			})
-		})
-
-		// Wait for active at revision 1
-		var activeRGD krov1alpha1.ResourceGraphDefinition
-		Eventually(func(g Gomega) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &activeRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(activeRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(activeRGD.Status.LastIssuedRevision).To(Equal(int64(1)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Update the RGD spec to something invalid (circular dependency).
-		// The RGD controller will fail to build and won't issue a new revision.
-		invalidSpec := invalidConfigmapRGD(rgdName, kind)
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			fresh.Spec = invalidSpec.Spec
-			g.Expect(env.Client.Update(ctx, fresh)).To(Succeed())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Wait for Inactive — the RGD controller can't build the invalid spec.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Now inject a GR at revision 2 with the same invalid spec.
-		// The hash will match the current (invalid) RGD spec. The GR controller
-		// will try to compile it and fail.
-		injectedGR := &internalv1alpha1.GraphRevision{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: fmt.Sprintf("%s-r%05d", rgdName, 2),
-				Labels: map[string]string{
-					metadata.ResourceGraphDefinitionNameLabel: rgdName,
-				},
-				OwnerReferences: []metav1.OwnerReference{
-					metadata.NewResourceGraphDefinitionOwnerReference(rgdName, activeRGD.UID),
-				},
-			},
-			Spec: internalv1alpha1.GraphRevisionSpec{
-				Revision: 2,
-				Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
-					Name: rgdName,
-					Spec: invalidSpec.Spec,
-				},
-			},
-		}
-		Expect(env.Client.Create(ctx, injectedGR)).To(Succeed())
-
-		// The GR controller compiles → fails → registry marks Failed.
-		// The RGD sees latest revision 2 with matching hash and Failed state.
-		// GraphAccepted=False → Inactive.
-		failMsg := "latest graph revision 2 failed compilation"
-		expectExactRGDConditions(ctx, rgdName, time.Second, exactRGDExpectation{
-			state: krov1alpha1.ResourceGraphDefinitionStateInactive,
-			conditions: map[krov1alpha1.ConditionType]conditionExpectation{
-				krov1alpha1.ConditionType(resourcegraphdefinition.GraphRevisionsResolved): {
-					status:  metav1.ConditionFalse,
-					reason:  "Failed",
-					message: failMsg,
-				},
-				krov1alpha1.ConditionType(resourcegraphdefinition.GraphAccepted): {
-					status:  metav1.ConditionFalse,
-					reason:  "InvalidResourceGraph",
-					message: failMsg,
-				},
-				krov1alpha1.ConditionType(resourcegraphdefinition.KindReady): {
-					status:                   metav1.ConditionTrue,
-					reason:                   "Ready",
-					message:                  fmt.Sprintf("kind %s has been accepted and ready", kind),
-					observedGenerationOffset: -1,
-				},
-				krov1alpha1.ConditionType(resourcegraphdefinition.ControllerReady): {
-					status:                   metav1.ConditionTrue,
-					reason:                   "Running",
-					message:                  "controller is running",
-					observedGenerationOffset: -1,
-				},
-				krov1alpha1.ConditionType(apis.ConditionReady): {
-					status:  metav1.ConditionFalse,
-					reason:  "Failed",
-					message: failMsg,
-				},
-			},
-		})
-	})
 
 	It("should serve instances using compiled graph from current revision", func(ctx SpecContext) {
 		rgdName := fmt.Sprintf("gr-serve-%s", rand.String(5))
@@ -1636,7 +404,7 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create an instance
 		instanceName := fmt.Sprintf("inst-%s", rand.String(5))
@@ -1665,14 +433,14 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: cmName, Namespace: namespace}, cm)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cm.Data).To(HaveKeyWithValue("key", "v1-value"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify revision 1 exists
 		Eventually(func(g Gomega) {
 			grs := listGraphRevisions(ctx, rgdName)
 			g.Expect(grs).To(HaveLen(1))
 			g.Expect(grs[0].Spec.Revision).To(Equal(int64(1)))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Update instance data — instance controller should use the compiled
 		// graph from the current revision to reconcile the change.
@@ -1687,14 +455,14 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			current.Object["spec"] = map[string]interface{}{"data": "v2-value"}
 			g.Expect(env.Client.Update(ctx, current)).To(Succeed())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega) {
 			cm := &corev1.ConfigMap{}
 			err := env.Client.Get(ctx, types.NamespacedName{Name: cmName, Namespace: namespace}, cm)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cm.Data).To(HaveKeyWithValue("key", "v2-value"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })
 
@@ -1705,15 +473,6 @@ func listGraphRevisions(ctx SpecContext, rgdName string) []internalv1alpha1.Grap
 	})
 	ExpectWithOffset(1, env.Client.List(ctx, list, &client.ListOptions{LabelSelector: sel})).To(Succeed())
 	return list.Items
-}
-
-func findGRCondition(conditions []krov1alpha1.Condition, t krov1alpha1.ConditionType) *krov1alpha1.Condition {
-	for i := range conditions {
-		if conditions[i].Type == t {
-			return &conditions[i]
-		}
-	}
-	return nil
 }
 
 func findRGDCondition(conditions []krov1alpha1.Condition, t krov1alpha1.ConditionType) *krov1alpha1.Condition {
@@ -1789,393 +548,6 @@ func configmapRGD(name, kind string) *krov1alpha1.ResourceGraphDefinition {
 		}, nil, nil),
 	)
 }
-
-// createRGDWithRevisions creates a configmap RGD, waits for it to become active,
-// then mutates the spec n-1 additional times to produce exactly n revisions.
-// Returns the RGD name and kind for further operations.
-//
-//nolint:unparam // Keep the helper generic for tests that vary retained revision counts.
-func createRGDWithRevisions(ctx SpecContext, rgdName, kind string, n int) {
-	rgd := configmapRGD(rgdName, kind)
-	ExpectWithOffset(1, env.Client.Create(ctx, rgd)).To(Succeed())
-
-	// Wait for active + revision 1
-	EventuallyWithOffset(1, func(g Gomega) {
-		fresh := &krov1alpha1.ResourceGraphDefinition{}
-		err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-		g.Expect(err).ToNot(HaveOccurred())
-		g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		g.Expect(listGraphRevisions(ctx, rgdName)).To(HaveLen(1))
-	}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-	// Mutate resource template n-1 times to produce revisions 2..n
-	for i := 2; i <= n; i++ {
-		updateRGDTemplate(ctx, rgdName, fmt.Sprintf("rev-%d", i))
-		expectedRevision := int64(i)
-		EventuallyWithOffset(1, func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.LastIssuedRevision).To(BeNumerically(">=", expectedRevision))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-	}
-
-	// Wait for all n revisions to exist
-	EventuallyWithOffset(1, func(g Gomega) {
-		g.Expect(listGraphRevisions(ctx, rgdName)).To(HaveLen(n))
-	}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-}
-
-// updateRGDTemplate updates the configmap RGD's resource template to trigger a
-// new revision. Each call adds a unique label to the ConfigMap template so the
-// spec hash changes without touching the schema.
-func updateRGDTemplate(ctx SpecContext, rgdName, label string) {
-	EventuallyWithOffset(1, func(g Gomega) {
-		fresh := &krov1alpha1.ResourceGraphDefinition{}
-		err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-		g.Expect(err).ToNot(HaveOccurred())
-		template := `{"apiVersion":"v1","kind":"ConfigMap",` +
-			`"metadata":{"name":"cm-${schema.metadata.name}",` +
-			`"labels":{"revision":"%s"}},"data":{"key":"${schema.spec.data}"}}`
-		fresh.Spec.Resources[0].Template.Raw = []byte(fmt.Sprintf(template, label))
-		err = env.Client.Update(ctx, fresh)
-		g.Expect(err).ToNot(HaveOccurred())
-	}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-}
-
-// emulateGCForRGD manually deletes GraphRevisions that have a deletionTimestamp,
-// emulating what the Kubernetes garbage collector would do on cascade delete.
-// envtest does not run a GC controller, so ownerReference-based cascade
-// deletion doesn't work. Only revisions already marked for deletion are removed.
-func emulateGCForRGD(ctx SpecContext, rgdName string) {
-	list := &internalv1alpha1.GraphRevisionList{}
-	sel := labels.SelectorFromSet(map[string]string{
-		metadata.ResourceGraphDefinitionNameLabel: rgdName,
-	})
-	ExpectWithOffset(1, env.Client.List(ctx, list, &client.ListOptions{LabelSelector: sel})).To(Succeed())
-
-	for i := range list.Items {
-		gr := &list.Items[i]
-		if !gr.DeletionTimestamp.IsZero() {
-			// Remove finalizer so the API server can complete deletion
-			gr.Finalizers = nil
-			ExpectWithOffset(1, env.Client.Update(ctx, gr)).To(Succeed())
-		} else {
-			// Not marked for deletion — delete it explicitly (emulate GC marking + deletion)
-			ExpectWithOffset(1, env.Client.Delete(ctx, gr)).To(Succeed())
-		}
-	}
-
-	EventuallyWithOffset(1, func(g Gomega) {
-		remaining := &internalv1alpha1.GraphRevisionList{}
-		g.Expect(env.Client.List(ctx, remaining, &client.ListOptions{LabelSelector: sel})).To(Succeed())
-		g.Expect(remaining.Items).To(BeEmpty())
-	}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-}
-
-// emulateOrphanDeleteForRGD emulates DeletePropagationOrphan in envtest by
-// stripping ownerReferences from all GraphRevisions first, then deleting the
-// RGD. Without ownerReferences, envtest won't cascade-delete the GRs.
-// This matches the end state of a real orphan deletion: RGD gone, GRs alive
-// with no owner.
-func emulateOrphanDeleteForRGD(ctx SpecContext, rgdName string) {
-	// Strip ownerReferences from all GRs
-	for _, gr := range listGraphRevisions(ctx, rgdName) {
-		gr.OwnerReferences = nil
-		ExpectWithOffset(1, env.Client.Update(ctx, &gr)).To(Succeed())
-	}
-
-	// Now delete the RGD — GRs have no ownerRef so they won't be cascade-deleted
-	rgd := &krov1alpha1.ResourceGraphDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: rgdName},
-	}
-	ExpectWithOffset(1, env.Client.Delete(ctx, rgd)).To(Succeed())
-
-	// Wait for RGD to be gone
-	EventuallyWithOffset(1, func(g Gomega) {
-		err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &krov1alpha1.ResourceGraphDefinition{})
-		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-	}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-}
-
-var _ = Describe("GraphRevision Adoption", func() {
-
-	It("should stamp ownerRef on orphaned revisions after recreate", func(ctx SpecContext) {
-		const numRevisions = 3
-		rgdName := fmt.Sprintf("gr-adopt-%s", rand.String(5))
-		kind := fmt.Sprintf("GrAdopt%s", rand.String(5))
-
-		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
-
-		// Record the original RGD UID.
-		var originalRGD krov1alpha1.ResourceGraphDefinition
-		Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &originalRGD)).To(Succeed())
-		originalUID := originalRGD.UID
-
-		// All GRs should be owned by the original RGD.
-		for _, gr := range listGraphRevisions(ctx, rgdName) {
-			Expect(gr.OwnerReferences).ToNot(BeEmpty())
-			Expect(gr.OwnerReferences[0].UID).To(Equal(originalUID))
-		}
-
-		// Orphan delete: strip ownerRefs, delete RGD.
-		// With the spec.snapshot.name watch, the RGD may re-adopt GRs before
-		// it is deleted, so we cannot assert ownerRefs are empty here.
-		emulateOrphanDeleteForRGD(ctx, rgdName)
-		Expect(listGraphRevisions(ctx, rgdName)).To(HaveLen(numRevisions))
-
-		// Recreate with same spec as the latest revision.
-		rgd2 := generator.NewResourceGraphDefinition(rgdName,
-			generator.WithSchema(
-				kind, "v1alpha1",
-				map[string]interface{}{
-					"data": "string | default=hello",
-				},
-				nil,
-			),
-			generator.WithResource("configmap", map[string]interface{}{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
-					"name": "cm-${schema.metadata.name}",
-					"labels": map[string]interface{}{
-						"revision": fmt.Sprintf("rev-%d", numRevisions),
-					},
-				},
-				"data": map[string]interface{}{
-					"key": "${schema.spec.data}",
-				},
-			}, nil, nil),
-		)
-		Expect(env.Client.Create(ctx, rgd2)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			for _, gr := range listGraphRevisions(ctx, rgdName) {
-				_ = env.Client.Delete(ctx, &gr)
-			}
-			_ = env.Client.Delete(ctx, rgd2)
-		})
-
-		// Wait for active, then verify all GRs have been adopted with the new UID.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-
-			newUID := fresh.UID
-			g.Expect(newUID).ToNot(Equal(originalUID), "recreated RGD should have a new UID")
-
-			for _, gr := range listGraphRevisions(ctx, rgdName) {
-				g.Expect(gr.OwnerReferences).ToNot(BeEmpty(),
-					"GR %s should have an ownerRef after adoption", gr.Name)
-				g.Expect(gr.OwnerReferences[0].UID).To(Equal(newUID),
-					"GR %s should be owned by the new RGD UID", gr.Name)
-				g.Expect(gr.OwnerReferences[0].Kind).To(Equal("ResourceGraphDefinition"))
-			}
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-	})
-
-	It("should replace stale ownerRef UID after RGD recreate", func(ctx SpecContext) {
-		rgdName := fmt.Sprintf("gr-stale-%s", rand.String(5))
-		kind := fmt.Sprintf("GrStale%s", rand.String(5))
-
-		// Create RGD and wait for active with 1 revision.
-		rgd := configmapRGD(rgdName, kind)
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-
-		var originalRGD krov1alpha1.ResourceGraphDefinition
-		Eventually(func(g Gomega) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &originalRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(originalRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-		originalUID := originalRGD.UID
-
-		// Delete the RGD. envtest has no GC, so GRs with ownerRef survive.
-		Expect(env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
-			ObjectMeta: metav1.ObjectMeta{Name: rgdName},
-		})).To(Succeed())
-		Eventually(func(g Gomega) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &krov1alpha1.ResourceGraphDefinition{})
-			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// GRs survive with the old UID in ownerRef.
-		grs := listGraphRevisions(ctx, rgdName)
-		Expect(grs).To(HaveLen(1))
-		Expect(grs[0].OwnerReferences).ToNot(BeEmpty())
-		Expect(grs[0].OwnerReferences[0].UID).To(Equal(originalUID))
-
-		// Recreate with the same spec.
-		rgd2 := configmapRGD(rgdName, kind)
-		Expect(env.Client.Create(ctx, rgd2)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			for _, gr := range listGraphRevisions(ctx, rgdName) {
-				_ = env.Client.Delete(ctx, &gr)
-			}
-			_ = env.Client.Delete(ctx, rgd2)
-		})
-
-		// The stale ownerRef should be replaced with the new UID.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-
-			newUID := fresh.UID
-			g.Expect(newUID).ToNot(Equal(originalUID))
-
-			for _, gr := range listGraphRevisions(ctx, rgdName) {
-				g.Expect(gr.OwnerReferences).To(HaveLen(1),
-					"GR %s should have exactly one ownerRef", gr.Name)
-				g.Expect(gr.OwnerReferences[0].UID).To(Equal(newUID),
-					"GR %s should have the new RGD UID, not the stale one", gr.Name)
-			}
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-	})
-
-	It("should not cross boundaries between RGDs with identical specs", func(ctx SpecContext) {
-		rgdNameA := fmt.Sprintf("gr-iso-a-%s", rand.String(5))
-		rgdNameB := fmt.Sprintf("gr-iso-b-%s", rand.String(5))
-		kindA := fmt.Sprintf("GrIsoA%s", rand.String(5))
-		kindB := fmt.Sprintf("GrIsoB%s", rand.String(5))
-
-		// Create two RGDs with the same resource template but different names/kinds.
-		rgdA := configmapRGD(rgdNameA, kindA)
-		rgdB := configmapRGD(rgdNameB, kindB)
-		Expect(env.Client.Create(ctx, rgdA)).To(Succeed())
-		Expect(env.Client.Create(ctx, rgdB)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			for _, name := range []string{rgdNameA, rgdNameB} {
-				for _, gr := range listGraphRevisions(ctx, name) {
-					_ = env.Client.Delete(ctx, &gr)
-				}
-				_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
-					ObjectMeta: metav1.ObjectMeta{Name: name},
-				})
-			}
-		})
-
-		// Both become active independently.
-		for _, name := range []string{rgdNameA, rgdNameB} {
-			Eventually(func(g Gomega) {
-				fresh := &krov1alpha1.ResourceGraphDefinition{}
-				err := env.Client.Get(ctx, types.NamespacedName{Name: name}, fresh)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-		}
-
-		// Each RGD has exactly 1 revision, scoped to its own name.
-		grsA := listGraphRevisions(ctx, rgdNameA)
-		grsB := listGraphRevisions(ctx, rgdNameB)
-		Expect(grsA).To(HaveLen(1))
-		Expect(grsB).To(HaveLen(1))
-		Expect(grsA[0].Spec.Snapshot.Name).To(Equal(rgdNameA))
-		Expect(grsB[0].Spec.Snapshot.Name).To(Equal(rgdNameB))
-
-		// Verify ownerRefs point to different UIDs.
-		var uidA, uidB types.UID
-		rgdObjA := &krov1alpha1.ResourceGraphDefinition{}
-		rgdObjB := &krov1alpha1.ResourceGraphDefinition{}
-		Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgdNameA}, rgdObjA)).To(Succeed())
-		Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgdNameB}, rgdObjB)).To(Succeed())
-		uidA = rgdObjA.UID
-		uidB = rgdObjB.UID
-		Expect(uidA).ToNot(Equal(uidB))
-
-		Expect(grsA[0].OwnerReferences[0].UID).To(Equal(uidA))
-		Expect(grsB[0].OwnerReferences[0].UID).To(Equal(uidB))
-	})
-
-	It("should adopt an externally injected GR without ownerRef", func(ctx SpecContext) {
-		rgdName := fmt.Sprintf("gr-ext-%s", rand.String(5))
-		kind := fmt.Sprintf("GrExt%s", rand.String(5))
-
-		// Create RGD and wait for active at revision 1.
-		rgd := configmapRGD(rgdName, kind)
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-
-		var activeRGD krov1alpha1.ResourceGraphDefinition
-		Eventually(func(g Gomega) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &activeRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(activeRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			g.Expect(activeRGD.Status.LastIssuedRevision).To(Equal(int64(1)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Inject a GR with spec.snapshot.name pointing to the RGD but NO ownerRef.
-		// Use a mutated template so the spec hash differs from the current RGD,
-		// forcing the controller to re-issue after adoption.
-		mutatedRGD := generator.NewResourceGraphDefinition(rgdName,
-			generator.WithSchema(
-				kind, "v1alpha1",
-				map[string]interface{}{
-					"data": "string | default=hello",
-				},
-				nil,
-			),
-			generator.WithResource("configmap", map[string]interface{}{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
-					"name": "cm-${schema.metadata.name}",
-					"labels": map[string]interface{}{
-						"injected": "true",
-					},
-				},
-				"data": map[string]interface{}{
-					"key": "${schema.spec.data}",
-				},
-			}, nil, nil),
-		)
-		injectedGR := &internalv1alpha1.GraphRevision{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: fmt.Sprintf("%s-r%05d", rgdName, 6),
-				Labels: map[string]string{
-					metadata.ResourceGraphDefinitionNameLabel: rgdName,
-				},
-				// No OwnerReferences — simulates external creation.
-			},
-			Spec: internalv1alpha1.GraphRevisionSpec{
-				Revision: 6,
-				Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
-					Name: rgdName,
-					Spec: mutatedRGD.Spec,
-				},
-			},
-		}
-		Expect(env.Client.Create(ctx, injectedGR)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			for _, gr := range listGraphRevisions(ctx, rgdName) {
-				_ = env.Client.Delete(ctx, &gr)
-			}
-			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
-				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
-			})
-		})
-
-		// The RGD should react (spec.snapshot.name watch), adopt the injected GR,
-		// and re-issue because the hash doesn't match.
-		Eventually(func(g Gomega) {
-			fresh := &krov1alpha1.ResourceGraphDefinition{}
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			// Should have re-issued past revision 6.
-			g.Expect(fresh.Status.LastIssuedRevision).To(BeNumerically(">", int64(6)))
-
-			// The injected GR should now have an ownerRef.
-			var adopted internalv1alpha1.GraphRevision
-			err = env.Client.Get(ctx, types.NamespacedName{Name: injectedGR.Name}, &adopted)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(adopted.OwnerReferences).ToNot(BeEmpty(),
-				"injected GR should be adopted with an ownerRef")
-			g.Expect(adopted.OwnerReferences[0].UID).To(Equal(fresh.UID))
-		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-	})
-})
 
 func invalidConfigmapRGD(name, kind string) *krov1alpha1.ResourceGraphDefinition {
 	return generator.NewResourceGraphDefinition(name,

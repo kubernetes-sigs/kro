@@ -885,6 +885,31 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			wantErr: true,
 			errMsg:  "cannot use externalRef with forEach",
 		},
+		{
+			// Ported from test/integration/suites/core/validation_test.go
+			// ("should reject invalid kubernetes object structures"): a
+			// malformed apiVersion with two slashes passes structural
+			// validation but fails GVK extraction at build time.
+			name: "invalid apiVersion format",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("cfgmap", map[string]interface{}{
+					"apiVersion": "invalid/version/format",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "test",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "invalid apiVersion format",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2317,6 +2342,30 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			wantErr: true,
 			errMsg:  "type mismatch",
 		},
+		{
+			// Ported from test/integration/suites/core/instance_conditions_test.go
+			// ("should surface a failure condition when a resource is
+			// invalid"): an includeWhen referencing an undeclared
+			// schema.spec subfield is rejected by the typed CEL env.
+			name: "includeWhen references undefined schema field",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"value": "string",
+					},
+					nil,
+				),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]interface{}{"name": "${schema.metadata.name}"},
+					"data":       map[string]interface{}{"foo": "${schema.spec.value}"},
+				}, nil, []string{"${schema.spec.convex.enabled}"}),
+			},
+			wantErr: true,
+			errMsg:  "convex",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2715,6 +2764,46 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 					},
 					"spec": map[string]interface{}{
 						"containers": "${sourcePod.spec.containers}",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			// Ported from test/integration/suites/core/type_compatibility_test.go
+			// ("should validate all type compatibility scenarios"): float
+			// scalar, []float indexing, float arithmetic and size() casts
+			// via string() — not covered by the other structural cases.
+			name: "pass - float scalar, float list indexing, arithmetic and size() casts",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"FloatCasts", "v1alpha1",
+					map[string]interface{}{
+						"appName":   "string",
+						"threshold": "float",
+						"limits":    "[]float",
+					},
+					nil,
+				),
+				generator.WithResource("pod", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.appName}-ports",
+						"annotations": map[string]interface{}{
+							"threshold":   "${string(schema.spec.threshold)}",
+							"doubleValue": "${string(schema.spec.threshold * 2.0)}",
+							"firstLimit":  "${string(schema.spec.limits[0])}",
+							"limitsCount": "${string(size(schema.spec.limits))}",
+						},
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "main",
+								"image": "nginx",
+							},
+						},
 					},
 				}, nil, nil),
 			},

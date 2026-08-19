@@ -108,7 +108,7 @@ var _ = Describe("Update", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create initial instance
 		instance := &unstructured.Unstructured{
@@ -139,7 +139,7 @@ var _ = Describe("Update", func() {
 			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(1)))
 			g.Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal("nginx:1.19"))
 			g.Expect(deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort).To(Equal(int32(80)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Mark deployment as ready
 		deployment.Status.Replicas = 1
@@ -162,7 +162,7 @@ var _ = Describe("Update", func() {
 			}
 			err = env.Client.Update(ctx, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify deployment is updated with new values
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -174,7 +174,7 @@ var _ = Describe("Update", func() {
 			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(3)))
 			g.Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal("nginx:1.20"))
 			g.Expect(deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort).To(Equal(int32(443)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -184,7 +184,7 @@ var _ = Describe("Update", func() {
 				Namespace: namespace,
 			}, deployment)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "deployment should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 	})
 })

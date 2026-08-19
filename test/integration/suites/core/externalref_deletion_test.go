@@ -97,7 +97,7 @@ var _ = Describe("ExternalRef Deletion", func() {
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 				g.Expect(rgd.Status.TopologicalOrder).To(HaveLen(2))
 				g.Expect(rgd.Status.TopologicalOrder[0]).To(Equal("extcm"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating the external ConfigMap")
 			extCM := &corev1.ConfigMap{
@@ -135,7 +135,7 @@ var _ = Describe("ExternalRef Deletion", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(instance.Object).To(HaveKeyWithValue("status",
 					HaveKeyWithValue("state", "ACTIVE")))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying the managed ConfigMap was created with persisted apply order")
 			managedCM := &corev1.ConfigMap{}
@@ -146,7 +146,7 @@ var _ = Describe("ExternalRef Deletion", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(managedCM.Data["inherited"]).To(Equal("from-external"))
 				g.Expect(managedCM.Annotations[krometadata.ApplyOrderAnnotation]).To(Equal("2"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("holding the managed child in termination")
 			managedCM.Finalizers = append(managedCM.Finalizers, "test.kro.run/block-deletion")
@@ -162,7 +162,7 @@ var _ = Describe("ExternalRef Deletion", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: managedCMName, Namespace: ns.Name}, current)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(current.DeletionTimestamp).ToNot(BeNil())
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("unblocking child deletion")
 			current := &corev1.ConfigMap{}
@@ -176,7 +176,7 @@ var _ = Describe("ExternalRef Deletion", func() {
 				g.Expect(err).To(MatchError(errors.IsNotFound, "managed child should be deleted"))
 				err = env.Client.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: ns.Name}, instance)
 				g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 
 	It("ordered deletion waits for the higher dependency wave", func(ctx SpecContext) {
@@ -200,7 +200,7 @@ var _ = Describe("ExternalRef Deletion", func() {
 		Eventually(func(g Gomega, ctx SpecContext) {
 			g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, rgd)).To(Succeed())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instance := &unstructured.Unstructured{Object: map[string]interface{}{
 			"apiVersion": "kro.run/v1alpha1", "kind": "TestOrderedDeletion",
@@ -215,7 +215,7 @@ var _ = Describe("ExternalRef Deletion", func() {
 			g.Expect(env.Client.Get(ctx, aKey, &corev1.ConfigMap{})).To(Succeed())
 			g.Expect(env.Client.Get(ctx, bKey, b)).To(Succeed())
 			g.Expect(b.Annotations[krometadata.ApplyOrderAnnotation]).To(Equal("2"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		b.Finalizers = append(b.Finalizers, "test.kro.run/block-deletion")
 		Expect(env.Client.Update(ctx, b)).To(Succeed())
@@ -225,7 +225,7 @@ var _ = Describe("ExternalRef Deletion", func() {
 			current := &corev1.ConfigMap{}
 			g.Expect(env.Client.Get(ctx, bKey, current)).To(Succeed())
 			g.Expect(current.DeletionTimestamp).ToNot(BeNil())
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		Consistently(func(g Gomega, ctx SpecContext) {
 			a := &corev1.ConfigMap{}
 			g.Expect(env.Client.Get(ctx, aKey, a)).To(Succeed())
@@ -246,6 +246,6 @@ var _ = Describe("ExternalRef Deletion", func() {
 			g.Expect(env.Client.Get(ctx, types.NamespacedName{
 				Name: instanceName, Namespace: ns.Name,
 			}, instance)).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

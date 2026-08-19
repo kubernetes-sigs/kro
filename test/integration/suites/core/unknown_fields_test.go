@@ -137,7 +137,7 @@ var _ = Describe("Unknown Fields", func() {
 					&apiextensionsv1.CustomResourceDefinition{},
 				)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating an external object reference")
 			existingAllowUnknown := &unstructured.Unstructured{
@@ -157,7 +157,7 @@ var _ = Describe("Unknown Fields", func() {
 			}
 			Eventually(func(g Gomega, ctx SpecContext) {
 				g.Expect(env.Client.Create(ctx, existingAllowUnknown)).To(Succeed())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 			Expect(env.Client.Get(ctx, types.NamespacedName{
 				Name:      existingAllowUnknown.GetName(),
 				Namespace: existingAllowUnknown.GetNamespace(),
@@ -252,7 +252,7 @@ var _ = Describe("Unknown Fields", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating instance including unknown nested fields")
 
@@ -286,7 +286,7 @@ var _ = Describe("Unknown Fields", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(found).To(BeTrue())
 				g.Expect(state).To(Equal("ACTIVE"))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("verifying ConfigMap resolved unknown-field expressions")
 
@@ -303,7 +303,7 @@ var _ = Describe("Unknown Fields", func() {
 				g.Expect(cm.Data["nested"]).To(Equal("value"))
 				g.Expect(cm.Data["valueFromMap"]).To(Equal("value"))
 				g.Expect(cm.Data["nonExisting"]).To(Equal(""))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 	})
 
@@ -374,7 +374,7 @@ var _ = Describe("Unknown Fields", func() {
 				)).To(Succeed())
 				g.Expect(basicRGD.Status.State).
 					To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			advancedRGD := generator.NewResourceGraphDefinition(
 				"advanced-app-"+rand.String(4),
@@ -420,7 +420,7 @@ var _ = Describe("Unknown Fields", func() {
 				// IF THE PANIC STILL EXISTS: this never reaches Active
 				g.Expect(advancedRGD.Status.State).
 					To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 	})
 })

@@ -183,7 +183,7 @@ var _ = Describe("Dependency Readiness", func() {
 
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instanceName := "test-dep-readiness"
 		// Create instance with both configmaps NOT ready initially
@@ -218,7 +218,7 @@ var _ = Describe("Dependency Readiness", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify ConfigMaps are created
 		configMapA := &corev1.ConfigMap{}
@@ -230,7 +230,7 @@ var _ = Describe("Dependency Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(configMapA.Data["value"]).To(Equal("valueA"))
 			g.Expect(configMapA.Data["ready"]).To(Equal("false"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		configMapB := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -241,7 +241,7 @@ var _ = Describe("Dependency Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(configMapB.Data["value"]).To(Equal("valueB"))
 			g.Expect(configMapB.Data["ready"]).To(Equal("false"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify Deployment is NOT created yet (dependencies not ready)
 		Consistently(func(g Gomega, ctx SpecContext) {
@@ -250,7 +250,7 @@ var _ = Describe("Dependency Readiness", func() {
 				Namespace: namespace,
 			}, &appsv1.Deployment{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "deployment should not be created yet"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 7*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify instance state is IN_PROGRESS
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -264,7 +264,7 @@ var _ = Describe("Dependency Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(status).To(Equal("IN_PROGRESS"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Update instance spec to set ConfigMap A to ready
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -291,7 +291,7 @@ var _ = Describe("Dependency Readiness", func() {
 				Namespace: namespace,
 			}, &appsv1.Deployment{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "deployment should still not be created"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 7*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Update instance spec to set ConfigMap B to ready
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -339,7 +339,7 @@ var _ = Describe("Dependency Readiness", func() {
 			}
 			g.Expect(foundConfigA).To(BeTrue(), "CONFIG_A should be set from configMapA")
 			g.Expect(foundConfigB).To(BeTrue(), "CONFIG_B should be set from configMapB")
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify instance state becomes ACTIVE once all resources are synced
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -353,7 +353,7 @@ var _ = Describe("Dependency Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(status).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -363,7 +363,7 @@ var _ = Describe("Dependency Readiness", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -371,7 +371,7 @@ var _ = Describe("Dependency Readiness", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should block dependent resources until readyWhen conditions are satisfied", func(ctx SpecContext) {
@@ -446,7 +446,7 @@ var _ = Describe("Dependency Readiness", func() {
 			}
 			g.Expect(readyCondition).ToNot(BeNil())
 			g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
@@ -471,7 +471,7 @@ var _ = Describe("Dependency Readiness", func() {
 				Namespace: namespace,
 			}, job1)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Consistently(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -479,7 +479,7 @@ var _ = Describe("Dependency Readiness", func() {
 				Namespace: namespace,
 			}, &batchv1.Job{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "job2 should not be created while job1 is running"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 7*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		now := metav1.Now()
 		job1.Status.Conditions = append(job1.Status.Conditions,
@@ -511,7 +511,7 @@ var _ = Describe("Dependency Readiness", func() {
 				Namespace: namespace,
 			}, job2)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		now = metav1.Now()
 		job2.Status.Conditions = append(job1.Status.Conditions, batchv1.JobCondition{
@@ -538,6 +538,6 @@ var _ = Describe("Dependency Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(state).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	}, SpecTimeout(120*time.Second))
 })

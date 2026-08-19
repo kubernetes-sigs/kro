@@ -83,7 +83,7 @@ var _ = Describe("Omit", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// --- Case 1: optional is empty → field should be omitted ---
 		name1 := fmt.Sprintf("omit-yes-%s", rand.String(4))
@@ -111,7 +111,7 @@ var _ = Describe("Omit", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify ConfigMap: "always" present, "optional" absent.
 		cm1 := &corev1.ConfigMap{}
@@ -120,13 +120,13 @@ var _ = Describe("Omit", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cm1.Data).To(HaveKey("always"))
 			g.Expect(cm1.Data).ToNot(HaveKey("optional"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// --- Case 1b: update instance1 to set optional → field should appear ---
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: name1, Namespace: namespace}, instance1)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(unstructured.SetNestedField(instance1.Object, "now-present", "spec", "optional")).To(Succeed())
 		Expect(env.Client.Update(ctx, instance1)).To(Succeed())
@@ -136,7 +136,7 @@ var _ = Describe("Omit", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cm1.Data).To(HaveKeyWithValue("always", "present"))
 			g.Expect(cm1.Data).To(HaveKeyWithValue("optional", "now-present"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// --- Case 1c: update instance1 back to empty → field should be omitted again ---
 		// This is the interesting SSA edge case: the field was previously managed
@@ -146,7 +146,7 @@ var _ = Describe("Omit", func() {
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: name1, Namespace: namespace}, instance1)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(unstructured.SetNestedField(instance1.Object, "", "spec", "optional")).To(Succeed())
 		Expect(env.Client.Update(ctx, instance1)).To(Succeed())
@@ -156,7 +156,7 @@ var _ = Describe("Omit", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cm1.Data).To(HaveKeyWithValue("always", "present"))
 			g.Expect(cm1.Data).ToNot(HaveKey("optional"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// --- Case 2: optional is set → field should be present ---
 		name2 := fmt.Sprintf("omit-no-%s", rand.String(4))
@@ -184,7 +184,7 @@ var _ = Describe("Omit", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify ConfigMap: both "always" and "optional" present.
 		cm2 := &corev1.ConfigMap{}
@@ -193,7 +193,7 @@ var _ = Describe("Omit", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cm2.Data).To(HaveKeyWithValue("always", "present"))
 			g.Expect(cm2.Data).To(HaveKeyWithValue("optional", "my-value"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance1)).To(Succeed())
@@ -202,42 +202,19 @@ var _ = Describe("Omit", func() {
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: name1, Namespace: namespace}, instance1)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance1 should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: name2, Namespace: namespace}, instance2)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance2 should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-	})
-
-	It("should reject omit() on metadata.name for a regular resource", func(ctx SpecContext) {
-		rgd := generator.NewResourceGraphDefinition("test-omit-name",
-			generator.WithSchema(
-				"TestOmitName", "v1alpha1",
-				map[string]interface{}{
-					"name": "string",
-				},
-				nil,
-			),
-			generator.WithResource("configmap", map[string]interface{}{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
-					"name": "${omit()}",
-				},
-			}, nil, nil),
-		)
-
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		expectRGDInactiveWithError(ctx, rgd, "omit() cannot be used at path \"metadata.name\"")
-		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should omit array elements when omit() is triggered", func(ctx SpecContext) {
@@ -278,7 +255,7 @@ var _ = Describe("Omit", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// --- Case 1: optionalArg is empty → array element should be omitted ---
 		name1 := fmt.Sprintf("omit-arr-yes-%s", rand.String(4))
@@ -305,7 +282,7 @@ var _ = Describe("Omit", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		pod1 := &corev1.Pod{}
 		Eventually(func(g Gomega) {
@@ -313,7 +290,7 @@ var _ = Describe("Omit", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(pod1.Spec.Containers).To(HaveLen(1))
 			g.Expect(pod1.Spec.Containers[0].Command).To(Equal([]string{"echo"}))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// --- Case 2: optionalArg is set → array element should be present ---
 		name2 := fmt.Sprintf("omit-arr-no-%s", rand.String(4))
@@ -340,7 +317,7 @@ var _ = Describe("Omit", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		pod2 := &corev1.Pod{}
 		Eventually(func(g Gomega) {
@@ -348,7 +325,7 @@ var _ = Describe("Omit", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(pod2.Spec.Containers).To(HaveLen(1))
 			g.Expect(pod2.Spec.Containers[0].Command).To(Equal([]string{"echo", "hello"}))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance1)).To(Succeed())
@@ -357,18 +334,18 @@ var _ = Describe("Omit", func() {
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: name1, Namespace: namespace}, instance1)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance1 should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: name2, Namespace: namespace}, instance2)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance2 should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

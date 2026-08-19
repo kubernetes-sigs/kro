@@ -85,7 +85,7 @@ var _ = Describe("Metadata Fields Access", func() {
 			created := &krov1alpha1.ResourceGraphDefinition{}
 			g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, created)).To(Succeed())
 			g.Expect(created.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instance := &unstructured.Unstructured{
@@ -143,6 +143,6 @@ var _ = Describe("Metadata Fields Access", func() {
 
 			g.Expect(cm.Data).To(HaveKey("instance-has-annotations"))
 			g.Expect(cm.Data["instance-has-annotations"]).To(Equal("true"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

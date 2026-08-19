@@ -174,7 +174,7 @@ var _ = Describe("Readiness", func() {
 
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-readiness"
 		replicas := 5
@@ -212,7 +212,7 @@ var _ = Describe("Readiness", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify DeploymentB is created
 		deployment := &appsv1.Deployment{}
@@ -230,7 +230,7 @@ var _ = Describe("Readiness", func() {
 			g.Expect(deployment.Annotations).To(HaveKeyWithValue(
 				krometadata.ApplyOrderAnnotation, "1",
 			))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify Service is not created yet
 		err := env.Client.Get(ctx, types.NamespacedName{
@@ -251,7 +251,7 @@ var _ = Describe("Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(status).To(Equal("IN_PROGRESS"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Patch the deployment to have available replicas in status
 		deployment.Status.Replicas = int32(replicas)
@@ -281,7 +281,7 @@ var _ = Describe("Readiness", func() {
 			g.Expect(service.Annotations).To(HaveKeyWithValue(
 				krometadata.ApplyOrderAnnotation, "2",
 			))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -293,7 +293,7 @@ var _ = Describe("Readiness", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete ResourceGraphDefinition
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
@@ -304,7 +304,7 @@ var _ = Describe("Readiness", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It(`should should wait for the last node in the DAG to be ready`, func(ctx SpecContext) {
@@ -350,7 +350,7 @@ var _ = Describe("Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instanceName := "test-readiness-tail"
 
@@ -377,7 +377,7 @@ var _ = Describe("Readiness", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Expect instance state to be IN_PROGRESS
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -386,7 +386,7 @@ var _ = Describe("Readiness", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify Job is created now
 		job := &batchv1.Job{}
@@ -396,9 +396,10 @@ var _ = Describe("Readiness", func() {
 				Namespace: namespace,
 			}, job)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
-		// Verify instance state is IN_PROGRESS consistently for 30seconds
+		// Verify instance state is IN_PROGRESS consistently for a window that
+		// covers at least one DefaultRequeueDuration (5s) cycle.
 		Consistently(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      instanceName,
@@ -409,7 +410,7 @@ var _ = Describe("Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(status).To(Equal("IN_PROGRESS"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 7*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Patch job completionTime to simulate job completion
 		now := metav1.Now()
@@ -446,7 +447,7 @@ var _ = Describe("Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(status).To(Equal("ACTIVE"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())

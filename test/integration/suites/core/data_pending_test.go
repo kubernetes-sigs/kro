@@ -152,7 +152,7 @@ var _ = Describe("Data Pending", func() {
 			// Verify topological order - VPC should be first
 			g.Expect(rgd.Status.TopologicalOrder).To(HaveLen(4))
 			g.Expect(rgd.Status.TopologicalOrder[0]).To(Equal("vpc"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instanceName := "test-data-pending"
@@ -185,7 +185,7 @@ var _ = Describe("Data Pending", func() {
 				Namespace: namespace,
 			}, vpc)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Step 2: Instance should be IN_PROGRESS with ResourcesReady=False and message indicating unresolved resources
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -221,7 +221,7 @@ var _ = Describe("Data Pending", func() {
 			msg, _ := resourcesReadyCondition["message"].(string)
 			g.Expect(msg).To(
 				ContainSubstring("unresolved"), "Message should indicate unresolved dependencies")
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Step 3: InternetGateway and Subnet should NOT exist yet
 		igw := &unstructured.Unstructured{}
@@ -251,7 +251,7 @@ var _ = Describe("Data Pending", func() {
 			vpcID, found, _ := unstructured.NestedString(igw.Object, "spec", "vpc")
 			g.Expect(found).To(BeTrue())
 			g.Expect(vpcID).To(Equal("vpc-12345"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		subnet := &unstructured.Unstructured{}
 		subnet.SetAPIVersion("ec2.services.k8s.aws/v1alpha1")
@@ -266,7 +266,7 @@ var _ = Describe("Data Pending", func() {
 			vpcID, found, _ := unstructured.NestedString(subnet.Object, "spec", "vpcID")
 			g.Expect(found).To(BeTrue())
 			g.Expect(vpcID).To(Equal("vpc-12345"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Step 6: NATGateway should still NOT exist (waiting for subnet.status.subnetID)
 		natgw := &unstructured.Unstructured{}
@@ -297,7 +297,7 @@ var _ = Describe("Data Pending", func() {
 			subnetID, found, _ := unstructured.NestedString(natgw.Object, "spec", "subnetID")
 			g.Expect(found).To(BeTrue())
 			g.Expect(subnetID).To(Equal("subnet-67890"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Step 9: Instance should become ACTIVE with all conditions True
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -319,7 +319,7 @@ var _ = Describe("Data Pending", func() {
 			subnetID, found, _ := unstructured.NestedString(instance.Object, "status", "subnetID")
 			g.Expect(found).To(BeTrue())
 			g.Expect(subnetID).To(Equal("subnet-67890"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should create independent resources in parallel while waiting for dependent data", func(ctx SpecContext) {
@@ -399,7 +399,7 @@ var _ = Describe("Data Pending", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instanceName := "test-parallel"
@@ -442,7 +442,7 @@ var _ = Describe("Data Pending", func() {
 				Namespace: namespace,
 			}, vpcB)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Subnets should NOT exist yet
 		subnetA := &unstructured.Unstructured{}
@@ -475,7 +475,7 @@ var _ = Describe("Data Pending", func() {
 			vpcID, found, _ := unstructured.NestedString(subnetA.Object, "spec", "vpcID")
 			g.Expect(found).To(BeTrue())
 			g.Expect(vpcID).To(Equal("vpc-aaaa"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// subnetB should STILL not exist (vpcB's status is still missing)
 		Consistently(func(g Gomega, ctx SpecContext) {
@@ -500,7 +500,7 @@ var _ = Describe("Data Pending", func() {
 			vpcID, found, _ := unstructured.NestedString(subnetB.Object, "spec", "vpcID")
 			g.Expect(found).To(BeTrue())
 			g.Expect(vpcID).To(Equal("vpc-bbbb"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Instance should become ACTIVE
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -513,6 +513,6 @@ var _ = Describe("Data Pending", func() {
 			state, found, _ := unstructured.NestedString(instance.Object, "status", "state")
 			g.Expect(found).To(BeTrue())
 			g.Expect(state).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

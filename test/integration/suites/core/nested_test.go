@@ -31,10 +31,19 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
+// These specs drive the controller to create *nested* RGDs (and their
+// generated CRDs). The controller creates the nested RGD under the group named
+// in its schema, bypassing the core suite's per-process group-isolating client
+// — so both specs would otherwise race on the same nested identity
+// (rg-nested-<type> / the generated CRD) on the shared control plane.
+//
+// Instead of booting a separate apiserver per spec, each spec stamps a unique
+// token into the nested RGD's name and API group — parameterizing the group
+// the same way the suite virtualizes kro.run per process. Distinct groups and
+// names mean the specs run concurrently on the shared control plane without
+// colliding.
 var _ = Describe("Nested ResourceGraphDefinition", func() {
-	var (
-		ns *corev1.Namespace
-	)
+	var ns *corev1.Namespace
 
 	BeforeEach(func(ctx SpecContext) {
 		ns = &corev1.Namespace{
@@ -50,8 +59,11 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 	})
 
 	It("should handle nested ResourceGraphDefinition lifecycle", func(ctx SpecContext) {
+		token := rand.String(5)
+		nestedName := fmt.Sprintf("rg-nested-string-%s", token)
+
 		// Create parent ResourceGraphDefinition
-		rg, genInstance := nestedResourceGraphDefinition("testnestedrg")
+		rg, genInstance := nestedResourceGraphDefinition("testnestedrg", token)
 		Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
 		// Wait for parent ResourceGraphDefinition to be ready
@@ -61,7 +73,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instance := genInstance(ns.Name, "test-string", "string", "10")
@@ -79,17 +91,17 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(instanceState).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Wait for nested ResourceGraphDefinition to be created and ready
 		var nestedRG krov1alpha1.ResourceGraphDefinition
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: "rg-nested-string",
+				Name: nestedName,
 			}, &nestedRG)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(nestedRG.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -97,19 +109,21 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 		// Verify nested ResourceGraphDefinition is deleted
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: "rg-nested-string",
+				Name: nestedName,
 			}, &nestedRG)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "nested RGD should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete parent ResourceGraphDefinition
 		Expect(env.Client.Delete(ctx, rg)).To(Succeed())
 	})
 
 	It("should dynamically create RGDs with different schema field types", func(ctx SpecContext) {
+		token := rand.String(5)
+
 		// Create parent ResourceGraphDefinition
 		By("Creating parent ResourceGraphDefinition")
-		rg, genInstance := nestedResourceGraphDefinition("testmultirg")
+		rg, genInstance := nestedResourceGraphDefinition("testmultirg", token)
 		Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
 		// Wait for parent ResourceGraphDefinition to be ready
@@ -119,7 +133,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create instances with different types
 		testCases := []struct {
@@ -141,15 +155,16 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 		// Wait for all nested ResourceGraphDefinitions and verify status
 		for _, t := range testCases {
 			By(fmt.Sprintf("Verifying instance %s", t.name))
+			nestedName := fmt.Sprintf("rg-nested-%s-%s", t.typeVal, token)
 			// Wait for nested ResourceGraphDefinition
 			var nestedRG krov1alpha1.ResourceGraphDefinition
 			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{
-					Name: fmt.Sprintf("rg-nested-%s", t.typeVal),
+					Name: nestedName,
 				}, &nestedRG)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(nestedRG.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			// Verify parent instance status
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -165,7 +180,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 				g.Expect(instanceStatus).ToNot(BeNil())
 				g.Expect(instanceStatus).To(HaveKeyWithValue("state", "ACTIVE"),
 					fmt.Sprintf("instance status should have state field, status was %v", instanceStatus))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Delete all instances
@@ -178,13 +193,14 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 		// Verify all nested ResourceGraphDefinitions are deleted
 		for _, t := range testCases {
 			By(fmt.Sprintf("Verifying instance deletion %s", t.name))
+			nestedName := fmt.Sprintf("rg-nested-%s-%s", t.typeVal, token)
 			Eventually(func(g Gomega, ctx SpecContext) {
 				var nestedRG krov1alpha1.ResourceGraphDefinition
 				err := env.Client.Get(ctx, types.NamespacedName{
-					Name: fmt.Sprintf("rg-nested-%s", t.typeVal),
+					Name: nestedName,
 				}, &nestedRG)
 				g.Expect(err).To(MatchError(errors.IsNotFound, "nested RGD should be deleted"))
-			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		// Delete parent ResourceGraphDefinition
@@ -197,15 +213,20 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 				Name: rg.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "parent RGD should be deleted"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })
 
-// nestedResourceGraphDefinition creates a ResourceGraphDefinition inception
-func nestedResourceGraphDefinition(rgName string) (
+// nestedResourceGraphDefinition creates a ResourceGraphDefinition inception.
+// The nested RGD's object name and generated-CRD API group are both suffixed
+// with a per-spec token so concurrent specs never collide on the same nested
+// identity on the shared control plane. The nested kind is left unmangled; the
+// group is what disambiguates the generated CRD across specs/processes.
+func nestedResourceGraphDefinition(rgName, token string) (
 	*krov1alpha1.ResourceGraphDefinition,
 	func(namespace, name string, typeVal string, defaultVal string) *unstructured.Unstructured,
 ) {
+	nestedGroup := fmt.Sprintf("nested%s.%s", token, krov1alpha1.KRODomainName)
 
 	rg := generator.NewResourceGraphDefinition(rgName,
 		generator.WithSchema(
@@ -220,11 +241,12 @@ func nestedResourceGraphDefinition(rgName string) (
 			"apiVersion": "kro.run/v1alpha1",
 			"kind":       "ResourceGraphDefinition",
 			"metadata": map[string]interface{}{
-				"name": "rg-nested-${schema.spec.type}",
+				"name": fmt.Sprintf("rg-nested-${schema.spec.type}-%s", token),
 			},
 			"spec": map[string]interface{}{
 				"schema": map[string]interface{}{
 					"apiVersion": "v1alpha1",
+					"group":      nestedGroup,
 					"kind":       "NestedRGD${schema.spec.type}",
 					"spec": map[string]interface{}{
 						"name": "string",

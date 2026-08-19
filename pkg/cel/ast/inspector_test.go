@@ -1149,3 +1149,106 @@ func testInspector(resources []string, functions []string) (*Inspector, error) {
 		loopVars:  make(map[string]struct{}),
 	}, nil
 }
+
+// TestInspector_OptionalDependencies verifies that a resource id is recorded
+// in OptionalResourceDependencies only when it is the direct receiver of CEL
+// optional chaining (id.?field / id[?"k"]), while every occurrence — optional
+// or hard — still appears in ResourceDependencies unchanged.
+func TestInspector_OptionalDependencies(t *testing.T) {
+	tests := []struct {
+		name          string
+		resources     []string
+		expression    string
+		wantResources []string // ids expected in ResourceDependencies
+		wantOptional  []string // ids expected in OptionalResourceDependencies
+	}{
+		{
+			name:          "optional select receiver",
+			resources:     []string{"x"},
+			expression:    `x.?y`,
+			wantResources: []string{"x"},
+			wantOptional:  []string{"x"},
+		},
+		{
+			name:          "optional index receiver",
+			resources:     []string{"x"},
+			expression:    `x[?"k"]`,
+			wantResources: []string{"x"},
+			wantOptional:  []string{"x"},
+		},
+		{
+			name:          "optional select with orValue",
+			resources:     []string{"x"},
+			expression:    `x.?y.orValue("z")`,
+			wantResources: []string{"x"},
+			wantOptional:  []string{"x"},
+		},
+		{
+			name:          "hard select stays hard",
+			resources:     []string{"x"},
+			expression:    `x.y`,
+			wantResources: []string{"x"},
+			wantOptional:  nil,
+		},
+		{
+			name:          "hard select then optional field: receiver is hard",
+			resources:     []string{"x"},
+			expression:    `x.spec.?field`,
+			wantResources: []string{"x"},
+			wantOptional:  nil,
+		},
+		{
+			name:          "one optional one hard across ids",
+			resources:     []string{"x", "z"},
+			expression:    `x.?y.orValue(z.w)`,
+			wantResources: []string{"x", "z"},
+			wantOptional:  []string{"x"},
+		},
+		{
+			name:          "same id optional and hard",
+			resources:     []string{"x"},
+			expression:    `x.?y.orValue(x.z)`,
+			wantResources: []string{"x", "x"},
+			wantOptional:  []string{"x"},
+		},
+	}
+
+	ids := func(deps []ResourceDependency) []string {
+		out := make([]string, 0, len(deps))
+		for _, d := range deps {
+			out = append(out, d.ID)
+		}
+		slices.Sort(out)
+		return out
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inspector, err := testInspector(tt.resources, nil)
+			if err != nil {
+				t.Fatalf("Failed to create inspector: %v", err)
+			}
+			got, err := inspector.Inspect(tt.expression)
+			if err != nil {
+				t.Fatalf("Inspect() error = %v", err)
+			}
+			wantRes := append([]string(nil), tt.wantResources...)
+			slices.Sort(wantRes)
+			if gotRes := ids(got.ResourceDependencies); !reflect.DeepEqual(gotRes, wantRes) {
+				t.Errorf("ResourceDependencies ids = %v, want %v", gotRes, wantRes)
+			}
+			wantOpt := append([]string(nil), tt.wantOptional...)
+			slices.Sort(wantOpt)
+			gotOpt := ids(got.OptionalResourceDependencies)
+			if len(gotOpt) == 0 {
+				gotOpt = nil
+			}
+			if len(wantOpt) == 0 {
+				wantOpt = nil
+			}
+			if !reflect.DeepEqual(gotOpt, wantOpt) {
+				t.Errorf("OptionalResourceDependencies ids = %v, want %v", gotOpt, wantOpt)
+			}
+		})
+	}
+}

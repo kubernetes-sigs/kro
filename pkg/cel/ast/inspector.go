@@ -73,6 +73,13 @@ type ExpressionInspection struct {
 	// ResourceDependencies lists all known resources and their access paths
 	// used in the expression
 	ResourceDependencies []ResourceDependency
+	// OptionalResourceDependencies lists known resources that appear only as
+	// the direct receiver of CEL optional chaining (id.?field / id[?"k"]) —
+	// the id is arg[0] of a `_?._` or `_[?_]` call. This is a strict subset of
+	// the occurrences also recorded in ResourceDependencies; callers compare
+	// occurrence counts to decide whether every reference to an id is optional
+	// (a soft dependency) or at least one is a hard reference.
+	OptionalResourceDependencies []ResourceDependency
 	// FunctionCalls lists all known function calls and their arguments found
 	// in the expression
 	FunctionCalls []FunctionCall
@@ -95,6 +102,7 @@ func (e *ExpressionInspection) UsesOmit() bool {
 
 func (e *ExpressionInspection) merge(other ExpressionInspection) {
 	e.ResourceDependencies = append(e.ResourceDependencies, other.ResourceDependencies...)
+	e.OptionalResourceDependencies = append(e.OptionalResourceDependencies, other.OptionalResourceDependencies...)
 	e.FunctionCalls = append(e.FunctionCalls, other.FunctionCalls...)
 	e.UnknownResources = append(e.UnknownResources, other.UnknownResources...)
 	e.UnknownFunctions = append(e.UnknownFunctions, other.UnknownFunctions...)
@@ -262,6 +270,24 @@ func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path stri
 
 	for _, arg := range call.Args() {
 		out.merge(a.inspectExpr(ast, arg, ""))
+	}
+
+	// Optional chaining: `id.?field` (_?._) and `id[?"k"]` (_[?_]) parse with
+	// the made-optional receiver as arg[0]. When that receiver is a bare,
+	// known-resource identifier, the whole reference is non-gating: if the
+	// resource has not published yet the expression yields optional.none() and
+	// the field is dropped. Record it so the caller can tell a
+	// receiver-of-optional reference apart from a hard access on the same id.
+	if fn == "_?._" || fn == "_[?_]" {
+		args := call.Args()
+		if len(args) >= 1 && args[0].Kind() == celast.IdentKind {
+			name := args[0].AsIdent()
+			if _, isLoop := a.loopVars[name]; !isLoop {
+				if _, ok := a.resources[name]; ok {
+					out.OptionalResourceDependencies = append(out.OptionalResourceDependencies, ResourceDependency{ID: name, Path: name})
+				}
+			}
+		}
 	}
 
 	// Namespaced (member) function: target.method

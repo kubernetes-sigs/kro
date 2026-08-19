@@ -40,10 +40,11 @@ type WatchManager struct {
 	watches map[schema.GroupVersionResource]*gvrWatch
 	// owners tracks who retains each GVR. An informer is eligible for
 	// shutdown only when its owner set is empty.
-	owners map[schema.GroupVersionResource]map[string]struct{}
-	client metadata.Interface
-	resync time.Duration
-	log    logr.Logger
+	owners   map[schema.GroupVersionResource]map[string]struct{}
+	failures map[schema.GroupVersionResource]*watchFailure
+	client   metadata.Interface
+	resync   time.Duration
+	log      logr.Logger
 
 	// onEvent is the single callback invoked for every informer event.
 	// Set at construction time; never nil.
@@ -72,12 +73,13 @@ type gvrWatch struct {
 // for every informer event across all GVRs.
 func NewWatchManager(client metadata.Interface, resync time.Duration, onEvent EventHandler, log logr.Logger) *WatchManager {
 	wm := &WatchManager{
-		watches: make(map[schema.GroupVersionResource]*gvrWatch),
-		owners:  make(map[schema.GroupVersionResource]map[string]struct{}),
-		client:  client,
-		resync:  resync,
-		onEvent: onEvent,
-		log:     log.WithName("watch-manager"),
+		watches:  make(map[schema.GroupVersionResource]*gvrWatch),
+		owners:   make(map[schema.GroupVersionResource]map[string]struct{}),
+		failures: make(map[schema.GroupVersionResource]*watchFailure),
+		client:   client,
+		resync:   resync,
+		onEvent:  onEvent,
+		log:      log.WithName("watch-manager"),
 	}
 	wm.createInformer = wm.defaultCreateInformer
 	return wm
@@ -87,6 +89,13 @@ func NewWatchManager(client metadata.Interface, resync time.Duration, onEvent Ev
 // If the informer fails to start, the owner is removed.
 func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource, ownerID string) error {
 	m.mu.Lock()
+
+	// Check if GVR is currently in a failure backoff/cooldown period.
+	if f, exists := m.failures[gvr]; exists && time.Since(f.lastFailed) < f.cooldown {
+		m.mu.Unlock()
+		return fmt.Errorf("cache sync timeout for %s (cooldown active)", gvr)
+	}
+
 	if m.owners[gvr] == nil {
 		m.owners[gvr] = make(map[string]struct{})
 	}
@@ -120,9 +129,15 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource, ownerID stri
 		metrics.DynInformerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
 		m.forceStopWatch(gvr)
 		m.ReleaseWatch(gvr, ownerID)
+		m.recordFailure(gvr)
 		return fmt.Errorf("cache sync timeout for %s", gvr)
 	}
 	metrics.DynInformerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
+
+	m.mu.Lock()
+	delete(m.failures, gvr)
+	m.mu.Unlock()
+
 	return nil
 }
 
@@ -169,6 +184,7 @@ func (m *WatchManager) Shutdown() {
 	}
 	m.watches = make(map[schema.GroupVersionResource]*gvrWatch)
 	m.owners = make(map[schema.GroupVersionResource]map[string]struct{})
+	m.failures = make(map[schema.GroupVersionResource]*watchFailure)
 }
 
 const defaultSyncTimeout = 30 * time.Second
@@ -285,4 +301,36 @@ func (w *gvrWatch) eventHandlerFuncs(onEvent EventHandler) cache.ResourceEventHa
 			}
 		},
 	}
+}
+
+type watchFailure struct {
+	lastFailed time.Time
+	cooldown   time.Duration
+}
+
+func (m *WatchManager) recordFailure(gvr schema.GroupVersionResource) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	const (
+		initialCooldown = 5 * time.Second
+		maxCooldown     = 5 * time.Minute
+	)
+
+	f, exists := m.failures[gvr]
+	if !exists {
+		m.failures[gvr] = &watchFailure{
+			lastFailed: time.Now(),
+			cooldown:   initialCooldown,
+		}
+		return
+	}
+
+	newCooldown := f.cooldown * 2
+	if newCooldown > maxCooldown {
+		newCooldown = maxCooldown
+	}
+
+	f.lastFailed = time.Now()
+	f.cooldown = newCooldown
 }

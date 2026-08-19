@@ -16,6 +16,7 @@ package runtime
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -25,6 +26,24 @@ import (
 var ErrDataPending = errors.New("data pending")
 
 var ErrWaitingForReadiness = errors.New("waiting for readiness")
+
+// waitingForReadinessError formats a readiness-wait message that satisfies
+// errors.Is(err, ErrWaitingForReadiness) without appending the sentinel's own
+// "waiting for readiness" text, which duplicates the NodeState/condition
+// reason and adds no value for users reading the message.
+type waitingForReadinessError struct {
+	msg string
+}
+
+func (e *waitingForReadinessError) Error() string { return e.msg }
+
+func (e *waitingForReadinessError) Unwrap() error { return ErrWaitingForReadiness }
+
+// newWaitingForReadinessError builds an error matching ErrWaitingForReadiness
+// via errors.Is, with a message composed solely of format/args.
+func newWaitingForReadinessError(format string, args ...any) error {
+	return &waitingForReadinessError{msg: fmt.Sprintf(format, args...)}
+}
 
 // ErrDesiredNotResolved indicates that the desired state for a node has not
 // been resolved yet. This typically happens when GetDesired is called on a

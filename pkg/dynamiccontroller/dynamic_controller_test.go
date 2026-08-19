@@ -40,6 +40,7 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
+	kwatch "github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 // NOTE(a-hilaly): I'm just playing around with the dynamic controller code here
@@ -179,8 +180,8 @@ func TestEnqueueObject(t *testing.T) {
 
 	parentGVR := schema.GroupVersionResource{Group: "group", Version: "version", Resource: "resource"}
 
-	dc.enqueueParent(parentGVR, Event{
-		Type:      EventAdd,
+	dc.enqueueParent(parentGVR, kwatch.Event{
+		Type:      kwatch.EventAdd,
 		GVR:       parentGVR,
 		Name:      "test-object",
 		Namespace: "default",
@@ -654,10 +655,10 @@ func TestEnqueueFromInformer_GenerationSkip(t *testing.T) {
 			expectQueue: 0,
 		},
 		{
-			name:        "same generation, reconcile disabled on new only — skips",
+			name:        "same generation, reconcile disabled on new only — enqueues",
 			oldObj:      makeObj("a", "default", 5, nil),
 			newObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"}),
-			expectQueue: 0,
+			expectQueue: 1,
 		},
 		{
 			name:        "same generation, reconcile re-enabled case-insensitive — enqueues",
@@ -675,7 +676,7 @@ func TestEnqueueFromInformer_GenerationSkip(t *testing.T) {
 			mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
 
 			dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
-			dc.enqueueFromInformer(parentGVR, tt.oldObj, tt.newObj, EventUpdate)
+			dc.enqueueFromInformer(parentGVR, tt.oldObj, tt.newObj, kwatch.EventUpdate)
 			assert.Equal(t, tt.expectQueue, dc.queue.Len())
 		})
 	}
@@ -698,7 +699,7 @@ func TestEnqueueFromInformer_AddAndDelete(t *testing.T) {
 	obj.SetGeneration(1)
 
 	// AddFunc passes nil as oldObject — should enqueue
-	dc.enqueueFromInformer(parentGVR, nil, obj, EventAdd)
+	dc.enqueueFromInformer(parentGVR, nil, obj, kwatch.EventAdd)
 	assert.Equal(t, 1, dc.queue.Len(), "Add events should be enqueued")
 
 	// Drain
@@ -707,7 +708,7 @@ func TestEnqueueFromInformer_AddAndDelete(t *testing.T) {
 	dc.queue.Forget(item)
 
 	// DeleteFunc passes nil as oldObject — should enqueue
-	dc.enqueueFromInformer(parentGVR, nil, obj, EventDelete)
+	dc.enqueueFromInformer(parentGVR, nil, obj, kwatch.EventDelete)
 	assert.Equal(t, 1, dc.queue.Len(), "Delete events should be enqueued")
 }
 
@@ -721,11 +722,11 @@ func TestEnqueueFromInformer_NilNewObject(t *testing.T) {
 	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
 
-	dc.enqueueFromInformer(parentGVR, nil, nil, EventDelete)
+	dc.enqueueFromInformer(parentGVR, nil, nil, kwatch.EventDelete)
 	assert.Equal(t, 0, dc.queue.Len(), "nil newObject should cause early return")
 }
 
-func TestReconcileEnabledInUpdate(t *testing.T) {
+func TestReconcileSuspensionChangedInUpdate(t *testing.T) {
 	makeObj := func(annotations map[string]string) *v1.PartialObjectMetadata {
 		obj := &v1.PartialObjectMetadata{}
 		obj.SetAnnotations(annotations)
@@ -761,7 +762,7 @@ func TestReconcileEnabledInUpdate(t *testing.T) {
 			name:   "enabled -> disabled",
 			old:    nil,
 			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
-			expect: false,
+			expect: true,
 		},
 		{
 			name:   "case insensitive disabled",
@@ -792,7 +793,7 @@ func TestReconcileEnabledInUpdate(t *testing.T) {
 			name:   "enabled -> suspended",
 			old:    nil,
 			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "suspended"},
-			expect: false,
+			expect: true,
 		},
 		{
 			name:   "case insensitive suspended",
@@ -823,7 +824,7 @@ func TestReconcileEnabledInUpdate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := reconcileEnabledInUpdate(makeObj(tt.old), makeObj(tt.new))
+			result := reconcileSuspensionChangedInUpdate(makeObj(tt.old), makeObj(tt.new))
 			assert.Equal(t, tt.expect, result)
 		})
 	}
@@ -867,7 +868,7 @@ func TestGetInformer_ReturnsNil_ForMissingWatch(t *testing.T) {
 	// guard in Register protects against.
 	scheme := runtime.NewScheme()
 	require.NoError(t, v1.AddMetaToScheme(scheme))
-	wm := NewWatchManager(fake.NewSimpleMetadataClient(scheme), 1*time.Hour, func(Event) {}, noopLogger())
+	wm := kwatch.NewManager(fake.NewSimpleMetadataClient(scheme), 1*time.Hour, func(kwatch.Event) {}, noopLogger())
 
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 	assert.Nil(t, wm.GetInformer(gvr), "GetInformer should return nil for unwatched GVR")
@@ -875,8 +876,8 @@ func TestGetInformer_ReturnsNil_ForMissingWatch(t *testing.T) {
 	require.NoError(t, wm.EnsureWatch(gvr, "owner"))
 	assert.NotNil(t, wm.GetInformer(gvr))
 
-	wm.forceStopWatch(gvr)
-	assert.Nil(t, wm.GetInformer(gvr), "GetInformer should return nil after forceStopWatch")
+	wm.ReleaseWatch(gvr, "owner")
+	assert.Nil(t, wm.GetInformer(gvr), "GetInformer should return nil after the last owner releases the watch")
 }
 
 func TestDeregister_HandlerNoLongerReceivesEvents(t *testing.T) {

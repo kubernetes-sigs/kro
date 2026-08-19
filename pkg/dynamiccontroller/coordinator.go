@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
+	kwatch "github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 // InstanceWatcher is the interface the instance reconciler uses to request
@@ -107,7 +108,7 @@ type collectionEntry struct {
 type WatchCoordinator struct {
 	mu sync.RWMutex
 
-	watches *WatchManager
+	watches *kwatch.Manager
 	enqueue EnqueueFunc
 	log     logr.Logger
 
@@ -123,7 +124,7 @@ type WatchCoordinator struct {
 }
 
 // NewWatchCoordinator creates a new WatchCoordinator.
-func NewWatchCoordinator(watches *WatchManager, enqueue EnqueueFunc, log logr.Logger) *WatchCoordinator {
+func NewWatchCoordinator(watches *kwatch.Manager, enqueue EnqueueFunc, log logr.Logger) *WatchCoordinator {
 	return &WatchCoordinator{
 		watches:         watches,
 		enqueue:         enqueue,
@@ -330,7 +331,7 @@ func (c *WatchCoordinator) RemoveParentGVR(parentGVR schema.GroupVersionResource
 
 // RouteEvent routes a watch event to all matching instances.
 // Called by the watch handler for every event.
-func (c *WatchCoordinator) RouteEvent(event Event) {
+func (c *WatchCoordinator) RouteEvent(event kwatch.Event) {
 	metrics.DynRouteTotal.WithLabelValues(event.GVR.String()).Inc()
 
 	c.mu.RLock()

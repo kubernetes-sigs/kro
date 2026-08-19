@@ -82,6 +82,7 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
+	kwatch "github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 // Config holds the configuration for DynamicController
@@ -152,7 +153,7 @@ type DynamicController struct {
 	log    logr.Logger
 
 	// Shared watch lifecycle management.
-	watches *WatchManager
+	watches *kwatch.Manager
 
 	// Instance-level watch coordination.
 	coordinator *WatchCoordinator
@@ -186,7 +187,7 @@ func NewDynamicController(
 	}
 
 	// WatchManager routes all informer events through the coordinator.
-	dc.watches = NewWatchManager(kubeClient, config.ResyncPeriod, dc.routeChildEvent, logger)
+	dc.watches = newWatchManager(kubeClient, config.ResyncPeriod, dc.routeChildEvent, logger)
 
 	// Initialize coordinator eagerly so it's never nil.
 	dc.coordinator = NewWatchCoordinator(dc.watches, dc.enqueueInstance, logger)
@@ -221,8 +222,29 @@ func (dc *DynamicController) Coordinator() *WatchCoordinator {
 
 // routeChildEvent is the EventHandler callback given to WatchManager.
 // It delegates to the coordinator for child/external resource event routing.
-func (dc *DynamicController) routeChildEvent(event Event) {
+func (dc *DynamicController) routeChildEvent(event kwatch.Event) {
 	dc.coordinator.RouteEvent(event)
+}
+
+// newWatchManager creates a kwatch.Manager wired to the dynamic controller's
+// Prometheus metrics. The onEvent callback is invoked for every informer event
+// across all GVRs.
+func newWatchManager(client k8smetadata.Interface, resync time.Duration, onEvent kwatch.EventHandler, log logr.Logger) *kwatch.Manager {
+	wm := kwatch.NewManager(client, resync, onEvent, log)
+	wm.Metrics = dynMetricsRecorder{}
+	return wm
+}
+
+// dynMetricsRecorder forwards WatchManager observability signals to the
+// dynamic controller's Prometheus vectors in pkg/metrics.
+type dynMetricsRecorder struct{}
+
+func (dynMetricsRecorder) SetActiveWatches(active int) {
+	metrics.DynWatchCount.Set(float64(active))
+}
+
+func (dynMetricsRecorder) ObserveInformerSync(gvr schema.GroupVersionResource, seconds float64) {
+	metrics.DynInformerSyncDuration.WithLabelValues(gvr.String()).Observe(seconds)
 }
 
 func (dc *DynamicController) worker(ctx context.Context) {
@@ -327,7 +349,7 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers,
 }
 
 // enqueueParent enqueues an instance directly from a parent watch event.
-func (dc *DynamicController) enqueueParent(parentGVR schema.GroupVersionResource, event Event) {
+func (dc *DynamicController) enqueueParent(parentGVR schema.GroupVersionResource, event kwatch.Event) {
 	oi := ObjectIdentifiers{
 		NamespacedName: types.NamespacedName{
 			Namespace: event.Namespace,
@@ -418,13 +440,13 @@ func (dc *DynamicController) Register(
 func (dc *DynamicController) parentEventHandlerFor(parent schema.GroupVersionResource) cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
-			dc.enqueueFromInformer(parent, nil, obj, EventAdd)
+			dc.enqueueFromInformer(parent, nil, obj, kwatch.EventAdd)
 		},
 		UpdateFunc: func(oldObj, newObj any) {
-			dc.enqueueFromInformer(parent, oldObj, newObj, EventUpdate)
+			dc.enqueueFromInformer(parent, oldObj, newObj, kwatch.EventUpdate)
 		},
 		DeleteFunc: func(obj any) {
-			dc.enqueueFromInformer(parent, nil, obj, EventDelete)
+			dc.enqueueFromInformer(parent, nil, obj, kwatch.EventDelete)
 		},
 	}
 }
@@ -434,7 +456,7 @@ func (dc *DynamicController) parentEventHandlerFor(parent schema.GroupVersionRes
 func (dc *DynamicController) enqueueExistingInstances(parent schema.GroupVersionResource) {
 	if inf := dc.watches.GetInformer(parent); inf != nil && !inf.IsStopped() {
 		for _, obj := range inf.GetStore().List() {
-			dc.enqueueFromInformer(parent, nil, obj, EventUpdate)
+			dc.enqueueFromInformer(parent, nil, obj, kwatch.EventUpdate)
 		}
 	}
 }
@@ -442,7 +464,7 @@ func (dc *DynamicController) enqueueExistingInstances(parent schema.GroupVersion
 // enqueueFromInformer converts a raw informer callback into an enqueue call.
 // For Update events it compares generations and skips if unchanged (unless
 // the reconcile-disabled label was just removed).
-func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionResource, oldObject, newObject any, eventType EventType) {
+func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionResource, oldObject, newObject any, eventType kwatch.EventType) {
 	newMeta, err := meta.Accessor(newObject)
 	if err != nil {
 		dc.log.Error(err, "Failed to get meta for parent object")
@@ -450,18 +472,20 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 	}
 
 	// Generation-based skip only applies to updates where we have both old and new objects.
-	if eventType == EventUpdate && oldObject != nil {
+	if eventType == kwatch.EventUpdate && oldObject != nil {
 		oldMeta, err := meta.Accessor(oldObject)
 		if err != nil {
 			dc.log.Error(err, "Failed to get meta for old parent object")
 			return
 		}
 		if newMeta.GetGeneration() == oldMeta.GetGeneration() {
-			// Normally skip, but we should enqueue if the oldMeta had the reconcile disabled annotation, and the newMeta doesn't.
-			// This covers an edge case where the user only updates the reconcile annotation from disabled to enabled,
-			// which will trigger this func, but the generation won't change since it's a metadata-only update.
-			// We want to make sure this transition still triggers a reconciliation.
-			if !reconcileEnabledInUpdate(oldMeta, newMeta) {
+			// Normally skip metadata-only updates, but a change to the
+			// reconcile-suspended annotation does not bump generation yet must
+			// still trigger a reconcile: resuming (suspended->enabled) so the
+			// instance re-converges, and suspending (enabled->suspended) so the
+			// ReconciliationSuspended status is written promptly (the graph
+			// engine does not periodically requeue).
+			if !reconcileSuspensionChangedInUpdate(oldMeta, newMeta) {
 				dc.log.V(2).Info("Skipping update due to unchanged generation",
 					"name", newMeta.GetName(), "namespace", newMeta.GetNamespace(), "generation", newMeta.GetGeneration())
 				return
@@ -469,7 +493,7 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 		}
 	}
 
-	dc.enqueueParent(parentGVR, Event{
+	dc.enqueueParent(parentGVR, kwatch.Event{
 		Type:      eventType,
 		GVR:       parentGVR,
 		Name:      newMeta.GetName(),
@@ -477,10 +501,15 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 	})
 }
 
-func reconcileEnabledInUpdate(oldMeta, newMeta metav1.Object) bool {
+// reconcileSuspensionChangedInUpdate reports whether the reconcile-suspended
+// annotation flipped between the old and new object. It is symmetric: both
+// suspended->enabled and enabled->suspended transitions return true so each is
+// reconciled exactly once. A steadily-suspended (or steadily-enabled) instance
+// returns false, so it is not re-enqueued every metadata update.
+func reconcileSuspensionChangedInUpdate(oldMeta, newMeta metav1.Object) bool {
 	oldSuspended := v1alpha1.IsReconcileSuspended(oldMeta.GetAnnotations()[v1alpha1.InstanceReconcileAnnotation])
 	newSuspended := v1alpha1.IsReconcileSuspended(newMeta.GetAnnotations()[v1alpha1.InstanceReconcileAnnotation])
-	return oldSuspended && !newSuspended
+	return oldSuspended != newSuspended
 }
 
 // Deregister removes a parent GVR handler and cleans up coordinator state.

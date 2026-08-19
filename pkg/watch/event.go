@@ -12,7 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dynamiccontroller
+// Package watch provides the shared informer-fleet machinery used by kro's
+// controllers. A [Manager] owns one metadata-only informer per GVR, starting
+// them lazily and reference-counting owners so an informer stops as soon as
+// its last owner releases it. Informer callbacks are normalized into [Event]
+// values and delivered to a single [EventHandler].
+//
+// The package is deliberately controller-agnostic: it does not know about
+// work queues, parent CRDs, or controller-runtime. Consumers (the RGD/instance
+// dynamic controller and the graph-engine watch router) layer their own event
+// routing and reconcile dispatch on top of a shared Manager.
+package watch
 
 import "k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -25,7 +35,7 @@ const (
 	EventDelete EventType = "delete"
 )
 
-// Event is a normalized watch event emitted by the WatchManager.
+// Event is a normalized watch event emitted by the [Manager].
 // Consumers decide what to act on -- no old/new comparison or generation
 // filtering is performed by the watch layer.
 type Event struct {
@@ -40,5 +50,7 @@ type Event struct {
 	OldLabels map[string]string
 }
 
-// EventHandler processes a single watch event.
+// EventHandler processes a single watch event. The [Manager] invokes the
+// handler synchronously from informer goroutines, so implementations must keep
+// work fast -- push to a queue or fan-out channel for heavy work.
 type EventHandler func(event Event)

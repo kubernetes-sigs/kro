@@ -50,6 +50,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	krt "github.com/kubernetes-sigs/kro/pkg/runtime"
+	"github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 var (
@@ -200,7 +201,7 @@ func newControllerTestCoordinator(t *testing.T) *dynamiccontroller.WatchCoordina
 	metadataClient := metadatafake.NewSimpleMetadataClient(scheme)
 
 	var coord *dynamiccontroller.WatchCoordinator
-	watches := dynamiccontroller.NewWatchManager(metadataClient, time.Hour, func(event dynamiccontroller.Event) {
+	watches := watch.NewManager(metadataClient, time.Hour, func(event watch.Event) {
 		if coord != nil {
 			coord.RouteEvent(event)
 		}

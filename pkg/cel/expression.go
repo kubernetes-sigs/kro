@@ -24,6 +24,23 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
+const (
+	// DefaultCostLimit bounds the maximum evaluation cost for CEL programs to
+	// prevent unbounded resource consumption from pathological expressions.
+	DefaultCostLimit = 10_000_000
+	// DefaultInterruptCheckFrequency defines the instruction step frequency for checking
+	// cancellation and interrupt signals during evaluation.
+	DefaultInterruptCheckFrequency = 100
+)
+
+// DefaultProgramOptions returns the standard execution bound options for CEL programs.
+func DefaultProgramOptions() []cel.ProgramOption {
+	return []cel.ProgramOption{
+		cel.CostLimit(DefaultCostLimit),
+		cel.InterruptCheckFrequency(DefaultInterruptCheckFrequency),
+	}
+}
+
 // Expression wraps a CEL expression with its compiled program and metadata.
 // Programs are compiled once at graph build time and reused across reconciliations.
 // The struct is immutable and thread-safe after construction. It is save to use

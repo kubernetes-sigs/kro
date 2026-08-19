@@ -22,6 +22,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
 func TestWithResourceIDs(t *testing.T) {
@@ -300,6 +301,44 @@ func TestBaseDeclarations_ReturnsSameSlice(t *testing.T) {
 	if len(a) > 0 && len(b) > 0 {
 		assert.Same(t, &a[0], &b[0], "expected same backing array from cached BaseDeclarations")
 	}
+}
+
+func TestWithRuntimeLibrary_DefaultOn(t *testing.T) {
+	env, err := DefaultEnvironment()
+	require.NoError(t, err)
+	_, issues := env.Compile(`runtime.newCondition({type: 'X', status: 'True', reason: '', message: ''})`)
+	assert.NoError(t, issues.Err(), "default environment must keep the Runtime library")
+}
+
+func TestWithRuntimeLibrary_Off(t *testing.T) {
+	env, err := DefaultEnvironment(WithRuntimeLibrary(false))
+	require.NoError(t, err)
+	_, issues := env.Compile(`runtime.newCondition({type: 'X', status: 'True', reason: '', message: ''})`)
+	assert.Error(t, issues.Err(), "Graph environments must omit the Runtime library")
+}
+
+func TestTypedEnvironmentWithIDsAndProvider(t *testing.T) {
+	schemas := map[string]*spec.Schema{
+		"schema": {
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				},
+			},
+		},
+	}
+	env, provider, err := TypedEnvironmentWithIDsAndProvider(schemas, []string{"extra"}, WithRuntimeLibrary(false))
+	require.NoError(t, err)
+	require.NotNil(t, env)
+	require.NotNil(t, provider)
+
+	_, issues := env.Compile("schema.name")
+	assert.NoError(t, issues.Err())
+	_, issues = env.Compile("extra")
+	assert.NoError(t, issues.Err())
+	_, issues = env.Compile(`runtime.newCondition({type: 'X', status: 'True', reason: '', message: ''})`)
+	assert.Error(t, issues.Err())
 }
 
 func TestBaseEnv_Extend_PreservesLibraries(t *testing.T) {

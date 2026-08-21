@@ -234,15 +234,18 @@ resources:
         name: ${schema.spec.name}
       spec:
         # other required fields omitted for brevity
-        tags: ${merge(schema.spec.tags, {
+        tags: ${schema.spec.tags.merge({
           "managed-by": "kro",
           "tenant": schema.metadata.?labels["tenant"].orValue("shared"),
           "namespace": schema.metadata.namespace
         })}
 ```
 
-Putting the platform tags in the second argument to `merge()` makes them win on
-key conflicts, so the wrapper always injects the tags you require.
+Passing the platform tags as the argument to `merge()` makes them the second
+map, so they win on key conflicts and the wrapper always injects the tags you
+require. Note that `merge()` is a member function, so it must be called on the
+receiving map (`schema.spec.tags.merge({...})`) rather than as a global
+function (`merge(schema.spec.tags, {...})`), which does not compile.
 
 ## When Not To Wrap
 

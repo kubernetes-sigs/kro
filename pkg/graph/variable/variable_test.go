@@ -28,6 +28,7 @@ func TestResourceVariableKind(t *testing.T) {
 		isStatic      bool
 		isDynamic     bool
 		isIncludeWhen bool
+		isIteration   bool
 	}{
 		{
 			name:          "Static Kind",
@@ -36,6 +37,7 @@ func TestResourceVariableKind(t *testing.T) {
 			isStatic:      true,
 			isDynamic:     false,
 			isIncludeWhen: false,
+			isIteration:   false,
 		},
 		{
 			name:          "Dynamic Kind",
@@ -44,6 +46,7 @@ func TestResourceVariableKind(t *testing.T) {
 			isStatic:      false,
 			isDynamic:     true,
 			isIncludeWhen: false,
+			isIteration:   false,
 		},
 		{
 			name:          "ReadyWhen Kind",
@@ -52,6 +55,7 @@ func TestResourceVariableKind(t *testing.T) {
 			isStatic:      false,
 			isDynamic:     false,
 			isIncludeWhen: false,
+			isIteration:   false,
 		},
 		{
 			name:          "IncludeWhen Kind",
@@ -60,6 +64,16 @@ func TestResourceVariableKind(t *testing.T) {
 			isStatic:      false,
 			isDynamic:     false,
 			isIncludeWhen: true,
+			isIteration:   false,
+		},
+		{
+			name:          "Iteration Kind",
+			kind:          ResourceVariableKindIteration,
+			expectedStr:   "iteration",
+			isStatic:      false,
+			isDynamic:     false,
+			isIncludeWhen: false,
+			isIteration:   true,
 		},
 		{
 			name:          "Unknown Kind",
@@ -68,6 +82,7 @@ func TestResourceVariableKind(t *testing.T) {
 			isStatic:      false,
 			isDynamic:     false,
 			isIncludeWhen: false,
+			isIteration:   false,
 		},
 	}
 
@@ -77,6 +92,7 @@ func TestResourceVariableKind(t *testing.T) {
 			assert.Equal(t, tc.isStatic, tc.kind.IsStatic())
 			assert.Equal(t, tc.isDynamic, tc.kind.IsDynamic())
 			assert.Equal(t, tc.isIncludeWhen, tc.kind.IsIncludeWhen())
+			assert.Equal(t, tc.isIteration, tc.kind.IsIteration())
 		})
 	}
 }

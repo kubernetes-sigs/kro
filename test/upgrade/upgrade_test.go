@@ -192,6 +192,7 @@ var _ = ginkgo.Describe("Post-Upgrade GraphRevision", ginkgo.Ordered, func() {
 		// the current count must not exceed what is expected given the known
 		// post-upgrade mutations:
 		//   - mutationRGDName: exactly +1 (one deliberate mutation by mutation suite)
+		//   - shrinkRGDName: exactly +1 (one deliberate mutation by template-shrink suite)
 		//   - retentionRGDName: capped at maxGraphRevisions (rapid-mutation suite)
 		//   - deletionRGDName: 0 or snapshot count (deletion suite may or may not have run)
 		//   - all others: unchanged from snapshot
@@ -199,7 +200,7 @@ var _ = ginkgo.Describe("Post-Upgrade GraphRevision", ginkgo.Ordered, func() {
 			currentCount := currentGRCountPerRGD[rgdName]
 			var maxAllowed int
 			switch rgdName {
-			case mutationRGDName:
+			case mutationRGDName, shrinkRGDName:
 				maxAllowed = min(preCount+1, maxGraphRevisions)
 			case retentionRGDName:
 				maxAllowed = min(preCount+retentionMutations, maxGraphRevisions)

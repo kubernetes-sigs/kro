@@ -17,4 +17,9 @@ package metadata
 const (
 	// ApplyOrderAnnotation persists a managed resource's reverse topological deletion wave.
 	ApplyOrderAnnotation = InternalKROPrefix + "apply-order"
+	// PatchContributionsAnnotation persists the inventory of patch-node
+	// field-manager contributions on a Graph, as a JSON array. It drives
+	// release-on-prune: contributions present last reconcile but absent this
+	// one have their fields released under their field manager.
+	PatchContributionsAnnotation = InternalKROPrefix + "patch-contributions"
 )

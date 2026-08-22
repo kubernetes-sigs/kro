@@ -38,6 +38,7 @@ type buildContext struct {
 	env          *cel.Env
 	typeProvider *krocel.DeclTypeProvider
 	schemaCache  *schema.Cache
+	costLimit    uint64
 
 	// schema pointer → DeclType. Avoids redundant SchemaDeclTypeWithMetadata
 	// calls for schemas already converted. Schema pointers are live in the
@@ -113,7 +114,7 @@ func (bc *buildContext) compile(env *cel.Env, expr *krocel.Expression) (*cel.Ast
 		}
 	}
 
-	program, err := env.Program(checkedAST)
+	program, err := env.Program(checkedAST, krocel.ProgramOptions(bc.costLimit)...)
 	if err != nil {
 		return nil, fmt.Errorf("compile: %w", err)
 	}

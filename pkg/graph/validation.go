@@ -63,6 +63,7 @@ var (
 		"externalRefs",
 		"externalReferences",
 		"graph",
+		"graphengine",
 		"instance",
 		"item",
 		"items",
@@ -104,6 +105,11 @@ func isValidKindName(name string) bool {
 // isKROReservedWord checks if the given word is a reserved word in KRO.
 func isKROReservedWord(word string) bool {
 	return reservedKeyWords.Has(word)
+}
+
+// IsKROReservedWord checks if the given word is a reserved word in KRO.
+func IsKROReservedWord(word string) bool {
+	return isKROReservedWord(word)
 }
 
 // validateResourceGraphDefinition validates the naming conventions of

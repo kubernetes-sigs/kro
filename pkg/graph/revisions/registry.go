@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
@@ -39,12 +40,11 @@ const (
 	RevisionStateFailed RevisionState = "Failed"
 )
 
-// OwnerKey is the logical ownership key that groups revisions. Today it is an
-// RGD name; a future graph consumer keys by its own object name. It is an alias
-// of string so existing callers are unaffected.
+// OwnerKey is the logical ownership key that groups revisions, typically an
+// owning object's name. It is a string alias.
 type OwnerKey = string
 
-// Entry is a single cached revision record for an owner (an RGD name today).
+// Entry is a single cached revision record for an owner.
 type Entry struct {
 	// OwnerKey is the logical ownership key. Revisions are grouped by it so a
 	// re-created owner can still reuse existing GraphRevisions.
@@ -59,6 +59,12 @@ type Entry struct {
 	// CompiledGraph is populated for active revisions.
 	// Registry writes enforce that Active never exists without a graph.
 	CompiledGraph *graph.Graph
+
+	// RGDSpec is an optional copy of the source RGD spec at the time this
+	// revision was compiled. Populated by the graphrevision controller so
+	// consumers can reconstruct a full *v1alpha1.ResourceGraphDefinition without
+	// a separate API fetch. May be nil; callers must tolerate nil.
+	RGDSpec *krov1alpha1.ResourceGraphDefinitionSpec
 }
 
 // rgdBucket holds all revisions for a single RGD name.

@@ -36,6 +36,9 @@ func TestCore(t *testing.T) {
 	if err := features.FeatureGate.Set("CELOmitFunction=true"); err != nil {
 		t.Fatalf("failed to enable CELOmitFunction feature gate: %v", err)
 	}
+	if err := features.FeatureGate.Set("GraphKind=true"); err != nil {
+		t.Fatalf("failed to enable GraphKind feature gate: %v", err)
+	}
 
 	RegisterFailHandler(Fail)
 

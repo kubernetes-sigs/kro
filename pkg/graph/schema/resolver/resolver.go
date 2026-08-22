@@ -15,6 +15,7 @@
 package resolver
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -56,4 +57,34 @@ func NewCombinedResolver(clientConfig *rest.Config, httpClient *http.Client) (re
 
 	combinedResolver := coreResolver.Combine(cachedResolver)
 	return combinedResolver, nil
+}
+
+// NewCombinedResolverWithCache uses the same two-tier wiring as
+// NewCombinedResolver, but the discovery-backed tier is a push-invalidated LRU
+// (CachedSchemaResolver) instead of a TTL cache. The live cache is returned so
+// a schema watcher can call InvalidateGroupKind.
+func NewCombinedResolverWithCache(clientConfig *rest.Config, httpClient *http.Client) (resolver.SchemaResolver, *CachedSchemaResolver, error) {
+	discoveryClient, err := discovery.NewDiscoveryClientForConfigAndClient(clientConfig, httpClient)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create discovery client: %w", err)
+	}
+
+	clientResolver := &resolver.ClientDiscoveryResolver{
+		Discovery: discoveryClient,
+	}
+
+	// 500 entries comfortably covers ~200 CRDs × 2-3 versions, with
+	// LRU eviction handling installations with more.
+	cached, err := NewCachedSchemaResolver(clientResolver, 500)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create cached schema resolver: %w", err)
+	}
+
+	coreResolver := resolver.NewDefinitionsSchemaResolver(
+		openapi.GetOpenAPIDefinitions,
+		scheme.Scheme,
+	)
+
+	combined := coreResolver.Combine(cached)
+	return combined, cached, nil
 }

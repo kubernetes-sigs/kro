@@ -33,7 +33,10 @@ import (
 // baseGroup is the real API group kro serves instances under (kro.run).
 const baseGroup = krov1alpha1.KRODomainName
 
-const rgdKind = "ResourceGraphDefinition"
+const (
+	rgdKind   = "ResourceGraphDefinition"
+	graphKind = "Graph"
+)
 
 // groupIsolatingClient virtualizes the kro.run API group so that specs running
 // on different Ginkgo parallel processes against a SINGLE shared apiserver do
@@ -177,7 +180,7 @@ func kroInstance(obj client.Object) (*unstructured.Unstructured, bool) {
 		return nil, false
 	}
 	gvk := u.GroupVersionKind()
-	if gvk.Group == baseGroup && gvk.Kind != rgdKind {
+	if gvk.Group == baseGroup && gvk.Kind != rgdKind && gvk.Kind != graphKind {
 		return u, true
 	}
 	return nil, false

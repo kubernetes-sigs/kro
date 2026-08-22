@@ -142,7 +142,8 @@ ifeq ($(WHAT),integration)
 		$(filter-out $@,$(MAKECMDGOALS)) \
 		./test/integration/suites/...
 else ifeq ($(WHAT),unit)
-	go test -race ./pkg/... -coverprofile unit-cover.out $(filter-out $@,$(MAKECMDGOALS))
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		go test -race ./pkg/... -coverprofile unit-cover.out $(filter-out $@,$(MAKECMDGOALS))
 else ifeq ($(WHAT),upgrade)
 	KRO_UPGRADE_FROM_VERSION=$(KRO_UPGRADE_FROM_VERSION) \
 	KRO_UPGRADE_MODE=$(MODE) \
@@ -329,13 +330,18 @@ start-kind:
 	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} create namespace kro-system
 
+# allowCRDDeletion controls whether kro deletes an instance CRD when its RGD is
+# deleted. Defaults to true for the dev deploy-kind convenience; the e2e chainsaw
+# lane overrides it to false (the helm default) so check-rgd-deletion holds.
+ALLOW_CRD_DELETION ?= true
+
 .PHONY: deploy-kind-helm
 deploy-kind-helm: export KO_DOCKER_REPO=kind.local
 deploy-kind-helm: ko start-kind
 	make install
 	# This generates deployment with ko://... used in image.
 	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
-	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(WITH_GOFLAGS) $(KO) apply -f -
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=$(ALLOW_CRD_DELETION) | $(WITH_GOFLAGS) $(KO) apply -f -
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
@@ -384,9 +390,14 @@ test-e2e-kind-%: deploy-kind-%
 deploy-kind: export KO_DOCKER_REPO=kind.local
 deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
 
-# Default end to end tests uses helm deployments
+# Default end to end tests uses helm deployments.
+# The chainsaw suite (e.g. check-rgd-deletion) asserts the helm DEFAULT behavior
+# (config.allowCRDDeletion=false: an instance CRD must survive RGD deletion), so
+# the e2e lane deploys with defaults rather than the dev deploy's true.
 .PHONY: test-e2e-kind
-test-e2e-kind: deploy-kind-helm
+test-e2e-kind: ALLOW_CRD_DELETION=false
+test-e2e-kind: chainsaw deploy-kind-helm
+	$(CHAINSAW) test ./test/e2e/chainsaw
 
 ##@ Upgrade Tests
 

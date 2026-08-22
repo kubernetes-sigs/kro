@@ -179,12 +179,14 @@ func (r *GraphRevisionReconciler) reconcileGraphRevision(
 	mark.GraphVerified()
 	// Return the desired Active entry to the caller, which only publishes it
 	// after status has been written successfully.
+	snapshotSpec := revision.Spec.Snapshot.Spec
 	return compiledGraph.TopologicalOrder, resourcesInfo, &revisions.Entry{
 		OwnerKey:      revision.Spec.Snapshot.Name,
 		Revision:      revision.Spec.Revision,
 		SpecHash:      specHash,
 		State:         revisions.RevisionStateActive,
 		CompiledGraph: compiledGraph,
+		RGDSpec:       &snapshotSpec,
 	}, nil
 }
 

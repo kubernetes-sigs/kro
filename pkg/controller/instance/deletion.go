@@ -23,18 +23,17 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	controllergraph "github.com/kubernetes-sigs/kro/pkg/controller/graph"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
-	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // reconcileDeletion drives deletion workflow for an instance.
 func (c *Controller) reconcileDeletion(dcx *DeletionContext) error {
-	dcx.StateManager.State = v1alpha1.InstanceStateDeleting
+	dcx.State = v1alpha1.InstanceStateDeleting
 	dcx.Mark.ResourcesUnderDeletion("deleting resources")
 
 	candidates, applier, err := c.discoverDeletionInventory(dcx)
@@ -102,8 +101,11 @@ func (c *Controller) discoverDeletionInventory(
 const fallbackDeletionOrder = 0
 
 // highestDeletionWave returns only candidates in the highest remaining order.
-// Resources without a valid positive order share the fallback wave, which runs
-// after every ordered wave has disappeared.
+// Resources without a valid positive order share fallbackDeletionOrder (wave 0),
+// which runs after every ordered wave has disappeared. Note: children created
+// by the classic engine (or prior to apply-order annotation rollout) carry no
+// annotation and all land in fallback deletion wave 0; ordered deletion silently
+// degrades to unordered for them until they are rewritten.
 func highestDeletionWave(candidates []applyset.OrphanCandidate) ([]applyset.OrphanCandidate, int) {
 	highest := fallbackDeletionOrder
 	wave := make([]applyset.OrphanCandidate, 0, len(candidates))
@@ -126,6 +128,22 @@ func highestDeletionWave(candidates []applyset.OrphanCandidate) ([]applyset.Orph
 
 // removeFinalizer clears managed state on the instance after deletions complete.
 func (c *Controller) removeFinalizer(dcx *DeletionContext) error {
+	// Release every recorded patch contribution so the field managers
+	// relinquish their fields. Targets survive — patches never own them.
+	contribs, err := controllergraph.ReadContributions(dcx.Instance)
+	if err != nil {
+		dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
+		return fmt.Errorf("read patch contributions on delete: %w", err)
+	}
+	if len(contribs) > 0 {
+		if c.graphEngineExecutor != nil {
+			if err := c.graphEngineExecutor.Release(dcx.Ctx, contribs); err != nil {
+				dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
+				return fmt.Errorf("executor release: %w", err)
+			}
+		}
+	}
+
 	// Clean up coordinator watch requests before removing the finalizer.
 	c.coordinator.RemoveInstance(c.gvr, types.NamespacedName{
 		Name:      dcx.Instance.GetName(),
@@ -142,18 +160,6 @@ func (c *Controller) removeFinalizer(dcx *DeletionContext) error {
 	}
 	dcx.Mark.ResourcesUnderDeletion("deleting resources")
 	return nil
-}
-
-// resourceClientFor returns a client scoped to the node's namespace rules.
-func resourceClientFor(
-	rcx *ReconcileContext,
-	desc graph.NodeMeta,
-	namespace string,
-) dynamic.ResourceInterface {
-	if desc.Namespaced {
-		return rcx.Client.Resource(desc.GVR).Namespace(namespace)
-	}
-	return rcx.Client.Resource(desc.GVR)
 }
 
 // setUnmanaged removes the instance finalizer using JSON merge patch with retry on conflict.

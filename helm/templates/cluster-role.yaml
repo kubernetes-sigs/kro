@@ -70,6 +70,30 @@ rules:
   - patch
   - update
 - apiGroups:
+  - kro.run
+  resources:
+  - graphs
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kro.run
+  resources:
+  - graphs/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - kro.run
+  resources:
+  - graphs/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - internal.kro.run
   resources:
   - graphrevisions

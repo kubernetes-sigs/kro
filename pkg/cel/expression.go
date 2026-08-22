@@ -24,6 +24,31 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
+const (
+	// DefaultInterruptCheckFrequency defines the instruction step frequency for checking
+	// cancellation and interrupt signals during evaluation.
+	DefaultInterruptCheckFrequency = 100
+)
+
+// ProgramOptions returns execution bound options for CEL programs.
+// When costLimit > 0, cel.CostLimit(costLimit) is applied to bound evaluation cost.
+// When costLimit == 0, cost limiting is disabled, avoiding CEL cost tracking overhead.
+func ProgramOptions(costLimit uint64) []cel.ProgramOption {
+	opts := []cel.ProgramOption{
+		cel.InterruptCheckFrequency(DefaultInterruptCheckFrequency),
+	}
+	if costLimit > 0 {
+		opts = append(opts, cel.CostLimit(costLimit))
+	}
+	return opts
+}
+
+// DefaultProgramOptions returns execution bound options without cost limiting (costLimit = 0),
+// matching unconstrained CEL evaluation without cost-tracking overhead.
+func DefaultProgramOptions() []cel.ProgramOption {
+	return ProgramOptions(0)
+}
+
 // Expression wraps a CEL expression with its compiled program and metadata.
 // Programs are compiled once at graph build time and reused across reconciliations.
 // The struct is immutable and thread-safe after construction. It is save to use

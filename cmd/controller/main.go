@@ -42,6 +42,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	// +kubebuilder:scaffold:imports
 )
@@ -74,6 +75,7 @@ func main() {
 		graphRevisionConcurrentReconciles           int
 		resourceGraphDefinitionConcurrentReconciles int
 		dynamicControllerConcurrentReconciles       int
+		graphConcurrentReconciles                   int
 		// dynamic controller rate limiter parameters
 		minRetryDelay time.Duration
 		maxRetryDelay time.Duration
@@ -90,6 +92,8 @@ func main() {
 		rgdMaxCollectionSize          int
 		rgdMaxCollectionDimensionSize int
 		rgdMaxGraphRevisions          int
+		applyConcurrency              int
+		celCostLimit                  uint64
 		rgdProgressRequeueDelay       time.Duration
 		leaderElectionLeaseDuration   time.Duration
 		leaderElectionRenewDeadline   time.Duration
@@ -130,6 +134,18 @@ func main() {
 	flag.IntVar(&dynamicControllerConcurrentReconciles,
 		"dynamic-controller-concurrent-reconciles", 1,
 		"The number of dynamic controller reconciles to run in parallel",
+	)
+	flag.IntVar(&graphConcurrentReconciles,
+		"graph-concurrent-reconciles", 1,
+		"The number of graph reconciles to run in parallel",
+	)
+	flag.IntVar(&applyConcurrency,
+		"apply-concurrency", 20,
+		"Maximum number of concurrent SSA writes per collection node",
+	)
+	flag.Uint64Var(&celCostLimit,
+		"cel-cost-limit", 0,
+		"Cost limit for CEL expression evaluations. If set to 0, cost limit enforcement is disabled.",
 	)
 
 	// rate limiter parameters
@@ -254,7 +270,11 @@ func main() {
 		BurstLimit:      burstLimit,
 	}, set.Metadata(), set.RESTMapper())
 
-	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(restConfig, set.HTTPClient())
+	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
+		restConfig,
+		set.HTTPClient(),
+		graph.WithCostLimit(celCostLimit),
+	)
 	if err != nil {
 		setupLog.Error(err, "unable to create resource graph definition graph builder")
 		os.Exit(1)
@@ -272,6 +292,7 @@ func main() {
 			ProgressRequeueDelay:    rgdProgressRequeueDelay,
 			MaxConcurrentReconciles: resourceGraphDefinitionConcurrentReconciles,
 			MaxGraphRevisions:       rgdMaxGraphRevisions,
+			ApplyConcurrency:        applyConcurrency,
 			RGDConfig: graph.RGDConfig{
 				MaxCollectionSize:          rgdMaxCollectionSize,
 				MaxCollectionDimensionSize: rgdMaxCollectionDimensionSize,
@@ -282,6 +303,19 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ResourceGraphDefinition")
 		os.Exit(1)
 	}
+
+	// Build a graph-engine compiler and inject it into the RGD reconciler so
+	// micro-controllers route instance reconciliation through the Graph engine.
+	// The compiler is built here (post-SetupWithManager) so it shares restConfig
+	// + httpClient with the rest of the manager process.
+	setupLog.Info("injecting graph-engine compiler into RGD reconciler")
+	geCmp, err := compiler.NewCompiler(restConfig, set.HTTPClient())
+	if err != nil {
+		setupLog.Error(err, "unable to build graph-engine compiler")
+		os.Exit(1)
+	}
+	geCmp.WithCostLimit(celCostLimit)
+	rgd.WithGraphEngineCompiler(geCmp)
 
 	gv := graphrevisionctrl.NewGraphRevisionReconciler(
 		resourceGraphDefinitionGraphBuilder,
@@ -295,6 +329,25 @@ func main() {
 	if err := gv.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GraphRevision")
 		os.Exit(1)
+	}
+
+	// Graph controller (kro.run/v1alpha1) runs alongside the ResourceGraphDefinition
+	// stack in the same manager. Gated behind the GraphKind feature (default off) so
+	// it never starts in existing deployments unless explicitly enabled.
+	if features.FeatureGate.Enabled(features.GraphKind) {
+		setupLog.Info("GraphKind feature enabled; starting Graph controller")
+		if err := setupGraphController(
+			mgr,
+			geCmp,
+			set.Metadata(),
+			rootLogger,
+			graphConcurrentReconciles,
+			rgdMaxCollectionSize,
+			applyConcurrency,
+		); err != nil {
+			setupLog.Error(err, "unable to set up Graph controller")
+			os.Exit(1)
+		}
 	}
 
 	if err := mgr.Add(dc); err != nil {

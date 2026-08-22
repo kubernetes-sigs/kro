@@ -184,3 +184,71 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 		})
 	}
 }
+
+func TestGraphFinalizer(t *testing.T) {
+	cases := []struct {
+		name             string
+		initial          []string
+		op               func(obj metav1.Object)
+		wantFinalizers   []string
+		wantHasFinalizer bool
+	}{
+		{
+			name:             "Has returns false on empty list",
+			initial:          nil,
+			op:               func(metav1.Object) {},
+			wantFinalizers:   nil,
+			wantHasFinalizer: false,
+		},
+		{
+			name:             "Set adds when absent",
+			initial:          nil,
+			op:               SetGraphFinalizer,
+			wantFinalizers:   []string{GraphFinalizer},
+			wantHasFinalizer: true,
+		},
+		{
+			name:             "Set is a no-op when already present",
+			initial:          []string{GraphFinalizer},
+			op:               SetGraphFinalizer,
+			wantFinalizers:   []string{GraphFinalizer},
+			wantHasFinalizer: true,
+		},
+		{
+			name:             "Set preserves unrelated finalizers",
+			initial:          []string{"other/finalizer"},
+			op:               SetGraphFinalizer,
+			wantFinalizers:   []string{"other/finalizer", GraphFinalizer},
+			wantHasFinalizer: true,
+		},
+		{
+			name:             "Remove drops the finalizer",
+			initial:          []string{GraphFinalizer},
+			op:               RemoveGraphFinalizer,
+			wantFinalizers:   []string{},
+			wantHasFinalizer: false,
+		},
+		{
+			name:             "Remove preserves unrelated finalizers",
+			initial:          []string{"first", GraphFinalizer, "third"},
+			op:               RemoveGraphFinalizer,
+			wantFinalizers:   []string{"first", "third"},
+			wantHasFinalizer: false,
+		},
+		{
+			name:             "Remove is a no-op when absent",
+			initial:          []string{"other"},
+			op:               RemoveGraphFinalizer,
+			wantFinalizers:   []string{"other"},
+			wantHasFinalizer: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := &metav1.ObjectMeta{Finalizers: append([]string(nil), tc.initial...)}
+			tc.op(obj)
+			assert.Equal(t, tc.wantFinalizers, obj.Finalizers)
+			assert.Equal(t, tc.wantHasFinalizer, HasGraphFinalizer(obj))
+		})
+	}
+}

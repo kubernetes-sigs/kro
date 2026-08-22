@@ -17,6 +17,7 @@ import (
 	"fmt"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 )
 
 // CompareVersions compares CRD versions and returns a compatibility report.
@@ -68,6 +69,12 @@ func CompareVersions(oldVersions, newVersions []v1.CustomResourceDefinitionVersi
 	newHasStatus := newVersion.Subresources != nil && newVersion.Subresources.Status != nil
 	if oldHasStatus && !newHasStatus {
 		report.AddBreakingChange("version.subresources.status", PropertyRemoved, "", "")
+	}
+
+	// Additional printer columns are not part of the schema, so they wouldn't
+	// otherwise be caught above. Record any change so the CRD still gets updated.
+	if !equality.Semantic.DeepEqual(oldVersion.AdditionalPrinterColumns, newVersion.AdditionalPrinterColumns) {
+		report.AddNonBreakingChange("version.additionalPrinterColumns", AdditionalPrinterColumnsChanged, "", "")
 	}
 
 	return report, nil

@@ -46,12 +46,13 @@ const (
 	MaxItemsDecreased  ChangeType = "MAX_ITEMS_DECREASED"
 
 	// Non-breaking change types
-	PropertyAdded      ChangeType = "PROPERTY_ADDED"
-	DescriptionChanged ChangeType = "DESCRIPTION_CHANGED"
-	DefaultChanged     ChangeType = "DEFAULT_CHANGED"
-	RequiredRemoved    ChangeType = "REQUIRED_REMOVED"
-	EnumExpanded       ChangeType = "ENUM_EXPANDED"
-	PatternRemoved     ChangeType = "PATTERN_REMOVED"
+	PropertyAdded                   ChangeType = "PROPERTY_ADDED"
+	DescriptionChanged              ChangeType = "DESCRIPTION_CHANGED"
+	DefaultChanged                  ChangeType = "DEFAULT_CHANGED"
+	RequiredRemoved                 ChangeType = "REQUIRED_REMOVED"
+	EnumExpanded                    ChangeType = "ENUM_EXPANDED"
+	PatternRemoved                  ChangeType = "PATTERN_REMOVED"
+	AdditionalPrinterColumnsChanged ChangeType = "ADDITIONAL_PRINTER_COLUMNS_CHANGED"
 
 	// Non-breaking - constraint relaxed
 	MinimumRemoved     ChangeType = "MINIMUM_REMOVED"
@@ -191,6 +192,8 @@ func (c Change) Description() string {
 		return fmt.Sprintf("Description field was changed from %s to %s", c.OldValue, c.NewValue)
 	case DefaultChanged:
 		return fmt.Sprintf("Default value was changed from %s to %s", c.OldValue, c.NewValue)
+	case AdditionalPrinterColumnsChanged:
+		return "Additional printer columns were changed"
 	default:
 		return c.constraintDescription()
 	}

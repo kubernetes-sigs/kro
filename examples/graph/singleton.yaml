@@ -15,7 +15,6 @@
 # ---------------------------------------------------------------------------
 
 # Team A claims webapp-dashboard with priority 100
----
 apiVersion: kro.run/v1alpha1
 kind: Singleton
 metadata:
@@ -30,6 +29,7 @@ spec:
       namespace: monitoring
     data:
       dashboard.json: '{ "title": "Team A Dashboard" }'
+
 
 # Team B claims the same resource with priority 200 — wins
 ---
@@ -47,6 +47,7 @@ spec:
       namespace: monitoring
     data:
       dashboard.json: '{ "title": "Team B Dashboard" }'
+
 
 # Result:
 #   ConfigMap/monitoring/webapp-dashboard exists with Team B's content.
@@ -75,7 +76,7 @@ metadata:
   namespace: kro-system
 spec:
   nodes:
-    # The Singleton CRD — created by this Graph using simpleSchema.
+    # The Singleton CRD — created by this Graph.
     - id: crd
       template:
         apiVersion: apiextensions.k8s.io/v1
@@ -97,19 +98,25 @@ spec:
               subresources:
                 status: {}
               schema:
-                openAPIV3Schema: >-
-                  ${simpleSchema.toOpenAPI({
-                    "apiVersion": "kro.run/v1alpha1",
-                    "kind": "Singleton",
-                    "spec": {
-                      "priority": "integer | default=0",
-                      "template": "object"
-                    },
-                    "status": {
-                      "active": "boolean",
-                      "claim": "string"
-                    }
-                  }, [])}
+                openAPIV3Schema:
+                  type: object
+                  properties:
+                    spec:
+                      type: object
+                      properties:
+                        priority:
+                          type: integer
+                          default: 0
+                        template:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                    status:
+                      type: object
+                      properties:
+                        active:
+                          type: boolean
+                        claim:
+                          type: string
               additionalPrinterColumns:
                 - name: Claim
                   type: string
@@ -128,10 +135,11 @@ spec:
     - id: singletons
       includeWhen:
         - ${has(crd.status) && has(crd.status.conditions) && crd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
-      watch:
+      ref:
         apiVersion: kro.run/v1alpha1
         kind: Singleton
-        selector: {}
+        metadata:
+          selector: {}
 
     # Flatten each singleton into {key, name, namespace, priority, creationTimestamp, identity, template}.
     # key = namespace/name composite for cross-namespace uniqueness.
@@ -163,23 +171,27 @@ spec:
               c.key == claims.filter(x, x.identity == c.identity)
                 .sortBy(x, x.creationTimestamp)
                 .sortBy(x, -x.priority)[0].key)}
-      lifecycle:
-        apply: Force
-      template: "${c.template}"
+      template:
+        apiVersion: ${c.template.apiVersion}
+        kind: ${c.template.kind}
+        metadata:
+          name: ${c.template.metadata.name}
+          namespace: ${c.template.metadata.namespace}
+        data: ${c.template.data}
 
-    # Status writeback — patch each Singleton CR with active + claim.
-    - id: status
-      forEach:
-        - c: ${claims}
+    # Status writeback — patch Singleton CR with active + claim.
+    - id: singletonStatus
       patch:
         apiVersion: kro.run/v1alpha1
         kind: Singleton
         metadata:
-          name: ${c.name}
-          namespace: ${c.namespace}
-        status:
-          active: >-
-            ${c.key == claims.filter(x, x.identity == c.identity)
-              .sortBy(x, x.creationTimestamp)
-              .sortBy(x, -x.priority)[0].key}
-          claim: "${c.identity}"
+          name: ${claims[0].name}
+          namespace: ${claims[0].namespace}
+        subresource: status
+        body:
+          status:
+            active: >-
+              ${claims[0].key == claims.filter(x, x.identity == claims[0].identity)
+                .sortBy(x, x.creationTimestamp)
+                .sortBy(x, -x.priority)[0].key}
+            claim: "${claims[0].identity}"

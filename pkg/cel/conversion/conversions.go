@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 )
 
 // ErrUnsupportedType is returned when the type is not supported.
@@ -63,6 +64,9 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 	case types.OptionalType:
 		opt := v.(*types.Optional)
 		if !opt.HasValue() {
+			if features.FeatureGate.Enabled(features.CELOmitFunction) {
+				return sentinels.Omit{}, nil
+			}
 			return nil, nil
 		}
 		return GoNativeType(opt.GetValue())

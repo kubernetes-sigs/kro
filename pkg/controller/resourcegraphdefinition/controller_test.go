@@ -551,6 +551,7 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 			ProgressRequeueDelay:    5 * time.Second,
 			MaxConcurrentReconciles: 7,
 			MaxGraphRevisions:       20,
+			ApplyConcurrency:        15,
 			RGDConfig:               graph.RGDConfig{MaxCollectionSize: 32},
 		},
 	)
@@ -561,6 +562,7 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 	assert.Equal(t, 9*time.Second, r.cfg.InstanceRequeueInterval)
 	assert.Equal(t, 5*time.Second, r.cfg.ProgressRequeueDelay)
 	assert.Equal(t, 7, r.cfg.MaxConcurrentReconciles)
+	assert.Equal(t, 15, r.cfg.ApplyConcurrency)
 	assert.Equal(t, graph.RGDConfig{MaxCollectionSize: 32}, r.cfg.RGDConfig)
 	assert.Equal(t, metadata.NewKROMetaLabeler().Labels(), r.metadataLabeler.Labels())
 }

@@ -15,12 +15,13 @@ metadata:
 spec:
   nodes:
     - id: namespaces
-      watch:
+      ref:
         apiVersion: v1
         kind: Namespace
-        selector:
-          matchLabels:
-            policy: enforced
+        metadata:
+          selector:
+            matchLabels:
+              policy: enforced
 
     - id: policies
       forEach:

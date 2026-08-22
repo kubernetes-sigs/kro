@@ -20,8 +20,8 @@ import (
 )
 
 // Source is the schema-agnostic input to Builder.CompileSource. Any graph
-// consumer (the RGD builder today, a Graph controller later) projects its own
-// API shape into a Source so the compile pipeline never sees a concrete API type.
+// consumer projects its own API shape into a Source so the compile pipeline
+// never sees a concrete API type.
 //
 // SchemaVarSchema is the value bound to the `schema` CEL variable: the instance
 // spec plus ObjectMeta, with status excluded. Callers that synthesize a CRD

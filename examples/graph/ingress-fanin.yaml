@@ -15,12 +15,13 @@ metadata:
 spec:
   nodes:
     - id: services
-      watch:
+      ref:
         apiVersion: v1
         kind: Service
-        selector:
-          matchLabels:
-            expose: "true"
+        metadata:
+          selector:
+            matchLabels:
+              expose: "true"
 
     - id: ingress
       template:

@@ -30,7 +30,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/apis"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
-	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
 const (
@@ -39,6 +38,12 @@ const (
 	GraphResolved   = string(v1alpha1.InstanceConditionTypeGraphResolved)
 	ResourcesReady  = string(v1alpha1.InstanceConditionTypeResourcesReady)
 )
+
+// instanceStatusFieldManager owns the controller-written status surface
+// (conditions + state) via server-side apply. It is distinct from the status
+// patch node's per-node field manager (which owns the author status FIELDS), so
+// the two writers manage disjoint fields and neither reverts the other.
+const instanceStatusFieldManager = "kro-instance-status"
 
 var condSet = apis.NewReadyConditions(InstanceManaged, GraphResolved, ResourcesReady)
 
@@ -182,76 +187,38 @@ func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructu
 	})
 }
 
-func (c *Controller) updateStatus(rcx *ReconcileContext) error {
-	previousState, _ := rcx.WireStatus["state"].(string)
-
-	rcx.updateInstanceState()
-	status := rcx.initialStatus()
-
-	desired, err := rcx.Runtime.Instance().GetDesired()
-	if err != nil {
-		return err
-	}
-	if resolved, found, _ := unstructured.NestedMap(desired[0].Object, "status"); found {
-		for k, v := range resolved {
-			if k == "conditions" || k == "state" {
-				continue
-			}
-			status[k] = v
-		}
-	}
-
-	// When the RGD declares author conditions, only those appear on the
-	// wire. kro's built-ins stay readable from author CEL through
-	// runtime.condition(schema, 'X').
-	instanceNode := rcx.Runtime.Instance()
-	if instanceNode.HasConditions() {
-		authored, incomplete, evalErr := instanceNode.EvaluateConditions(
-			rcx.Log, builtinConditions(rcx.Instance),
-		)
-
-		// Read previous conditions from the wire snapshot, not rcx.Instance:
-		// the markers have already overwritten any built-in-typed override.
-		conds, _ := rcx.WireStatus["conditions"].([]interface{})
-		previous := decodeConditions(conds)
-		stamped := stampAuthorConditions(authored, previous, rcx.Instance.GetGeneration())
-		if incomplete {
-			// Keep the previously persisted conditions for the types that
-			// produced no output this reconcile.
-			stamped = mergeWithPrevious(stamped, previous)
-		}
-		status["conditions"] = conditionsToInterfaceSlice(stamped)
-
-		// A degraded result still surfaces its surviving conditions; set
-		// state=Error rather than failing the reconcile.
-		if evalErr != nil {
-			rcx.Log.Error(evalErr, "author conditions degraded; setting state=Error")
-			status["state"] = string(v1alpha1.InstanceStateError)
-		}
-	}
-
-	return c.persistStatus(
-		rcx.Ctx, rcx.InstanceClient(), rcx.Instance, rcx.WireStatus, status, previousState,
-	)
-}
-
 // updateDeletionStatus updates instance-level deletion status without a
 // runtime. Status projections and author conditions that cannot be evaluated
 // during early deletion are preserved from the wire.
 func (c *Controller) updateDeletionStatus(dcx *DeletionContext) error {
-	previousState, _ := dcx.WireStatus["state"].(string)
-	status := initialStatus(dcx.Instance, dcx.StateManager)
-	for k, v := range dcx.WireStatus {
+	return c.persistNodeFreeStatus(dcx.Ctx, dcx.InstanceClient(), dcx.Instance, dcx.WireStatus, dcx.State)
+}
+
+// persistNodeFreeStatus assembles and persists instance status for the two
+// engine-free paths (deletion and suspend). The caller must already have
+// stamped the built-in conditions onto inst via a ConditionsMarker. It carries
+// the wire status forward (minus conditions/state), applies the given
+// lifecycle state, preserves author conditions via deletionConditions when the
+// RGD owns the condition surface, and writes through the skip-identical
+// persistStatus guard.
+func (c *Controller) persistNodeFreeStatus(
+	ctx context.Context,
+	instanceClient dynamic.ResourceInterface,
+	inst *unstructured.Unstructured,
+	wireStatus map[string]interface{},
+	state v1alpha1.InstanceState,
+) error {
+	previousState, _ := wireStatus["state"].(string)
+	status := initialStatus(inst, state)
+	for k, v := range wireStatus {
 		if k != "conditions" && k != "state" {
 			status[k] = v
 		}
 	}
-	if dcx.Config.HasAuthorConditions {
-		status["conditions"] = deletionConditions(dcx.Instance, dcx.WireStatus)
+	if c.reconcileConfig.HasAuthorConditions {
+		status["conditions"] = deletionConditions(inst, wireStatus)
 	}
-	return c.persistStatus(
-		dcx.Ctx, dcx.InstanceClient(), dcx.Instance, dcx.WireStatus, status, previousState,
-	)
+	return c.persistStatus(ctx, instanceClient, inst, wireStatus, status, previousState)
 }
 
 // deletionConditions preserves author conditions that cannot be evaluated
@@ -323,6 +290,75 @@ func (c *Controller) persistStatus(
 	return nil
 }
 
+// persistConditionsAndState writes the controller-owned status surface
+// (conditions + .status.state) onto the instance's status subresource via
+// server-side apply under instanceStatusFieldManager. The author status FIELDS
+// are written separately by the status patch node's field manager, so the two
+// writers manage disjoint fields: the SSA apply names only conditions + state
+// and never reverts the node's author fields.
+//
+// The write is skipped when the wire already holds identical conditions+state
+// (statusesMatch over just those keys), preserving the redundant-write guard
+// that prevents a resourceVersion-bump reconcile loop. The state-transition
+// metric fires on a change. Conditions/state are mirrored onto inst so the
+// reconcile-level deferred event/metric emitters read the persisted surface.
+func (c *Controller) persistConditionsAndState(
+	ctx context.Context,
+	inst *unstructured.Unstructured,
+	wireStatus map[string]interface{},
+	status map[string]interface{},
+	previousState string,
+) error {
+	// Mirror conditions/state onto the instance for the deferred emitters,
+	// leaving any author status fields already present untouched.
+	if inst.Object["status"] == nil {
+		inst.Object["status"] = map[string]interface{}{}
+	}
+	if s, ok := inst.Object["status"].(map[string]interface{}); ok {
+		s["conditions"] = status["conditions"]
+		s["state"] = status["state"]
+	}
+
+	// Skip the API write when the wire already carries identical conditions+state.
+	wireCS := map[string]interface{}{
+		"conditions": wireStatus["conditions"],
+		"state":      wireStatus["state"],
+	}
+	if statusesMatch(wireCS, status) {
+		return nil
+	}
+
+	patchObj := instanceSSAPatch(inst)
+	patchObj.Object["status"] = status
+
+	ri := c.client.Dynamic().Resource(c.gvr)
+	var instanceClient dynamic.ResourceInterface = ri
+	if c.namespaced {
+		instanceClient = ri.Namespace(inst.GetNamespace())
+	}
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		_, aerr := instanceClient.ApplyStatus(ctx, inst.GetName(), patchObj, metav1.ApplyOptions{
+			FieldManager: instanceStatusFieldManager,
+			Force:        true,
+		})
+		return aerr
+	})
+	if err != nil {
+		return err
+	}
+
+	writtenState, _ := status["state"].(string)
+	if previousState != writtenState {
+		gvk := inst.GroupVersionKind().String()
+		metrics.InstanceStateTransitionsTotal.WithLabelValues(
+			gvk,
+			previousState,
+			writtenState,
+		).Inc()
+	}
+	return nil
+}
+
 // statusesMatch reports whether the computed status would persist the same
 // JSON the wire snapshot already holds. The canonical JSON encodings are
 // compared instead of the Go values because the two sides type numbers
@@ -371,11 +407,7 @@ func mergeWithPrevious(current, previous []v1alpha1.Condition) []v1alpha1.Condit
 	return current
 }
 
-func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
-	return initialStatus(rcx.Instance, rcx.StateManager)
-}
-
-func initialStatus(instance *unstructured.Unstructured, stateManager *StateManager) map[string]interface{} {
+func initialStatus(instance *unstructured.Unstructured, state v1alpha1.InstanceState) map[string]interface{} {
 	cs := condSet.For(&unstructuredWrapper{instance})
 
 	// Start fresh - user-defined status fields come solely from current
@@ -390,18 +422,9 @@ func initialStatus(instance *unstructured.Unstructured, stateManager *StateManag
 	if cs.IsRootReady() {
 		status["state"] = string(v1alpha1.InstanceStateActive)
 	} else {
-		status["state"] = string(stateManager.State)
+		status["state"] = string(state)
 	}
 	return status
-}
-
-func (rcx *ReconcileContext) updateInstanceState() {
-	switch rcx.StateManager.ReconcileErr.(type) {
-	case *requeue.NoRequeue, *requeue.RequeueNeeded, *requeue.RequeueNeededAfter:
-		return
-	default:
-		rcx.StateManager.Update()
-	}
 }
 
 // stampAuthorConditions converts evaluated library.Condition values into

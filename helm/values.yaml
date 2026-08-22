@@ -181,6 +181,10 @@ config:
     # The fixed delay between delayed instance requeues while waiting for cluster state to settle.
     # Set to 0 to disable delayed requeues.
     requeueInterval: 3s
+  # Maximum number of concurrent SSA writes per collection node
+  applyConcurrency: 20
+  # Cost limit for CEL expression evaluations. Set to 0 to disable cost limit.
+  celCostLimit: 0
   # Feature gates for alpha/experimental features.
   # Each key is a feature gate name, each value is a boolean.
   # Example:

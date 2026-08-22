@@ -119,6 +119,10 @@ spec:
               value: {{ .Values.config.leaderElectionRenewDeadline | quote }}
             - name: KRO_LEADER_ELECTION_RETRY_PERIOD
               value: {{ .Values.config.leaderElectionRetryPeriod | quote }}
+            - name: KRO_APPLY_CONCURRENCY
+              value: {{ .Values.config.applyConcurrency | default 20 | quote }}
+            - name: KRO_CEL_COST_LIMIT
+              value: {{ .Values.config.celCostLimit | default 0 | quote }}
           {{- with .Values.deployment.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -175,6 +179,10 @@ spec:
             - "$(KRO_LEADER_ELECTION_RENEW_DEADLINE)"
             - --leader-election-retry-period
             - "$(KRO_LEADER_ELECTION_RETRY_PERIOD)"
+            - --apply-concurrency
+            - "$(KRO_APPLY_CONCURRENCY)"
+            - --cel-cost-limit
+            - "$(KRO_CEL_COST_LIMIT)"
             {{- if .Values.config.enableLeaderElection }}
             - --leader-elect
             {{- if ne .Values.config.leaderElectionNamespace "" }}

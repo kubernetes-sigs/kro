@@ -105,6 +105,7 @@ type Builder struct {
 	// schemaResolver is used to resolve the OpenAPI schema for the resources.
 	schemaResolver resolver.SchemaResolver
 	restMapper     meta.RESTMapper
+	costLimit      uint64
 }
 
 // BuilderOption is an option for configuring a Builder.
@@ -118,6 +119,12 @@ func WithSchemaResolver(r resolver.SchemaResolver) BuilderOption {
 // WithRESTMapper allows configuring a custom RESTMapper for a Builder.
 func WithRESTMapper(rm meta.RESTMapper) BuilderOption {
 	return func(b *Builder) { b.restMapper = rm }
+}
+
+// WithCostLimit allows configuring a custom CEL evaluation cost limit for a Builder.
+// Setting costLimit to 0 disables cost limiting (default).
+func WithCostLimit(limit uint64) BuilderOption {
+	return func(b *Builder) { b.costLimit = limit }
 }
 
 // Config holds runtime configuration parameters shared by every graph consumer.
@@ -145,31 +152,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
 	}
 
-	crdScope := extv1.NamespaceScoped
-	if rgd.Spec.Schema.Scope == v1alpha1.ResourceScopeCluster {
-		crdScope = extv1.ClusterScoped
-	}
-
-	// SimpleSchema -> instance spec schema, then synthesize the CRD (status filled
-	// in later once inferred). Both depend only on the schema block, not resources,
-	// so they are computed up front and fed to CompileSource via the Source.
-	instanceSpecSchema, err := buildInstanceSpecSchema(rgd.Spec.Schema)
+	// SimpleSchema -> instance spec schema -> synthesized CRD + status-stripped
+	// CEL schema + scope. Depends only on the schema block, not resources, so it
+	// is computed up front and fed to CompileSource via the Source.
+	instanceCRD, schemaWithoutStatus, crdScope, err := synthesizeInstanceCRD(rgd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition %q: %w", rgd.Name, err)
-	}
-	instanceCRD := crd.SynthesizeCRD(
-		rgd.Spec.Schema.Group,
-		rgd.Spec.Schema.APIVersion,
-		rgd.Spec.Schema.Kind,
-		*instanceSpecSchema,
-		extv1.JSONSchemaProps{}, // empty status placeholder
-		false,                   // don't add default fields yet
-		crdScope,
-		rgd.Spec.Schema,
-	)
-	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get schema without status: %w", err)
 	}
 
 	resourceSpecs := make([]ResourceSpec, 0, len(rgd.Spec.Resources))
@@ -195,6 +183,54 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	crd.SetCRDStatus(instanceCRD, *statusSchema, true)
 	g.CRD = instanceCRD
 	return g, nil
+}
+
+// InstanceSchemaForCEL returns the OpenAPI schema bound to the `schema` CEL
+// variable when compiling expressions for the given RGD: the instance spec
+// converted from the RGD's SimpleSchema plus apiVersion/kind/metadata, with
+// status stripped (status references are not allowed in RGD resource
+// expressions).
+//
+// Exported so graph consumers can bind this as the type of the `schema` CEL
+// variable, giving compile-time typing from the declared SimpleSchema rather
+// than from a runtime instance value.
+func InstanceSchemaForCEL(rgd *v1alpha1.ResourceGraphDefinition) (*spec.Schema, error) {
+	_, schemaWithoutStatus, _, err := synthesizeInstanceCRD(rgd)
+	return schemaWithoutStatus, err
+}
+
+// synthesizeInstanceCRD converts the RGD's SimpleSchema into the instance CRD
+// (status placeholder empty, filled in later once inferred) and the
+// status-stripped OpenAPI schema bound to the `schema` CEL variable, plus the
+// CRD scope. Shared by NewResourceGraphDefinition and InstanceSchemaForCEL so
+// the compile-time typing and the synthesized CRD stay in lock-step.
+func synthesizeInstanceCRD(rgd *v1alpha1.ResourceGraphDefinition) (*extv1.CustomResourceDefinition, *spec.Schema, extv1.ResourceScope, error) {
+	if rgd.Spec.Schema == nil {
+		return nil, nil, "", fmt.Errorf("resourcegraphdefinition %q: schema is required", rgd.Name)
+	}
+	instanceSpecSchema, err := buildInstanceSpecSchema(rgd.Spec.Schema)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	crdScope := extv1.NamespaceScoped
+	if rgd.Spec.Schema.Scope == v1alpha1.ResourceScopeCluster {
+		crdScope = extv1.ClusterScoped
+	}
+	instanceCRD := crd.SynthesizeCRD(
+		rgd.Spec.Schema.Group,
+		rgd.Spec.Schema.APIVersion,
+		rgd.Spec.Schema.Kind,
+		*instanceSpecSchema,
+		extv1.JSONSchemaProps{}, // empty status placeholder
+		false,                   // don't add default fields yet
+		crdScope,
+		rgd.Spec.Schema,
+	)
+	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return instanceCRD, schemaWithoutStatus, crdScope, nil
 }
 
 // rgdSource adapts a ResourceGraphDefinition's precomputed pieces to Source.
@@ -285,6 +321,7 @@ func (b *Builder) CompileSource(src Source) (*Graph, *extv1.JSONSchemaProps, err
 		declTypes:    make(map[*spec.Schema]*apiservercel.DeclType),
 		checkedASTs:  make(map[checkedASTKey]*cel.Ast),
 		extendedEnvs: make(map[extendedEnvKey]*cel.Env),
+		costLimit:    b.costLimit,
 	}
 
 	for id, node := range nodes {
@@ -759,6 +796,15 @@ func buildInstanceNode(
 	return instance, nil
 }
 
+// BuildInstanceSpecSchema converts an RGD Schema's SimpleSchema spec (and
+// optional custom types) into the OpenAPI JSONSchemaProps used to synthesize
+// the instance CRD. Exported so graph consumers can reuse the same
+// SimpleSchema → OpenAPI conversion without depending on unexported builder
+// internals.
+func BuildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps, error) {
+	return buildInstanceSpecSchema(rgSchema)
+}
+
 // buildInstanceSpecSchema builds the instance spec schema that will be
 // used to generate the CRD for the instance resource. The instance spec
 // schema is expected to be defined using the "SimpleSchema" format.
@@ -1115,6 +1161,14 @@ func extractConditionDependencies(
 	var allDeps []string
 
 	for _, expression := range expressions {
+		inspectionResult, err := inspector.Inspect(expression.Original)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect expression: %w", err)
+		}
+		if inspectionResult.UsesOmit() {
+			return nil, fmt.Errorf("omit() can only be used in resource template expressions")
+		}
+
 		nodeDeps, _, err := extractDependencies(inspector, expression, nil)
 		if err != nil {
 			return nil, err

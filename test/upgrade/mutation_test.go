@@ -236,8 +236,8 @@ var _ = ginkgo.Describe("Post-Upgrade RGD Mutation", ginkgo.Ordered, func() {
 			ginkgo.GinkgoLogr.Info("No pre-upgrade snapshot available, checking relative counts only")
 
 			for rgdName, count := range grCountPerRGD {
-				if rgdName == mutationRGDName {
-					continue // we already verified this one got +1
+				if rgdName == mutationRGDName || rgdName == shrinkRGDName {
+					continue // deliberately mutated by a post-upgrade suite
 				}
 				// For pre-GR upgrades, each RGD should have exactly 1 GR.
 				// For GR-aware upgrades, we don't know the exact count without
@@ -255,8 +255,9 @@ var _ = ginkgo.Describe("Post-Upgrade RGD Mutation", ginkgo.Ordered, func() {
 		// Skip RGDs intentionally mutated by other post-upgrade test suites:
 		//   - mutationRGDName: mutated by this suite (expected +1 GR)
 		//   - retentionRGDName: mutated by the rapid-mutations suite (GC'd to maxGraphRevisions)
+		//   - shrinkRGDName: mutated by the template-shrink suite (expected +1 GR)
 		for rgdName, currentCount := range grCountPerRGD {
-			if rgdName == mutationRGDName || rgdName == retentionRGDName {
+			if rgdName == mutationRGDName || rgdName == retentionRGDName || rgdName == shrinkRGDName {
 				continue
 			}
 			preCount := snapshot.GRCountPerRGD[rgdName]

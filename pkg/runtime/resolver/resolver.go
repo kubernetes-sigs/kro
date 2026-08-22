@@ -90,6 +90,11 @@ func (r *Resolver) UpsertValueAtPath(path string, value interface{}) error {
 	return r.setValueAtPath(path, value)
 }
 
+// GetValueAtPath retrieves a value from the resource using the fieldpath parser.
+func (r *Resolver) GetValueAtPath(path string) (interface{}, error) {
+	return r.getValueFromPath(path)
+}
+
 // resolveField handles the resolution of a single ExpressionField (one field) in
 // the resource. It returns a ResolutionResult containing information about the
 // resolution process
@@ -222,7 +227,7 @@ func (r *Resolver) setValueAtPath(path string, value interface{}) error {
 		} else {
 			currentMap, ok := current.(map[string]interface{})
 			if !ok {
-				return fmt.Errorf("expected map at path segment: %v", segment)
+				return fmt.Errorf("path segment %q already exists with type %T", parentKey, current)
 			}
 
 			if i == len(segments)-1 {

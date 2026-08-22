@@ -35,8 +35,10 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	controllergraph "github.com/kubernetes-sigs/kro/pkg/controller/graph"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
@@ -289,7 +291,7 @@ func TestReconcileDeletionDeletesAllAndRequeues(t *testing.T) {
 	err := controller.reconcileDeletion(rcx)
 	var retryAfter *requeue.RequeueNeededAfter
 	require.ErrorAs(t, err, &retryAfter)
-	assert.Equal(t, v1alpha1.InstanceStateDeleting, rcx.StateManager.State)
+	assert.Equal(t, v1alpha1.InstanceStateDeleting, rcx.State)
 	_, getErr := raw.Tracker().Get(controllerTestDeployGVR, "default", "demo")
 	require.Error(t, getErr)
 }
@@ -738,4 +740,88 @@ func TestRemoveFinalizerMarksInstanceNotManagedOnError(t *testing.T) {
 	err := controller.removeFinalizer(rcx)
 	require.Error(t, err)
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, rcx.Instance, InstanceManaged).Status)
+}
+
+func TestReconcileDeletion_MalformedPatchContributions_RetainsFinalizer(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	metadata.SetInstanceFinalizer(instance)
+	addEmptyDeletionScope(instance)
+	anns := instance.GetAnnotations()
+	anns[metadata.PatchContributionsAnnotation] = "not-json"
+	instance.SetAnnotations(anns)
+
+	controller, dcx, _ := newControllerAndDeletionContext(t, instance, newTestGraph())
+
+	err := controller.reconcileDeletion(dcx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read patch contributions on delete")
+	assert.True(t, metadata.HasInstanceFinalizer(dcx.Instance), "finalizer must be retained on malformed patch contributions")
+
+	condition := conditionByType(t, dcx.Instance, ResourcesReady)
+	assert.Equal(t, metav1.ConditionUnknown, condition.Status)
+	require.NotNil(t, condition.Message)
+	assert.Contains(t, *condition.Message, "deletion blocked")
+}
+
+func TestReconcileDeletion_ReleasesPatchContributionsBeforeRemovingFinalizer(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	metadata.SetInstanceFinalizer(instance)
+	addEmptyDeletionScope(instance)
+	contribs := []executor.Contribution{
+		{
+			APIVersion:   "v1",
+			Kind:         "ConfigMap",
+			Namespace:    "default",
+			Name:         "target-cm",
+			FieldManager: "fm-test",
+		},
+	}
+	rawJSON, err := controllergraph.MarshalContributions(contribs)
+	require.NoError(t, err)
+	anns := instance.GetAnnotations()
+	anns[metadata.PatchContributionsAnnotation] = rawJSON
+	instance.SetAnnotations(anns)
+
+	targetCM := newConfigMapObject("target-cm", "default")
+	fakeRuntimeCl := newFakeRuntimeClient(t, targetCM)
+
+	controller, dcx, _ := newControllerAndDeletionContext(t, instance, newTestGraph())
+	controller.graphEngineExecutor = executor.NewSimple(fakeRuntimeCl)
+
+	err = controller.reconcileDeletion(dcx)
+	require.NoError(t, err)
+	assert.False(t, metadata.HasInstanceFinalizer(dcx.Instance), "finalizer should be removed after release")
+}
+
+func TestReconcileDeletion_ReleaseFailure_RetainsFinalizer(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	metadata.SetInstanceFinalizer(instance)
+	addEmptyDeletionScope(instance)
+	contribs := []executor.Contribution{
+		{
+			APIVersion:   "v1",
+			Kind:         "ConfigMap",
+			Namespace:    "default",
+			Name:         "target-cm",
+			FieldManager: "fm-test",
+		},
+	}
+	rawJSON, err := controllergraph.MarshalContributions(contribs)
+	require.NoError(t, err)
+	anns := instance.GetAnnotations()
+	anns[metadata.PatchContributionsAnnotation] = rawJSON
+	instance.SetAnnotations(anns)
+
+	fakeRuntimeCl := &errorClient{
+		Client:   newFakeRuntimeClient(t),
+		patchErr: errors.New("SSA patch failure"),
+	}
+
+	controller, dcx, _ := newControllerAndDeletionContext(t, instance, newTestGraph())
+	controller.graphEngineExecutor = executor.NewSimple(fakeRuntimeCl)
+
+	err = controller.reconcileDeletion(dcx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "executor release")
+	assert.True(t, metadata.HasInstanceFinalizer(dcx.Instance), "finalizer must be retained when release fails")
 }

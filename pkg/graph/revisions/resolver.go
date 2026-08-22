@@ -16,8 +16,7 @@ package revisions
 
 // Resolver resolves compiled graph revisions for a single owner. Implementations
 // are already scoped to one owner, so callers ask only for the latest issued
-// revision or a specific revision number. It is the shared contract consumed by
-// any graph consumer (the instance controller today).
+// revision or a specific revision number.
 type Resolver interface {
 	GetLatestRevision() (Entry, bool)
 	GetGraphRevision(revision int64) (Entry, bool)

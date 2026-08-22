@@ -23,39 +23,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
-	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
-
-type ReconcileContext struct {
-	Ctx context.Context
-	Log logr.Logger
-
-	GVR        schema.GroupVersionResource
-	Namespaced bool
-	Client     dynamic.Interface
-	RestMapper meta.RESTMapper
-	Labeler    metadata.Labeler
-
-	Runtime  runtime.Interface
-	Instance *unstructured.Unstructured
-	Config   ReconcileConfig
-
-	// WireStatus is a deep copy of the instance's .status as fetched from
-	// the API server, captured before the condition markers mutate Instance
-	// in memory. Skip-write comparison and lastTransitionTime preservation
-	// run against it.
-	WireStatus map[string]interface{}
-
-	Mark         *ConditionsMarker
-	StateManager *StateManager
-
-	// Watcher is the per-instance watch handle from the coordinator.
-	// Use dynamiccontroller.NoopInstanceWatcher{} in tests.
-	Watcher dynamiccontroller.InstanceWatcher
-}
 
 // DeletionContext contains only the dependencies available to the early
 // deletion path. In particular, it has no runtime: deletion must remain
@@ -74,48 +44,8 @@ type DeletionContext struct {
 
 	WireStatus map[string]interface{}
 
-	Mark         *ConditionsMarker
-	StateManager *StateManager
-}
-
-// NewReconcileContext constructs a ReconcileContext for a single reconciliation cycle.
-// It bundles all dependencies needed to reconcile an instance's resources:
-//   - client/restMapper: for Kubernetes API operations
-//   - labeler: for applying kro metadata labels to resources
-//   - rt: the runtime containing resolved resource templates, and helpers to figure out
-//     readiness, inclusion etc...
-//   - instance: the instance CR being reconciled
-//
-// It also initializes internal state (Mark for conditions, StateManager for node states).
-func NewReconcileContext(
-	ctx context.Context,
-	log logr.Logger,
-	gvr schema.GroupVersionResource,
-	namespaced bool,
-	client dynamic.Interface,
-	restMapper meta.RESTMapper,
-	labeler metadata.Labeler,
-	rt runtime.Interface,
-	config ReconcileConfig,
-	instance *unstructured.Unstructured,
-) *ReconcileContext {
-	return &ReconcileContext{
-		Ctx:        ctx,
-		Log:        log,
-		GVR:        gvr,
-		Namespaced: namespaced,
-		Client:     client,
-		RestMapper: restMapper,
-		Labeler:    labeler,
-		Runtime:    rt,
-		Instance:   instance,
-		Config:     config,
-		// WireStatus must be captured before NewConditionsMarkerFor
-		// initializes the built-in conditions on the instance object.
-		WireStatus:   captureWireStatus(instance),
-		Mark:         NewConditionsMarkerFor(instance),
-		StateManager: newStateManager(),
-	}
+	Mark  *ConditionsMarker
+	State v1alpha1.InstanceState
 }
 
 // NewDeletionContext constructs the runtime-free context used before graph
@@ -131,29 +61,23 @@ func NewDeletionContext(
 	instance *unstructured.Unstructured,
 ) *DeletionContext {
 	return &DeletionContext{
-		Ctx:          ctx,
-		Log:          log,
-		GVR:          gvr,
-		Namespaced:   namespaced,
-		Client:       client,
-		RestMapper:   restMapper,
-		Instance:     instance,
-		Config:       config,
-		WireStatus:   captureWireStatus(instance),
-		Mark:         NewConditionsMarkerFor(instance),
-		StateManager: newStateManager(),
+		Ctx:        ctx,
+		Log:        log,
+		GVR:        gvr,
+		Namespaced: namespaced,
+		Client:     client,
+		RestMapper: restMapper,
+		Instance:   instance,
+		Config:     config,
+		WireStatus: captureWireStatus(instance),
+		Mark:       NewConditionsMarkerFor(instance),
+		State:      v1alpha1.InstanceStateInProgress,
 	}
 }
 
-// rebindInstance replaces rcx.Instance with a fresh server response (e.g.
+// rebindInstance replaces dcx.Instance with a fresh server response (e.g.
 // after an SSA patch), re-capturing the wire status before the condition
 // marker mutates the new object.
-func (rcx *ReconcileContext) rebindInstance(instance *unstructured.Unstructured) {
-	rcx.Instance = instance
-	rcx.WireStatus = captureWireStatus(instance)
-	rcx.Mark = NewConditionsMarkerFor(instance)
-}
-
 func (dcx *DeletionContext) rebindInstance(instance *unstructured.Unstructured) {
 	dcx.Instance = instance
 	dcx.WireStatus = captureWireStatus(instance)
@@ -166,26 +90,11 @@ func captureWireStatus(instance *unstructured.Unstructured) map[string]interface
 	return status
 }
 
-func (rcx *ReconcileContext) delayedRequeue(err error) error {
-	if rcx.Config.DefaultRequeueDuration == 0 {
-		return requeue.None(err)
-	}
-	return requeue.NeededAfter(err, rcx.Config.DefaultRequeueDuration)
-}
-
 func (dcx *DeletionContext) delayedRequeue(err error) error {
 	if dcx.Config.DefaultRequeueDuration == 0 {
 		return requeue.None(err)
 	}
 	return requeue.NeededAfter(err, dcx.Config.DefaultRequeueDuration)
-}
-
-func (rcx *ReconcileContext) InstanceClient() dynamic.ResourceInterface {
-	base := rcx.Client.Resource(rcx.GVR)
-	if rcx.Namespaced {
-		return base.Namespace(rcx.Instance.GetNamespace())
-	}
-	return base
 }
 
 func (dcx *DeletionContext) InstanceClient() dynamic.ResourceInterface {

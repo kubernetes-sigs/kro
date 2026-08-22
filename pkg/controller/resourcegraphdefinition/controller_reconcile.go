@@ -191,14 +191,13 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		"controllerKind", processedRGD.CRD.Spec.Names.Kind,
 	)
 
-	return instancectrl.NewController(
+	instCtrl := instancectrl.NewController(
 		instanceLogger,
 		instancectrl.ReconcileConfig{
-			DefaultRequeueDuration:    r.cfg.InstanceRequeueInterval,
-			DeletionGraceTimeDuration: 30 * time.Second,
-			DeletionPolicy:            "Delete",
-			RGDConfig:                 r.cfg.RGDConfig,
-			HasAuthorConditions:       len(processedRGD.Instance.Conditions) > 0,
+			DefaultRequeueDuration: r.cfg.InstanceRequeueInterval,
+			HasAuthorConditions:    len(processedRGD.Instance.Conditions) > 0,
+			MaxCollectionSize:      r.cfg.RGDConfig.MaxCollectionSize,
+			ApplyConcurrency:       r.cfg.ApplyConcurrency,
 		},
 		gvr,
 		r.revisionsRegistry.ResolverFor(rgd.Name),
@@ -209,7 +208,17 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		r.dynamicController.Coordinator(),
 		// recorder keyed by CRD name to uniquely identify the event source
 		r.newEventRecorder(fmt.Sprintf("kro/%s-controller", processedRGD.CRD.Name)),
+		// graphEngineClient: the controller-runtime client used by the Graph
+		// engine executor.  r.Client is set by SetupWithManager, which always
+		// runs before the first micro-controller is created.
+		r.Client,
 	)
+
+	// Wire the graph-engine compiler.  The compiler is injected separately
+	// (two-phase init) because it owns a rest.Config reference that the
+	// instance controller does not otherwise need.
+	instCtrl.WithGraphEngineCompiler(r.graphEngineCompiler)
+	return instCtrl
 }
 
 // resolveGraphRevisions determines whether the RGD can proceed to serving

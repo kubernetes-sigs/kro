@@ -39,12 +39,19 @@ import (
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	ctrlgraph "github.com/kubernetes-sigs/kro/pkg/controller/graph"
 	ctrlgraphrevision "github.com/kubernetes-sigs/kro/pkg/controller/graphrevision"
 	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	ctrlresourcegraphdefinition "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/registry"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/schemawatcher"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
 )
 
 type Environment struct {
@@ -58,6 +65,8 @@ type Environment struct {
 	ClientSet        *kroclient.Set
 	CRDManager       kroclient.CRDClient
 	GraphBuilder     *graph.Builder
+	Router           *watchrouter.Router
+	SchemaWatcher    *schemawatcher.SchemaWatcher
 	managerReady     <-chan struct{}
 	managerDone      chan struct{}
 	managerErrMu     sync.RWMutex
@@ -301,6 +310,7 @@ func (e *Environment) setupController() error {
 			MaxConcurrentReconciles: 40,
 			MaxGraphRevisions:       maxGraphRevisions,
 			RGDConfig:               rgdConfig,
+			ApplyConcurrency:        e.ControllerConfig.ReconcileConfig.ApplyConcurrency,
 		},
 	)
 	gvReconciler := ctrlgraphrevision.NewGraphRevisionReconciler(
@@ -317,8 +327,58 @@ func (e *Environment) setupController() error {
 	if err = rgReconciler.SetupWithManager(e.CtrlManager); err != nil {
 		return fmt.Errorf("setting up reconciler: %w", err)
 	}
+	// Inject the graph-engine compiler so that micro-controllers route
+	// instance reconciliation through the Graph engine.
+	geCmp, err := compiler.NewCompiler(e.ClientSet.RESTConfig(), e.ClientSet.HTTPClient())
+	if err != nil {
+		return fmt.Errorf("building graph-engine compiler: %w", err)
+	}
+	rgReconciler.WithGraphEngineCompiler(geCmp)
 	if err = gvReconciler.SetupWithManager(e.CtrlManager); err != nil {
 		return fmt.Errorf("setting up graph revision reconciler: %w", err)
+	}
+
+	if features.FeatureGate.Enabled(features.GraphKind) {
+		router := watchrouter.NewRouter(
+			zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)).WithName("graph-watch-router"),
+			watchrouter.Config{},
+			e.ClientSet.Metadata(),
+		)
+		if err := e.CtrlManager.Add(router); err != nil {
+			return fmt.Errorf("adding graph watch router to manager: %w", err)
+		}
+		e.Router = router
+
+		reg := registry.New()
+		sw := schemawatcher.New(
+			zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)).WithName("graph-schema-watcher"),
+			schemawatcher.Config{
+				Cache:   e.CtrlManager.GetCache(),
+				Graphs:  reg,
+				Schemas: geCmp,
+			},
+		)
+		if err := e.CtrlManager.Add(sw); err != nil {
+			return fmt.Errorf("adding graph schema watcher to manager: %w", err)
+		}
+		e.SchemaWatcher = sw
+
+		exec := executor.NewSimple(e.CtrlManager.GetClient())
+		exec.ApplyConcurrency = e.ControllerConfig.ReconcileConfig.ApplyConcurrency
+
+		graphReconciler := &ctrlgraph.Reconciler{
+			Client:                  e.CtrlManager.GetClient(),
+			Compiler:                geCmp,
+			Registry:                reg,
+			Executor:                exec,
+			Router:                  router,
+			SchemaWatcher:           sw,
+			MaxConcurrentReconciles: 40,
+			MaxCollectionSize:       1000,
+		}
+		if err := graphReconciler.SetupWithManager(e.CtrlManager); err != nil {
+			return fmt.Errorf("setting up graph reconciler: %w", err)
+		}
 	}
 
 	e.managerReady = e.CtrlManager.Elected()
@@ -335,6 +395,13 @@ func (e *Environment) setupController() error {
 	}()
 
 	return nil
+}
+
+func (e *Environment) Context() context.Context {
+	if e == nil || e.context == nil {
+		return context.Background()
+	}
+	return e.context
 }
 
 func (e *Environment) RestartControllers() error {

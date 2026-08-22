@@ -40,6 +40,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/rgdadapter"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
@@ -55,6 +56,7 @@ type Config struct {
 	ProgressRequeueDelay    time.Duration
 	MaxConcurrentReconciles int
 	MaxGraphRevisions       int
+	ApplyConcurrency        int
 	RGDConfig               graph.RGDConfig
 }
 
@@ -73,6 +75,11 @@ type ResourceGraphDefinitionReconciler struct {
 	revisionsRegistry     *revisions.Registry
 	registeredControllers sync.Map
 	cfg                   Config
+
+	// graphEngineCompiler is injected via WithGraphEngineCompiler after
+	// SetupWithManager so that the compiler shares the same REST config/HTTP
+	// client as the rest of the manager.  It drives the instance reconcile path.
+	graphEngineCompiler rgdadapter.Compiler
 
 	newEventRecorder func(string) record.EventRecorder
 }
@@ -157,6 +164,13 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 			}),
 		).
 		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
+}
+
+// WithGraphEngineCompiler injects the graph-engine compiler used by the
+// instance micro-controllers.  Call this after SetupWithManager so the
+// compiler shares the manager's REST config and HTTP client.
+func (r *ResourceGraphDefinitionReconciler) WithGraphEngineCompiler(comp rgdadapter.Compiler) {
+	r.graphEngineCompiler = comp
 }
 
 // resourceGraphDefinitionPrimaryWatchPredicate returns a predicate that decides

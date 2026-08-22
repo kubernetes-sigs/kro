@@ -2412,6 +2412,12 @@ func TestNewBuilder(t *testing.T) {
 			opts:   []BuilderOption{WithRESTMapper(fakeRESTMapper)},
 		},
 		{
+			name:   "success with WithCostLimit",
+			config: &rest.Config{},
+			client: &http.Client{},
+			opts:   []BuilderOption{WithCostLimit(5000)},
+		},
+		{
 			name:   "success with both options overridden skips defaults",
 			config: &rest.Config{Host: "://bad"}, // would fail default resolver creation
 			client: nil,                          // would fail default REST mapper creation

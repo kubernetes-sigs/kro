@@ -24,6 +24,12 @@ import (
 
 const kroFinalizer = v1alpha1.KRODomainName + "/finalizer"
 
+// GraphFinalizer is the finalizer the Graph reconciler claims on each Graph
+// so cleanup can run before the API server completes deletion. It is distinct
+// from the RGD/instance finalizer (kro.run/finalizer) so the two controllers
+// never contend over the same finalizer string.
+const GraphFinalizer = v1alpha1.KRODomainName + "/graph-finalizer"
+
 // SetResourceGraphDefinitionFinalizer adds the kro finalizer to the object if it's not already present.
 func SetResourceGraphDefinitionFinalizer(obj metav1.Object) {
 	if !HasResourceGraphDefinitionFinalizer(obj) {
@@ -73,6 +79,23 @@ func RemoveInstanceFinalizer(obj client.Object) {
 // HasInstanceFinalizer checks if an unstructured object has an instance-specific finalizer.
 func HasInstanceFinalizer(obj client.Object) bool {
 	return controllerutil.ContainsFinalizer(obj, kroFinalizer)
+}
+
+// HasGraphFinalizer reports whether obj already carries the Graph finalizer.
+func HasGraphFinalizer(obj metav1.Object) bool {
+	return containsString(obj.GetFinalizers(), GraphFinalizer)
+}
+
+// SetGraphFinalizer appends the Graph finalizer if it isn't present.
+func SetGraphFinalizer(obj metav1.Object) {
+	if !HasGraphFinalizer(obj) {
+		obj.SetFinalizers(append(obj.GetFinalizers(), GraphFinalizer))
+	}
+}
+
+// RemoveGraphFinalizer drops the Graph finalizer if it's present.
+func RemoveGraphFinalizer(obj metav1.Object) {
+	obj.SetFinalizers(removeString(obj.GetFinalizers(), GraphFinalizer))
 }
 
 // Helper functions

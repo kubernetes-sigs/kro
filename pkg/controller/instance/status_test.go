@@ -16,7 +16,6 @@ package instance
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,10 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
-	"github.com/kubernetes-sigs/kro/pkg/graph"
-	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 func TestConditionsMarkerAndInitialStatus(t *testing.T) {
@@ -47,11 +43,7 @@ func TestConditionsMarkerAndInitialStatus(t *testing.T) {
 	marker.GraphResolved()
 	marker.ResourcesReady()
 
-	rcx := &ReconcileContext{
-		Instance:     instance,
-		StateManager: &StateManager{State: v1alpha1.InstanceStateInProgress},
-	}
-	status := rcx.initialStatus()
+	status := initialStatus(instance, v1alpha1.InstanceStateInProgress)
 	assert.Equal(t, string(v1alpha1.InstanceStateActive), status["state"])
 
 	marker.ResourcesNotReady("not yet")
@@ -59,186 +51,12 @@ func TestConditionsMarkerAndInitialStatus(t *testing.T) {
 	marker.InstanceNotManaged("nope")
 	marker.GraphResolutionFailed("bad graph")
 
-	rcx.StateManager.State = v1alpha1.InstanceStateDeleting
-	status = rcx.initialStatus()
+	status = initialStatus(instance, v1alpha1.InstanceStateDeleting)
 	assert.Equal(t, string(v1alpha1.InstanceStateDeleting), status["state"])
 
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, instance, InstanceManaged).Status)
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, instance, GraphResolved).Status)
 	assert.Equal(t, metav1.ConditionUnknown, conditionByType(t, instance, ResourcesReady).Status)
-}
-
-func TestUpdateStatusPaths(t *testing.T) {
-	tests := []struct {
-		name      string
-		badExpr   bool
-		wantURL   string
-		wantState string
-		wantErr   string
-	}{
-		{
-			name:      "copies resolved status fields but preserves reserved keys",
-			wantURL:   "https://demo",
-			wantState: string(v1alpha1.InstanceStateDeleting),
-		},
-		{
-			name:    "returns instance desired resolution error",
-			badExpr: true,
-			wantErr: "division by zero",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			instance := newInstanceObject("demo", "default")
-
-			instanceNode := &graph.Node{
-				Meta: graph.NodeMeta{
-					ID:         graph.InstanceNodeID,
-					Type:       graph.NodeTypeInstance,
-					GVR:        controllerTestParentGVR,
-					Namespaced: true,
-				},
-			}
-			if tt.badExpr {
-				instanceNode.Template = &unstructured.Unstructured{
-					Object: map[string]interface{}{
-						"status": map[string]interface{}{
-							"bad": "${1 / 0}",
-						},
-					},
-				}
-				instanceNode.Variables = []*variable.ResourceField{
-					standaloneField("status.bad", mustCompileControllerExpr(t, "1 / 0"), variable.ResourceVariableKindStatic),
-				}
-			} else {
-				instanceNode.Template = &unstructured.Unstructured{
-					Object: map[string]interface{}{
-						"status": map[string]interface{}{
-							"url":        "${'https://demo'}",
-							"state":      "${'OVERRIDE'}",
-							"conditions": "${['bad']}",
-						},
-					},
-				}
-				instanceNode.Variables = []*variable.ResourceField{
-					standaloneField("status.url", mustCompileControllerExpr(t, "'https://demo'"), variable.ResourceVariableKindStatic),
-					standaloneField("status.state", mustCompileControllerExpr(t, "'OVERRIDE'"), variable.ResourceVariableKindStatic),
-					standaloneField("status.conditions", mustCompileControllerExpr(t, "['bad']"), variable.ResourceVariableKindStatic),
-				}
-			}
-
-			controller, rcx, raw := newControllerAndContext(t, instance, newTestGraphWithInstance(instanceNode))
-			rcx.StateManager.State = v1alpha1.InstanceStateDeleting
-
-			err := controller.updateStatus(rcx)
-			if tt.wantErr != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantErr)
-				return
-			}
-
-			require.NoError(t, err)
-			stored := getStoredParentObject(t, raw)
-
-			url, found, err := unstructured.NestedString(stored.Object, "status", "url")
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, tt.wantURL, url)
-
-			state, found, err := unstructured.NestedString(stored.Object, "status", "state")
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, tt.wantState, state)
-
-			conditions, found, err := unstructured.NestedSlice(stored.Object, "status", "conditions")
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.NotEqual(t, []interface{}{"bad"}, conditions)
-		})
-	}
-}
-
-func TestUpdateStatusMirrorsPersistedConditionsOntoInstance(t *testing.T) {
-	instance := newInstanceObject("demo", "default")
-
-	instanceNode := &graph.Node{
-		Meta: graph.NodeMeta{
-			ID:         graph.InstanceNodeID,
-			Type:       graph.NodeTypeInstance,
-			GVR:        controllerTestParentGVR,
-			Namespaced: true,
-		},
-		Template: &unstructured.Unstructured{
-			Object: map[string]interface{}{"status": map[string]interface{}{}},
-		},
-		Conditions: []*krocel.Expression{
-			mustCompileControllerExpr(t,
-				`runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: 'Healthy', message: 'all good'})`,
-				library.RuntimeVarName,
-			),
-		},
-	}
-
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraphWithInstance(instanceNode))
-	rcx.StateManager.State = v1alpha1.InstanceStateActive
-
-	rcx.Mark.InstanceManaged()
-	rcx.Mark.GraphResolved()
-	rcx.Mark.ResourcesReady()
-
-	require.NoError(t, controller.updateStatus(rcx))
-
-	instanceConditions := conditionsFromInstance(rcx.Instance)
-	require.Len(t, instanceConditions, 1,
-		"only the author condition should be on rcx.Instance; built-ins are suppressed from the wire")
-	assert.Equal(t, v1alpha1.ConditionType("PrimaryReady"), instanceConditions[0].Type,
-		"rcx.Instance must carry the author condition the emitter reports")
-	assert.Equal(t, metav1.ConditionTrue, instanceConditions[0].Status)
-
-	stored := getStoredParentObject(t, raw)
-	assert.Equal(t,
-		conditionsFromInstance(stored),
-		instanceConditions,
-		"rcx.Instance conditions must match the persisted wire conditions")
-}
-
-func TestUpdateStatusKeepsBuiltinConditionsWhenNoAuthorConditions(t *testing.T) {
-	instance := newInstanceObject("demo", "default")
-
-	instanceNode := &graph.Node{
-		Meta: graph.NodeMeta{
-			ID:         graph.InstanceNodeID,
-			Type:       graph.NodeTypeInstance,
-			GVR:        controllerTestParentGVR,
-			Namespaced: true,
-		},
-		Template: &unstructured.Unstructured{
-			Object: map[string]interface{}{"status": map[string]interface{}{}},
-		},
-	}
-
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraphWithInstance(instanceNode))
-	rcx.StateManager.State = v1alpha1.InstanceStateActive
-
-	rcx.Mark.InstanceManaged()
-	rcx.Mark.GraphResolved()
-	rcx.Mark.ResourcesReady()
-
-	require.NoError(t, controller.updateStatus(rcx))
-
-	instanceConditions := conditionsFromInstance(rcx.Instance)
-	types := make(map[v1alpha1.ConditionType]struct{}, len(instanceConditions))
-	for _, c := range instanceConditions {
-		types[c.Type] = struct{}{}
-	}
-	for _, builtin := range []string{InstanceManaged, GraphResolved, ResourcesReady, Ready} {
-		assert.Contains(t, types, v1alpha1.ConditionType(builtin),
-			"built-in %q should remain on rcx.Instance when no author conditions are declared", builtin)
-	}
-
-	assert.Equal(t, conditionsFromInstance(getStoredParentObject(t, raw)), instanceConditions,
-		"rcx.Instance conditions must match the persisted wire conditions")
 }
 
 func TestStampAuthorConditionsNewWire(t *testing.T) {
@@ -314,67 +132,6 @@ func TestStampAuthorConditionsEmptyReasonAndMessage(t *testing.T) {
 	assert.Nil(t, stamped[0].Message, "empty message should serialize as nil pointer")
 }
 
-// authorConditionsInstanceNode returns an instance node declaring the given
-// author condition expressions.
-func authorConditionsInstanceNode(t *testing.T, exprs ...*krocel.Expression) *graph.Node {
-	t.Helper()
-	return &graph.Node{
-		Meta: graph.NodeMeta{
-			ID:         graph.InstanceNodeID,
-			Type:       graph.NodeTypeInstance,
-			GVR:        controllerTestParentGVR,
-			Namespaced: true,
-		},
-		Template: &unstructured.Unstructured{
-			Object: map[string]interface{}{"status": map[string]interface{}{}},
-		},
-		Conditions: exprs,
-	}
-}
-
-// TestUpdateStatusPreservesLastTransitionTimeForBuiltinOverride is a
-// regression test for the reconcile hot loop: an author condition overriding
-// a built-in type must preserve its wire lastTransitionTime even though the
-// markers overwrite the in-memory copy with kro's internal value.
-func TestUpdateStatusPreservesLastTransitionTimeForBuiltinOverride(t *testing.T) {
-	instance := newInstanceObject("demo", "default")
-	require.NoError(t, unstructured.SetNestedField(instance.Object, int64(1), "metadata", "generation"))
-	require.NoError(t, unstructured.SetNestedSlice(instance.Object, []interface{}{
-		map[string]interface{}{
-			"type":               ResourcesReady,
-			"status":             "True",
-			"reason":             "AuthorOverride",
-			"lastTransitionTime": "2026-01-01T00:00:00Z",
-			"observedGeneration": int64(1),
-		},
-	}, "status", "conditions"))
-
-	instanceNode := authorConditionsInstanceNode(t, mustCompileControllerExpr(t,
-		`runtime.newCondition({type: 'ResourcesReady', status: 'True', reason: 'AuthorOverride', message: ''})`,
-		library.RuntimeVarName,
-	))
-
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraphWithInstance(instanceNode))
-	rcx.StateManager.State = v1alpha1.InstanceStateInProgress
-
-	// kro's internal ResourcesReady disagrees with the author's True; before
-	// the wire-snapshot fix this bumped lastTransitionTime every reconcile.
-	rcx.Mark.InstanceManaged()
-	rcx.Mark.GraphResolved()
-	rcx.Mark.ResourcesNotReady("resources not ready yet")
-
-	require.NoError(t, controller.updateStatus(rcx))
-
-	stored := getStoredParentObject(t, raw)
-	conds := conditionsFromInstance(stored)
-	require.Len(t, conds, 1)
-	assert.Equal(t, v1alpha1.ConditionType(ResourcesReady), conds[0].Type)
-	assert.Equal(t, metav1.ConditionTrue, conds[0].Status)
-	require.NotNil(t, conds[0].LastTransitionTime)
-	assert.Equal(t, "2026-01-01T00:00:00Z", conds[0].LastTransitionTime.UTC().Format(time.RFC3339),
-		"lastTransitionTime must be preserved from the wire, not recomputed against the marker's value")
-}
-
 func TestBuiltinConditionsFiltersAuthorTypes(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	require.NoError(t, unstructured.SetNestedSlice(instance.Object, []interface{}{
@@ -392,38 +149,4 @@ func TestBuiltinConditionsFiltersAuthorTypes(t *testing.T) {
 	for _, c := range builtins {
 		assert.Contains(t, v1alpha1.KROBuiltinConditionTypes, string(c.Type))
 	}
-}
-
-// TestUpdateStatusCleanEvalRemovesStaleConditions verifies that a fully
-// successful evaluation replaces the wire, so condition types no longer
-// produced by any expression are cleaned up.
-func TestUpdateStatusCleanEvalRemovesStaleConditions(t *testing.T) {
-	instance := newInstanceObject("demo", "default")
-	require.NoError(t, unstructured.SetNestedSlice(instance.Object, []interface{}{
-		map[string]interface{}{
-			"type":               "Stale",
-			"status":             "True",
-			"reason":             "NoLongerDeclared",
-			"lastTransitionTime": "2026-01-01T00:00:00Z",
-		},
-	}, "status", "conditions"))
-
-	instanceNode := authorConditionsInstanceNode(t, mustCompileControllerExpr(t,
-		`runtime.newCondition({type: 'Fresh', status: 'True', reason: '', message: ''})`,
-		library.RuntimeVarName,
-	))
-
-	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraphWithInstance(instanceNode))
-	rcx.StateManager.State = v1alpha1.InstanceStateActive
-
-	rcx.Mark.InstanceManaged()
-	rcx.Mark.GraphResolved()
-	rcx.Mark.ResourcesReady()
-
-	require.NoError(t, controller.updateStatus(rcx))
-
-	stored := getStoredParentObject(t, raw)
-	conds := conditionsFromInstance(stored)
-	require.Len(t, conds, 1, "a clean evaluation replaces the wire; stale types are removed")
-	assert.Equal(t, v1alpha1.ConditionType("Fresh"), conds[0].Type)
 }

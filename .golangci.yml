@@ -79,7 +79,7 @@ formatters:
     - goimports
   settings:
     goimports:
-      local-prefixes: [ "github.com/kubernetes-sigs/kro" ]
+      local-prefixes: ["github.com/kubernetes-sigs/kro"]
   exclusions:
     generated: lax
     paths:

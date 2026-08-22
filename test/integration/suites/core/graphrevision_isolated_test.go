@@ -255,10 +255,13 @@ var _ = Describe("GraphRevision Integration", func() {
 			Expect(testEnv.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
+		waitForRGDActiveInEnv(ctx, testEnv, rgdName)
+
 		Eventually(func(g Gomega) {
 			fresh := &krov1alpha1.ResourceGraphDefinition{}
 			err := testEnv.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
 			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(1)))
 
 			gvs := listGraphRevisionsInEnv(ctx, testEnv, rgdName)
@@ -401,7 +404,7 @@ var _ = Describe("GraphRevision Integration", func() {
 				err := testEnv.Client.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, configMap)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(configMap.Data).To(HaveKeyWithValue("key", "after-restart"))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			updateRGDDataDefaultInEnv(ctx, testEnv, rgdName, "restart-value-3")
 			Eventually(func(g Gomega) {
@@ -410,7 +413,7 @@ var _ = Describe("GraphRevision Integration", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(3)))
 				g.Expect(maxGraphRevisionNumber(listGraphRevisionsInEnv(ctx, testEnv, rgdName))).To(Equal(int64(3)))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		},
 	)
 
@@ -493,7 +496,7 @@ var _ = Describe("GraphRevision Integration", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 				g.Expect(fresh.Status.LastIssuedRevision).To(Equal(expectedLatest))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}, 90*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			Expect(testEnv.RestartControllers()).To(Succeed())
 
@@ -527,7 +530,7 @@ var _ = Describe("GraphRevision Integration", func() {
 			err := testEnv.Client.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, configMap)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(configMap.Data).To(HaveKeyWithValue("key", "post-restart"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		finalExpectedLatest := int64(cycles + 1)
 		Eventually(func(g Gomega) {

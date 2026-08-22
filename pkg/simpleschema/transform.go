@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
@@ -171,10 +172,61 @@ func (t *transformer) buildFieldSchema(name string, spec interface{}, parent *ex
 	case string:
 		return t.buildFieldFromString(name, val, parent)
 	case map[string]interface{}:
+		// A nested mapping is treated as an inline struct. If it instead looks
+		// like a hand-written OpenAPI/structural schema, surface an actionable
+		// error here rather than letting an OpenAPI keyword or a default value
+		// be misinterpreted as a field type two levels down (e.g. the
+		// confusing "unknown type: no").
+		if looksLikeOpenAPISchema(val) {
+			return nil, fmt.Errorf(
+				"looks like a nested OpenAPI schema (keys: %s); SimpleSchema fields "+
+					"are written as a single inline string, e.g. "+
+					`'map[string]string | default={"key":"value"}'`,
+				strings.Join(sortedKeys(val), ", "))
+		}
 		return t.buildSchema(val)
 	default:
 		return nil, fmt.Errorf("unexpected type: %T", spec)
 	}
+}
+
+// openAPISchemaKeywords are keys that indicate a field was written as a nested
+// OpenAPI/structural schema instead of the inline SimpleSchema string form.
+var openAPISchemaKeywords = map[string]struct{}{
+	"type":                 {},
+	"properties":           {},
+	"additionalProperties": {},
+	"items":                {},
+	"format":               {},
+	"enum":                 {},
+	"default":              {},
+}
+
+// looksLikeOpenAPISchema reports whether a nested mapping was likely intended as
+// an OpenAPI schema rather than a SimpleSchema inline struct. It requires a
+// "type" key (the OpenAPI discriminator) and that every key is an OpenAPI
+// keyword, so a genuine inline struct that merely happens to contain a field
+// named e.g. "default" is not misclassified.
+func looksLikeOpenAPISchema(spec map[string]interface{}) bool {
+	if _, hasType := spec["type"]; !hasType {
+		return false
+	}
+	for k := range spec {
+		if _, ok := openAPISchemaKeywords[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// sortedKeys returns the keys of m in deterministic (sorted) order.
+func sortedKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (t *transformer) buildFieldFromString(name, fieldValue string, parent *extv1.JSONSchemaProps) (*extv1.JSONSchemaProps, error) {

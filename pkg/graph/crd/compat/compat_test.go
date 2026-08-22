@@ -209,6 +209,35 @@ func TestCompareVersions(t *testing.T) {
 			expectBreaking:   false,
 			nonBreakingCount: 1,
 		},
+		{
+			name: "non-breaking change - additional printer columns changed",
+			oldVersions: []v1.CustomResourceDefinitionVersion{
+				{
+					Name: "v1",
+					Schema: &v1.CustomResourceValidation{
+						OpenAPIV3Schema: &v1.JSONSchemaProps{Type: "object"},
+					},
+					AdditionalPrinterColumns: []v1.CustomResourceColumnDefinition{
+						{Name: "Replicas", Type: "integer", JSONPath: ".spec.replicas"},
+					},
+				},
+			},
+			newVersions: []v1.CustomResourceDefinitionVersion{
+				{
+					Name: "v1",
+					Schema: &v1.CustomResourceValidation{
+						OpenAPIV3Schema: &v1.JSONSchemaProps{Type: "object"},
+					},
+					AdditionalPrinterColumns: []v1.CustomResourceColumnDefinition{
+						{Name: "Replicas", Type: "integer", JSONPath: ".spec.replicas"},
+						{Name: "Age", Type: "date", JSONPath: ".metadata.creationTimestamp"},
+					},
+				},
+			},
+			expectError:      false,
+			expectBreaking:   false,
+			nonBreakingCount: 1,
+		},
 	}
 
 	for _, tt := range tests {

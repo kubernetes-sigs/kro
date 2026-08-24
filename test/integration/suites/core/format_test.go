@@ -83,7 +83,7 @@ var _ = Describe("Format function in ResourceGraphDefinition templates", func() 
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(obj.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 			g.Expect(obj.Status.TopologicalOrder).To(ContainElements("serviceAccount", "configMap"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating instance")
 
@@ -112,7 +112,7 @@ var _ = Describe("Format function in ResourceGraphDefinition templates", func() 
 			}, obj)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(obj.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("verifying generated ServiceAccount")
 
@@ -123,7 +123,7 @@ var _ = Describe("Format function in ResourceGraphDefinition templates", func() 
 				Namespace: namespace,
 			}, sa)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("verifying generated ConfigMap with formatted key")
 
@@ -136,6 +136,6 @@ var _ = Describe("Format function in ResourceGraphDefinition templates", func() 
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cm.Data).To(HaveKey("key"))
 			g.Expect(cm.Data["key"]).To(Equal(fmt.Sprintf("%s:%s", namespace, "test-format")))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

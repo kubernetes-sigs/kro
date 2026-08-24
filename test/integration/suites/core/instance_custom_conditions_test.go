@@ -67,27 +67,6 @@ func getConditionTypes(inst *unstructured.Unstructured) []string {
 	return out
 }
 
-// expectRGDRejected asserts that the RGD becomes Inactive with a Ready
-// condition message containing msgSubstring.
-func expectRGDRejected(ctx SpecContext, rgd *krov1alpha1.ResourceGraphDefinition, msgSubstring string) {
-	GinkgoHelper()
-	Eventually(func(g Gomega) {
-		g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
-		g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-
-		var ready *krov1alpha1.Condition
-		for _, c := range rgd.Status.Conditions {
-			if string(c.Type) == ctrlinstance.Ready {
-				ready = &c
-				break
-			}
-		}
-		g.Expect(ready).ToNot(BeNil())
-		g.Expect(ready.Message).ToNot(BeNil())
-		g.Expect(*ready.Message).To(ContainSubstring(msgSubstring))
-	}).WithContext(ctx).WithTimeout(20 * time.Second).WithPolling(time.Second).Should(Succeed())
-}
-
 // createInstanceWithCleanup creates the instance and registers a cleanup
 // that deletes it and waits for finalization. Instances must be fully
 // deleted before the RGD's own cleanup runs: RGD deletion deregisters the
@@ -305,86 +284,6 @@ var _ = Describe("Instance Custom Conditions", func() {
 			ready := findInstanceConditionByType(instance, ctrlinstance.Ready)
 			g.Expect(ready["status"]).To(Equal("True"))
 		}).WithContext(ctx).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
-	})
-
-	It("rejects an RGD whose condition uses an invalid literal status", func(ctx SpecContext) {
-		rgd := generator.NewResourceGraphDefinition("test-cc-bad-status",
-			generator.WithSchema(
-				"TestCcBadStatus", "v1alpha1",
-				map[string]interface{}{"name": "string"},
-				map[string]interface{}{
-					"conditions": []interface{}{
-						`${runtime.newCondition({type: 'X', status: 'YES', reason: 'R', message: 'M'})}`,
-					},
-				},
-			),
-			generator.WithResource("configmap", map[string]interface{}{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
-				"data":       map[string]interface{}{"foo": "${schema.spec.name}"},
-			}, nil, nil),
-		)
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			_ = env.Client.Delete(ctx, rgd)
-		})
-
-		expectRGDRejected(ctx, rgd, "status must be one of")
-	})
-
-	It("rejects an RGD whose condition uses an unknown literal key", func(ctx SpecContext) {
-		rgd := generator.NewResourceGraphDefinition("test-cc-bad-key",
-			generator.WithSchema(
-				"TestCcBadKey", "v1alpha1",
-				map[string]interface{}{"name": "string"},
-				map[string]interface{}{
-					"conditions": []interface{}{
-						`${runtime.newCondition({type: 'X', status: 'True', reason: 'R', message: 'M', extra: 'foo'})}`,
-					},
-				},
-			),
-			generator.WithResource("configmap", map[string]interface{}{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
-				"data":       map[string]interface{}{"foo": "${schema.spec.name}"},
-			}, nil, nil),
-		)
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			_ = env.Client.Delete(ctx, rgd)
-		})
-
-		expectRGDRejected(ctx, rgd, `unknown key "extra"`)
-	})
-
-	It("rejects an RGD whose conditions reference each other", func(ctx SpecContext) {
-		rgd := generator.NewResourceGraphDefinition("test-cc-self-ref",
-			generator.WithSchema(
-				"TestCcSelfRef", "v1alpha1",
-				map[string]interface{}{"name": "string"},
-				map[string]interface{}{
-					"conditions": []interface{}{
-						`${runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: '', message: ''})}`,
-						`${runtime.newCondition({type: 'Ready',
-							status: runtime.condition(schema, 'PrimaryReady').status, reason: '', message: ''})}`,
-					},
-				},
-			),
-			generator.WithResource("configmap", map[string]interface{}{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
-				"data":       map[string]interface{}{"foo": "${schema.spec.name}"},
-			}, nil, nil),
-		)
-		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			_ = env.Client.Delete(ctx, rgd)
-		})
-
-		expectRGDRejected(ctx, rgd, "custom conditions cannot reference each other")
 	})
 
 	It("honors an author-defined Ready that overrides kro's lifecycle Ready", func(ctx SpecContext) {

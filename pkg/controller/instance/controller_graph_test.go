@@ -40,7 +40,7 @@ func TestResolveCompiledGraphCases(t *testing.T) {
 		{
 			name: "uses newest issued revision when active",
 			entry: revisions.Entry{
-				RGDName:       "demo-rgd",
+				OwnerKey:      "demo-rgd",
 				Revision:      7,
 				State:         revisions.RevisionStateActive,
 				CompiledGraph: latest,
@@ -51,7 +51,7 @@ func TestResolveCompiledGraphCases(t *testing.T) {
 		{
 			name: "requeues when latest is pending",
 			entry: revisions.Entry{
-				RGDName:  "demo-rgd",
+				OwnerKey: "demo-rgd",
 				Revision: 8,
 				State:    revisions.RevisionStatePending,
 			},
@@ -61,7 +61,7 @@ func TestResolveCompiledGraphCases(t *testing.T) {
 		{
 			name: "does not requeue when latest failed",
 			entry: revisions.Entry{
-				RGDName:  "demo-rgd",
+				OwnerKey: "demo-rgd",
 				Revision: 8,
 				State:    revisions.RevisionStateFailed,
 			},
@@ -76,7 +76,7 @@ func TestResolveCompiledGraphCases(t *testing.T) {
 		{
 			name: "requeues when latest revision state is unknown",
 			entry: revisions.Entry{
-				RGDName:  "demo-rgd",
+				OwnerKey: "demo-rgd",
 				Revision: 9,
 				State:    revisions.RevisionState("Unknown"),
 			},

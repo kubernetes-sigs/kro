@@ -134,7 +134,8 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration, pass extra args after --
 ifeq ($(WHAT),integration)
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" \
-		go tool ginkgo -p -v \
+		go tool ginkgo -p \
+		--timeout=8m \
 		--cover \
 		--coverprofile=integration-cover.out \
 		-coverpkg=github.com/kubernetes-sigs/kro/pkg/... \
@@ -167,12 +168,9 @@ test-coverage: ## Run all tests and report coverage
 	@echo "Combined:    $$(go tool cover -func=combined-cover.out | grep total | awk '{print $$NF}')"
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.11.4
+GOLANGCI_LINT_VERSION ?= v2.12.2
 golangci-lint:
-	@[ -f $(GOLANGCI_LINT) ] || { \
-	set -e ;\
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell dirname $(GOLANGCI_LINT)) $(GOLANGCI_LINT_VERSION) ;\
-	}
+	@[ -f $(GOLANGCI_LINT) ] || GOBIN=$(shell dirname $(GOLANGCI_LINT)) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter & yamllint
@@ -209,10 +207,10 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 CHAINSAW ?= $(LOCALBIN)/chainsaw
 
 ## Tool Versions
-KO_VERSION ?= v0.18.1
-KUSTOMIZE_VERSION ?= v5.8.0
-CONTROLLER_TOOLS_VERSION ?= v0.20.0
-CHAINSAW_VERSION ?= v0.2.14
+KO_VERSION ?= v0.19.1
+KUSTOMIZE_VERSION ?= v5.8.1
+CONTROLLER_TOOLS_VERSION ?= v0.21.0
+CHAINSAW_VERSION ?= v0.2.15
 
 .PHONY: chainsaw
 chainsaw: $(CHAINSAW) ## Download chainsaw locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -223,7 +221,7 @@ $(CHAINSAW): $(LOCALBIN)
 	fi
 	test -s $(LOCALBIN)/chainsaw || GOBIN=$(LOCALBIN) GO111MODULE=on go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
 
-ENVTEST_VERSION ?= 1.35.x
+ENVTEST_VERSION ?= 1.36.x
 
 .PHONY: ko
 ko: $(KO) ## Download ko locally if necessary. If wrong version is installed, it will be removed before downloading.

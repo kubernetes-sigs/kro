@@ -2039,7 +2039,7 @@ func (b *testNodeBuilder) build() *Node {
 		forEachExprs:     b.forEachExprs,
 		templateExprs:    b.templateExprs,
 		templateVars:     b.templateVars,
-		rgdConfig: graph.RGDConfig{
+		config: graph.Config{
 			MaxCollectionSize: testMaxCollectionSize,
 		},
 		resourceSchema: b.resourceSchema,

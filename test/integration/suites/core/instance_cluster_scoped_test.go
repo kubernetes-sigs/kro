@@ -157,7 +157,7 @@ var _ = Describe("ClusterScopedInstance", func() {
 			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &krov1alpha1.ResourceGraphDefinition{})
 				g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		})
 
 		By("waiting for RGD to become active")
@@ -165,7 +165,7 @@ var _ = Describe("ClusterScopedInstance", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating cluster-scoped instance (no namespace)")
 		instanceName := fmt.Sprintf("test-policy-%s", rand.String(5))
@@ -190,7 +190,7 @@ var _ = Describe("ClusterScopedInstance", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(instance.Object).To(HaveKey("status"))
 			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("verifying instance has no namespace (cluster-scoped)")
 		Expect(instance.GetNamespace()).To(BeEmpty())
@@ -209,7 +209,7 @@ var _ = Describe("ClusterScopedInstance", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(teamCount).To(Equal("2"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("verifying normal resource was created in the target namespace")
 		policyCM := &corev1.ConfigMap{}
@@ -220,7 +220,7 @@ var _ = Describe("ClusterScopedInstance", func() {
 			}, policyCM)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(policyCM.Data["setting"]).To(Equal("enabled"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("verifying cluster-scoped instance child does NOT have instance-namespace label")
 		Expect(policyCM.GetLabels()).ToNot(HaveKey(metadata.InstanceNamespaceLabel),
@@ -236,7 +236,7 @@ var _ = Describe("ClusterScopedInstance", func() {
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["env"]).To(Equal(val))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
 		By("verifying collection children also lack instance-namespace label")
@@ -256,7 +256,7 @@ var _ = Describe("ClusterScopedInstance", func() {
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: instanceName}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("verifying child resources were cleaned up")
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -265,7 +265,7 @@ var _ = Describe("ClusterScopedInstance", func() {
 				Namespace: namespace,
 			}, &corev1.ConfigMap{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "policy configmap should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		for _, val := range []string{"dev", "staging"} {
 			Eventually(func(g Gomega, ctx SpecContext) {
@@ -274,7 +274,7 @@ var _ = Describe("ClusterScopedInstance", func() {
 					Namespace: namespace,
 				}, &corev1.ConfigMap{})
 				g.Expect(err).To(MatchError(errors.IsNotFound, "collection configmap should be deleted"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 	})
 })

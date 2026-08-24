@@ -284,7 +284,7 @@ func TestCreateGraphRevision_DoesNotOverwriteExistingRegistryEntry(t *testing.T)
 	registry := revisions.NewRegistry()
 	compiledGraph := &graph.Graph{TopologicalOrder: []string{"deploy"}}
 	registry.Put(revisions.Entry{
-		RGDName:       "demo",
+		OwnerKey:      "demo",
 		Revision:      3,
 		SpecHash:      "hash-3",
 		State:         revisions.RevisionStateActive,
@@ -364,7 +364,7 @@ func TestGetLatestGraphRevisionView(t *testing.T) {
 		// Warm the cache for all revisions present in graphRevisions.
 		for _, gr := range graphRevisions {
 			reconciler.revisionsRegistry.Put(revisions.Entry{
-				RGDName:  "demo",
+				OwnerKey: "demo",
 				Revision: gr.Spec.Revision,
 				SpecHash: fmt.Sprintf("hash-%d", gr.Spec.Revision),
 				State:    revisions.RevisionStatePending,
@@ -386,7 +386,7 @@ func TestGetLatestGraphRevisionView(t *testing.T) {
 		// matters for serving.
 		reg := revisions.NewRegistry()
 		reg.Put(revisions.Entry{
-			RGDName:  "demo",
+			OwnerKey: "demo",
 			Revision: 3,
 			SpecHash: "hash-3",
 			State:    revisions.RevisionStateActive,
@@ -406,7 +406,7 @@ func TestGetLatestGraphRevisionView(t *testing.T) {
 		// Revision 1 is in the registry but revision 3 (the latest) is not.
 		reg := revisions.NewRegistry()
 		reg.Put(revisions.Entry{
-			RGDName:  "demo",
+			OwnerKey: "demo",
 			Revision: 1,
 			SpecHash: "hash-1",
 			State:    revisions.RevisionStateActive,
@@ -1061,7 +1061,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				)
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:  rgd.Name,
+					OwnerKey: rgd.Name,
 					Revision: 1,
 					SpecHash: currentSpecHash,
 					State:    revisions.RevisionStateActive,
@@ -1108,7 +1108,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, 3, currentSpecHash))
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:       rgd.Name,
+					OwnerKey:      rgd.Name,
 					Revision:      3,
 					SpecHash:      currentSpecHash,
 					State:         revisions.RevisionStateActive,
@@ -1170,7 +1170,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, 4, currentSpecHash))
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:  rgd.Name,
+					OwnerKey: rgd.Name,
 					Revision: 4,
 					SpecHash: currentSpecHash,
 					State:    revisions.RevisionStatePending,
@@ -1223,7 +1223,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, 5, currentSpecHash))
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:  rgd.Name,
+					OwnerKey: rgd.Name,
 					Revision: 5,
 					SpecHash: currentSpecHash,
 					State:    revisions.RevisionStateFailed,
@@ -1258,7 +1258,144 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				assert.Equal(t, rgd.Status.TopologicalOrder, topologicalOrder)
 				assert.Equal(t, rgd.Status.Resources, resourcesInfo)
 				assert.Equal(t, int64(5), rgd.Status.LastIssuedRevision)
-				assert.True(t, conditionFor(t, rgd, GraphAccepted).IsFalse())
+				assertConditionExact(t, rgd, GraphRevisionsResolved, metav1.ConditionFalse, "Failed", "latest graph revision 5 failed compilation")
+				assertConditionExact(t, rgd, GraphAccepted, metav1.ConditionFalse, "InvalidResourceGraph", "latest graph revision 5 failed compilation")
+				assert.True(t, conditionFor(t, rgd, Ready).IsFalse(), "Ready must be False when the latest matching revision failed")
+			},
+		},
+		{
+			name: "re-issues the next revision when the latest failed revision no longer matches the spec",
+			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition) {
+				t.Helper()
+
+				// The latest revision (5) failed compilation, but its recorded
+				// spec hash no longer matches the current spec. The hash
+				// mismatch beats the Failed state: the controller re-issues the
+				// next revision rather than surfacing the stale failure.
+				rgd := newTestRGD("rgd-failed-mismatch")
+
+				cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, 5, "old-hash"))
+				registry := revisions.NewRegistry()
+				registry.Put(revisions.Entry{
+					OwnerKey: rgd.Name,
+					Revision: 5,
+					SpecHash: "old-hash",
+					State:    revisions.RevisionStateFailed,
+				})
+
+				return &ResourceGraphDefinitionReconciler{
+					Client:            cl,
+					apiReader:         cl,
+					metadataLabeler:   metadata.NewKROMetaLabeler(),
+					rgBuilder:         newTestBuilder(),
+					revisionsRegistry: registry,
+					cfg: Config{
+						MaxGraphRevisions:    20,
+						ProgressRequeueDelay: 3 * time.Second,
+					},
+				}, rgd
+			},
+			check: func(
+				t *testing.T,
+				result ctrl.Result,
+				topologicalOrder []string,
+				resourcesInfo []v1alpha1.ResourceInformation,
+				err error,
+				reconciler *ResourceGraphDefinitionReconciler,
+				rgd *v1alpha1.ResourceGraphDefinition,
+			) {
+				t.Helper()
+
+				require.NoError(t, err)
+				assert.Equal(t, 3*time.Second, result.RequeueAfter)
+				assert.Equal(t, int64(6), rgd.Status.LastIssuedRevision)
+				assertConditionExact(t, rgd, GraphRevisionsResolved, metav1.ConditionUnknown, "WaitingForGraphRevisionCompilation", "graph revision 6 issued and awaiting compilation")
+				assertConditionExact(t, rgd, GraphAccepted, metav1.ConditionTrue, "Valid", "resource graph and schema are valid")
+				assert.True(t, conditionFor(t, rgd, Ready).IsUnknown(), "Ready must be Unknown while the re-issued revision compiles")
+
+				revisionList := &internalv1alpha1.GraphRevisionList{}
+				require.NoError(t, reconciler.Client.List(context.Background(), revisionList))
+				revs := make([]int64, 0, len(revisionList.Items))
+				for i := range revisionList.Items {
+					revs = append(revs, revisionList.Items[i].Spec.Revision)
+				}
+				assert.Contains(t, revs, int64(6), "re-issued revision 6 must be present in the live revision list")
+			},
+		},
+		{
+			name: "keeps serving the last good revision when an invalid update fails to build",
+			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition) {
+				t.Helper()
+
+				// Preset the prior generation's healthy leaf conditions, then
+				// bump the generation to simulate an invalid spec update. The
+				// last good revision (1) is still Active in the registry.
+				rgd := newTestRGD("rgd-keep-serving")
+				preset := NewConditionsMarkerFor(rgd)
+				preset.GraphRevisionsResolved(1)
+				preset.ResourceGraphValid()
+				preset.KindReady("Network")
+				preset.ControllerRunning()
+				rgd.Generation = 2
+
+				cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, 1, "old-hash"))
+				registry := revisions.NewRegistry()
+				registry.Put(revisions.Entry{
+					OwnerKey:      rgd.Name,
+					Revision:      1,
+					SpecHash:      "old-hash",
+					State:         revisions.RevisionStateActive,
+					CompiledGraph: newProcessedGraph(),
+				})
+
+				return &ResourceGraphDefinitionReconciler{
+					Client:            cl,
+					apiReader:         cl,
+					metadataLabeler:   metadata.NewKROMetaLabeler(),
+					rgBuilder:         newFailingBuilder(errors.New("resource \"web\" references unknown resource \"cache\"")),
+					revisionsRegistry: registry,
+					cfg: Config{
+						MaxGraphRevisions:    20,
+						ProgressRequeueDelay: 3 * time.Second,
+					},
+				}, rgd
+			},
+			check: func(
+				t *testing.T,
+				result ctrl.Result,
+				topologicalOrder []string,
+				resourcesInfo []v1alpha1.ResourceInformation,
+				err error,
+				reconciler *ResourceGraphDefinitionReconciler,
+				rgd *v1alpha1.ResourceGraphDefinition,
+			) {
+				t.Helper()
+
+				const invalidMsg = "resource \"web\" references unknown resource \"cache\""
+				require.Error(t, err)
+				assert.ErrorContains(t, err, invalidMsg)
+				assert.Equal(t, ctrl.Result{}, result)
+
+				// The invalid update is rejected and marked invalid at the new generation.
+				assertConditionExact(t, rgd, GraphAccepted, metav1.ConditionFalse, "InvalidResourceGraph", invalidMsg)
+				assertConditionExact(t, rgd, Ready, metav1.ConditionFalse, "InvalidResourceGraph", invalidMsg)
+
+				// The last-good leaf conditions are retained at the prior generation.
+				kindReady := conditionFor(t, rgd, KindReady)
+				assert.True(t, kindReady.IsTrue(), "KindReady must stay True")
+				assert.Equal(t, int64(1), kindReady.ObservedGeneration, "KindReady must remain at the prior generation")
+				controllerReady := conditionFor(t, rgd, ControllerReady)
+				assert.True(t, controllerReady.IsTrue(), "ControllerReady must stay True")
+				assert.Equal(t, int64(1), controllerReady.ObservedGeneration, "ControllerReady must remain at the prior generation")
+
+				// GraphRevisionsResolved stays True — the last good revision is still served.
+				assertConditionExact(t, rgd, GraphRevisionsResolved, metav1.ConditionTrue, "Resolved", "revision 1 compiled and active")
+
+				// No new revision was issued for the invalid spec.
+				revisionList := &internalv1alpha1.GraphRevisionList{}
+				require.NoError(t, reconciler.Client.List(context.Background(), revisionList))
+				require.Len(t, revisionList.Items, 1)
+				assert.Equal(t, int64(1), revisionList.Items[0].Spec.Revision)
 			},
 		},
 		{
@@ -1272,7 +1409,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, 9, "old-hash"))
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:  rgd.Name,
+					OwnerKey: rgd.Name,
 					Revision: 9,
 					SpecHash: "old-hash",
 					State:    revisions.RevisionStateActive,
@@ -1337,7 +1474,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				cl := newTestClient(t, interceptor.Funcs{})
 				registry := revisions.NewRegistry()
 				registry.Put(revisions.Entry{
-					RGDName:       rgd.Name,
+					OwnerKey:      rgd.Name,
 					Revision:      5,
 					SpecHash:      "old-hash",
 					State:         revisions.RevisionStateActive,
@@ -1496,7 +1633,7 @@ func TestResolveGraphRevisions_RequeuesWhenRevisionStateIsUnknown(t *testing.T) 
 		RevisionNumber: 6,
 		Revision:       revision,
 		RuntimeEntry: &revisions.Entry{
-			RGDName:  rgd.Name,
+			OwnerKey: rgd.Name,
 			Revision: 6,
 			SpecHash: "same-hash",
 			State:    revisions.RevisionState("Unknown"),
@@ -1522,7 +1659,7 @@ func TestReconcileResourceGraphDefinition_RecreateWithEmptyLiveListClearsStaleRe
 	cl := newTestClient(t, interceptor.Funcs{})
 	registry := revisions.NewRegistry()
 	registry.Put(revisions.Entry{
-		RGDName:       rgd.Name,
+		OwnerKey:      rgd.Name,
 		Revision:      2,
 		SpecHash:      "old-hash",
 		State:         revisions.RevisionStateActive,
@@ -1606,6 +1743,12 @@ func TestReconcileResourceGraphDefinition_TerminatingRevisionsBlockReconcile(t *
 
 			rgd := newTestRGD("rgd-terminating-test")
 
+			// Preset a healthy GraphAccepted leaf so we can prove the settling
+			// path retains it (keeps serving the accepted graph) while it
+			// requeues waiting for terminating revisions to settle.
+			preset := NewConditionsMarkerFor(rgd)
+			preset.ResourceGraphValid()
+
 			// Build GR objects
 			objects := make(
 				[]client.Object,
@@ -1627,7 +1770,7 @@ func TestReconcileResourceGraphDefinition_TerminatingRevisionsBlockReconcile(t *
 			registry := revisions.NewRegistry()
 			for _, rev := range tt.staleRegistry {
 				registry.Put(revisions.Entry{
-					RGDName:       rgd.Name,
+					OwnerKey:      rgd.Name,
 					Revision:      rev,
 					SpecHash:      fmt.Sprintf("hash-%d", rev),
 					State:         revisions.RevisionStateActive,
@@ -1658,6 +1801,12 @@ func TestReconcileResourceGraphDefinition_TerminatingRevisionsBlockReconcile(t *
 				require.NoError(t, reconcileErr)
 				assert.Equal(t, 3*time.Second, result.RequeueAfter,
 					"should requeue when terminating revisions exist")
+
+				// Observing terminating GRs marks revisions unresolved (settling)
+				// and leaves the accepted graph leaf untouched so serving continues.
+				assertConditionExact(t, rgd, GraphRevisionsResolved, metav1.ConditionUnknown, waitingForGraphRevisionSettlementReason, "waiting for terminating graph revisions to settle")
+				assert.True(t, conditionFor(t, rgd, Ready).IsUnknown(), "Ready must be Unknown while terminating revisions settle")
+				assertConditionExact(t, rgd, GraphAccepted, metav1.ConditionTrue, "Valid", "resource graph and schema are valid")
 
 				// Registry should NOT be cleared during requeue — GR controller
 				// handles eviction as each revision finalizes.
@@ -1710,7 +1859,7 @@ func TestReconcileResourceGraphDefinitionRecoversWhenLatestFailedBecomesActiveWi
 	cl := newTestClient(t, interceptor.Funcs{}, newListedGraphRevision(rgd, revision, currentSpecHash))
 	registry := revisions.NewRegistry()
 	registry.Put(revisions.Entry{
-		RGDName:  rgd.Name,
+		OwnerKey: rgd.Name,
 		Revision: revision,
 		SpecHash: currentSpecHash,
 		State:    revisions.RevisionStateFailed,
@@ -1743,7 +1892,7 @@ func TestReconcileResourceGraphDefinitionRecoversWhenLatestFailedBecomesActiveWi
 	assert.Equal(t, revision, rgd.Status.LastIssuedRevision)
 
 	registry.Put(revisions.Entry{
-		RGDName:       rgd.Name,
+		OwnerKey:      rgd.Name,
 		Revision:      revision,
 		SpecHash:      currentSpecHash,
 		State:         revisions.RevisionStateActive,
@@ -1779,7 +1928,7 @@ func TestGarbageCollectGraphRevisionsPrunesObjects(t *testing.T) {
 	registry := revisions.NewRegistry()
 	for revision := int64(1); revision <= 4; revision++ {
 		registry.Put(revisions.Entry{
-			RGDName:  rgd.Name,
+			OwnerKey: rgd.Name,
 			Revision: revision,
 			SpecHash: "hash",
 			State:    revisions.RevisionStateActive,

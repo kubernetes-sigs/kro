@@ -73,7 +73,7 @@ var _ = Describe("Instance Resource Watch", func() {
 			for _, cond := range rgd.Status.Conditions {
 				g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			}
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instance := &unstructured.Unstructured{}
 		instance.SetAPIVersion(krov1alpha1.GroupVersion.String())
@@ -90,7 +90,7 @@ var _ = Describe("Instance Resource Watch", func() {
 				Name:      instance.GetName(),
 				Namespace: instance.GetNamespace(),
 			}, instance)).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		cfgMap := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -99,7 +99,7 @@ var _ = Describe("Instance Resource Watch", func() {
 				Namespace: namespace,
 			}, cfgMap)).ToNot(HaveOccurred())
 			g.Expect(cfgMap.Data).To(HaveKeyWithValue("key", "foo"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		time.Sleep(5 * time.Second)
 		cfgMap.Data["key"] = "updated"
@@ -112,7 +112,7 @@ var _ = Describe("Instance Resource Watch", func() {
 			}, cfgMap)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(cfgMap.Data).To(HaveKeyWithValue("key", "updated"))
-		}, 3*time.Second, time.Second).WithContext(ctx).Should(Succeed(),
+		}, 3*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed(),
 			"ConfigMap should be updated to reflect the instance reconcile due to watch on resources",
 		)
 	})

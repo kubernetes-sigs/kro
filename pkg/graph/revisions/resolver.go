@@ -14,25 +14,41 @@
 
 package revisions
 
+// Resolver resolves compiled graph revisions for a single owner. Implementations
+// are already scoped to one owner, so callers ask only for the latest issued
+// revision or a specific revision number. It is the shared contract consumed by
+// any graph consumer (the instance controller today).
+type Resolver interface {
+	GetLatestRevision() (Entry, bool)
+	GetGraphRevision(revision int64) (Entry, bool)
+}
+
 type rgdResolver struct {
 	registry *Registry
-	rgdName  string
+	owner    OwnerKey
+}
+
+// ResolverFor returns a resolver scoped to a single owner key.
+func (r *Registry) ResolverFor(owner OwnerKey) Resolver {
+	return rgdResolver{registry: r, owner: owner}
 }
 
 // ResolverForRGD returns a resolver scoped to a single RGD name.
+//
+// Deprecated: use ResolverFor.
 func (r *Registry) ResolverForRGD(rgdName string) rgdResolver {
 	return rgdResolver{
 		registry: r,
-		rgdName:  rgdName,
+		owner:    rgdName,
 	}
 }
 
-// GetLatestRevision returns the newest cached revision for this resolver's RGD.
+// GetLatestRevision returns the newest cached revision for this resolver's owner.
 func (r rgdResolver) GetLatestRevision() (Entry, bool) {
-	return r.registry.Latest(r.rgdName)
+	return r.registry.Latest(r.owner)
 }
 
-// GetGraphRevision returns a specific cached revision for this resolver's RGD.
+// GetGraphRevision returns a specific cached revision for this resolver's owner.
 func (r rgdResolver) GetGraphRevision(revision int64) (Entry, bool) {
-	return r.registry.Get(r.rgdName, revision)
+	return r.registry.Get(r.owner, revision)
 }

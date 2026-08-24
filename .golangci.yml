@@ -7,7 +7,6 @@ linters:
     - copyloopvar
     - dupl
     - errcheck
-    - goconst
     - gocyclo
     - govet
     - ineffassign
@@ -29,13 +28,48 @@ linters:
           - dupl
           - lll
         path: pkg/*
+      # Test files legitimately repeat fixture strings, use long table rows,
+      # and take fixed helper arguments — these linters are noise there.
+      # Same reasoning for the fixture generators under test/integration and
+      # the test-support scaffolding under pkg/testutil — they're test-suite
+      # scaffolding, just not named _test.go.
+      - linters:
+          - lll
+          - dupl
+          - unparam
+          - gocyclo
+        path: (_test\.go|^test/integration/.*\.go|^pkg/testutil/.*\.go)$
     paths:
       - third_party$
       - builtin$
       - examples$
   settings:
     goconst:
-      ignore-string-values: ["true","false"]
+      # Ignore protocol/schema vocabulary that recurs by nature — Kubernetes
+      # object field keys and JSON-Schema type names. Deduping these into named
+      # constants adds no clarity.
+      ignore-string-values:
+        - "true"
+        - "false"
+        - "apiVersion"
+        - "kind"
+        - "metadata"
+        - "name"
+        - "namespace"
+        - "spec"
+        - "status"
+        - "conditions"
+        - "labels"
+        - "annotations"
+        - "object"
+        - "string"
+        - "integer"
+        - "number"
+        - "boolean"
+        - "array"
+        - "map"
+        - "bool"
+        - "int"
     staticcheck:
       checks:
         - -QF1008

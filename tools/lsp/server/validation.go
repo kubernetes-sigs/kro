@@ -18,12 +18,13 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
-	"github.com/kro-run/kro/api/v1alpha1"
-	"github.com/kro-run/kro/pkg/graph"
-	"github.com/kro-run/kro/tools/lsp/server/parser"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/tools/lsp/server/parser"
 )
 
 // ValidationManager handles comprehensive validation of KRO ResourceGraphDefinition documents.
@@ -46,36 +47,46 @@ type ValidationResult struct {
 // If clientConfig is provided and valid, enables online mode with full KRO validation.
 // If clientConfig is nil or invalid, falls back to offline mode with basic validation.
 func NewValidationManager(logger logr.Logger, clientConfig *rest.Config) (*ValidationManager, error) {
-	// Always create YAML parser for basic syntax validation
-	yamlParser := parser.NewYAMLParser(logger)
+	// Always create YAML parser for basic syntax validation.
+	// An offline manager is the safe fallback whenever any online-mode setup step fails.
+	offline := &ValidationManager{
+		logger:     logger,
+		yamlParser: parser.NewYAMLParser(logger),
+		builder:    nil, // nil builder indicates offline mode
+	}
 
-	// If no client config is provided, operate in offline mode
+	// No client config → pure offline mode.
 	if clientConfig == nil {
-		return &ValidationManager{
-			logger:     logger,
-			yamlParser: yamlParser,
-			builder:    nil, // nil builder indicates offline mode
-		}, nil
+		return offline, nil
 	}
 
-	// Try to create KRO Builder for online validation
-	// This enables CRD schema validation and CEL expression evaluation
-	builder, err := graph.NewBuilder(clientConfig)
+	// Try to create KRO Builder for online validation.
+	// This enables CRD schema validation and CEL expression evaluation.
+	httpClient, err := rest.HTTPClientFor(clientConfig)
 	if err != nil {
-		// If builder creation fails, gracefully fall back to offline mode
-		return &ValidationManager{
-			logger:     logger,
-			yamlParser: yamlParser,
-			builder:    nil, // Offline mode fallback
-		}, nil
+		return offline, nil // could not build HTTP client → offline fallback
 	}
 
-	// Successfully created builder - online mode enabled
+	builder, err := graph.NewBuilder(clientConfig, httpClient)
+	if err != nil {
+		return offline, nil // builder creation failed → offline fallback
+	}
+
+	// Successfully created builder → online mode enabled.
 	return &ValidationManager{
 		logger:     logger,
-		yamlParser: yamlParser,
-		builder:    builder, // Online mode with full validation capabilities
+		yamlParser: offline.yamlParser,
+		builder:    builder,
 	}, nil
+}
+
+// defaultRGDConfig mirrors the controller's default RGD limits
+// (see cmd/controller/main.go rgd-max-collection-* flag defaults).
+// The kro/pkg/graph package does not (yet) export a helper for this, so we
+// keep the values in one place instead of scattering literals across callers.
+var defaultRGDConfig = graph.RGDConfig{
+	MaxCollectionSize:          1000,
+	MaxCollectionDimensionSize: 10,
 }
 
 // ValidateDocument performs comprehensive validation of a KRO ResourceGraphDefinition document.
@@ -133,7 +144,7 @@ func (vm *ValidationManager) ValidateDocument(content string) ValidationResult {
 		// - CEL expression validation with cluster context
 		// - Cross-resource dependency validation
 		// - Field type validation against OpenAPI schemas
-		_, err := vm.builder.NewResourceGraphDefinition(rgd)
+		_, err := vm.builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 		if err != nil {
 			diagnostic := vm.createErrorDiagnostic(0, 0, fmt.Sprintf("KRO validation failed: %s", err.Error()))
 			result.Diagnostics = append(result.Diagnostics, diagnostic)

@@ -18,10 +18,12 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/defaults"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
+
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 
-	"github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"gopkg.in/yaml.v2"
 )
 
@@ -38,7 +40,7 @@ func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, er
 		return nil, fmt.Errorf("failed to create graph builder: %w", err)
 	}
 
-	rgdGraph, err := builder.NewResourceGraphDefinition(rgd)
+	rgdGraph, err := builder.NewResourceGraphDefinition(rgd, defaults.RGDConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create resource graph definition: %w", err)
 	}

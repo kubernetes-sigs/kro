@@ -18,11 +18,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kubernetes-sigs/kro/api/v1alpha1"
-	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
-	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/defaults"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 )
 
 var validateCmd = &cobra.Command{
@@ -77,7 +79,7 @@ func validateRGD(rgd *v1alpha1.ResourceGraphDefinition) error {
 		return fmt.Errorf("failed to create graph builder: %w", err)
 	}
 
-	_, err = builder.NewResourceGraphDefinition(rgd)
+	_, err = builder.NewResourceGraphDefinition(rgd, defaults.RGDConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create ResourceGraphDefinition: %w", err)
 	}

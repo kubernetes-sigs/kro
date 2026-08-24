@@ -13,7 +13,6 @@ Amazon VPC Lattice is a fully managed application networking service that enable
 
 ![Architecture Diagram](images/draw.png)
 
-
 ## Prerequisites
 
 - Amazon EKS cluster
@@ -33,7 +32,7 @@ export KRO_VERSION=$(curl -sL \
     https://api.github.com/repos/kubernetes-sigs/kro/releases/latest | \
     jq -r '.tag_name | ltrimstr("v")'
   )
-helm install kro oci://ghcr.io/kro-run/kro/kro \
+helm install kro oci://registry.k8s.io/kro/charts/kro \
   --namespace kro \
   --create-namespace \
   --version=${KRO_VERSION}
@@ -87,12 +86,12 @@ helm install gateway-api-controller \
     --wait
 ```
 
-### Deploy gatewayClass and gateway resources 
+### Deploy gatewayClass and gateway resources
+
 ```
 kubectl apply -f resources/gatewayclass.yaml
 kubectl apply -f resources/gateway.yaml
 ```
-
 
 ## Resource Graph Definitions
 
@@ -165,6 +164,7 @@ aws vpc-lattice list-services --service-network-identifier kro-vpc-lattice-demo
 - Ensure your EKS cluster has the required IAM permissions for VPC Lattice integration
 - Verify the security group rules are correctly configured to allow VPC Lattice traffic
 - Check the Gateway API Controller logs for any errors:
+
   ```bash
   kubectl logs -n gateway-api-controller -l app.kubernetes.io/name=gateway-api-controller
   ```

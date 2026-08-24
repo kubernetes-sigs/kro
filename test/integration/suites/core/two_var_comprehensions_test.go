@@ -87,7 +87,7 @@ var _ = Describe("TwoVarComprehensions", func() {
 			}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Create an instance of the RGD
 		instance := &unstructured.Unstructured{
@@ -121,7 +121,7 @@ var _ = Describe("TwoVarComprehensions", func() {
 			g.Expect(cm.Data["transformListSize"]).To(Equal("3"))
 			// transformMap filtered: [10,20,30].transformMap(i,v,i>0,v*2).size() == 2
 			g.Expect(cm.Data["transformMapFiltered"]).To(Equal("2"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())

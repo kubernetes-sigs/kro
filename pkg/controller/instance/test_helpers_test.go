@@ -50,6 +50,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	krt "github.com/kubernetes-sigs/kro/pkg/runtime"
+	"github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 var (
@@ -200,7 +201,7 @@ func newControllerTestCoordinator(t *testing.T) *dynamiccontroller.WatchCoordina
 	metadataClient := metadatafake.NewSimpleMetadataClient(scheme)
 
 	var coord *dynamiccontroller.WatchCoordinator
-	watches := dynamiccontroller.NewWatchManager(metadataClient, time.Hour, func(event dynamiccontroller.Event) {
+	watches := watch.NewManager(metadataClient, time.Hour, func(event watch.Event) {
 		if coord != nil {
 			coord.RouteEvent(event)
 		}
@@ -217,7 +218,7 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 	clientSet.SetRESTMapper(buildControllerTestRESTMapper())
 	registry := revisions.NewRegistry()
 	registry.Put(revisions.Entry{
-		RGDName:       controllerTestParentGVR.Resource,
+		OwnerKey:      controllerTestParentGVR.Resource,
 		Revision:      1,
 		State:         revisions.RevisionStateActive,
 		CompiledGraph: g,
@@ -257,7 +258,7 @@ func newControllerAndContext(
 	raw := newControllerTestDynamicClient(t, objs...)
 	controller, clientSet := newControllerUnderTest(t, raw, g)
 
-	rt, err := krt.FromGraph(g, instance.DeepCopy(), controller.reconcileConfig.RGDConfig)
+	rt, err := krt.FromGraph(g, controller.reconcileConfig.RGDConfig, krt.WithInstance(instance.DeepCopy()))
 	require.NoError(t, err)
 
 	namespaced := instance.GetNamespace() != ""

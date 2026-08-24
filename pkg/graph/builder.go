@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	k8sschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
@@ -119,122 +120,43 @@ func WithRESTMapper(rm meta.RESTMapper) BuilderOption {
 	return func(b *Builder) { b.restMapper = rm }
 }
 
-// RGDConfig holds RGD runtime configuration parameters.
-type RGDConfig struct {
+// Config holds runtime configuration parameters shared by every graph consumer.
+type Config struct {
 	MaxCollectionSize          int
 	MaxCollectionDimensionSize int
 }
+
+// RGDConfig is a compatibility alias for Config.
+//
+// Deprecated: use Config.
+type RGDConfig = Config
 
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
 // CRD. The ResourceGraphDefinition object is a fully processed and validated representation
 // of the resource graph definition CRD, it's underlying resources, and the relationships between
 // the resources.
-func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphDefinition, rgdConfig RGDConfig) (*Graph, error) {
-	// Before anything else, let's copy the resource graph definition to avoid modifying the
-	// original object.
+func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphDefinition, rgdConfig Config) (*Graph, error) {
+	// Copy so we never mutate the caller's object.
 	rgd := originalCR.DeepCopy()
 
-	// There are a few steps to build a resource graph definition:
-	// 1. Validate the naming convention of the resource graph definition and its resources.
-	//    kro leverages CEL expressions to allow users to define new types and
-	//    express relationships between resources. This means that we need to ensure
-	//    that the names of the resources are valid to be used in CEL expressions.
-	//    for example name-something-something is not a valid name for a resource,
-	//    because in CEL - is a subtraction operator.
-	err := validateResourceGraphDefinition(rgd, rgdConfig)
-	if err != nil {
+	// kro leverages CEL expressions, so resource/kind names must be valid CEL
+	// identifiers (e.g. no "-", which CEL reads as subtraction).
+	if err := validateResourceGraphDefinition(rgd, rgdConfig); err != nil {
 		return nil, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
 	}
 
-	// Determine CRD scope from the schema definition. Defaults to NamespaceScoped
-	// to preserve backward compatibility.
 	crdScope := extv1.NamespaceScoped
 	if rgd.Spec.Schema.Scope == v1alpha1.ResourceScopeCluster {
 		crdScope = extv1.ClusterScoped
 	}
-	instanceNamespaced := crdScope == extv1.NamespaceScoped
 
-	// Now that we did a basic validation of the resource graph definition, we can start understanding
-	// the resources that are part of the resource graph definition.
-
-	// For each resource in the resource graph definition, we need to:
-	// 1. Check if it looks like a valid Kubernetes resource. This means that it
-	//    has a group, version, and kind, and a metadata field.
-	// 2. Based the GVK, we need to load the OpenAPI schema for the resource.
-	// 3. Emulate the resource, this is later used to verify the validity of the
-	//    CEL expressions.
-	// 4. Extract the CEL expressions from the resource + validate them.
-
-	// Per-build schema cache provides pointer-stable field lookups within
-	// this build. Discarded when the build completes.
-	schemaCache := schema.NewCache()
-	p := parser.New(schemaCache)
-
-	// we'll also store the nodes and schemas in maps for easy access later.
-	// Schemas are only needed during build for CEL validation.
-	nodes := make(map[string]*Node)
-	schemas := make(map[string]*spec.Schema)
-	for i, rgResource := range rgd.Spec.Resources {
-		id := rgResource.ID
-		node, nodeSchema, err := b.buildRGResource(p, rgResource, i, instanceNamespaced)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build resource %q: %w", id, err)
-		}
-		if nodes[id] != nil {
-			return nil, fmt.Errorf("found resources with duplicate id %q", id)
-		}
-		nodes[id] = node
-		schemas[id] = nodeSchema
-	}
-
-	// At this stage we have a superficial understanding of the resources that are
-	// part of the resource graph definition. We have the OpenAPI schema for each resource, and
-	// we have extracted the CEL expressions from the schema.
-	//
-	// Before we get into the dependency graph computation, we need to understand
-	// the shape of the instance resource (Mainly trying to understand the instance
-	// resource schema) to help validating the CEL expressions that are pointing to
-	// the instance resource e.g ${schema.spec.something.something}.
-	//
-	// You might wonder why are we building the resources before the instance resource?
-	// That's because the instance status schema is inferred from the CEL expressions
-	// in the status field of the instance resource. Those CEL expressions refer to
-	// the resources defined in the resource graph definition. Hence, we need to build the resources
-	// first, to be able to generate a proper schema for the instance status.
-
-	//
-
-	// Next, we need to understand the instance definition. The instance is
-	// the resource users will create in their cluster, to request the creation of
-	// the resources defined in the resource graph definition.
-	//
-	// The instance resource is a Kubernetes resource, differently from typical
-	// CRDs, users define the schema of the instance resource using the "SimpleSchema"
-	// format. This format is a simplified version of the OpenAPI schema, that only
-	// supports a subset of the features.
-	//
-	// SimpleSchema is a new standard we created to simplify CRD declarations, it is
-	// very useful when we need to define the Spec of a CRD, when it comes to defining
-	// the status of a CRD, we use CEL expressions. `kro` inspects the CEL expressions
-	// to infer the types of the status fields, and generate the OpenAPI schema for the
-	// status field. The CEL expressions are also used to patch the status field of the
-	// instance.
-	//
-	// We need to:
-	// 1. Parse the instance spec fields adhering to the SimpleSchema format.
-	// 2. Extract CEL expressions from the status
-	// 3. Validate them against the resources defined in the resource graph definition.
-	// 4. Infer the status schema based on the CEL expressions.
-
-	// Build instance spec schema from SimpleSchema.
-	// This is independent of resources - just YAML parsing.
+	// SimpleSchema -> instance spec schema, then synthesize the CRD (status filled
+	// in later once inferred). Both depend only on the schema block, not resources,
+	// so they are computed up front and fed to CompileSource via the Source.
 	instanceSpecSchema, err := buildInstanceSpecSchema(rgd.Spec.Schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition %q: %w", rgd.Name, err)
 	}
-
-	// Synthesize CRD early with empty status.
-	// We'll update the status later after inferring it from CEL expressions.
 	instanceCRD := crd.SynthesizeCRD(
 		rgd.Spec.Schema.Group,
 		rgd.Spec.Schema.APIVersion,
@@ -245,10 +167,77 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		crdScope,
 		rgd.Spec.Schema,
 	)
+	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get schema without status: %w", err)
+	}
 
-	// Create a single expression inspector for all AST inspection operations.
-	// This uses a lightweight env that only declares identifier names (no full schemas) -
-	// sufficient for parsing and finding references, but NOT for type-checking or compilation.
+	resourceSpecs := make([]ResourceSpec, 0, len(rgd.Spec.Resources))
+	for i, rgResource := range rgd.Spec.Resources {
+		rs, err := b.rgResourceSpec(rgResource, i)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build resource %q: %w", rgResource.ID, err)
+		}
+		resourceSpecs = append(resourceSpecs, rs)
+	}
+
+	g, statusSchema, err := b.CompileSource(rgdSource{
+		resources:       resourceSpecs,
+		instanceGVR:     metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind),
+		namespaced:      crdScope == extv1.NamespaceScoped,
+		schemaVarSchema: schemaWithoutStatus,
+		statusRaw:       rgd.Spec.Schema.Status.Raw,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	crd.SetCRDStatus(instanceCRD, *statusSchema, true)
+	g.CRD = instanceCRD
+	return g, nil
+}
+
+// rgdSource adapts a ResourceGraphDefinition's precomputed pieces to Source.
+type rgdSource struct {
+	resources       []ResourceSpec
+	instanceGVR     k8sschema.GroupVersionResource
+	namespaced      bool
+	schemaVarSchema *spec.Schema
+	statusRaw       []byte
+}
+
+func (s rgdSource) Resources() []ResourceSpec                   { return s.resources }
+func (s rgdSource) InstanceGVR() k8sschema.GroupVersionResource { return s.instanceGVR }
+func (s rgdSource) InstanceNamespaced() bool                    { return s.namespaced }
+func (s rgdSource) SchemaVarSchema() *spec.Schema               { return s.schemaVarSchema }
+func (s rgdSource) StatusRaw() []byte                           { return s.statusRaw }
+
+// CompileSource compiles a Source into a Graph: it builds resource nodes, derives
+// the dependency DAG, type-checks every CEL expression against target schemas,
+// infers the instance status schema, and assembles the instance node. It does not
+// synthesize a CRD; callers that need one attach it to the returned Graph using
+// the returned status schema. This is the shared entry point for any graph consumer.
+func (b *Builder) CompileSource(src Source) (*Graph, *extv1.JSONSchemaProps, error) {
+	// Per-build schema cache: pointer-stable field lookups, discarded after build.
+	schemaCache := schema.NewCache()
+	p := parser.New(schemaCache)
+
+	nodes := make(map[string]*Node)
+	schemas := make(map[string]*spec.Schema)
+	for _, rs := range src.Resources() {
+		node, nodeSchema, err := b.buildResourceNode(p, rs, src.InstanceNamespaced())
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to build resource %q: %w", rs.ID, err)
+		}
+		if nodes[rs.ID] != nil {
+			return nil, nil, fmt.Errorf("found resources with duplicate id %q", rs.ID)
+		}
+		nodes[rs.ID] = node
+		schemas[rs.ID] = nodeSchema
+	}
+
+	// Lightweight inspector env: declares identifier names only (enough to parse
+	// and find references, not to type-check or compile).
 	nodeNames := make([]string, 0, len(nodes))
 	for name := range nodes {
 		nodeNames = append(nodeNames, name)
@@ -256,64 +245,39 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	allIdentifiers := slices.Concat(nodeNames, []string{SchemaVarName, EachVarName, library.RuntimeVarName})
 	inspectorEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(allIdentifiers))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create inspector environment: %w", err)
+		return nil, nil, fmt.Errorf("failed to create inspector environment: %w", err)
 	}
 	inspector := ast.NewInspectorWithEnv(inspectorEnv, allIdentifiers)
 
-	// Build the dependency graph by inspecting CEL expressions.
-	// This extracts all resource dependencies and validates that:
-	// 1. All referenced resources are defined in the RGD
-	// 2. There are no unknown functions
-	// 3. The dependency graph is acyclic
-	//
-	// We do this BEFORE type checking so that undeclared resource errors
-	// are caught here with clear messages, rather than as CEL type errors.
+	// Dependency graph first, so undeclared-resource errors surface clearly
+	// rather than as downstream CEL type errors.
 	dag, err := b.buildDependencyGraph(nodes, inspector)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
+		return nil, nil, fmt.Errorf("failed to build dependency graph: %w", err)
 	}
-	// Ensure the graph is acyclic and get the topological order of resources.
 	topologicalOrder, err := dag.TopologicalSort()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get topological order: %w", err)
+		return nil, nil, fmt.Errorf("failed to get topological order: %w", err)
 	}
 	applyOrders, err := applyOrdersForDAG(dag)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get apply-order waves: %w", err)
+		return nil, nil, fmt.Errorf("failed to get apply-order waves: %w", err)
 	}
 
-	// Validate that omit() is not used on resource identity fields.
-	// Only needed when omit() is enabled — if the gate is off, the builder
-	// already rejects any omit() usage in extractDependencies.
 	if features.FeatureGate.Enabled(features.CELOmitFunction) {
-		if err := validateIdentityFields(nodes, inspector, instanceNamespaced); err != nil {
-			return nil, err
+		if err := validateIdentityFields(nodes, inspector, src.InstanceNamespaced()); err != nil {
+			return nil, nil, err
 		}
 	}
 
-	// Collect all schemas for CEL validation:
-	// - Resource schemas (wrapped as lists for collections)
-	// - Instance spec schema as "schema" variable (extracted from CRD, without status)
-	//
-	// This allows expressions like ${schema.spec.replicas} and ${deployment.status.replicas}.
-	// Note: only spec and metadata are included - status references are not allowed in RGDs.
 	celSchemas := collectNodeSchemas(schemaCache, nodes, schemas)
-	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get schema without status: %w", err)
-	}
-	celSchemas[SchemaVarName] = schemaWithoutStatus
+	celSchemas[SchemaVarName] = src.SchemaVarSchema()
 
-	// Create a single typed CEL environment with all schemas for compilation.
-	// TypedEnvironmentWithProvider returns both the env and the DeclTypeProvider it
-	// creates internally, avoiding duplicate schema-to-DeclType conversions.
 	typedEnv, typeProvider, err := krocel.TypedEnvironmentWithProvider(celSchemas)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
+		return nil, nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
 	}
 
-	// Build context memoizes per-build CEL artifacts (checked ASTs, DeclTypes,
-	// extended environments) to avoid redundant computation within this build.
 	bc := &buildContext{
 		env:          typedEnv,
 		typeProvider: typeProvider,
@@ -323,77 +287,60 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		extendedEnvs: make(map[extendedEnvKey]*cel.Env),
 	}
 
-	// Validate and compile all resource CEL expressions.
 	for id, node := range nodes {
 		if err := validateAndCompileNode(bc, node, inspector, schemas[id]); err != nil {
-			return nil, fmt.Errorf("failed to validate resource %q: %w", id, err)
+			return nil, nil, fmt.Errorf("failed to validate resource %q: %w", id, err)
 		}
 	}
 
-	// Build instance status schema.
-	// Status expressions reference resources and/or the instance's own schema.
-	// We infer the status field types from the CEL expression output types.
-	statusSchema, statusVariables, statusTemplate, conditionExprStrings, err := buildStatusSchema(
-		bc,
-		rgd.Spec.Schema,
-		nodeNames,
-		inspector,
-	)
+	unstructuredStatus := map[string]interface{}{}
+	if err := yaml.UnmarshalStrict(src.StatusRaw(), &unstructuredStatus); err != nil {
+		return nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
+	}
+	statusSchema, statusVariables, statusTemplate, conditionExprStrings, err := inferStatusSchema(bc, unstructuredStatus, nodeNames, inspector)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build instance status schema: %w", err)
+		return nil, nil, fmt.Errorf("failed to build instance status schema: %w", err)
 	}
 
-	// Compile programs for status expressions in a separate pass.
-	// buildStatusSchema only parsed and type-checked; bc.compile reuses the
-	// cached checked ASTs, skipping redundant parse+check.
 	for _, fd := range statusVariables {
 		if _, err := bc.compile(bc.env, fd.Expression); err != nil {
-			return nil, fmt.Errorf("failed to compile status expression %q at path %q: %w", fd.Expression.UserExpression(), fd.Path, err)
+			return nil, nil, fmt.Errorf("failed to compile status expression %q at path %q: %w", fd.Expression.UserExpression(), fd.Path, err)
 		}
 	}
 
 	conditions, err := buildConditions(bc, conditionExprStrings, inspector, inspectorEnv, nodeNames)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build instance conditions: %w", err)
+		return nil, nil, fmt.Errorf("failed to build instance conditions: %w", err)
 	}
 
-	// Update the CRD with the inferred status schema.
-	crd.SetCRDStatus(instanceCRD, *statusSchema, true)
-
-	// Create the instance node with status variables for runtime patching.
 	instance, err := buildInstanceNode(
-		rgd.Spec.Schema.Group,
-		rgd.Spec.Schema.APIVersion,
-		rgd.Spec.Schema.Kind,
-		instanceNamespaced,
+		src.InstanceGVR(),
+		src.InstanceNamespaced(),
 		statusVariables,
 		statusTemplate,
 		conditions,
 		inspector,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create instance node: %w", err)
+		return nil, nil, fmt.Errorf("failed to create instance node: %w", err)
 	}
 
-	// Build resource schemas map for runtime CEL value conversion.
-	// Include both resource schemas and the instance schema (without status).
 	resourceSchemas := make(map[string]*spec.Schema, len(schemas)+1)
 	for id, sch := range schemas {
 		resourceSchemas[id] = sch
 	}
-	resourceSchemas[InstanceNodeID] = schemaWithoutStatus
+	resourceSchemas[InstanceNodeID] = src.SchemaVarSchema()
 
-	resourceGraphDefinition := &Graph{
+	g := &Graph{
 		DAG:              dag,
 		Instance:         instance,
 		Nodes:            nodes,
 		Resources:        nodes,
 		TopologicalOrder: topologicalOrder,
 		ApplyOrders:      applyOrders,
-		CRD:              instanceCRD,
 		ResourceSchemas:  resourceSchemas,
 	}
-	return resourceGraphDefinition, nil
+	return g, statusSchema, nil
 }
 
 // buildExternalRefResource builds an empty resource with metadata from the given externalRef definition.
@@ -408,96 +355,109 @@ func (b *Builder) buildExternalRefResource(
 	return result, nil
 }
 
-// buildRGResource builds a node from the given resource definition.
-// It provides a high-level understanding of the resource, by extracting the
-// OpenAPI schema, emulating the resource and extracting the cel expressions
-// from the schema.
-// Returns the Node and the OpenAPI schema (schema is only needed during build for CEL validation).
-func (b *Builder) buildRGResource(
-	p *parser.Parser,
-	rgResource *v1alpha1.Resource,
-	order int,
-	instanceNamespaced bool,
-) (*Node, *spec.Schema, error) {
-	// 1. Validate resource field combinations.
-	if err := validateCombinableResourceFields(rgResource); err != nil {
-		return nil, nil, fmt.Errorf("invalid combination of resource fields: %w", err)
+// rgResourceSpec projects an RGD resource into a schema-agnostic ResourceSpec:
+// it validates field combinations and resolves the template object (user YAML or
+// external ref serialized to unstructured).
+func (b *Builder) rgResourceSpec(rgResource *v1alpha1.Resource, order int) (ResourceSpec, error) {
+	if err := validateCombinableResourceFields(rgResource.ID, len(rgResource.Template.Raw) > 0, rgResource.ExternalRef != nil, len(rgResource.ForEach)); err != nil {
+		return ResourceSpec{}, fmt.Errorf("invalid combination of resource fields: %w", err)
 	}
 	if rgResource.ExternalRef != nil {
 		if err := validateExternalRefMetadata(rgResource.ExternalRef.Metadata); err != nil {
-			return nil, nil, fmt.Errorf("invalid external ref metadata for resource %s: %w", rgResource.ID, err)
+			return ResourceSpec{}, fmt.Errorf("invalid external ref metadata for resource %s: %w", rgResource.ID, err)
 		}
 	}
 
-	// 2. Unmarshal the resource into a map[string]interface{}.
 	resourceObject := map[string]interface{}{}
 	if len(rgResource.Template.Raw) > 0 {
-		err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
+		if err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject); err != nil {
+			return ResourceSpec{}, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
 		}
 	} else {
 		var err error
 		if resourceObject, err = b.buildExternalRefResource(rgResource.ExternalRef); err != nil {
-			return nil, nil, fmt.Errorf("failed to build external ref resource %s: %w", rgResource.ID, err)
+			return ResourceSpec{}, fmt.Errorf("failed to build external ref resource %s: %w", rgResource.ID, err)
 		}
 	}
 
-	// 3. Check if it looks like a valid Kubernetes resource.
-	err := validateKubernetesObjectStructure(resourceObject)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resource %s is not a valid Kubernetes object: %v", rgResource.ID, err)
+	forEach := make([]map[string]string, len(rgResource.ForEach))
+	for i, d := range rgResource.ForEach {
+		forEach[i] = d
 	}
 
-	// 4. Extract the GVK from the resource.
-	gvk, err := metadata.ExtractGVKFromUnstructured(resourceObject)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to extract GVK from resource %s: %w", rgResource.ID, err)
+	return ResourceSpec{
+		ID:          rgResource.ID,
+		Object:      resourceObject,
+		ExternalRef: rgResource.ExternalRef != nil,
+		Collection:  rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.HasSelector(),
+		ReadyWhen:   rgResource.ReadyWhen,
+		IncludeWhen: rgResource.IncludeWhen,
+		ForEach:     forEach,
+		Order:       order,
+	}, nil
+}
+
+// buildResourceNode builds a node from a schema-agnostic ResourceSpec: it
+// resolves the GVK/schema/REST mapping, validates template constraints, extracts
+// CEL field descriptors, and assembles the Node. Returns the Node and the
+// OpenAPI schema (used during build for CEL validation only).
+func (b *Builder) buildResourceNode(
+	p *parser.Parser,
+	rs ResourceSpec,
+	instanceNamespaced bool,
+) (*Node, *spec.Schema, error) {
+	if err := validateKubernetesObjectStructure(rs.Object); err != nil {
+		return nil, nil, fmt.Errorf("resource %s is not a valid Kubernetes object: %v", rs.ID, err)
 	}
 
-	// 5. Load the OpenAPI schema for the resource.
+	gvk, err := metadata.ExtractGVKFromUnstructured(rs.Object)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to extract GVK from resource %s: %w", rs.ID, err)
+	}
+
 	resourceSchema, err := b.schemaResolver.ResolveSchema(gvk)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.ID, err)
+		return nil, nil, fmt.Errorf("failed to get schema for resource %s: %w", rs.ID, err)
 	}
 
 	mapping, err := b.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rgResource.ID, err)
+		return nil, nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rs.ID, err)
 	}
 	if err := validateTemplateConstraints(
-		rgResource,
-		resourceObject,
+		rs.ID,
+		rs.Collection,
+		rs.Object,
 		mapping.Scope.Name() == meta.RESTScopeNameNamespace,
 		instanceNamespaced,
 	); err != nil {
 		return nil, nil, err
 	}
 
-	// 6. Extract CEL fieldDescriptors from the resource.
+	// Extract CEL fieldDescriptors from the resource.
 	var fieldDescriptors []variable.FieldDescriptor
-	if rgResource.ExternalRef != nil {
+	if rs.ExternalRef {
 		// External ref templates are synthetic (not user YAML), so use the
 		// schemaless parser for the entire resource uniformly.
-		fieldDescriptors, _, err = parser.ParseSchemalessResource(resourceObject)
+		fieldDescriptors, _, err = parser.ParseSchemalessResource(rs.Object)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse external ref resource %s: %w", rgResource.ID, err)
+			return nil, nil, fmt.Errorf("failed to parse external ref resource %s: %w", rs.ID, err)
 		}
 	} else if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
-		fieldDescriptors, _, err = parser.ParseSchemalessResource(resourceObject)
+		fieldDescriptors, _, err = parser.ParseSchemalessResource(rs.Object)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
+			return nil, nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rs.ID, err)
 		}
 
 		for _, expr := range fieldDescriptors {
 			if !strings.HasPrefix(expr.Path, "metadata.") {
-				return nil, nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, rgResource.ID)
+				return nil, nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, rs.ID)
 			}
 		}
 	} else {
-		fieldDescriptors, err = p.ParseResource(resourceObject, resourceSchema)
+		fieldDescriptors, err = p.ParseResource(rs.Object, resourceSchema)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
+			return nil, nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rs.ID, err)
 		}
 	}
 
@@ -510,28 +470,25 @@ func (b *Builder) buildRGResource(
 		})
 	}
 
-	// 7. Parse ReadyWhen expressions
-	readyWhen, err := parser.UnwrapExpressions(rgResource.ReadyWhen)
+	readyWhen, err := parser.UnwrapExpressions(rs.ReadyWhen)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
 	}
 
-	// 8. Parse condition expressions
-	includeWhen, err := parser.UnwrapExpressions(rgResource.IncludeWhen)
+	includeWhen, err := parser.UnwrapExpressions(rs.IncludeWhen)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
 	}
 
-	// 9. Parse forEach dimensions
-	forEachDimensions, err := parseForEachDimensions(rgResource.ForEach)
+	forEachDimensions, err := parseForEachDimensions(rs.ForEach)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
 	}
 
 	// Determine node type.
 	nodeType := NodeTypeResource
-	if rgResource.ExternalRef != nil {
-		if rgResource.ExternalRef.Metadata.HasSelector() {
+	if rs.ExternalRef {
+		if rs.Collection {
 			nodeType = NodeTypeExternalCollection
 		} else {
 			nodeType = NodeTypeExternal
@@ -543,14 +500,14 @@ func (b *Builder) buildRGResource(
 	// Note that dependencies are not set here - they're extracted later in buildDependencyGraph.
 	node := &Node{
 		Meta: NodeMeta{
-			ID:         rgResource.ID,
-			Index:      order,
+			ID:         rs.ID,
+			Index:      rs.Order,
 			Type:       nodeType,
 			GVR:        mapping.Resource,
 			Namespaced: mapping.Scope.Name() == meta.RESTScopeNameNamespace,
 			// Dependencies will be set by buildDependencyGraph
 		},
-		Template:    &unstructured.Unstructured{Object: resourceObject},
+		Template:    &unstructured.Unstructured{Object: rs.Object},
 		Variables:   templateVariables,
 		IncludeWhen: includeWhen,
 		ReadyWhen:   readyWhen,
@@ -732,14 +689,13 @@ func extractForEachDependencies(
 // This is called after spec schema, status schema, and CRD have been built separately.
 // Uses the shared inspectorEnv for AST inspection.
 func buildInstanceNode(
-	group, apiVersion, kind string,
+	gvr k8sschema.GroupVersionResource,
 	namespaced bool,
 	statusVariables []variable.FieldDescriptor,
 	statusTemplate map[string]interface{},
 	conditions []*krocel.Expression,
 	inspector *ast.Inspector,
 ) (*Node, error) {
-	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(group, apiVersion, kind)
 
 	// Collect dependencies for instance status fields
 	var instanceDeps []string
@@ -861,7 +817,25 @@ func buildStatusSchema(
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
 	}
+	return inferStatusSchema(bc, unstructuredStatus, nodeNames, inspector)
+}
 
+// inferStatusSchema infers the instance status schema from CEL expressions in a
+// pre-unmarshalled status map. Author-defined conditions are extracted first,
+// remaining fields are type-checked and converted to an OpenAPI schema.
+// Returns: (schema, fieldDescriptors, statusTemplate, conditionExprs, error).
+func inferStatusSchema(
+	bc *buildContext,
+	unstructuredStatus map[string]interface{},
+	nodeNames []string,
+	inspector *ast.Inspector,
+) (
+	*extv1.JSONSchemaProps,
+	[]variable.FieldDescriptor,
+	map[string]interface{},
+	[]string,
+	error,
+) {
 	// Extract author-defined conditions before running CEL inference: the
 	// `conditions:` expressions return Condition values, so inferring their
 	// types would produce a wrong CRD schema. Removing the key leaves the
@@ -1174,10 +1148,9 @@ func validateConditionReferences(expressions []*krocel.Expression, allowedIdenti
 	return nil
 }
 
-// parseForEachDimensions converts API forEach dimensions (map[string]string) to
-// ForEachDimension structs. Each API dimension is a single-entry map where
-// the key is the variable name and the value is the CEL expression.
-func parseForEachDimensions(apiDimensions []v1alpha1.ForEachDimension) ([]ForEachDimension, error) {
+// parseForEachDimensions converts forEach dimensions (single-entry {name: expr}
+// maps) to ForEachDimension structs.
+func parseForEachDimensions(apiDimensions []map[string]string) ([]ForEachDimension, error) {
 	if len(apiDimensions) == 0 {
 		return nil, nil
 	}
@@ -1568,10 +1541,6 @@ func validateAndCompileForEach(bc *buildContext, node *Node, inspector *ast.Insp
 }
 
 // getSchemaWithoutStatus extracts a spec.Schema from a CRD for CEL validation.
-// It includes spec and metadata but excludes status, since status references
-// are not allowed in RGD expressions. Cluster-scoped instance CRDs also omit
-// metadata.namespace so CEL cannot type-check references to a field that does
-// not exist at runtime.
 func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
 	if len(crd.Spec.Versions) != 1 {
 		return nil, fmt.Errorf("expected CRD to have exactly one version, got %d versions", len(crd.Spec.Versions))
@@ -1579,9 +1548,16 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 	if crd.Spec.Versions[0].Schema == nil {
 		return nil, fmt.Errorf("expected CRD version to have schema defined")
 	}
+	return stripStatusFromSchema(crd.Spec.Versions[0].Schema.OpenAPIV3Schema, crd.Spec.Scope == extv1.ClusterScoped)
+}
 
-	// Copy the schema and remove status
-	openAPISchema := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.DeepCopy()
+// stripStatusFromSchema converts an instance OpenAPI schema to a spec.Schema for
+// CEL validation: status is dropped (status references are not allowed in RGD
+// expressions) and a full ObjectMeta schema is added. Cluster-scoped instances
+// omit metadata.namespace so CEL cannot type-check a field absent at runtime.
+// The input is not mutated.
+func stripStatusFromSchema(openAPI *extv1.JSONSchemaProps, isClusterScoped bool) (*spec.Schema, error) {
+	openAPISchema := openAPI.DeepCopy()
 	delete(openAPISchema.Properties, "status")
 
 	specSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(openAPISchema)
@@ -1589,12 +1565,11 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 		return nil, err
 	}
 
-	// Add full ObjectMeta schema for CEL validation
 	if specSchema.Properties == nil {
 		specSchema.Properties = make(map[string]spec.Schema)
 	}
 	metadataSchema := schema.ObjectMetaSchema
-	if crd.Spec.Scope == extv1.ClusterScoped {
+	if isClusterScoped {
 		metadataSchema = schema.NamespacelessObjectMetaSchema
 	}
 	specSchema.Properties["metadata"] = metadataSchema

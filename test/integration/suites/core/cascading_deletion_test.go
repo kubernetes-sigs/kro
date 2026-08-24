@@ -277,7 +277,7 @@ func waitForRGDActive(ctx SpecContext, name string) {
 		err := env.Client.Get(ctx, types.NamespacedName{Name: name}, rgd)
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-	}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 }
 
 func waitForInstanceActive(ctx SpecContext, namespace, name string, instance *unstructured.Unstructured) {
@@ -288,7 +288,7 @@ func waitForInstanceActive(ctx SpecContext, namespace, name string, instance *un
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(found).To(BeTrue())
 		g.Expect(state).To(Equal("ACTIVE"))
-	}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 }
 
 func waitForNestedInstanceActive(ctx SpecContext, namespace, name, kind string) *unstructured.Unstructured {
@@ -313,5 +313,5 @@ func waitForResourceDeleted(ctx SpecContext, namespace, name string, obj client.
 		nsName := types.NamespacedName{Name: name, Namespace: namespace}
 		err := env.Client.Get(ctx, nsName, obj)
 		g.Expect(err).To(MatchError(errors.IsNotFound, fmt.Sprintf("%s should be deleted", name)))
-	}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 }

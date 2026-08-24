@@ -45,19 +45,24 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		name             string
-		mutateRevision   func(*internalv1alpha1.GraphRevision)
-		buildClient      func(*testing.T, *runtime.Scheme, *internalv1alpha1.GraphRevision) client.Client
-		seedRegistry     func(*revisions.Registry, *internalv1alpha1.GraphRevision)
-		compile          compileGraphFunc
-		wantErrContains  []string
-		wantFinalizer    *bool
-		wantVerified     *metav1.ConditionStatus
-		wantReady        *metav1.ConditionStatus
-		wantOrder        []string
-		wantResourceIDs  []string
-		wantRegistry     *revisions.Entry
-		wantRegistryMiss bool
+		name                string
+		mutateRevision      func(*internalv1alpha1.GraphRevision)
+		buildClient         func(*testing.T, *runtime.Scheme, *internalv1alpha1.GraphRevision) client.Client
+		seedRegistry        func(*revisions.Registry, *internalv1alpha1.GraphRevision)
+		compile             compileGraphFunc
+		wantErrContains     []string
+		wantFinalizer       *bool
+		wantVerified        *metav1.ConditionStatus
+		wantReady           *metav1.ConditionStatus
+		wantOrder           []string
+		wantResourceIDs     []string
+		wantRegistry        *revisions.Entry
+		wantRegistryMiss    bool
+		wantVerifiedReason  string
+		wantVerifiedMessage string
+		wantReadyReason     string
+		wantReadyMessage    string
+		wantEmptyStatus     bool
 	}{
 		{
 			name: "compile success marks revision active",
@@ -65,13 +70,17 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 				assert.Equal(t, "demo-rgd", rgd.Name)
 				return compiled, nil
 			},
-			wantFinalizer:   new(true),
-			wantVerified:    new(metav1.ConditionTrue),
-			wantReady:       new(metav1.ConditionTrue),
-			wantOrder:       []string{"config", "deploy"},
-			wantResourceIDs: []string{"deploy"},
+			wantFinalizer:       new(true),
+			wantVerified:        new(metav1.ConditionTrue),
+			wantReady:           new(metav1.ConditionTrue),
+			wantOrder:           []string{"config", "deploy"},
+			wantResourceIDs:     []string{"deploy"},
+			wantVerifiedReason:  "Verified",
+			wantVerifiedMessage: "graph revision compiled and verified",
+			wantReadyReason:     apis.ConditionReady,
+			wantReadyMessage:    "",
 			wantRegistry: &revisions.Entry{
-				RGDName:       "demo-rgd",
+				OwnerKey:      "demo-rgd",
 				Revision:      1,
 				SpecHash:      expectedHash,
 				State:         revisions.RevisionStateActive,
@@ -83,12 +92,17 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			compile: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
 				return nil, errors.New("graph compile failed")
 			},
-			wantErrContains: []string{"graph compile failed"},
-			wantFinalizer:   new(true),
-			wantVerified:    new(metav1.ConditionFalse),
-			wantReady:       new(metav1.ConditionFalse),
+			wantErrContains:     []string{"graph compile failed"},
+			wantFinalizer:       new(true),
+			wantVerified:        new(metav1.ConditionFalse),
+			wantReady:           new(metav1.ConditionFalse),
+			wantVerifiedReason:  "InvalidGraph",
+			wantVerifiedMessage: `failed to compile graph revision "demo-rgd-rev-1": graph compile failed`,
+			wantReadyReason:     "InvalidGraph",
+			wantReadyMessage:    `failed to compile graph revision "demo-rgd-rev-1": graph compile failed`,
+			wantEmptyStatus:     true,
 			wantRegistry: &revisions.Entry{
-				RGDName:  "demo-rgd",
+				OwnerKey: "demo-rgd",
 				Revision: 1,
 				SpecHash: expectedHash,
 				State:    revisions.RevisionStateFailed,
@@ -110,7 +124,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantErrContains: []string{"status patch failed"},
 			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
-				RGDName:  "demo-rgd",
+				OwnerKey: "demo-rgd",
 				Revision: 1,
 				SpecHash: expectedHash,
 				State:    revisions.RevisionStatePending,
@@ -128,7 +142,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			},
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
-					RGDName:       revision.Spec.Snapshot.Name,
+					OwnerKey:      revision.Spec.Snapshot.Name,
 					Revision:      revision.Spec.Revision,
 					SpecHash:      expectedHash,
 					State:         revisions.RevisionStateActive,
@@ -141,7 +155,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantErrContains: []string{"status patch failed"},
 			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
-				RGDName:       "demo-rgd",
+				OwnerKey:      "demo-rgd",
 				Revision:      1,
 				SpecHash:      expectedHash,
 				State:         revisions.RevisionStateActive,
@@ -156,7 +170,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			},
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
-					RGDName:       revision.Spec.Snapshot.Name,
+					OwnerKey:      revision.Spec.Snapshot.Name,
 					Revision:      revision.Spec.Revision,
 					State:         revisions.RevisionStateActive,
 					CompiledGraph: &graph.Graph{},
@@ -178,7 +192,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			},
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
-					RGDName:       revision.Spec.Snapshot.Name,
+					OwnerKey:      revision.Spec.Snapshot.Name,
 					Revision:      revision.Spec.Revision,
 					State:         revisions.RevisionStateActive,
 					CompiledGraph: &graph.Graph{},
@@ -188,7 +202,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantErrContains: []string{"patch failed"},
 			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
-				RGDName:       "demo-rgd",
+				OwnerKey:      "demo-rgd",
 				Revision:      1,
 				State:         revisions.RevisionStateActive,
 				CompiledGraph: &graph.Graph{},
@@ -221,7 +235,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantErrContains: []string{"graph compile failed", "status patch failed"},
 			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
-				RGDName:  "demo-rgd",
+				OwnerKey: "demo-rgd",
 				Revision: 1,
 				SpecHash: expectedHash,
 				State:    revisions.RevisionStateFailed,
@@ -231,7 +245,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			name: "recompile failure downgrades an active revision to failed",
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
-					RGDName:       revision.Spec.Snapshot.Name,
+					OwnerKey:      revision.Spec.Snapshot.Name,
 					Revision:      revision.Spec.Revision,
 					SpecHash:      mustSpecHash(t, revision.Spec.Snapshot.Spec),
 					State:         revisions.RevisionStateActive,
@@ -246,7 +260,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			wantVerified:    new(metav1.ConditionFalse),
 			wantReady:       new(metav1.ConditionFalse),
 			wantRegistry: &revisions.Entry{
-				RGDName:  "demo-rgd",
+				OwnerKey: "demo-rgd",
 				Revision: 1,
 				SpecHash: expectedHash,
 				State:    revisions.RevisionStateFailed,
@@ -302,6 +316,21 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 
 			assertStoredRevisionState(t, cl, revision, tt.wantFinalizer, tt.wantVerified, tt.wantReady, tt.wantOrder, tt.wantResourceIDs)
 			assertRegistryState(t, registry, tt.wantRegistry, tt.wantRegistryMiss)
+
+			if tt.wantVerifiedReason != "" || tt.wantReadyReason != "" || tt.wantEmptyStatus {
+				stored := &internalv1alpha1.GraphRevision{}
+				require.NoError(t, cl.Get(context.Background(), client.ObjectKeyFromObject(revision), stored))
+				if tt.wantVerifiedReason != "" {
+					assertGRConditionExact(t, stored, GraphVerified, *tt.wantVerified, tt.wantVerifiedReason, tt.wantVerifiedMessage)
+				}
+				if tt.wantReadyReason != "" {
+					assertGRConditionExact(t, stored, apis.ConditionReady, *tt.wantReady, tt.wantReadyReason, tt.wantReadyMessage)
+				}
+				if tt.wantEmptyStatus {
+					assert.Empty(t, stored.Status.TopologicalOrder)
+					assert.Empty(t, stored.Status.Resources)
+				}
+			}
 		})
 	}
 }
@@ -598,7 +627,7 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 		registry := revisions.NewRegistry()
 		compiled := testCompiledGraph()
 		registry.Put(revisions.Entry{
-			RGDName:       revision.Spec.Snapshot.Name,
+			OwnerKey:      revision.Spec.Snapshot.Name,
 			Revision:      revision.Spec.Revision,
 			SpecHash:      mustSpecHash(t, revision.Spec.Snapshot.Spec),
 			State:         revisions.RevisionStateActive,
@@ -720,7 +749,7 @@ func assertRegistryState(t *testing.T, registry *revisions.Registry, want *revis
 	}
 	require.NotNil(t, want)
 	require.True(t, ok)
-	assert.Equal(t, want.RGDName, entry.RGDName)
+	assert.Equal(t, want.OwnerKey, entry.OwnerKey)
 	assert.Equal(t, want.Revision, entry.Revision)
 	assert.Equal(t, want.SpecHash, entry.SpecHash)
 	assert.Equal(t, want.State, entry.State)
@@ -769,6 +798,27 @@ func newTestGraphRevision(name string) *internalv1alpha1.GraphRevision {
 			},
 		},
 	}
+}
+
+func assertGRConditionExact(
+	t testing.TB,
+	gr *internalv1alpha1.GraphRevision,
+	conditionType string,
+	wantStatus metav1.ConditionStatus,
+	wantReason string,
+	wantMessage string,
+) {
+	t.Helper()
+
+	cond := findCondition(gr.Status.Conditions, v1alpha1.ConditionType(conditionType))
+	require.NotNil(t, cond)
+	assert.Equal(t, v1alpha1.ConditionType(conditionType), cond.Type)
+	assert.Equal(t, wantStatus, cond.Status)
+	require.NotNil(t, cond.Reason)
+	assert.Equal(t, wantReason, *cond.Reason)
+	require.NotNil(t, cond.Message)
+	assert.Equal(t, wantMessage, *cond.Message)
+	require.NotNil(t, cond.LastTransitionTime)
 }
 
 func findCondition(conditions []v1alpha1.Condition, t v1alpha1.ConditionType) *v1alpha1.Condition {

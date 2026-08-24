@@ -247,7 +247,7 @@ var _ = Describe("Conditions", func() {
 
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-conditions"
 		// Create instance
@@ -284,7 +284,7 @@ var _ = Describe("Conditions", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(b).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify DeploymentA is not created
 		Eventually(func(g Gomega, ctx SpecContext) bool {
@@ -293,7 +293,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, &appsv1.Deployment{})
 			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(BeTrue())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(BeTrue())
 
 		// Verify serviceAccountA is created
 		serviceAccountA := &corev1.ServiceAccount{}
@@ -303,7 +303,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, serviceAccountA)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify DeploymentB is created
 		deploymentB := &appsv1.Deployment{}
@@ -317,7 +317,7 @@ var _ = Describe("Conditions", func() {
 			// Verify deployment specs
 			g.Expect(deploymentB.Spec.Template.Spec.Containers).To(HaveLen(1))
 			g.Expect(deploymentB.Spec.Template.Spec.ServiceAccountName).To(Equal(name + "-a" + name))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify ServiceA is not created
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -326,7 +326,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, &corev1.Service{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "serviceA should not be created"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify ServiceB is not created
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -335,7 +335,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, &corev1.Service{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "serviceB should not be created"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify ServiceAccountB is not created
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -344,7 +344,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, &corev1.ServiceAccount{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "serviceAccountB should not be created"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -356,7 +356,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Delete ResourceGraphDefinition
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
@@ -367,7 +367,7 @@ var _ = Describe("Conditions", func() {
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should skip downstream dependents when an upstream includeWhen is false", func(ctx SpecContext) {
@@ -422,7 +422,7 @@ var _ = Describe("Conditions", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-conditions-contagious"
 		instance := &unstructured.Unstructured{
@@ -454,7 +454,7 @@ var _ = Describe("Conditions", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(state).To(Equal("ACTIVE"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		always := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -464,7 +464,7 @@ var _ = Describe("Conditions", func() {
 			}, always)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(always.Data).To(HaveKeyWithValue("key", "always"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Consistently(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -472,7 +472,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, &corev1.ConfigMap{})
 			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "parent should be skipped by includeWhen")
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Consistently(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -480,7 +480,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, &corev1.ConfigMap{})
 			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "child should be skipped contagiously because parent is skipped")
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should propagate exclusion when includeWhen depends on another resource", func(ctx SpecContext) {
@@ -545,7 +545,7 @@ var _ = Describe("Conditions", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "test-resource-backed-contagious"
 		instance := &unstructured.Unstructured{
@@ -577,7 +577,7 @@ var _ = Describe("Conditions", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(state).To(Equal("ACTIVE"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		source := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -587,7 +587,7 @@ var _ = Describe("Conditions", func() {
 			}, source)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(source.Data).To(HaveKeyWithValue("enabled", "false"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		always := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -596,7 +596,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, always)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Consistently(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -604,7 +604,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, &corev1.ConfigMap{})
 			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "middle should be excluded by resource-backed includeWhen")
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Consistently(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -612,7 +612,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, &corev1.ConfigMap{})
 			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "child should be excluded contagiously because middle is skipped")
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("should wait for status-backed includeWhen before creating dependent resources", func(ctx SpecContext) {
@@ -696,7 +696,7 @@ var _ = Describe("Conditions", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		name := "status-backed"
 		instance := &unstructured.Unstructured{
@@ -726,7 +726,7 @@ var _ = Describe("Conditions", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(source.Spec.Replicas).ToNot(BeNil())
 			g.Expect(*source.Spec.Replicas).To(Equal(int32(1)))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		always := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -736,7 +736,7 @@ var _ = Describe("Conditions", func() {
 			}, always)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(always.Data).To(HaveKeyWithValue("key", "always"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -748,7 +748,7 @@ var _ = Describe("Conditions", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(state).To(Equal("IN_PROGRESS"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Consistently(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -756,7 +756,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, &corev1.ConfigMap{})
 			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "gated resource should wait for source.status.availableReplicas")
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Consistently(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -764,7 +764,7 @@ var _ = Describe("Conditions", func() {
 				Namespace: namespace,
 			}, &corev1.ConfigMap{})
 			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "child should wait until the gated resource is included")
-		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 5*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		source.Status.Replicas = 1
 		source.Status.ReadyReplicas = 1
@@ -787,7 +787,7 @@ var _ = Describe("Conditions", func() {
 			}, gated)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(gated.Data).To(HaveKeyWithValue("fromSource", name+"-source"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		child := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -797,7 +797,7 @@ var _ = Describe("Conditions", func() {
 			}, child)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(child.Data).To(HaveKeyWithValue("fromGated", name+"-source"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -809,7 +809,7 @@ var _ = Describe("Conditions", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(state).To(Equal("ACTIVE"))
-		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 })

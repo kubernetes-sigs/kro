@@ -113,6 +113,28 @@ type ForEachDimension struct {
 	Expression *krocel.Expression
 }
 
+// ResourceSpec is the schema-agnostic input to buildResourceNode. Any graph
+// consumer projects its own resource shape into this before compilation, so
+// the node builder never sees the RGD API type.
+type ResourceSpec struct {
+	// ID is the resource identifier within the graph.
+	ID string
+	// Object is the resolved template object (unmarshalled user template, or an
+	// external ref serialized to unstructured). Expressions are still embedded.
+	Object map[string]interface{}
+	// ExternalRef marks a read-only external reference (parsed schemaless).
+	ExternalRef bool
+	// Collection marks a selector-based external collection.
+	Collection bool
+	// ReadyWhen / IncludeWhen are raw expression strings (pre-unwrap).
+	ReadyWhen   []string
+	IncludeWhen []string
+	// ForEach is the list of single-entry {name: expr} iteration dimensions.
+	ForEach []map[string]string
+	// Order is the resource's position in the source list.
+	Order int
+}
+
 // Node is the immutable node spec produced by the builder.
 // It contains the template, variables, and conditions for a resource.
 // No CRD/schema references are kept here - schemas are only used

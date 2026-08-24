@@ -30,6 +30,8 @@ import (
 	"k8s.io/client-go/metadata/fake"
 	clienttesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	kwatch "github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 var (
@@ -85,7 +87,7 @@ func newTestCoordinator(t *testing.T) (*WatchCoordinator, *enqueueRecorder) {
 	// Create WatchManager with a placeholder onEvent; we'll wire the
 	// coordinator's RouteEvent after construction.
 	var coord *WatchCoordinator
-	wm := NewWatchManager(client, 1*time.Hour, func(event Event) {
+	wm := kwatch.NewManager(client, 1*time.Hour, func(event kwatch.Event) {
 		if coord != nil {
 			coord.RouteEvent(event)
 		}
@@ -122,8 +124,8 @@ func TestWatchAndDone_ScalarWatch(t *testing.T) {
 	assert.Equal(t, 1, coord.InstanceWatchCount())
 
 	// Simulate an event matching the scalar watch.
-	coord.RouteEvent(Event{
-		Type:      EventUpdate,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventUpdate,
 		GVR:       testDeployGVR,
 		Name:      "my-deploy",
 		Namespace: "default",
@@ -131,8 +133,8 @@ func TestWatchAndDone_ScalarWatch(t *testing.T) {
 	assert.Equal(t, 1, recorder.count())
 
 	// Non-matching event.
-	coord.RouteEvent(Event{
-		Type:      EventUpdate,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventUpdate,
 		GVR:       testDeployGVR,
 		Name:      "other-deploy",
 		Namespace: "default",
@@ -153,8 +155,8 @@ func TestWatchAndDone_CleanupStaleRequests(t *testing.T) {
 	w1.Done(true)
 
 	// Verify both match.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
 	assert.Equal(t, 2, recorder.count())
 	recorder.reset()
 
@@ -164,11 +166,11 @@ func TestWatchAndDone_CleanupStaleRequests(t *testing.T) {
 	w2.Done(true)
 
 	// Deployment still matches, service no longer does.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
 	assert.Equal(t, 1, recorder.count())
 	recorder.reset()
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
 	assert.Equal(t, 0, recorder.count())
 }
 
@@ -187,8 +189,8 @@ func TestCollectionWatch(t *testing.T) {
 	watcher.Done(true)
 
 	// Matching labels.
-	coord.RouteEvent(Event{
-		Type:      EventAdd,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventAdd,
 		GVR:       testCmGVR,
 		Name:      "config-1",
 		Namespace: "default",
@@ -197,8 +199,8 @@ func TestCollectionWatch(t *testing.T) {
 	assert.Equal(t, 1, recorder.count())
 
 	// Non-matching labels.
-	coord.RouteEvent(Event{
-		Type:      EventAdd,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventAdd,
 		GVR:       testCmGVR,
 		Name:      "config-2",
 		Namespace: "default",
@@ -207,8 +209,8 @@ func TestCollectionWatch(t *testing.T) {
 	assert.Equal(t, 1, recorder.count())
 
 	// Wrong namespace.
-	coord.RouteEvent(Event{
-		Type:      EventAdd,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventAdd,
 		GVR:       testCmGVR,
 		Name:      "config-3",
 		Namespace: "other-ns",
@@ -226,7 +228,7 @@ func TestRemoveInstance(t *testing.T) {
 	watcher.Done(true)
 
 	// Verify match.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
 	assert.Equal(t, 1, recorder.count())
 	recorder.reset()
 
@@ -235,7 +237,7 @@ func TestRemoveInstance(t *testing.T) {
 	assert.Equal(t, 0, coord.InstanceWatchCount())
 
 	// No longer matches.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
 	assert.Equal(t, 0, recorder.count())
 }
 
@@ -260,8 +262,8 @@ func TestRemoveParentGVR(t *testing.T) {
 	assert.Equal(t, 0, coord.InstanceWatchCount())
 
 	// No more matches.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d2", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testDeployGVR, Name: "d2", Namespace: "default"})
 	assert.Equal(t, 0, recorder.count())
 }
 
@@ -280,7 +282,7 @@ func TestSharedWatchAcrossInstances(t *testing.T) {
 	w2.Done(true)
 
 	// One event should trigger BOTH instances.
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testCmGVR, Name: "shared-cm", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testCmGVR, Name: "shared-cm", Namespace: "default"})
 	assert.Equal(t, 2, recorder.count())
 }
 
@@ -523,8 +525,8 @@ func TestDuplicateCollectionRegistration_Idempotent(t *testing.T) {
 	assert.Equal(t, 1, collection, "duplicate collection registration should be deduped")
 
 	// One matching event should trigger exactly one enqueue, not two.
-	coord.RouteEvent(Event{
-		Type:      EventAdd,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventAdd,
 		GVR:       testCmGVR,
 		Name:      "config-1",
 		Namespace: "default",
@@ -556,8 +558,8 @@ func TestScalarAndCollectionDedup(t *testing.T) {
 	watcher.Done(true)
 
 	// An event matching both scalar and collection should enqueue only once.
-	coord.RouteEvent(Event{
-		Type:      EventUpdate,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventUpdate,
 		GVR:       testCmGVR,
 		Name:      "config-1",
 		Namespace: "default",
@@ -593,8 +595,8 @@ func TestCollectionWatch_SelectorChange(t *testing.T) {
 	w2.Done(true)
 
 	// Old selector should not match.
-	coord.RouteEvent(Event{
-		Type:      EventAdd,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventAdd,
 		GVR:       testCmGVR,
 		Name:      "config-1",
 		Namespace: "default",
@@ -603,8 +605,8 @@ func TestCollectionWatch_SelectorChange(t *testing.T) {
 	assert.Equal(t, 0, recorder.count(), "old selector should not match after change")
 
 	// New selector should match.
-	coord.RouteEvent(Event{
-		Type:      EventAdd,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventAdd,
 		GVR:       testCmGVR,
 		Name:      "config-2",
 		Namespace: "default",
@@ -633,8 +635,8 @@ func TestRouteEvent_OldLabelsMatch(t *testing.T) {
 
 	// Update event: new labels no longer match, but old labels did.
 	// Should still trigger re-reconciliation (label-loss detection).
-	coord.RouteEvent(Event{
-		Type:      EventUpdate,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventUpdate,
 		GVR:       testCmGVR,
 		Name:      "config-1",
 		Namespace: "default",
@@ -715,10 +717,10 @@ func TestAbortInstance_RollsBackFailedCycleTargetChange(t *testing.T) {
 	}))
 	w2.Done(false)
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
 	assert.Equal(t, 0, recorder.count(), "aborted target change should not stay active")
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
 	assert.Equal(t, 1, recorder.count(), "previous committed watch should remain active after abort")
 
 	assert.NotNil(t, coord.watches.GetInformer(testDeployGVR), "previous informer should stay running")
@@ -751,7 +753,7 @@ func TestAbortInstance_SameTargetKeepsPreviousWatch(t *testing.T) {
 	}))
 	w2.Done(false)
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
 	assert.Equal(t, 1, recorder.count(), "aborting an unchanged request must not drop the previous watch")
 
 	scalar, collection := coord.WatchRequestCount()
@@ -790,10 +792,10 @@ func TestAbortInstance_DoesNotPromoteFailedCurrentOnLaterSuccess(t *testing.T) {
 	}))
 	w3.Done(true)
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testServiceGVR, Name: "s1", Namespace: "default"})
 	assert.Equal(t, 0, recorder.count(), "aborted requests must not be committed by a later successful Done")
 
-	coord.RouteEvent(Event{Type: EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
+	coord.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: testDeployGVR, Name: "d1", Namespace: "default"})
 	assert.Equal(t, 1, recorder.count(), "successful cycle should keep only the committed watch")
 }
 
@@ -824,8 +826,8 @@ func TestAbortInstance_RollsBackCollectionSelectorChange(t *testing.T) {
 	}))
 	w2.Done(false)
 
-	coord.RouteEvent(Event{
-		Type:      EventUpdate,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventUpdate,
 		GVR:       testCmGVR,
 		Name:      "cm-v2",
 		Namespace: "default",
@@ -833,8 +835,8 @@ func TestAbortInstance_RollsBackCollectionSelectorChange(t *testing.T) {
 	})
 	assert.Equal(t, 0, recorder.count(), "aborted selector change should not stay active")
 
-	coord.RouteEvent(Event{
-		Type:      EventUpdate,
+	coord.RouteEvent(kwatch.Event{
+		Type:      kwatch.EventUpdate,
 		GVR:       testCmGVR,
 		Name:      "cm-v1",
 		Namespace: "default",
@@ -855,7 +857,7 @@ func TestAddWatch_EnsureWatchSyncError(t *testing.T) {
 	})
 
 	recorder := &enqueueRecorder{}
-	wm := NewWatchManager(client, 1*time.Hour, func(event Event) {}, log)
+	wm := kwatch.NewManager(client, 1*time.Hour, func(event kwatch.Event) {}, log)
 	wm.SyncTimeout = 100 * time.Millisecond
 
 	coord := NewWatchCoordinator(wm, recorder.enqueue, log)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ackekscluster_test
+package core_test
 
 import (
 	"fmt"
@@ -46,16 +46,16 @@ func eksCluster(
 			},
 		),
 		generator.WithResource("clusterRole", clusterRoleDef(namespace), nil, nil),
-		generator.WithResource("clusterVPC", vpcDef(namespace), nil, nil),
+		generator.WithResource("clusterVPC", eksVPCDef(namespace), nil, nil),
 		generator.WithResource("clusterInternetGateway", igwDef(namespace), nil, nil),
 		generator.WithResource("clusterRouteTable", routeTableDef(namespace), nil, nil),
 		generator.WithResource(
 			"clusterSubnetA",
-			subnetDef(namespace, "kro-cluster-public-subnet1", "us-west-2a", "192.168.0.0/18"), nil, nil,
+			eksSubnetDef(namespace, "kro-cluster-public-subnet1", "us-west-2a", "192.168.0.0/18"), nil, nil,
 		),
 		generator.WithResource(
 			"clusterSubnetB",
-			subnetDef(namespace, "kro-cluster-public-subnet2", "us-west-2b", "192.168.64.0/18"), nil, nil,
+			eksSubnetDef(namespace, "kro-cluster-public-subnet2", "us-west-2b", "192.168.64.0/18"), nil, nil,
 		),
 		generator.WithResource("cluster", clusterDef(namespace), nil, nil),
 		generator.WithResource("clusterAdminRole", adminRoleDef(namespace), nil, nil),
@@ -84,7 +84,7 @@ func eksCluster(
 	return resourcegraphdefinition, instanceGenerator
 }
 
-func vpcDef(namespace string) map[string]interface{} {
+func eksVPCDef(namespace string) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "VPC",
@@ -148,7 +148,7 @@ func routeTableDef(namespace string) map[string]interface{} {
 	}
 }
 
-func subnetDef(namespace, name, az, cidr string) map[string]interface{} {
+func eksSubnetDef(namespace, name, az, cidr string) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "Subnet",

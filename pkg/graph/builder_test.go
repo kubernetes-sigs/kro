@@ -36,6 +36,7 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
@@ -882,6 +883,31 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "cannot use externalRef with forEach",
+		},
+		{
+			// Ported from test/integration/suites/core/validation_test.go
+			// ("should reject invalid kubernetes object structures"): a
+			// malformed apiVersion with two slashes passes structural
+			// validation but fails GVK extraction at build time.
+			name: "invalid apiVersion format",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("cfgmap", map[string]interface{}{
+					"apiVersion": "invalid/version/format",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "test",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "invalid apiVersion format",
 		},
 	}
 
@@ -2315,6 +2341,30 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			wantErr: true,
 			errMsg:  "type mismatch",
 		},
+		{
+			// Ported from test/integration/suites/core/instance_conditions_test.go
+			// ("should surface a failure condition when a resource is
+			// invalid"): an includeWhen referencing an undeclared
+			// schema.spec subfield is rejected by the typed CEL env.
+			name: "includeWhen references undefined schema field",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"value": "string",
+					},
+					nil,
+				),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]interface{}{"name": "${schema.metadata.name}"},
+					"data":       map[string]interface{}{"foo": "${schema.spec.value}"},
+				}, nil, []string{"${schema.spec.convex.enabled}"}),
+			},
+			wantErr: true,
+			errMsg:  "convex",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2818,6 +2868,46 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 					},
 					"spec": map[string]interface{}{
 						"containers": "${sourcePod.spec.containers}",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			// Ported from test/integration/suites/core/type_compatibility_test.go
+			// ("should validate all type compatibility scenarios"): float
+			// scalar, []float indexing, float arithmetic and size() casts
+			// via string() — not covered by the other structural cases.
+			name: "pass - float scalar, float list indexing, arithmetic and size() casts",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"FloatCasts", "v1alpha1",
+					map[string]interface{}{
+						"appName":   "string",
+						"threshold": "float",
+						"limits":    "[]float",
+					},
+					nil,
+				),
+				generator.WithResource("pod", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.appName}-ports",
+						"annotations": map[string]interface{}{
+							"threshold":   "${string(schema.spec.threshold)}",
+							"doubleValue": "${string(schema.spec.threshold * 2.0)}",
+							"firstLimit":  "${string(schema.spec.limits[0])}",
+							"limitsCount": "${string(size(schema.spec.limits))}",
+						},
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "main",
+								"image": "nginx",
+							},
+						},
 					},
 				}, nil, nil),
 			},
@@ -3969,17 +4059,17 @@ func TestBuildRGResourceErrorPaths(t *testing.T) {
 	testParser := parser.New(graphschema.NewCache())
 	t.Run("template unmarshal error", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+		_, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID:       "bad",
 			Template: rawExt("["),
-		}, 0, true)
+		}, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to unmarshal resource")
 	})
 
 	t.Run("extract gvk error", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+		_, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "badGVK",
 			Template: rawExt(`
 apiVersion: not/a/valid/apiVersion
@@ -3987,7 +4077,7 @@ kind: ConfigMap
 metadata:
   name: test
 `),
-		}, 0, true)
+		}, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to extract GVK")
 	})
@@ -3999,7 +4089,7 @@ metadata:
 			restMapper:     meta.NewDefaultRESTMapper([]schema.GroupVersion{}),
 		}
 
-		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+		_, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "cm",
 			Template: rawExt(`
 apiVersion: v1
@@ -4007,14 +4097,14 @@ kind: ConfigMap
 metadata:
   name: test
 `),
-		}, 0, true)
+		}, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get REST mapping")
 	})
 
 	t.Run("external ref parse error", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+		_, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "external",
 			ExternalRef: &krov1alpha1.ExternalRef{
 				APIVersion: "v1",
@@ -4023,14 +4113,14 @@ metadata:
 					Name: "${outer(${inner})}",
 				},
 			},
-		}, 0, true)
+		}, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to parse external ref resource")
 	})
 
 	t.Run("crd schemaless parse error", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+		_, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "crd",
 			Template: rawExt(`
 apiVersion: apiextensions.k8s.io/v1
@@ -4040,14 +4130,14 @@ metadata:
 spec:
   group: tests.kro.run
 `),
-		}, 0, true)
+		}, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to parse schemaless resource")
 	})
 
 	t.Run("crd only allows metadata expressions", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+		_, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "crd",
 			Template: rawExt(`
 apiVersion: apiextensions.k8s.io/v1
@@ -4057,14 +4147,14 @@ metadata:
 spec:
   group: ${schema.spec.group}
 `),
-		}, 0, true)
+		}, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "only supported for metadata fields")
 	})
 
 	t.Run("schema based parsing error", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+		_, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "vpc",
 			Template: rawExt(`
 apiVersion: ec2.services.k8s.aws/v1alpha1
@@ -4074,14 +4164,14 @@ metadata:
 spec:
   unknownField: ${schema.spec.name}
 `),
-		}, 0, true)
+		}, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to extract CEL expressions from schema")
 	})
 
 	t.Run("external selector becomes collection", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		node, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+		node, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "external",
 			ExternalRef: &krov1alpha1.ExternalRef{
 				APIVersion: "v1",
@@ -4094,14 +4184,14 @@ spec:
 					}),
 				},
 			},
-		}, 0, true)
+		}, true)
 		require.NoError(t, err)
 		assert.Equal(t, NodeTypeExternalCollection, node.Meta.Type)
 	})
 
 	t.Run("external selector CEL string becomes collection", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		node, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+		node, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "external",
 			ExternalRef: &krov1alpha1.ExternalRef{
 				APIVersion: "v1",
@@ -4110,14 +4200,14 @@ spec:
 					Selector: toRawExtension(t, "${schema.spec.selector}"),
 				},
 			},
-		}, 0, true)
+		}, true)
 		require.NoError(t, err)
 		assert.Equal(t, NodeTypeExternalCollection, node.Meta.Type)
 	})
 
 	t.Run("cluster-scoped instance requires namespace on namespaced resource", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+		_, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "cm",
 			Template: rawExt(`
 apiVersion: v1
@@ -4125,14 +4215,14 @@ kind: ConfigMap
 metadata:
   name: test
 `),
-		}, 0, false)
+		}, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "must set metadata.namespace when the instance CRD is cluster-scoped")
 	})
 
 	t.Run("cluster-scoped instance requires namespace on namespaced external ref", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+		_, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "external",
 			ExternalRef: &krov1alpha1.ExternalRef{
 				APIVersion: "v1",
@@ -4141,7 +4231,7 @@ metadata:
 					Name: "test",
 				},
 			},
-		}, 0, false)
+		}, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "must set metadata.namespace when the instance CRD is cluster-scoped")
 	})
@@ -4216,9 +4306,7 @@ func TestBuildInstanceNode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			node, err := buildInstanceNode(
-				"example.com",
-				"v1alpha1",
-				"Test",
+				metadata.GetResourceGraphDefinitionInstanceGVR("example.com", "v1alpha1", "Test"),
 				true, // namespaced (default)
 				tt.variables,
 				tt.template,
@@ -4910,9 +4998,7 @@ func TestBuildInstanceNodeFoldsConditionDeps(t *testing.T) {
 	require.Len(t, conditions, 1)
 
 	node, err := buildInstanceNode(
-		"example.com",
-		"v1alpha1",
-		"Test",
+		metadata.GetResourceGraphDefinitionInstanceGVR("example.com", "v1alpha1", "Test"),
 		true,
 		nil,
 		map[string]interface{}{},
@@ -5062,4 +5148,86 @@ func TestGraphBuilder_RuntimeOutsideConditionsRejected(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
+}
+
+// TestBuildResourceNode_DirectSpec proves a non-RGD consumer can build a node
+// straight from a ResourceSpec, with no v1alpha1 type involved.
+func TestBuildResourceNode_DirectSpec(t *testing.T) {
+	testParser := parser.New(graphschema.NewCache())
+	builder := newUnitTestBuilder()
+
+	node, schema, err := builder.buildResourceNode(testParser, ResourceSpec{
+		ID: "cm",
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]interface{}{"name": "demo", "namespace": "default"},
+		},
+		Order: 3,
+	}, true)
+	require.NoError(t, err)
+	require.NotNil(t, schema)
+	assert.Equal(t, "cm", node.Meta.ID)
+	assert.Equal(t, 3, node.Meta.Index)
+	assert.Equal(t, NodeTypeResource, node.Meta.Type)
+	assert.Equal(t, "configmaps", node.Meta.GVR.Resource)
+}
+
+// testSource is a minimal Source implementation with no RGD type, proving a
+// non-RGD consumer can drive CompileSource.
+type testSource struct {
+	resources []ResourceSpec
+	gvr       schema.GroupVersionResource
+	nsScoped  bool
+	schemaVar *spec.Schema
+	statusRaw []byte
+}
+
+func (s testSource) Resources() []ResourceSpec                { return s.resources }
+func (s testSource) InstanceGVR() schema.GroupVersionResource { return s.gvr }
+func (s testSource) InstanceNamespaced() bool                 { return s.nsScoped }
+func (s testSource) SchemaVarSchema() *spec.Schema            { return s.schemaVar }
+func (s testSource) StatusRaw() []byte                        { return s.statusRaw }
+
+func TestCompileSource_DirectConsumer(t *testing.T) {
+	builder := newUnitTestBuilder()
+	schemaVar := objectSchema(map[string]spec.Schema{
+		"spec": *objectSchema(map[string]spec.Schema{
+			"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+		}),
+		"metadata": graphschema.ObjectMetaSchema,
+	})
+
+	g, statusSchema, err := builder.CompileSource(testSource{
+		resources: []ResourceSpec{{
+			ID: "cm",
+			Object: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]interface{}{"name": "${schema.spec.name}", "namespace": "default"},
+			},
+			Order: 0,
+		}},
+		gvr:       schema.GroupVersionResource{Group: "example.com", Version: "v1alpha1", Resource: "tests"},
+		nsScoped:  true,
+		schemaVar: schemaVar,
+		statusRaw: []byte("{}"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, statusSchema)
+	require.Contains(t, g.Nodes, "cm")
+	assert.Equal(t, []string{"cm"}, g.TopologicalOrder)
+	assert.Nil(t, g.CRD, "CompileSource must not synthesize a CRD")
+}
+
+// buildRGResourceForTest mirrors the pre-Step-8 buildRGResource: project an RGD
+// resource to a ResourceSpec and build its node. Production now uses
+// rgResourceSpec + buildResourceNode separately (via CompileSource).
+func buildRGResourceForTest(b *Builder, p *parser.Parser, res *krov1alpha1.Resource, instanceNamespaced bool) (*Node, error) {
+	rs, err := b.rgResourceSpec(res, 0)
+	if err != nil {
+		return nil, err
+	}
+	node, _, err := b.buildResourceNode(p, rs, instanceNamespaced)
+	return node, err
 }

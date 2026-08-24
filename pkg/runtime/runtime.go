@@ -48,25 +48,52 @@ type Runtime struct {
 	nodes       map[string]*Node
 	instance    *Node
 	applyOrders map[string]int
-	rgdConfig   graph.RGDConfig
+	config      graph.Config
 }
 
-// FromGraph creates a new Runtime from a Graph and instance.
-// This is called at the start of each reconciliation.
-func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig graph.RGDConfig) (*Runtime, error) {
+// Option configures runtime construction.
+type Option func(*runtimeOptions)
+
+type runtimeOptions struct {
+	instance          *unstructured.Unstructured
+	maxCollectionSize *int
+}
+
+// WithInstance supplies the instance object whose observed state seeds the
+// instance node. Required for reconciliation; may be omitted for compile-only
+// construction, in which case the instance node has no observed state.
+func WithInstance(instance *unstructured.Unstructured) Option {
+	return func(o *runtimeOptions) { o.instance = instance }
+}
+
+// WithMaxCollectionSize overrides Config.MaxCollectionSize for this runtime.
+func WithMaxCollectionSize(n int) Option {
+	return func(o *runtimeOptions) { o.maxCollectionSize = &n }
+}
+
+// FromGraph creates a new Runtime from a compiled Graph. The instance object is
+// supplied via WithInstance. This is called at the start of each reconciliation.
+func FromGraph(g *graph.Graph, config graph.Config, opts ...Option) (*Runtime, error) {
+	var options runtimeOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	if options.maxCollectionSize != nil {
+		config.MaxCollectionSize = *options.maxCollectionSize
+	}
+
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
 		metrics.RuntimeCreationDuration.Observe(duration.Seconds())
 		metrics.RuntimeCreationTotal.Inc()
 	}()
-	instanceObj := instance.DeepCopy()
 
 	rt := &Runtime{
 		order:       g.TopologicalOrder,
 		nodes:       make(map[string]*Node),
 		applyOrders: g.ApplyOrders,
-		rgdConfig:   rgdConfig,
+		config:      config,
 	}
 
 	// Expression cache for non-iteration expressions only.
@@ -102,7 +129,7 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 		rt.nodes[id] = &Node{
 			Spec:           g.Nodes[id].DeepCopy(),
 			deps:           make(map[string]*Node),
-			rgdConfig:      rgdConfig,
+			config:         config,
 			resourceSchema: g.ResourceSchemas[id],
 		}
 	}
@@ -111,10 +138,12 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 	instNode := &Node{
 		Spec:           g.Instance.DeepCopy(),
 		deps:           make(map[string]*Node),
-		rgdConfig:      rgdConfig,
+		config:         config,
 		resourceSchema: g.ResourceSchemas[graph.InstanceNodeID],
 	}
-	instNode.SetObserved([]*unstructured.Unstructured{instanceObj})
+	if options.instance != nil {
+		instNode.SetObserved([]*unstructured.Unstructured{options.instance.DeepCopy()})
+	}
 	rt.instance = instNode
 
 	// Phase 2: Wire up dependencies for each node.

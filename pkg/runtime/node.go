@@ -54,7 +54,7 @@ type Node struct {
 	// instance node populates this; resource nodes leave it nil.
 	conditionExprs []*expressionEvaluationState
 
-	rgdConfig graph.RGDConfig
+	config graph.Config
 
 	// resourceSchema is the OpenAPI schema for this node's resource type.
 	// Used by buildContext to wrap observed resources with schema-aware CEL values.

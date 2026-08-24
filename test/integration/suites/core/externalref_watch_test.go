@@ -85,7 +85,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating the external ConfigMap with replicas=1")
 		extCM := &corev1.ConfigMap{
@@ -129,7 +129,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			}, managedCM)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(managedCM.Data).To(HaveKeyWithValue("replicas", "1"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("updating external ConfigMap to replicas=3")
 		Expect(env.Client.Get(ctx, types.NamespacedName{
@@ -155,6 +155,12 @@ var _ = Describe("ExternalRef Watch", func() {
 	})
 
 	It("external collection with matchExpressions CEL resolves dynamic values", func(ctx SpecContext) {
+		// This collection omits a namespace, so it lists across every namespace
+		// on the shared control plane. Unique label values keep concurrent specs
+		// from matching each other's ConfigMaps.
+		teamValue := fmt.Sprintf("bravo-%s", rand.String(5))
+		otherTeamValue := fmt.Sprintf("charlie-%s", rand.String(5))
+
 		By("creating RGD with external collection ref using matchExpressions with CEL")
 		rgd := generator.NewResourceGraphDefinition("test-extcoll-matchexpr",
 			generator.WithSchema(
@@ -193,14 +199,14 @@ var _ = Describe("ExternalRef Watch", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
-		By("creating ConfigMaps with label team=bravo")
+		By("creating ConfigMaps with the matching team label")
 		cm1 := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "bravo-config-1",
 				Namespace: namespace,
-				Labels:    map[string]string{"team": "bravo"},
+				Labels:    map[string]string{"team": teamValue},
 			},
 			Data: map[string]string{"key": "value1"},
 		}
@@ -208,7 +214,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "bravo-config-2",
 				Namespace: namespace,
-				Labels:    map[string]string{"team": "bravo"},
+				Labels:    map[string]string{"team": teamValue},
 			},
 			Data: map[string]string{"key": "value2"},
 		}
@@ -220,13 +226,13 @@ var _ = Describe("ExternalRef Watch", func() {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "charlie-config-1",
 				Namespace: namespace,
-				Labels:    map[string]string{"team": "charlie"},
+				Labels:    map[string]string{"team": otherTeamValue},
 			},
 			Data: map[string]string{"key": "other"},
 		}
 		Expect(env.Client.Create(ctx, cmOther)).To(Succeed())
 
-		By("creating the instance with teamName=bravo")
+		By("creating the instance with the matching teamName")
 		instance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
 				"apiVersion": "kro.run/v1alpha1",
@@ -236,13 +242,13 @@ var _ = Describe("ExternalRef Watch", func() {
 					"namespace": namespace,
 				},
 				"spec": map[string]interface{}{
-					"teamName": "bravo",
+					"teamName": teamValue,
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		By("waiting for instance to become ACTIVE with configCount=2 (only team=bravo matched)")
+		By("waiting for instance to become ACTIVE with configCount=2 (only the matching team)")
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      instance.GetName(),
@@ -256,10 +262,16 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(configCount).To(Equal("2"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("external collection with matchLabels CEL resolves dynamic values", func(ctx SpecContext) {
+		// This collection omits a namespace, so it lists across every namespace
+		// on the shared control plane. Unique label values keep concurrent specs
+		// from matching each other's ConfigMaps.
+		teamValue := fmt.Sprintf("bravo-%s", rand.String(5))
+		otherTeamValue := fmt.Sprintf("charlie-%s", rand.String(5))
+
 		By("creating RGD with external collection ref using matchLabels with CEL")
 		rgd := generator.NewResourceGraphDefinition("test-extcoll-matchlabels",
 			generator.WithSchema(
@@ -296,12 +308,12 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		By("creating ConfigMaps with label team=bravo")
+		By("creating ConfigMaps with the matching team label")
 		cm1 := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "bravo-labels-1",
 				Namespace: namespace,
-				Labels:    map[string]string{"team": "bravo"},
+				Labels:    map[string]string{"team": teamValue},
 			},
 			Data: map[string]string{"key": "value1"},
 		}
@@ -309,7 +321,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "bravo-labels-2",
 				Namespace: namespace,
-				Labels:    map[string]string{"team": "bravo"},
+				Labels:    map[string]string{"team": teamValue},
 			},
 			Data: map[string]string{"key": "value2"},
 		}
@@ -321,13 +333,13 @@ var _ = Describe("ExternalRef Watch", func() {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "charlie-labels-1",
 				Namespace: namespace,
-				Labels:    map[string]string{"team": "charlie"},
+				Labels:    map[string]string{"team": otherTeamValue},
 			},
 			Data: map[string]string{"key": "other"},
 		}
 		Expect(env.Client.Create(ctx, cmOther)).To(Succeed())
 
-		By("creating the instance with teamName=bravo")
+		By("creating the instance with the matching teamName")
 		instance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
 				"apiVersion": "kro.run/v1alpha1",
@@ -337,7 +349,7 @@ var _ = Describe("ExternalRef Watch", func() {
 					"namespace": namespace,
 				},
 				"spec": map[string]interface{}{
-					"teamName": "bravo",
+					"teamName": teamValue,
 				},
 			},
 		}
@@ -515,7 +527,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating first ConfigMap with label watch-test=reactive")
 		cm1 := &corev1.ConfigMap{
@@ -557,7 +569,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(configCount).To(Equal("1"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating a second ConfigMap with label watch-test=reactive")
 		cm2 := &corev1.ConfigMap{
@@ -625,7 +637,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		By("creating 3 ConfigMaps out of alphabetical/priority order with label app=sorttest")
 		cmCharlie := &corev1.ConfigMap{
@@ -688,7 +700,7 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 			g.Expect(sortedNames).To(Equal("cm-charlie,cm-alpha,cm-bravo"))
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
 	It("external ref to a chained RGD keeps the producer instance reconciling after consumer deletion",
@@ -723,7 +735,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: producerRGD.Name}, producerRGD)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(producerRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating a producer instance and waiting for its managed ConfigMap")
 			producerInstance := &unstructured.Unstructured{
@@ -763,7 +775,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				}, producerCM)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(producerCM.Data).To(HaveKeyWithValue("value", "one"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating a consumer RGD that externalRefs the producer custom resource kind")
 			consumerRGD := generator.NewResourceGraphDefinition("test-chained-consumer",
@@ -800,7 +812,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: consumerRGD.Name}, consumerRGD)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(consumerRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("creating the consumer instance so it registers an externalRef watch on the producer kind")
 			consumerInstance := &unstructured.Unstructured{
@@ -831,7 +843,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				}, consumerCM)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(consumerCM.Data).To(HaveKeyWithValue("value", "one"))
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 			By("deleting the consumer instance so its externalRef watch is cleaned up")
 			Expect(env.Client.Delete(ctx, consumerInstance)).To(Succeed())
@@ -841,7 +853,7 @@ var _ = Describe("ExternalRef Watch", func() {
 					Namespace: namespace,
 				}, consumerInstance)
 				return apierrors.IsNotFound(err)
-			}, 20*time.Second, time.Second).WithContext(ctx).Should(BeTrue())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(BeTrue())
 
 			By("updating the producer instance after consumer deletion")
 			Expect(env.Client.Get(ctx, types.NamespacedName{

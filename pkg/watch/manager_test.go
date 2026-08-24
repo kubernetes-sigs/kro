@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dynamiccontroller
+package watch
 
 import (
 	"fmt"
@@ -20,17 +20,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/metadata/fake"
 	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 )
 
-func newTestWatchManager(t *testing.T) *WatchManager {
+// noopLogger discards all output; the manager tests only assert on state.
+func noopLogger() logr.Logger { return logr.Discard() }
+
+// NewWatchManager keeps the identifier this suite used before the Manager moved
+// into pkg/watch. NewManager is the real constructor; this is a thin test-only
+// alias without the dynamiccontroller metrics wiring (these tests do not assert
+// on metrics).
+func NewWatchManager(client metadata.Interface, resync time.Duration, onEvent EventHandler, log logr.Logger) *Manager {
+	return NewManager(client, resync, onEvent, log)
+}
+
+func newTestWatchManager(t *testing.T) *Manager {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := v1.AddMetaToScheme(scheme); err != nil {

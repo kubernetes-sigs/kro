@@ -35,11 +35,11 @@ func TestRegistryCases(t *testing.T) {
 		{
 			name: "put and get preserve entry fields",
 			run: func(t *testing.T, reg *Registry) {
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, SpecHash: "hash-1", State: RevisionStateActive, CompiledGraph: one})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, SpecHash: "hash-1", State: RevisionStateActive, CompiledGraph: one})
 
 				entry, ok := reg.Get("demo-rgd", 1)
 				require.True(t, ok)
-				assert.Equal(t, "demo-rgd", entry.RGDName)
+				assert.Equal(t, "demo-rgd", entry.OwnerKey)
 				assert.Equal(t, int64(1), entry.Revision)
 				assert.Equal(t, "hash-1", entry.SpecHash)
 				assert.Equal(t, RevisionStateActive, entry.State)
@@ -49,8 +49,8 @@ func TestRegistryCases(t *testing.T) {
 		{
 			name: "put overwrites an existing revision",
 			run: func(t *testing.T, reg *Registry) {
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, SpecHash: "hash-1", State: RevisionStateActive, CompiledGraph: one})
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, SpecHash: "hash-2", State: RevisionStateActive, CompiledGraph: two})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, SpecHash: "hash-1", State: RevisionStateActive, CompiledGraph: one})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, SpecHash: "hash-2", State: RevisionStateActive, CompiledGraph: two})
 
 				entry, ok := reg.Get("demo-rgd", 1)
 				require.True(t, ok)
@@ -61,7 +61,7 @@ func TestRegistryCases(t *testing.T) {
 		{
 			name: "get returns misses for unknown rgd or revision",
 			run: func(t *testing.T, reg *Registry) {
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one})
 
 				_, ok := reg.Get("demo-rgd", 2)
 				assert.False(t, ok)
@@ -72,8 +72,8 @@ func TestRegistryCases(t *testing.T) {
 		{
 			name: "hasAll only checks revision membership",
 			run: func(t *testing.T, reg *Registry) {
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one})
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 3, State: RevisionStateActive, CompiledGraph: three})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 3, State: RevisionStateActive, CompiledGraph: three})
 
 				assert.True(t, reg.HasAll("demo-rgd", nil))
 				assert.True(t, reg.HasAll("demo-rgd", []int64{1, 3}))
@@ -84,9 +84,9 @@ func TestRegistryCases(t *testing.T) {
 		{
 			name: "latest tracks the highest revision and tolerates corrupt markers",
 			run: func(t *testing.T, reg *Registry) {
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, SpecHash: "hash-1", State: RevisionStateActive, CompiledGraph: one})
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 3, SpecHash: "hash-3", State: RevisionStateActive, CompiledGraph: three})
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 2, SpecHash: "hash-2", State: RevisionStateActive, CompiledGraph: two})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, SpecHash: "hash-1", State: RevisionStateActive, CompiledGraph: one})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 3, SpecHash: "hash-3", State: RevisionStateActive, CompiledGraph: three})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 2, SpecHash: "hash-2", State: RevisionStateActive, CompiledGraph: two})
 
 				latest, ok := reg.Latest("demo-rgd")
 				require.True(t, ok)
@@ -106,9 +106,9 @@ func TestRegistryCases(t *testing.T) {
 			name: "delete removes revisions and recomputes the latest marker",
 			run: func(t *testing.T, reg *Registry) {
 				putEntries(reg,
-					Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one},
-					Entry{RGDName: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: two},
-					Entry{RGDName: "demo-rgd", Revision: 3, State: RevisionStateActive, CompiledGraph: three},
+					Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one},
+					Entry{OwnerKey: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: two},
+					Entry{OwnerKey: "demo-rgd", Revision: 3, State: RevisionStateActive, CompiledGraph: three},
 				)
 
 				reg.Delete("demo-rgd", 2)
@@ -128,7 +128,7 @@ func TestRegistryCases(t *testing.T) {
 			name: "delete is idempotent for absent buckets and revisions",
 			run: func(t *testing.T, reg *Registry) {
 				reg.Delete("demo-rgd", 1)
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one})
 				reg.Delete("demo-rgd", 2)
 
 				entry, ok := reg.Get("demo-rgd", 1)
@@ -140,9 +140,9 @@ func TestRegistryCases(t *testing.T) {
 			name: "deleteRevisionsBefore prunes old revisions and preserves the retention floor",
 			run: func(t *testing.T, reg *Registry) {
 				putEntries(reg,
-					Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one},
-					Entry{RGDName: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: two},
-					Entry{RGDName: "demo-rgd", Revision: 3, State: RevisionStateActive, CompiledGraph: three},
+					Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one},
+					Entry{OwnerKey: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: two},
+					Entry{OwnerKey: "demo-rgd", Revision: 3, State: RevisionStateActive, CompiledGraph: three},
 				)
 
 				reg.DeleteRevisionsBefore("demo-rgd", 3)
@@ -164,7 +164,7 @@ func TestRegistryCases(t *testing.T) {
 				_, ok := reg.Latest("demo-rgd")
 				assert.False(t, ok)
 
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one})
 				reg.DeleteRevisionsBefore("demo-rgd", 2)
 				_, ok = reg.Latest("demo-rgd")
 				assert.False(t, ok)
@@ -175,8 +175,8 @@ func TestRegistryCases(t *testing.T) {
 			run: func(t *testing.T, reg *Registry) {
 				reg.byRGD["demo-rgd"] = &rgdBucket{
 					entries: map[int64]Entry{
-						2: {RGDName: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: two},
-						3: {RGDName: "demo-rgd", Revision: 3, State: RevisionStateActive, CompiledGraph: three},
+						2: {OwnerKey: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: two},
+						3: {OwnerKey: "demo-rgd", Revision: 3, State: RevisionStateActive, CompiledGraph: three},
 					},
 					latestRevision: 1,
 					hasLatest:      true,
@@ -190,10 +190,10 @@ func TestRegistryCases(t *testing.T) {
 			name: "deleteAll removes every revision for the target rgd",
 			run: func(t *testing.T, reg *Registry) {
 				putEntries(reg,
-					Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one},
-					Entry{RGDName: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: two},
-					Entry{RGDName: "demo-rgd", Revision: 3, State: RevisionStateActive, CompiledGraph: three},
-					Entry{RGDName: "other-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one},
+					Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one},
+					Entry{OwnerKey: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: two},
+					Entry{OwnerKey: "demo-rgd", Revision: 3, State: RevisionStateActive, CompiledGraph: three},
+					Entry{OwnerKey: "other-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one},
 				)
 
 				reg.DeleteAll("demo-rgd")
@@ -218,7 +218,7 @@ func TestRegistryCases(t *testing.T) {
 			run: func(t *testing.T, reg *Registry) {
 				reg.DeleteAll("nonexistent-rgd")
 				// no panic, no side effects
-				reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one})
+				reg.Put(Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one})
 				reg.DeleteAll("nonexistent-rgd")
 
 				entry, ok := reg.Get("demo-rgd", 1)
@@ -230,8 +230,8 @@ func TestRegistryCases(t *testing.T) {
 			name: "resolver scopes lookups to a single rgd",
 			run: func(t *testing.T, reg *Registry) {
 				putEntries(reg,
-					Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one},
-					Entry{RGDName: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: two},
+					Entry{OwnerKey: "demo-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: one},
+					Entry{OwnerKey: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: two},
 				)
 
 				resolver := reg.ResolverForRGD("demo-rgd")

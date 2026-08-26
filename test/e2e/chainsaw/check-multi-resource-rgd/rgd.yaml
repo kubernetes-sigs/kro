@@ -51,6 +51,8 @@ spec:
               labels:
                 app: ${schema.spec.name}-deployment
             spec:
+              # terminate immediately so we don't have to wait 30s.
+              terminationGracePeriodSeconds: 0
               containers:
                 - name: main
                   image: ${schema.spec.image}

@@ -16,6 +16,7 @@ package core_test
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
@@ -104,7 +106,7 @@ var _ = Describe("Labels and Annotations", func() {
 				"apiVersion": apiVersion,
 				"kind":       kind,
 				"metadata": map[string]interface{}{
-					"name":      "instance",
+					"name":      strings.Repeat("a", 64),
 					"namespace": namespace,
 				},
 				"spec": map[string]interface{}{
@@ -160,7 +162,7 @@ var _ = Describe("Labels and Annotations", func() {
 		Expect(cfgMap.GetLabels()).To(SatisfyAll(
 			HaveKeyWithValue(applyset.ApplysetPartOfLabel, applyset.ID(instance)),
 			HaveKeyWithValue(metadata.InstanceNamespaceLabel, instance.GetNamespace()),
-			HaveKeyWithValue(metadata.InstanceLabel, instance.GetName()),
+			HaveKey(metadata.InstanceLabel),
 			HaveKeyWithValue(metadata.InstanceIDLabel, string(instance.GetUID())),
 			HaveKeyWithValue(metadata.InstanceGroupLabel, krov1alpha1.KRODomainName),
 			HaveKeyWithValue(metadata.InstanceVersionLabel, "v1alpha1"),
@@ -168,6 +170,9 @@ var _ = Describe("Labels and Annotations", func() {
 			HaveKeyWithValue(metadata.KROVersionLabel, "devel"),
 			HaveKeyWithValue(metadata.OwnedLabel, "true"),
 		), "config map should be created as part of apply set managed by instance created through rgd")
+		Expect(validation.IsValidLabelValue(cfgMap.GetLabels()[metadata.InstanceLabel])).To(BeEmpty())
+		Expect(cfgMap.GetLabels()[metadata.InstanceLabel]).ToNot(Equal(instance.GetName()))
+		Expect(cfgMap.GetAnnotations()).To(HaveKeyWithValue(metadata.InstanceNameAnnotation, instance.GetName()))
 		Expect(cfgMap.GetLabels()).ToNot(HaveKey(metadata.ResourceGraphDefinitionIDLabel),
 			"child resource should not have RGD ID label (RGD labels are only applied to CRDs)")
 		Expect(cfgMap.GetLabels()).ToNot(HaveKey(metadata.ResourceGraphDefinitionNameLabel),

@@ -505,6 +505,9 @@ func (c *Controller) applyDecoratorMetadata(
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
+	if labels[metadata.InstanceLabel] != rcx.Instance.GetName() {
+		annotations[metadata.InstanceNameAnnotation] = rcx.Instance.GetName()
+	}
 	annotations[metadata.ApplyOrderAnnotation] = strconv.Itoa(applyOrder)
 	obj.SetAnnotations(annotations)
 }

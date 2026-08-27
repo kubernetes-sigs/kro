@@ -17,6 +17,7 @@ package metadata
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strconv"
 	"strings"
 
@@ -177,7 +178,7 @@ func NewInstanceLabeler(instance *unstructured.Unstructured, namespaced bool) Ge
 	gvk := instance.GroupVersionKind()
 	labels := map[string]string{
 		InstanceIDLabel:      string(instance.GetUID()),
-		InstanceLabel:        instance.GetName(),
+		InstanceLabel:        labelSafeInstanceName(instance.GetName()),
 		InstanceGroupLabel:   gvk.Group,
 		InstanceVersionLabel: gvk.Version,
 		InstanceKindLabel:    gvk.Kind,
@@ -186,6 +187,17 @@ func NewInstanceLabeler(instance *unstructured.Unstructured, namespaced bool) Ge
 		labels[InstanceNamespaceLabel] = instance.GetNamespace()
 	}
 	return labels
+}
+
+func labelSafeInstanceName(name string) string {
+	if validation.IsValidLabelValue(name) == nil {
+		return name
+	}
+	// Instance names are DNS subdomains and may be up to 253 characters,
+	// while label values are limited to 63 characters.
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(name))
+	return fmt.Sprintf("%016x", h.Sum64())
 }
 
 // NewNodeLabeler returns a new labeler for child resources

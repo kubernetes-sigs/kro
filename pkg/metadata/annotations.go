@@ -17,4 +17,6 @@ package metadata
 const (
 	// ApplyOrderAnnotation persists a managed resource's reverse topological deletion wave.
 	ApplyOrderAnnotation = InternalKROPrefix + "apply-order"
+	// InstanceNameAnnotation preserves the full instance name when it is too long for a label value.
+	InstanceNameAnnotation = InternalKROPrefix + "instance-name"
 )

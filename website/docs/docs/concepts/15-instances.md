@@ -107,7 +107,7 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 | `kro.run/owned` | Set to `"true"` to indicate kro manages this resource |
 | `kro.run/kro-version` | Version of kro managing the resource |
 | `kro.run/instance-id` | UID of the instance that created this resource |
-| `kro.run/instance-name` | Name of the instance |
+| `kro.run/instance-name` | Name of the instance, or a stable hash when the name exceeds the Kubernetes label value limit |
 | `kro.run/instance-namespace` | Namespace of the instance (only for namespaced instances) |
 | `kro.run/instance-group` | API group of the instance |
 | `kro.run/instance-version` | API version of the instance |
@@ -115,6 +115,12 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 | `app.kubernetes.io/managed-by` | Set to `"kro"` |
 | `kro.run/node-id` | Resource ID from the RGD |
 | `applyset.kubernetes.io/part-of` | Links the resource to its parent instance (matches the instance's `applyset.kubernetes.io/id`) |
+
+**Annotations:**
+
+| Annotation | Description |
+|------------|-------------|
+| `internal.kro.run/instance-name` | Full instance name when `kro.run/instance-name` contains a hash |
 
 **Collection-specific labels** (only on resources created via `forEach`):
 

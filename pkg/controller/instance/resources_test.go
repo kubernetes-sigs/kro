@@ -18,6 +18,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -729,6 +730,7 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 	assert.Equal(t, "yes", obj.GetLabels()["keep"])
 	assert.Equal(t, "configs", obj.GetLabels()[metadata.NodeIDLabel])
 	assert.Equal(t, "4", obj.GetAnnotations()[metadata.ApplyOrderAnnotation])
+	assert.NotContains(t, obj.GetAnnotations(), metadata.InstanceNameAnnotation)
 	assert.Equal(t, "1", obj.GetLabels()[metadata.CollectionIndexLabel])
 	assert.Equal(t, string(instance.GetUID()), obj.GetLabels()[metadata.InstanceIDLabel])
 	assert.Empty(t, obj.GetLabels()[metadata.ManagedByLabelKey])
@@ -741,6 +743,19 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 	}))
 	stored := getStoredParentObject(t, raw)
 	assert.Equal(t, "demo", stored.GetLabels()[applyset.ApplySetParentIDLabel])
+}
+
+func TestApplyDecoratorPreservesLongInstanceName(t *testing.T) {
+	instanceName := strings.Repeat("a", 64)
+	instance := newInstanceObject(instanceName, "default")
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph())
+
+	obj := newConfigMapObject("demo", "default")
+	controller.applyDecoratorMetadata(rcx, obj, "configs", 1, nil)
+
+	assert.NotEqual(t, instanceName, obj.GetLabels()[metadata.InstanceLabel])
+	assert.Len(t, obj.GetLabels()[metadata.InstanceLabel], 16)
+	assert.Equal(t, instanceName, obj.GetAnnotations()[metadata.InstanceNameAnnotation])
 }
 
 func TestReconcileNodesBackfillsApplyOrderOnExistingResource(t *testing.T) {

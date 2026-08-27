@@ -15,6 +15,7 @@
 package metadata
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
 )
 
@@ -300,6 +302,25 @@ func TestNewInstanceLabeler(t *testing.T) {
 			InstanceVersionLabel: version,
 			InstanceKindLabel:    kind,
 		}, labeler)
+	})
+
+	t.Run("long instance name", func(t *testing.T) {
+		name := strings.Repeat("a", 64)
+		obj := &unstructured.Unstructured{}
+		obj.SetName(name)
+
+		labeler := NewInstanceLabeler(obj, true)
+		encoded := labeler[InstanceLabel]
+		assert.NotEqual(t, name, encoded)
+		assert.Len(t, encoded, 16)
+		assert.Empty(t, validation.IsValidLabelValue(encoded))
+		assert.Equal(t, encoded, NewInstanceLabeler(obj, true)[InstanceLabel])
+
+		obj.SetName(strings.Repeat("a", 63))
+		assert.Equal(t, obj.GetName(), NewInstanceLabeler(obj, true)[InstanceLabel])
+
+		obj.SetName(strings.Repeat("a", 63) + "b")
+		assert.NotEqual(t, encoded, NewInstanceLabeler(obj, true)[InstanceLabel])
 	})
 }
 

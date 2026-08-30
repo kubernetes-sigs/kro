@@ -9,7 +9,7 @@ require (
 	github.com/kubernetes-sigs/kro v0.9.3
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
-	gopkg.in/yaml.v2 v2.4.0
+	k8s.io/apiextensions-apiserver v0.36.3
 	k8s.io/apimachinery v0.36.3
 	k8s.io/client-go v0.36.3
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad
@@ -78,7 +78,6 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/api v0.36.3 // indirect
-	k8s.io/apiextensions-apiserver v0.36.3 // indirect
 	k8s.io/apiserver v0.36.3 // indirect
 	k8s.io/component-base v0.36.3 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect

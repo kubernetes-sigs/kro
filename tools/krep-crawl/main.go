@@ -6,7 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	githubapi "github.com/google/go-github/v74/github"
+	githubapi "github.com/google/go-github/v78/github"
 	"net/http"
 	"os"
 	"path/filepath"

@@ -20,6 +20,7 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/spf13/cobra"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -60,7 +61,7 @@ func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	}
 
 	crd := rgdGraph.CRD
-	crd.SetAnnotations(map[string]string{"kro.run/cli-version": "dev"})
+	prepareCRDForOutput(crd)
 
 	b, err := marshalObject(crd, config.outputFormat)
 	if err != nil {
@@ -70,4 +71,9 @@ func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	fmt.Println(string(b))
 
 	return nil
+}
+
+func prepareCRDForOutput(crd *extv1.CustomResourceDefinition) {
+	crd.SetGroupVersionKind(extv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))
+	crd.SetAnnotations(map[string]string{"kro.run/cli-version": "dev"})
 }

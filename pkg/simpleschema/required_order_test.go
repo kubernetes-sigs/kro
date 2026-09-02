@@ -35,7 +35,7 @@ func TestToOpenAPISpecSortsRequiredFields(t *testing.T) {
 	// Field names deliberately not in alphabetical order in the source map, and
 	// enough of them that map iteration is unlikely to produce sorted output by
 	// chance.
-	obj := map[string]interface{}{
+	obj := map[string]any{
 		"zebra":    "string | required=true",
 		"alpha":    "string | required=true",
 		"mike":     "integer | required=true",
@@ -60,8 +60,8 @@ func TestToOpenAPISpecSortsRequiredFields(t *testing.T) {
 // Nested objects synthesize their own required list, so the guarantee has to
 // hold at every level rather than only at the root.
 func TestToOpenAPISpecSortsNestedRequiredFields(t *testing.T) {
-	obj := map[string]interface{}{
-		"config": map[string]interface{}{
+	obj := map[string]any{
+		"config": map[string]any{
 			"zulu":     "string | required=true",
 			"alpha":    "string | required=true",
 			"november": "integer | required=true",
@@ -81,7 +81,7 @@ func TestToOpenAPISpecSortsNestedRequiredFields(t *testing.T) {
 // suite depends on, and it is what fails in the field when the sort is missing,
 // since map iteration order varies per process rather than per call.
 func TestToOpenAPISpecRequiredIsStableAcrossBuilds(t *testing.T) {
-	obj := map[string]interface{}{
+	obj := map[string]any{
 		"delta":   "string | required=true",
 		"echo":    "string | required=true",
 		"foxtrot": "string | required=true",
@@ -92,7 +92,7 @@ func TestToOpenAPISpecRequiredIsStableAcrossBuilds(t *testing.T) {
 	first, err := ToOpenAPISpec(obj, nil)
 	require.NoError(t, err)
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		again, err := ToOpenAPISpec(obj, nil)
 		require.NoError(t, err)
 		require.Equal(t, first.Required, again.Required,

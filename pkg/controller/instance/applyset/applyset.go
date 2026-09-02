@@ -23,7 +23,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"maps"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -55,6 +55,10 @@ type Interface interface {
 	// Returns GKs/namespaces from both batch AND parent memory (for prune scope).
 	// Returns error if RESTMapping fails for any resource.
 	Project(resources []Resource) (Metadata, error)
+
+	// Union computes metadata as the union of the given batch metadata and the parent
+	// instance's prior annotations (memory of previous reconciles).
+	Union(batch Metadata) (Metadata, error)
 
 	// Apply runs SSA on resources and returns batch-only metadata.
 	// Batch metadata contains only GKs/namespaces from THIS apply (not parent memory).
@@ -126,14 +130,14 @@ func (m Metadata) GroupKindsString() string {
 			gkStrings = append(gkStrings, fmt.Sprintf("%s.%s", gk.Kind, gk.Group))
 		}
 	}
-	sort.Strings(gkStrings)
+	slices.Sort(gkStrings)
 	return strings.Join(gkStrings, ",")
 }
 
 // NamespacesString returns namespaces as comma-separated for KEP-3659 annotation.
 func (m Metadata) NamespacesString() string {
 	nsList := m.AdditionalNamespaces.UnsortedList()
-	sort.Strings(nsList)
+	slices.Sort(nsList)
 	return strings.Join(nsList, ",")
 }
 
@@ -242,6 +246,26 @@ func (a *ApplySet) Project(resources []Resource) (Metadata, error) {
 
 	if len(conflicts) > 0 {
 		return Metadata{}, fmt.Errorf("%w: %s", ErrDuplicateResource, strings.Join(conflicts, ", "))
+	}
+
+	return a.Union(Metadata{
+		GroupKinds:           gks,
+		AdditionalNamespaces: namespaces,
+	})
+}
+
+// Union computes metadata as the union of the given batch metadata and the parent
+// instance's prior annotations (memory of previous reconciles). This yields the
+// superset scope needed for pruning directly from typed Metadata without requiring
+// callers to construct synthetic Kubernetes objects.
+func (a *ApplySet) Union(batch Metadata) (Metadata, error) {
+	gks := batch.GroupKinds.Clone()
+	if gks == nil {
+		gks = sets.New[schema.GroupKind]()
+	}
+	namespaces := batch.AdditionalNamespaces.Clone()
+	if namespaces == nil {
+		namespaces = sets.New[string]()
 	}
 
 	// Union with parent annotations (memory from previous reconciles)

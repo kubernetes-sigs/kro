@@ -246,10 +246,10 @@ func (c *Condition) ConvertToNative(typeDesc reflect.Type) (any, error) {
 			conditionKeyMessage: c.Message,
 		}, nil
 	}
-	if typeDesc == reflect.TypeOf((*Condition)(nil)) {
+	if typeDesc == reflect.TypeFor[*Condition]() {
 		return c, nil
 	}
-	if typeDesc == reflect.TypeOf(Condition{}) {
+	if typeDesc == reflect.TypeFor[Condition]() {
 		return *c, nil
 	}
 	return nil, fmt.Errorf("type conversion error from %s to %v", ConditionTypeName, typeDesc)
@@ -407,7 +407,7 @@ func extractConditions(obj ref.Val) ([]*Condition, ref.Val) {
 	}
 
 	conditions := make([]*Condition, 0, int(size))
-	for i := types.Int(0); i < size; i++ {
+	for i := range size {
 		elem := condsList.Get(i)
 		switch v := elem.(type) {
 		case *Condition:

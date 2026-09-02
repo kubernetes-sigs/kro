@@ -17,19 +17,14 @@ package metadata
 import (
 	"errors"
 	"fmt"
-	"strconv"
+	"maps"
+
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
-)
-
-const (
-	// LabelKROPrefix is retained for compatibility.
-	// Deprecated: use KROPrefix.
-	LabelKROPrefix = KROPrefix
 )
 
 const (
@@ -132,7 +127,8 @@ func (gl GenericLabeler) ApplyLabels(meta metav1.Object) {
 // Merge merges the labels from the other labeler into the current
 // labeler. If there are any duplicate keys, an error is returned.
 func (gl GenericLabeler) Merge(other Labeler) (Labeler, error) {
-	newLabels := gl.Copy()
+	newLabels := map[string]string{}
+	maps.Copy(newLabels, gl)
 	for k, v := range other.Labels() {
 		if _, ok := newLabels[k]; ok {
 			return nil, fmt.Errorf("%v: found key '%s' in both maps", ErrDuplicatedLabels, k)
@@ -140,15 +136,6 @@ func (gl GenericLabeler) Merge(other Labeler) (Labeler, error) {
 		newLabels[k] = v
 	}
 	return GenericLabeler(newLabels), nil
-}
-
-// Copy returns a copy of the labels.
-func (gl GenericLabeler) Copy() map[string]string {
-	newGenericLabeler := map[string]string{}
-	for k, v := range gl {
-		newGenericLabeler[k] = v
-	}
-	return newGenericLabeler
 }
 
 // NewResourceGraphDefinitionLabeler returns a new labeler that sets the
@@ -202,19 +189,6 @@ func NewKROMetaLabeler() GenericLabeler {
 	return map[string]string{
 		OwnedLabel:      "true",
 		KROVersionLabel: safeVersion(version.GetVersionInfo().GitVersion),
-	}
-}
-
-// NewCollectionItemLabeler returns a new labeler that sets collection-specific
-// labels on a resource that is part of a collection (forEach expansion).
-// - node-id: the resource ID from the RGD (e.g "workerPods")
-// - collection-index: the position in the collection (e.g "0", "1", "2")
-// - collection-size: the total number of items in the collection (e.g "3")
-func NewCollectionItemLabeler(nodeID string, index, size int) GenericLabeler {
-	return map[string]string{
-		NodeIDLabel:          nodeID,
-		CollectionIndexLabel: strconv.Itoa(index),
-		CollectionSizeLabel:  strconv.Itoa(size),
 	}
 }
 

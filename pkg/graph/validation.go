@@ -69,6 +69,7 @@ var (
 		"externalRefs",
 		"externalReferences",
 		"graph",
+		"graphengine",
 		"instance",
 		"item",
 		"items",
@@ -110,6 +111,11 @@ func isValidKindName(name string) bool {
 // isKROReservedWord checks if the given word is a reserved word in KRO.
 func isKROReservedWord(word string) bool {
 	return reservedKeyWords.Has(word)
+}
+
+// IsKROReservedWord checks if the given word is a reserved word in KRO.
+func IsKROReservedWord(word string) bool {
+	return isKROReservedWord(word)
 }
 
 // validateResourceGraphDefinition validates the naming conventions of
@@ -217,7 +223,7 @@ func validateForEachDimensions(resourceID string, forEach []map[string]string, r
 // - apiVersion
 // - kind
 // - metadata
-func validateKubernetesObjectStructure(obj map[string]interface{}) error {
+func validateKubernetesObjectStructure(obj map[string]any) error {
 	apiVersion, exists := obj["apiVersion"]
 	if !exists {
 		return fmt.Errorf("apiVersion field not found")
@@ -240,7 +246,7 @@ func validateKubernetesObjectStructure(obj map[string]interface{}) error {
 	if !exists {
 		return fmt.Errorf("metadata field not found")
 	}
-	_, isMap := metadata.(map[string]interface{})
+	_, isMap := metadata.(map[string]any)
 	if !isMap {
 		return fmt.Errorf("metadata field is not a map")
 	}
@@ -352,7 +358,7 @@ var errSelectorShape = fmt.Errorf(
 func validateTemplateConstraints(
 	id string,
 	isExternalCollection bool,
-	resourceObject map[string]interface{},
+	resourceObject map[string]any,
 	resourceNamespaced bool,
 	instanceNamespaced bool,
 ) error {
@@ -434,13 +440,13 @@ func isRequiredIdentityField(path string, resourceNamespaced, instanceNamespaced
 
 // validateNoKROOwnedLabels enforces that resource templates do not define
 // labels in either controller-owned namespace.
-func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]interface{}) error {
+func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]any) error {
 	labelsRaw, found, err := unstructured.NestedFieldNoCopy(resourceObject, "metadata", "labels")
 	if err != nil || !found {
 		return nil
 	}
 
-	labelsMap, ok := labelsRaw.(map[string]interface{})
+	labelsMap, ok := labelsRaw.(map[string]any)
 	if !ok {
 		return nil
 	}
@@ -458,13 +464,13 @@ func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]inter
 
 // validateNoKROOwnedAnnotations prevents resource templates from overriding
 // annotations used as persisted controller state.
-func validateNoKROOwnedAnnotations(resourceID string, resourceObject map[string]interface{}) error {
+func validateNoKROOwnedAnnotations(resourceID string, resourceObject map[string]any) error {
 	annotationsRaw, found, err := unstructured.NestedFieldNoCopy(resourceObject, "metadata", "annotations")
 	if err != nil || !found {
 		return nil
 	}
 
-	annotationsMap, ok := annotationsRaw.(map[string]interface{})
+	annotationsMap, ok := annotationsRaw.(map[string]any)
 	if !ok {
 		return nil
 	}

@@ -6,13 +6,49 @@
 #
 # Resources are evaluated in dependency order inferred from CEL references:
 #   ServiceAccount → ClusterRole → ClusterRoleBinding → ConfigMap → Deployment → Service
+#
+# ─── Permissions ──────────────────────────────────────────────────────────────
+#
+# The Graph applies while impersonating spec.serviceAccountName in its own
+# namespace (kube-system). Because it CREATES a ClusterRole/ClusterRoleBinding
+# (system:coredns), its own identity must be allowed to grant those rights —
+# which requires either the `escalate`/`bind` verbs or already holding every
+# permission granted. For brevity this example binds the installer SA to the
+# built-in cluster-admin ClusterRole; scope it down in production.
+#
+# ─── Note ─────────────────────────────────────────────────────────────────────
+#
+# The Service (kube-dns, 10.96.0.10) and Deployment (coredns) intentionally use
+# the cluster-DNS names, so on a cluster that already runs CoreDNS this Graph
+# ADOPTS and overwrites it. Point it at fresh names/namespace to install a
+# second, independent CoreDNS instead.
 # ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coredns-installer
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: coredns-installer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: coredns-installer
+    namespace: kube-system
+---
 apiVersion: kro.run/v1alpha1
 kind: Graph
 metadata:
   name: coredns
   namespace: kube-system
 spec:
+  serviceAccountName: coredns-installer
   nodes:
     - id: sa
       template:
@@ -60,7 +96,9 @@ spec:
           Corefile: |
             .:53 {
                 errors
-                health { lameduck 5s }
+                health {
+                    lameduck 5s
+                }
                 ready
                 kubernetes cluster.local in-addr.arpa ip6.arpa {
                     pods insecure
@@ -68,7 +106,9 @@ spec:
                     ttl 30
                 }
                 prometheus :9153
-                forward . /etc/resolv.conf { max_concurrent 1000 }
+                forward . /etc/resolv.conf {
+                    max_concurrent 1000
+                }
                 cache 30
                 loop
                 reload

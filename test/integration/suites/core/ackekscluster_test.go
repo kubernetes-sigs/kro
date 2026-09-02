@@ -156,8 +156,8 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		clusterRole.Object["status"] = map[string]interface{}{
-			"ackResourceMetadata": map[string]interface{}{
+		clusterRole.Object["status"] = map[string]any{
+			"ackResourceMetadata": map[string]any{
 				"ownerAccountID": "123456789012",
 				"region":         "us-west-2",
 				"arn":            "arn:aws:iam::123456789012:role/kro-cluster-role",
@@ -181,7 +181,7 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		vpc.Object["status"] = map[string]interface{}{
+		vpc.Object["status"] = map[string]any{
 			"vpcID": "vpc-12345",
 		}
 		Expect(env.Client.Status().Update(ctx, vpc)).To(Succeed())
@@ -206,7 +206,7 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(vpcID).To(Equal("vpc-12345"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		igw.Object["status"] = map[string]interface{}{
+		igw.Object["status"] = map[string]any{
 			"internetGatewayID": "igw-12345",
 		}
 		Expect(env.Client.Status().Update(ctx, igw)).To(Succeed())
@@ -227,7 +227,7 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		rt.Object["status"] = map[string]interface{}{
+		rt.Object["status"] = map[string]any{
 			"routeTableID": "rtb-12345",
 		}
 		Expect(env.Client.Status().Update(ctx, rt)).To(Succeed())
@@ -250,7 +250,7 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		subnetA.Object["status"] = map[string]interface{}{
+		subnetA.Object["status"] = map[string]any{
 			"subnetID": "subnet-a12345",
 		}
 		Expect(env.Client.Status().Update(ctx, subnetA)).To(Succeed())
@@ -266,7 +266,7 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		subnetB.Object["status"] = map[string]interface{}{
+		subnetB.Object["status"] = map[string]any{
 			"subnetID": "subnet-b12345",
 		}
 		Expect(env.Client.Status().Update(ctx, subnetB)).To(Succeed())
@@ -287,8 +287,8 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		cluster.Object["status"] = map[string]interface{}{
-			"ackResourceMetadata": map[string]interface{}{
+		cluster.Object["status"] = map[string]any{
+			"ackResourceMetadata": map[string]any{
 				"ownerAccountID": "123456789012",
 				"region":         "us-west-2",
 				"arn":            "arn:aws:eks:us-west-2:123456789012:cluster/test-instance",
@@ -307,8 +307,8 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		adminRole.Object["status"] = map[string]interface{}{
-			"ackResourceMetadata": map[string]interface{}{
+		adminRole.Object["status"] = map[string]any{
+			"ackResourceMetadata": map[string]any{
 				"ownerAccountID": "123456789012",
 				"region":         "us-west-2",
 				"arn":            "arn:aws:iam::123456789012:role/kro-cluster-pia-role",
@@ -332,7 +332,7 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		eip.Object["status"] = map[string]interface{}{
+		eip.Object["status"] = map[string]any{
 			"allocationID": "eipalloc-12345",
 		}
 		Expect(env.Client.Status().Update(ctx, eip)).To(Succeed())
@@ -353,7 +353,7 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		nat.Object["status"] = map[string]interface{}{
+		nat.Object["status"] = map[string]any{
 			"natGatewayID": "nat-12345",
 		}
 		Expect(env.Client.Status().Update(ctx, nat)).To(Succeed())
@@ -369,8 +369,8 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		nodeRole.Object["status"] = map[string]interface{}{
-			"ackResourceMetadata": map[string]interface{}{
+		nodeRole.Object["status"] = map[string]any{
+			"ackResourceMetadata": map[string]any{
 				"ownerAccountID": "123456789012",
 				"region":         "us-west-2",
 				"arn":            "arn:aws:iam::123456789012:role/kro-cluster-node-role",
@@ -460,7 +460,7 @@ var _ = Describe("EKSCluster", func() {
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			spec := instance.Object["spec"].(map[string]interface{})
+			spec := instance.Object["spec"].(map[string]any)
 			spec["version"] = "1.28"
 			err = env.Client.Update(ctx, instance)
 			g.Expect(err).ToNot(HaveOccurred())

@@ -1,0 +1,24 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: upgrade-template-shrink
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UpgradeTemplateShrink
+    spec:
+      name: string
+  resources:
+  # Both data keys are written by the version that applies this fixture.
+  # The post-upgrade spec removes "removable" from the template and expects it
+  # to disappear from this already-existing object, while "keep" is untouched.
+  - id: configmap
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-configmap
+        namespace: ${schema.metadata.namespace}
+      data:
+        keep: retained
+        removable: remove-me

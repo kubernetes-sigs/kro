@@ -45,7 +45,7 @@ func TestEmitConditionMetrics_NewCondition(t *testing.T) {
 		{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
-			Reason:             strPtr("AllReady"),
+			Reason:             new("AllReady"),
 			LastTransitionTime: &now,
 		},
 	}
@@ -70,7 +70,7 @@ func TestEmitConditionMetrics_NoTransition(t *testing.T) {
 		{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
-			Reason:             strPtr("AllReady"),
+			Reason:             new("AllReady"),
 			LastTransitionTime: &now,
 		},
 	}
@@ -95,7 +95,7 @@ func TestEmitConditionMetrics_StatusTransition(t *testing.T) {
 		{
 			Type:               "ResourcesReady",
 			Status:             metav1.ConditionFalse,
-			Reason:             strPtr("NotReady"),
+			Reason:             new("NotReady"),
 			LastTransitionTime: &now,
 		},
 	}
@@ -103,7 +103,7 @@ func TestEmitConditionMetrics_StatusTransition(t *testing.T) {
 		{
 			Type:               "ResourcesReady",
 			Status:             metav1.ConditionTrue,
-			Reason:             strPtr("AllResourcesReady"),
+			Reason:             new("AllResourcesReady"),
 			LastTransitionTime: &now,
 		},
 	}
@@ -139,11 +139,11 @@ func TestEmitConditionMetrics_NoPhantomWhenCacheDivergesFromEtcd(t *testing.T) {
 	// Simulates a cache/etcd divergence (e.g. a failed status write): reconcile 1's
 	// condition is cached but absent from reconcile 2's initialConditions.
 	EmitConditionMetrics(log, gvr, inst, nil, []v1alpha1.Condition{
-		{Type: "Ready", Status: metav1.ConditionFalse, Reason: strPtr("ReasonA"), LastTransitionTime: &now},
+		{Type: "Ready", Status: metav1.ConditionFalse, Reason: new("ReasonA"), LastTransitionTime: &now},
 	})
 
 	EmitConditionMetrics(log, gvr, inst, nil, []v1alpha1.Condition{
-		{Type: "Ready", Status: metav1.ConditionFalse, Reason: strPtr("ReasonB"), LastTransitionTime: &now},
+		{Type: "Ready", Status: metav1.ConditionFalse, Reason: new("ReasonB"), LastTransitionTime: &now},
 	})
 
 	got := collectorEntries(t, InstanceConditionCurrentStatusSeconds)
@@ -173,7 +173,7 @@ func TestEmitConditionMetrics_DisappearedCondition(t *testing.T) {
 		{
 			Type:               "ResourcesReady",
 			Status:             metav1.ConditionTrue,
-			Reason:             strPtr("AllResourcesReady"),
+			Reason:             new("AllResourcesReady"),
 			LastTransitionTime: &now,
 		},
 	}
@@ -242,7 +242,7 @@ func TestEmitConditionMetrics_DurationIsPositive(t *testing.T) {
 		{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
-			Reason:             strPtr("AllReady"),
+			Reason:             new("AllReady"),
 			LastTransitionTime: &past,
 		},
 	}
@@ -268,7 +268,7 @@ func TestEmitConditionMetrics_DurationStaysAccurateBetweenReconciles(t *testing.
 		{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
-			Reason:             strPtr("AllReady"),
+			Reason:             new("AllReady"),
 			LastTransitionTime: &past,
 		},
 	}
@@ -284,10 +284,6 @@ func TestEmitConditionMetrics_DurationStaysAccurateBetweenReconciles(t *testing.
 		gvr.String(), "default", "my-app", "Ready", "True", "AllReady")
 
 	assert.Greater(t, val2, val1, "scrape-time duration must advance even without a reconcile")
-}
-
-func strPtr(s string) *string {
-	return &s
 }
 
 // testutilCountMetrics returns the number of active metric series a

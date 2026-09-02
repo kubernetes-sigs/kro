@@ -52,6 +52,24 @@ type envOptions struct {
 	typedResources map[string]*spec.Schema
 	// customDeclarations will be added to the CEL environment.
 	customDeclarations []cel.EnvOption
+	// runtimeLibrary gates library.Runtime() and the ConditionTypeProvider
+	// wrap. Nil means default-on.
+	runtimeLibrary *bool
+}
+
+// runtimeEnabled reports whether the Runtime library (and its
+// ConditionTypeProvider wrap) should be installed. Default is on.
+func (o *envOptions) runtimeEnabled() bool {
+	return o.runtimeLibrary == nil || *o.runtimeLibrary
+}
+
+// WithRuntimeLibrary gates the `runtime` CEL library and the
+// ConditionTypeProvider wrap that resolves kro.run.Condition. Default is
+// on; environments with no author-condition surface pass false to omit it.
+func WithRuntimeLibrary(enabled bool) EnvOption {
+	return func(opts *envOptions) {
+		opts.runtimeLibrary = &enabled
+	}
 }
 
 // WithResourceIDs adds resource ids that will be declared as CEL variables.
@@ -92,66 +110,97 @@ func WithListVariables(names []string) EnvOption {
 }
 
 var (
-	baseDeclarationsOnce   sync.Once
-	cachedBaseDeclarations []cel.EnvOption
+	baseDeclarationsOnce   [2]sync.Once
+	cachedBaseDeclarations [2][]cel.EnvOption
 )
+
+func baseDeclarationsIndex(includeRuntime bool) int {
+	if includeRuntime {
+		return 1
+	}
+	return 0
+}
+
+// coreDeclarations is the Runtime-independent set of CEL environment options.
+func coreDeclarations() []cel.EnvOption {
+	return []cel.EnvOption{
+		ext.TwoVarComprehensions(),
+		ext.Lists(),
+		ext.Strings(),
+		ext.Bindings(),
+		cel.OptionalTypes(),
+		ext.Encoders(),
+		// Kubernetes CEL libraries: url(), regex, quantity, ip(), cidr(), semver(), etc.
+		// See https://kubernetes.io/docs/reference/using-api/cel/ and
+		// https://github.com/kubernetes-sigs/kro/issues/880.
+		k8scellib.Lists(),
+		k8scellib.URLs(),
+		k8scellib.Regex(),
+		k8scellib.Quantity(),
+		k8scellib.IP(),
+		k8scellib.CIDR(),
+		k8scellib.SemverLib(),
+		library.Random(),
+		library.Maps(),
+		library.JSON(),
+		library.Hash(),
+		library.Lists(),
+		// Omit() is registered globally so CEL can parse and type-check it
+		// everywhere. The graph builder rejects it in restricted contexts
+		// (includeWhen, readyWhen, forEach) via inspectExpressionRestricted
+		// and validateAndCompileForEach.
+		library.Omit(),
+	}
+}
 
 // BaseDeclarations returns the base CEL environment options shared by all kro
 // CEL environments. Includes list/string extensions, optional types, encoders,
 // and Kubernetes CEL libraries (URLs, Regex, Random).
 // The result is cached via sync.Once since these options are stateless.
-func BaseDeclarations() []cel.EnvOption {
-	baseDeclarationsOnce.Do(func() {
-		cachedBaseDeclarations = []cel.EnvOption{
-			ext.TwoVarComprehensions(),
-			ext.Lists(),
-			ext.Strings(),
-			ext.Bindings(),
-			cel.OptionalTypes(),
-			ext.Encoders(),
-			// Kubernetes CEL libraries: url(), regex, quantity, ip(), cidr(), semver(), etc.
-			// See https://kubernetes.io/docs/reference/using-api/cel/ and
-			// https://github.com/kubernetes-sigs/kro/issues/880.
-			k8scellib.Lists(),
-			k8scellib.URLs(),
-			k8scellib.Regex(),
-			k8scellib.Quantity(),
-			k8scellib.IP(),
-			k8scellib.CIDR(),
-			k8scellib.SemverLib(),
-			library.Random(),
-			library.Maps(),
-			library.JSON(),
-			library.Hash(),
-			library.Lists(),
-			// Omit() is registered globally so CEL can parse and type-check it
-			// everywhere. The graph builder rejects it in restricted contexts
-			// (includeWhen, readyWhen, forEach) via inspectExpressionRestricted
-			// and validateAndCompileForEach.
-			library.Omit(),
+//
+// The default includes library.Runtime(); pass WithRuntimeLibrary(false) to
+// omit it when there is no author-condition surface.
+func BaseDeclarations(options ...EnvOption) []cel.EnvOption {
+	opts := &envOptions{}
+	for _, opt := range options {
+		opt(opts)
+	}
+	includeRuntime := opts.runtimeEnabled()
+	idx := baseDeclarationsIndex(includeRuntime)
+	baseDeclarationsOnce[idx].Do(func() {
+		decls := coreDeclarations()
+		if includeRuntime {
 			// Runtime() registers the `runtime` CEL variable used to author
 			// custom status conditions. The graph builder rejects it outside
 			// the schema's status.conditions block.
-			library.Runtime(),
+			decls = append(decls, library.Runtime())
 		}
+		cachedBaseDeclarations[idx] = decls
 	})
-	return cachedBaseDeclarations
+	return cachedBaseDeclarations[idx]
 }
 
 var (
-	baseEnvOnce   sync.Once
-	cachedBaseEnv *cel.Env
-	baseEnvErr    error
+	baseEnvOnce   [2]sync.Once
+	cachedBaseEnv [2]*cel.Env
+	baseEnvErr    [2]error
 )
 
 // baseEnv returns a cached base CEL environment containing only the base
 // declarations. Use env.Extend() on the result to add custom declarations,
 // which is cheaper than building a full environment from scratch.
-func baseEnv() (*cel.Env, error) {
-	baseEnvOnce.Do(func() {
-		cachedBaseEnv, baseEnvErr = cel.NewEnv(BaseDeclarations()...)
+func baseEnv(includeRuntime bool) (*cel.Env, error) {
+	idx := baseDeclarationsIndex(includeRuntime)
+	baseEnvOnce[idx].Do(func() {
+		var decls []cel.EnvOption
+		if includeRuntime {
+			decls = BaseDeclarations()
+		} else {
+			decls = BaseDeclarations(WithRuntimeLibrary(false))
+		}
+		cachedBaseEnv[idx], baseEnvErr[idx] = cel.NewEnv(decls...)
 	})
-	return cachedBaseEnv, baseEnvErr
+	return cachedBaseEnv[idx], baseEnvErr[idx]
 }
 
 // DefaultEnvironment returns the default CEL environment.
@@ -164,14 +213,15 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 // and returns both the environment and the DeclTypeProvider (if typed resources
 // were configured).
 func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, error) {
-	base, err := baseEnv()
-	if err != nil {
-		return nil, nil, fmt.Errorf("base environment: %w", err)
-	}
-
 	opts := &envOptions{}
 	for _, opt := range options {
 		opt(opts)
+	}
+
+	includeRuntime := opts.runtimeEnabled()
+	base, err := baseEnv(includeRuntime)
+	if err != nil {
+		return nil, nil, fmt.Errorf("base environment: %w", err)
 	}
 
 	// Only non-base declarations go here; base declarations are in the cached base env.
@@ -233,14 +283,27 @@ func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, erro
 	// its fields. This must run after the typed-resource provider above is
 	// installed, since cel.CustomTypeProvider replaces (not layers) the
 	// provider; ConditionTypeProvider delegates everything else back to it.
-	env, err = env.Extend(cel.CustomTypeProvider(library.ConditionTypeProvider(env.CELTypeProvider())))
+	// Skipped when the runtime library is omitted.
+	if includeRuntime {
+		env, err = env.Extend(cel.CustomTypeProvider(library.ConditionTypeProvider(env.CELTypeProvider())))
+	}
 	return env, provider, err
 }
 
 // TypedEnvironmentWithProvider creates a typed CEL environment.
 // It returns both the environment and the DeclTypeProvider.
-func TypedEnvironmentWithProvider(schemas map[string]*spec.Schema) (*cel.Env, *DeclTypeProvider, error) {
-	return defaultEnvironment(WithTypedResources(schemas))
+func TypedEnvironmentWithProvider(schemas map[string]*spec.Schema, options ...EnvOption) (*cel.Env, *DeclTypeProvider, error) {
+	opts := append([]EnvOption{WithTypedResources(schemas)}, options...)
+	return defaultEnvironment(opts...)
+}
+
+// TypedEnvironmentWithIDsAndProvider builds the typed CEL environment with
+// the supplied typed resources, additionally declaring the given identifiers
+// as untyped (dyn) variables. Useful when some identifiers carry no schema
+// but must still resolve at type-check time.
+func TypedEnvironmentWithIDsAndProvider(schemas map[string]*spec.Schema, dynIDs []string, options ...EnvOption) (*cel.Env, *DeclTypeProvider, error) {
+	opts := append([]EnvOption{WithTypedResources(schemas), WithResourceIDs(dynIDs)}, options...)
+	return defaultEnvironment(opts...)
 }
 
 // TypedEnvironment creates a CEL environment with type checking enabled.

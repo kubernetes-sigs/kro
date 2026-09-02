@@ -408,6 +408,9 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               lastIssuedRevision:
                 description: |-
                   LastIssuedRevision is the highest GraphRevision revision number ever issued for this RGD.

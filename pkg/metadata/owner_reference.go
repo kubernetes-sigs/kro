@@ -16,7 +16,7 @@ package metadata
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -33,17 +33,6 @@ func NewResourceGraphDefinitionOwnerReference(name string, uid types.UID) metav1
 		Name:       name,
 		Kind:       KRORGOwnerReferenceKind,
 		APIVersion: KRORGOwnerReferenceAPIVersion,
-		Controller: &[]bool{true}[0],
-		UID:        uid,
-	}
-}
-
-// NewInstanceOwnerReference stamped on the RGI child resources
-func NewInstanceOwnerReference(gvk schema.GroupVersionKind, name string, uid types.UID) metav1.OwnerReference {
-	return metav1.OwnerReference{
-		Name:       name,
-		Kind:       gvk.Kind,
-		APIVersion: gvk.GroupVersion().String(),
 		Controller: &[]bool{true}[0],
 		UID:        uid,
 	}

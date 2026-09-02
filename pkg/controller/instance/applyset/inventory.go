@@ -18,7 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -91,7 +91,7 @@ func parseGroupKinds(raw string) (sets.Set[schema.GroupKind], error) {
 	if raw == "" {
 		return result, nil
 	}
-	for _, entry := range strings.Split(raw, ",") {
+	for entry := range strings.SplitSeq(raw, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			return nil, fmt.Errorf("contains an empty group-kind")
@@ -117,7 +117,7 @@ func parseNamespaces(raw string) (sets.Set[string], error) {
 	if raw == "" {
 		return result, nil
 	}
-	for _, entry := range strings.Split(raw, ",") {
+	for entry := range strings.SplitSeq(raw, ",") {
 		entry = strings.TrimSpace(entry)
 		if problems := validation.IsDNS1123Label(entry); len(problems) > 0 {
 			return nil, fmt.Errorf("invalid namespace %q: %s", entry, strings.Join(problems, ", "))
@@ -140,9 +140,9 @@ func inventoryHash(
 		}
 		gkStrings = append(gkStrings, value)
 	}
-	sort.Strings(gkStrings)
+	slices.Sort(gkStrings)
 	nsStrings := namespaces.UnsortedList()
-	sort.Strings(nsStrings)
+	slices.Sort(nsStrings)
 	payload := strings.Join([]string{id, strings.Join(gkStrings, ","), strings.Join(nsStrings, ",")}, "\x00")
 	sum := sha256.Sum256([]byte(payload))
 	return "sha256:" + base64.RawURLEncoding.EncodeToString(sum[:])

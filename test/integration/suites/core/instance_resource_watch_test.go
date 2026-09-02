@@ -46,18 +46,18 @@ var _ = Describe("Instance Resource Watch", func() {
 		rgd := generator.NewResourceGraphDefinition("test-instance-resource-reconcile-reactive",
 			generator.WithSchema(
 				"TestResourceWatch", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"field1": "string",
 				},
 				nil,
 			),
-			generator.WithResource("res1", map[string]interface{}{
+			generator.WithResource("res1", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "static-configmap",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "${schema.spec.field1}",
 				},
 			}, nil, nil),
@@ -80,7 +80,7 @@ var _ = Describe("Instance Resource Watch", func() {
 		instance.SetKind("TestResourceWatch")
 		instance.SetName("test-instance")
 		instance.SetNamespace(namespace)
-		instance.Object["spec"] = map[string]interface{}{
+		instance.Object["spec"] = map[string]any{
 			"field1": "foo",
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())

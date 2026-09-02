@@ -64,14 +64,14 @@ var _ = Describe("Readiness", func() {
 		rgd := generator.NewResourceGraphDefinition("test-readiness",
 			generator.WithSchema(
 				"TestReadiness", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":     "string",
 					"replicas": "integer",
-					"deployment": map[string]interface{}{
+					"deployment": map[string]any{
 						"includeAnnotations": "boolean | default=false",
 						"annotations":        "map[string]string",
 					},
-					"service": map[string]interface{}{
+					"service": map[string]any{
 						"includeAnnotations": "boolean | default=true",
 						"annotations":        "map[string]string",
 					},
@@ -79,33 +79,33 @@ var _ = Describe("Readiness", func() {
 				nil,
 			),
 			// Deployment - no dependencies
-			generator.WithResource("deployment", map[string]interface{}{
+			generator.WithResource("deployment", map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":        "${schema.spec.name}",
 					"annotations": `${schema.spec.deployment.includeAnnotations ? schema.spec.deployment.annotations : {}}`,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"replicas": "${schema.spec.replicas}",
-					"selector": map[string]interface{}{
-						"matchLabels": map[string]interface{}{
+					"selector": map[string]any{
+						"matchLabels": map[string]any{
 							"app": "deployment",
 						},
 					},
-					"template": map[string]interface{}{
-						"metadata": map[string]interface{}{
-							"labels": map[string]interface{}{
+					"template": map[string]any{
+						"metadata": map[string]any{
+							"labels": map[string]any{
 								"app": "deployment",
 							},
 						},
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
 									"name":  "${schema.spec.name}-deployment",
 									"image": "nginx",
-									"ports": []interface{}{
-										map[string]interface{}{
+									"ports": []any{
+										map[string]any{
 											"containerPort": 8080,
 										},
 									},
@@ -116,19 +116,19 @@ var _ = Describe("Readiness", func() {
 				},
 			}, []string{"${deployment.spec.replicas == deployment.status.availableReplicas}"}, nil),
 			// ServiceB - depends on deploymentA and deploymentB
-			generator.WithResource("service", map[string]interface{}{
+			generator.WithResource("service", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Service",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":        "${deployment.metadata.name}",
 					"annotations": `${schema.spec.service.includeAnnotations ? schema.spec.service.annotations : {}}`,
 				},
-				"spec": map[string]interface{}{
-					"selector": map[string]interface{}{
+				"spec": map[string]any{
+					"selector": map[string]any{
 						"app": "deployment",
 					},
-					"ports": []interface{}{
-						map[string]interface{}{
+					"ports": []any{
+						map[string]any{
 							"port":       8080,
 							"targetPort": 8080,
 						},
@@ -180,23 +180,23 @@ var _ = Describe("Readiness", func() {
 		replicas := 5
 		// Create instance
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestReadiness",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":     name,
 					"replicas": replicas,
-					"deployment": map[string]interface{}{
+					"deployment": map[string]any{
 						"includeAnnotations": false,
-						"annotations":        map[string]interface{}{},
+						"annotations":        map[string]any{},
 					},
-					"service": map[string]interface{}{
+					"service": map[string]any{
 						"includeAnnotations": true,
-						"annotations": map[string]interface{}{
+						"annotations": map[string]any{
 							"app": "service",
 						},
 					},
@@ -311,26 +311,26 @@ var _ = Describe("Readiness", func() {
 		rgd := generator.NewResourceGraphDefinition("test-readiness-tail",
 			generator.WithSchema(
 				"TestReadinessTail", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				nil,
 			),
 			// Job resource
-			generator.WithResource("job", map[string]interface{}{
+			generator.WithResource("job", map[string]any{
 				"apiVersion": "batch/v1",
 				"kind":       "Job",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}",
 				},
-				"spec": map[string]interface{}{
-					"template": map[string]interface{}{
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
+				"spec": map[string]any{
+					"template": map[string]any{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
 									"name":  "sleep",
 									"image": "busybox",
-									"args":  []interface{}{"sleep", "3"},
+									"args":  []any{"sleep", "3"},
 								},
 							},
 							"restartPolicy": "Never",
@@ -342,28 +342,20 @@ var _ = Describe("Readiness", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 		// Verify ResourceGraphDefinition is created and becomes ready
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		instanceName := "test-readiness-tail"
 
 		// Create instance
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestReadinessTail",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": instanceName,
 				},
 			},

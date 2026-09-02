@@ -29,13 +29,13 @@ func Build(segments []Segment) string {
 
 	for i, segment := range segments {
 		if segment.Index != -1 {
-			b.WriteString(fmt.Sprintf("[%d]", segment.Index))
+			fmt.Fprintf(&b, "[%d]", segment.Index)
 			continue
 		}
 
 		// Use bracket notation for field names with dots or empty names
 		if strings.Contains(segment.Name, ".") || segment.Name == "" {
-			b.WriteString(fmt.Sprintf(`[%q]`, segment.Name))
+			fmt.Fprintf(&b, `[%q]`, segment.Name)
 		} else {
 			// Add a dot before regular field names if this isn't the first segment
 			if i > 0 {

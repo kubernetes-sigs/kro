@@ -142,7 +142,8 @@ ifeq ($(WHAT),integration)
 		$(filter-out $@,$(MAKECMDGOALS)) \
 		./test/integration/suites/...
 else ifeq ($(WHAT),unit)
-	go test -race ./pkg/... -coverprofile unit-cover.out $(filter-out $@,$(MAKECMDGOALS))
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		go test -race ./pkg/... -coverprofile unit-cover.out $(filter-out $@,$(MAKECMDGOALS))
 else ifeq ($(WHAT),upgrade)
 	KRO_UPGRADE_FROM_VERSION=$(KRO_UPGRADE_FROM_VERSION) \
 	KRO_UPGRADE_MODE=$(MODE) \
@@ -175,10 +176,12 @@ golangci-lint:
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter & yamllint
 	$(GOLANGCI_LINT) run
+	cd cmd/kro && $(GOLANGCI_LINT) run
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 	$(GOLANGCI_LINT) run --fix
+	cd cmd/kro && $(GOLANGCI_LINT) run --fix
 
 ##@ Build
 
@@ -330,7 +333,8 @@ start-kind:
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} create namespace kro-system
 
 # allowCRDDeletion controls whether kro deletes an instance CRD when its RGD is
-# deleted. Defaults to true, but is overwritten by the chainsaw e2e test.
+# deleted. Defaults to true for the dev deploy-kind convenience; the e2e chainsaw
+# lane overrides it to false (the helm default) so check-rgd-deletion holds.
 ALLOW_CRD_DELETION ?= true
 
 .PHONY: deploy-kind-helm
@@ -388,7 +392,10 @@ test-e2e-kind-%: deploy-kind-%
 deploy-kind: export KO_DOCKER_REPO=kind.local
 deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
 
-# Default end to end tests uses helm deployments
+# Default end to end tests uses helm deployments.
+# The chainsaw suite (e.g. check-rgd-deletion) asserts the helm DEFAULT behavior
+# (config.allowCRDDeletion=false: an instance CRD must survive RGD deletion), so
+# the e2e lane deploys with defaults rather than the dev deploy's true.
 .PHONY: test-e2e-kind
 test-e2e-kind: ALLOW_CRD_DELETION=false
 test-e2e-kind: chainsaw deploy-kind-helm

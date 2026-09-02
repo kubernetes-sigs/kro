@@ -61,19 +61,19 @@ var _ = Describe("Labels and Annotations", func() {
 		rgd := generator.NewResourceGraphDefinition("test-apply",
 			generator.WithSchema(
 				"TestApply", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"field1":    "string",
 					"threshold": "float",
 				},
 				nil,
 			),
-			generator.WithResource("res1", map[string]interface{}{
+			generator.WithResource("res1", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.field1}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"threshold": "${string(schema.spec.threshold)}",
 				},
 			}, nil, nil),
@@ -100,14 +100,14 @@ var _ = Describe("Labels and Annotations", func() {
 
 		// Create instance
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": apiVersion,
 				"kind":       kind,
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "instance",
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"field1":    "foobar",
 					"threshold": 3.14,
 				},

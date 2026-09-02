@@ -437,12 +437,12 @@ func TestEnsureWatch_ConcurrentCalls(t *testing.T) {
 
 	// Launch multiple concurrent EnsureWatch calls.
 	errs := make(chan error, 10)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
 			errs <- wm.EnsureWatch(gvr, "test")
 		}()
 	}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		assert.NoError(t, <-errs)
 	}
 
@@ -460,14 +460,14 @@ func TestConcurrentRetainWatch_ReleaseWatch(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			_ = wm.EnsureWatch(gvr, "a")
 			wm.ReleaseWatch(gvr, "a")
 		}
 	}()
 
 	// Concurrent EnsureWatch calls.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		_ = wm.EnsureWatch(gvr, "b")
 		wm.ReleaseWatch(gvr, "b")
 	}

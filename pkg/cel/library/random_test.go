@@ -108,7 +108,7 @@ func TestRandomString(t *testing.T) {
 			program, err := env.Program(ast)
 			require.NoError(t, err)
 
-			out, _, err := program.Eval(map[string]interface{}{})
+			out, _, err := program.Eval(map[string]any{})
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errMsg)
@@ -121,7 +121,7 @@ func TestRandomString(t *testing.T) {
 			tt.validate(t, result)
 
 			// Test determinism by running the same expression again
-			out2, _, err := program.Eval(map[string]interface{}{})
+			out2, _, err := program.Eval(map[string]any{})
 			require.NoError(t, err)
 			result2, ok := out2.Value().(string)
 			require.True(t, ok)
@@ -131,7 +131,7 @@ func TestRandomString(t *testing.T) {
 			if tt.seed != "" {
 				ast2, _ := env.Compile(fmt.Sprintf("random.seededString(%d, 'different-seed')", tt.length))
 				program2, _ := env.Program(ast2)
-				out3, _, _ := program2.Eval(map[string]interface{}{})
+				out3, _, _ := program2.Eval(map[string]any{})
 				result3 := out3.Value().(string)
 				assert.NotEqual(t, result, result3, "Different seeds should produce different strings")
 			}
@@ -203,7 +203,7 @@ func TestRandomInt(t *testing.T) {
 			program, err := env.Program(ast)
 			require.NoError(t, err)
 
-			out, _, err := program.Eval(map[string]interface{}{})
+			out, _, err := program.Eval(map[string]any{})
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errMsg)
@@ -216,7 +216,7 @@ func TestRandomInt(t *testing.T) {
 			tt.validate(t, result)
 
 			// Test determinism
-			out2, _, err := program.Eval(map[string]interface{}{})
+			out2, _, err := program.Eval(map[string]any{})
 			require.NoError(t, err)
 			result2, ok := out2.Value().(int64)
 			require.True(t, ok)
@@ -238,8 +238,8 @@ func TestRandomIntDifferentSeeds(t *testing.T) {
 	prog1, _ := env.Program(ast1)
 	prog2, _ := env.Program(ast2)
 
-	out1, _, _ := prog1.Eval(map[string]interface{}{})
-	out2, _, _ := prog2.Eval(map[string]interface{}{})
+	out1, _, _ := prog1.Eval(map[string]any{})
+	out2, _, _ := prog2.Eval(map[string]any{})
 
 	assert.NotEqual(t, out1.Value().(int64), out2.Value().(int64),
 		"different seeds should produce different integers")
@@ -305,7 +305,7 @@ func TestRandomStringErrors(t *testing.T) {
 			prg, err := env.Program(ast)
 			require.NoError(t, err)
 
-			result, _, err := prg.Eval(map[string]interface{}{})
+			result, _, err := prg.Eval(map[string]any{})
 			if err == nil {
 				t.Error("Expected error, got none")
 			}

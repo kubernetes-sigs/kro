@@ -20,7 +20,7 @@ package sentinels
 type Omit struct{}
 
 // IsOmit returns true if the value is an Omit sentinel.
-func IsOmit(v interface{}) bool {
+func IsOmit(v any) bool {
 	_, ok := v.(Omit)
 	return ok
 }

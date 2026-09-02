@@ -15,8 +15,6 @@
 package simpleschema
 
 import (
-	"fmt"
-
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
@@ -28,15 +26,10 @@ import (
 // The second input customTypes is a map[string]interface{} where the key is
 // the type name and the value its specification. These custom types will be
 // available as predefined types in the transformer.
-func ToOpenAPISpec(obj map[string]interface{}, customTypes map[string]interface{}) (*extv1.JSONSchemaProps, error) {
+func ToOpenAPISpec(obj map[string]any, customTypes map[string]any) (*extv1.JSONSchemaProps, error) {
 	t, err := newTransformer(customTypes)
 	if err != nil {
 		return nil, err
 	}
 	return t.buildSchema(obj)
-}
-
-// FromOpenAPISpec converts an OpenAPI schema to a SimpleSchema object.
-func FromOpenAPISpec(schema *extv1.JSONSchemaProps) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
 }

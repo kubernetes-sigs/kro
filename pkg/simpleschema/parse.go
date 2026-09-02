@@ -23,7 +23,7 @@ import (
 
 // ParseTypeString parses the type portion of a field string (before any "|").
 func ParseTypeString(s string) (types.Type, error) {
-	typeStr := strings.SplitN(s, "|", 2)[0]
+	typeStr, _, _ := strings.Cut(s, "|")
 	typeStr = strings.TrimSpace(typeStr)
 	if typeStr == "" {
 		return nil, fmt.Errorf("empty type")
@@ -52,11 +52,11 @@ func ParseField(s string) (types.Type, []*Marker, error) {
 // parseSpec parses a spec into a Type.
 // Handles both type strings and nested object maps.
 // Note: Markers are not parsed here; they're handled separately in buildSchema.
-func parseSpec(spec interface{}) (types.Type, error) {
+func parseSpec(spec any) (types.Type, error) {
 	switch val := spec.(type) {
 	case string:
 		return ParseTypeString(val)
-	case map[string]interface{}:
+	case map[string]any:
 		fields := make(map[string]types.Type)
 		for name, field := range val {
 			t, err := parseSpec(field)

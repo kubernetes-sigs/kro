@@ -63,10 +63,10 @@ var _ = Describe("Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition("test-conditions",
 			generator.WithSchema(
 				"TestConditions", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 
-					"deploymentA": map[string]interface{}{
+					"deploymentA": map[string]any{
 						"name":    "string",
 						"enabled": "boolean",
 					},
@@ -78,32 +78,32 @@ var _ = Describe("Conditions", func() {
 				nil,
 			),
 			// Deployment - no dependencies
-			generator.WithResource("deploymentA", map[string]interface{}{
+			generator.WithResource("deploymentA", map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.deploymentA.name}",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"replicas": 1,
-					"selector": map[string]interface{}{
-						"matchLabels": map[string]interface{}{
+					"selector": map[string]any{
+						"matchLabels": map[string]any{
 							"app": "deployment",
 						},
 					},
-					"template": map[string]interface{}{
-						"metadata": map[string]interface{}{
-							"labels": map[string]interface{}{
+					"template": map[string]any{
+						"metadata": map[string]any{
+							"labels": map[string]any{
 								"app": "deployment",
 							},
 						},
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
 									"name":  "${schema.spec.name}-deployment",
 									"image": "nginx",
-									"ports": []interface{}{
-										map[string]interface{}{
+									"ports": []any{
+										map[string]any{
 											"containerPort": 8080,
 										},
 									},
@@ -114,33 +114,33 @@ var _ = Describe("Conditions", func() {
 				},
 			}, nil, []string{"${schema.spec.deploymentA.enabled}"}),
 			// Depends on serviceAccountA
-			generator.WithResource("deploymentB", map[string]interface{}{
+			generator.WithResource("deploymentB", map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-b",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"replicas": 1,
-					"selector": map[string]interface{}{
-						"matchLabels": map[string]interface{}{
+					"selector": map[string]any{
+						"matchLabels": map[string]any{
 							"app": "deployment",
 						},
 					},
-					"template": map[string]interface{}{
-						"metadata": map[string]interface{}{
-							"labels": map[string]interface{}{
+					"template": map[string]any{
+						"metadata": map[string]any{
+							"labels": map[string]any{
 								"app": "deployment",
 							},
 						},
-						"spec": map[string]interface{}{
+						"spec": map[string]any{
 							"serviceAccountName": "${serviceAccountA.metadata.name + schema.spec.name}",
-							"containers": []interface{}{
-								map[string]interface{}{
+							"containers": []any{
+								map[string]any{
 									"name":  "${schema.spec.name}-deployment",
 									"image": "nginx",
-									"ports": []interface{}{
-										map[string]interface{}{
+									"ports": []any{
+										map[string]any{
 											"containerPort": 8080,
 										},
 									},
@@ -151,34 +151,34 @@ var _ = Describe("Conditions", func() {
 				},
 			}, nil, []string{"${schema.spec.deploymentBenabled}"}),
 			// serviceAccountA - no dependencies
-			generator.WithResource("serviceAccountA", map[string]interface{}{
+			generator.WithResource("serviceAccountA", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ServiceAccount",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-a",
 				},
 			}, nil, []string{"${schema.spec.serviceAccountAenabled}"}),
 			// ServiceAccount - depends on service
-			generator.WithResource("serviceAccountB", map[string]interface{}{
+			generator.WithResource("serviceAccountB", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ServiceAccount",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${serviceA.metadata.name}",
 				},
 			}, nil, []string{"${schema.spec.serviceAccountBenabled}"}),
 			// ServiceA - depends on DeploymentA
-			generator.WithResource("serviceA", map[string]interface{}{
+			generator.WithResource("serviceA", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Service",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${deploymentA.metadata.name}",
 				},
-				"spec": map[string]interface{}{
-					"selector": map[string]interface{}{
+				"spec": map[string]any{
+					"selector": map[string]any{
 						"app": "deployment",
 					},
-					"ports": []interface{}{
-						map[string]interface{}{
+					"ports": []any{
+						map[string]any{
 							"port":       8080,
 							"targetPort": 8080,
 						},
@@ -186,18 +186,18 @@ var _ = Describe("Conditions", func() {
 				},
 			}, nil, nil),
 			// ServiceB - depends on deploymentA and deploymentB
-			generator.WithResource("serviceB", map[string]interface{}{
+			generator.WithResource("serviceB", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Service",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${deploymentB.metadata.name + deploymentA.metadata.name}",
 				},
-				"spec": map[string]interface{}{
-					"selector": map[string]interface{}{
+				"spec": map[string]any{
+					"selector": map[string]any{
 						"app": "deployment",
 					},
-					"ports": []interface{}{
-						map[string]interface{}{
+					"ports": []any{
+						map[string]any{
 							"port":       8080,
 							"targetPort": 8080,
 						},
@@ -252,16 +252,16 @@ var _ = Describe("Conditions", func() {
 		name := "test-conditions"
 		// Create instance
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestConditions",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": name,
-					"deploymentA": map[string]interface{}{
+					"deploymentA": map[string]any{
 						"enabled": false,
 					},
 					"deploymentBenabled":     true,
@@ -374,39 +374,39 @@ var _ = Describe("Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition("test-conditions-contagious",
 			generator.WithSchema(
 				"ContagiousConditions", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":         "string",
 					"enableParent": "boolean",
 				},
 				nil,
 			),
-			generator.WithResource("parent", map[string]interface{}{
+			generator.WithResource("parent", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-parent",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "parent",
 				},
 			}, nil, []string{"${schema.spec.enableParent}"}),
-			generator.WithResource("child", map[string]interface{}{
+			generator.WithResource("child", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${parent.metadata.name}-child",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"fromParent": "${parent.data.key}",
 				},
 			}, nil, nil),
-			generator.WithResource("always", map[string]interface{}{
+			generator.WithResource("always", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-always",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "always",
 				},
 			}, nil, nil),
@@ -417,23 +417,18 @@ var _ = Describe("Conditions", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-conditions-contagious"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "ContagiousConditions",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":         name,
 					"enableParent": false,
 				},
@@ -487,49 +482,49 @@ var _ = Describe("Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition("test-conditions-resource-backed-contagious",
 			generator.WithSchema(
 				"ResourceBackedContagiousConditions", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":         "string",
 					"enableMiddle": "boolean",
 				},
 				nil,
 			),
-			generator.WithResource("source", map[string]interface{}{
+			generator.WithResource("source", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-source",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"enabled": "${schema.spec.enableMiddle ? 'true' : 'false'}",
 				},
 			}, nil, nil),
-			generator.WithResource("middle", map[string]interface{}{
+			generator.WithResource("middle", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-middle",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"value": "middle",
 				},
 			}, nil, []string{"${source.data.enabled == 'true'}"}),
-			generator.WithResource("child", map[string]interface{}{
+			generator.WithResource("child", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${middle.metadata.name}-child",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"fromMiddle": "${middle.data.value}",
 				},
 			}, nil, nil),
-			generator.WithResource("always", map[string]interface{}{
+			generator.WithResource("always", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-always",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "always",
 				},
 			}, nil, nil),
@@ -540,23 +535,18 @@ var _ = Describe("Conditions", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-resource-backed-contagious"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "ResourceBackedContagiousConditions",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":         name,
 					"enableMiddle": false,
 				},
@@ -619,33 +609,33 @@ var _ = Describe("Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition("test-conditions-status-backed",
 			generator.WithSchema(
 				"StatusBackedConditions", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				nil,
 			),
-			generator.WithResource("source", map[string]interface{}{
+			generator.WithResource("source", map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-source",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"replicas": 1,
-					"selector": map[string]interface{}{
-						"matchLabels": map[string]interface{}{
+					"selector": map[string]any{
+						"matchLabels": map[string]any{
 							"app": "${schema.spec.name}",
 						},
 					},
-					"template": map[string]interface{}{
-						"metadata": map[string]interface{}{
-							"labels": map[string]interface{}{
+					"template": map[string]any{
+						"metadata": map[string]any{
+							"labels": map[string]any{
 								"app": "${schema.spec.name}",
 							},
 						},
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
 									"name":  "nginx",
 									"image": "nginx",
 								},
@@ -654,33 +644,33 @@ var _ = Describe("Conditions", func() {
 					},
 				},
 			}, nil, nil),
-			generator.WithResource("gated", map[string]interface{}{
+			generator.WithResource("gated", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-gated",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"fromSource": "${source.metadata.name}",
 				},
 			}, nil, []string{"${source.status.availableReplicas == source.spec.replicas}"}),
-			generator.WithResource("child", map[string]interface{}{
+			generator.WithResource("child", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-child",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"fromGated": "${gated.data.fromSource}",
 				},
 			}, nil, nil),
-			generator.WithResource("always", map[string]interface{}{
+			generator.WithResource("always", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-always",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "always",
 				},
 			}, nil, nil),
@@ -691,23 +681,18 @@ var _ = Describe("Conditions", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "status-backed"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "StatusBackedConditions",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": name,
 				},
 			},
@@ -799,17 +784,7 @@ var _ = Describe("Conditions", func() {
 			g.Expect(child.Data).To(HaveKeyWithValue("fromGated", name+"-source"))
 		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			state, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(state).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 	})
 
 })

@@ -254,7 +254,7 @@ var celReservedSymbols = sets.NewString(
 
 // NativeToValue is an implementation of the ref.TypeAdapter interface which supports conversion
 // of rule values to CEL ref.Val instances.
-func (rt *DeclTypeProvider) NativeToValue(val interface{}) ref.Val {
+func (rt *DeclTypeProvider) NativeToValue(val any) ref.Val {
 	return rt.typeAdapter.NativeToValue(val)
 }
 

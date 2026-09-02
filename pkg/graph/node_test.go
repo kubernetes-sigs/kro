@@ -104,10 +104,10 @@ func TestNodeDeepCopy(t *testing.T) {
 			Dependencies: []string{"network"},
 		},
 		Template: &unstructured.Unstructured{
-			Object: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			Object: map[string]any{
+				"metadata": map[string]any{
 					"name": "test",
-					"labels": map[string]interface{}{
+					"labels": map[string]any{
 						"app": "demo",
 					},
 				},
@@ -136,7 +136,7 @@ func TestNodeDeepCopy(t *testing.T) {
 	require.NotSame(t, original.Variables[0], copied.Variables[0])
 
 	original.Meta.Dependencies[0] = "changed"
-	original.Template.Object["metadata"].(map[string]interface{})["name"] = "mutated"
+	original.Template.Object["metadata"].(map[string]any)["name"] = "mutated"
 	original.Variables[0].Path = "spec.other"
 	original.Variables[0].Expression = &krocel.Expression{Original: "schema.spec.other"}
 	original.IncludeWhen[0] = &krocel.Expression{Original: "false"}
@@ -144,7 +144,7 @@ func TestNodeDeepCopy(t *testing.T) {
 	original.ForEach[0].Name = "zone"
 
 	assert.Equal(t, []string{"network"}, copied.Meta.Dependencies)
-	assert.Equal(t, "test", copied.Template.Object["metadata"].(map[string]interface{})["name"])
+	assert.Equal(t, "test", copied.Template.Object["metadata"].(map[string]any)["name"])
 	assert.Equal(t, "spec.name", copied.Variables[0].Path)
 	assert.Equal(t, "schema.spec.name", copied.Variables[0].Expression.Original)
 	assert.Equal(t, "schema.spec.enabled", copied.IncludeWhen[0].Original)

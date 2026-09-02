@@ -25,13 +25,13 @@ import (
 func TestExtractGVKFromUnstructured(t *testing.T) {
 	cases := []struct {
 		name         string
-		unstructured map[string]interface{}
+		unstructured map[string]any
 		expectedGVK  schema.GroupVersionKind
 		expectedErr  string
 	}{
 		{
 			name: "Valid GVK with group",
-			unstructured: map[string]interface{}{
+			unstructured: map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 			},
@@ -43,7 +43,7 @@ func TestExtractGVKFromUnstructured(t *testing.T) {
 		},
 		{
 			name: "Valid GVK without group",
-			unstructured: map[string]interface{}{
+			unstructured: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Pod",
 			},
@@ -55,21 +55,21 @@ func TestExtractGVKFromUnstructured(t *testing.T) {
 		},
 		{
 			name: "Missing kind",
-			unstructured: map[string]interface{}{
+			unstructured: map[string]any{
 				"apiVersion": "v1",
 			},
 			expectedErr: "kind not found or not a string",
 		},
 		{
 			name: "Missing apiVersion",
-			unstructured: map[string]interface{}{
+			unstructured: map[string]any{
 				"kind": "Pod",
 			},
 			expectedErr: "apiVersion not found or not a string",
 		},
 		{
 			name: "Invalid apiVersion format - too many slashes",
-			unstructured: map[string]interface{}{
+			unstructured: map[string]any{
 				"apiVersion": "apps/v1/beta",
 				"kind":       "Deployment",
 			},
@@ -77,7 +77,7 @@ func TestExtractGVKFromUnstructured(t *testing.T) {
 		},
 		{
 			name: "Invalid kind - not DNS-1035 label (contains underscore)",
-			unstructured: map[string]interface{}{
+			unstructured: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Invalid_Kind",
 			},
@@ -85,7 +85,7 @@ func TestExtractGVKFromUnstructured(t *testing.T) {
 		},
 		{
 			name: "Invalid kind - not DNS-1035 label (starts with number)",
-			unstructured: map[string]interface{}{
+			unstructured: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "123Kind",
 			},
@@ -93,7 +93,7 @@ func TestExtractGVKFromUnstructured(t *testing.T) {
 		},
 		{
 			name: "Invalid kind - not DNS-1035 label (too long)",
-			unstructured: map[string]interface{}{
+			unstructured: map[string]any{
 				"apiVersion": "v1",
 				"kind":       strings.Repeat("a", 64), // DNS-1035 labels max length is 63
 			},
@@ -101,7 +101,7 @@ func TestExtractGVKFromUnstructured(t *testing.T) {
 		},
 		{
 			name: "Non-string kind",
-			unstructured: map[string]interface{}{
+			unstructured: map[string]any{
 				"apiVersion": "v1",
 				"kind":       123,
 			},
@@ -109,7 +109,7 @@ func TestExtractGVKFromUnstructured(t *testing.T) {
 		},
 		{
 			name: "Non-string apiVersion",
-			unstructured: map[string]interface{}{
+			unstructured: map[string]any{
 				"apiVersion": 123,
 				"kind":       "Pod",
 			},

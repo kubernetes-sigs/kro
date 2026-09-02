@@ -51,17 +51,17 @@ var _ = Describe("Status schema references", func() {
 		rgd := generator.NewResourceGraphDefinition("test-status-schema-only",
 			generator.WithSchema(
 				"StatusSchemaOnly", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"host": "string",
 				},
-				map[string]interface{}{
+				map[string]any{
 					"echoHost": "${schema.spec.host}",
 				},
 			),
-			generator.WithResource("cm", map[string]interface{}{
+			generator.WithResource("cm", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.host}",
 				},
 			}, nil, nil),
@@ -80,14 +80,14 @@ var _ = Describe("Status schema references", func() {
 
 		instanceName := "test-schema-only"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "StatusSchemaOnly",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"host": "example.com",
 				},
 			},
@@ -116,20 +116,20 @@ var _ = Describe("Status schema references", func() {
 		rgd := generator.NewResourceGraphDefinition("test-status-schema-mixed",
 			generator.WithSchema(
 				"StatusSchemaMixed", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"path": "string",
 				},
-				map[string]interface{}{
+				map[string]any{
 					"url": "${configmap.metadata.name + '/' + schema.spec.path}",
 				},
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "my-configmap",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "value",
 				},
 			}, nil, nil),
@@ -148,14 +148,14 @@ var _ = Describe("Status schema references", func() {
 
 		instanceName := "test-schema-mixed"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "StatusSchemaMixed",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"path": "api/v1",
 				},
 			},
@@ -184,17 +184,17 @@ var _ = Describe("Status schema references", func() {
 		rgd := generator.NewResourceGraphDefinition("test-status-schema-update",
 			generator.WithSchema(
 				"StatusSchemaUpdate", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"label": "string",
 				},
-				map[string]interface{}{
+				map[string]any{
 					"echoLabel": "${schema.spec.label}",
 				},
 			),
-			generator.WithResource("cm", map[string]interface{}{
+			generator.WithResource("cm", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "static-cm",
 				},
 			}, nil, nil),
@@ -213,14 +213,14 @@ var _ = Describe("Status schema references", func() {
 
 		instanceName := "test-schema-update"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "StatusSchemaUpdate",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"label": "first",
 				},
 			},

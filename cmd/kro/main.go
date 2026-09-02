@@ -19,9 +19,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kubernetes-sigs/kro/cmd/kro/commands"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/util/homedir"
+
+	"github.com/kubernetes-sigs/kro/cmd/kro/commands"
 )
 
 func main() {

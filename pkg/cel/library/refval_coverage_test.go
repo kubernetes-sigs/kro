@@ -46,7 +46,7 @@ func TestConditionConvertToNative(t *testing.T) {
 
 	t.Run("a map target yields the wire field names", func(t *testing.T) {
 		t.Parallel()
-		out, err := c.ConvertToNative(reflect.TypeOf(map[string]any{}))
+		out, err := c.ConvertToNative(reflect.TypeFor[map[string]any]())
 		require.NoError(t, err)
 		assert.Equal(t, map[string]any{
 			"type":    "Ready",
@@ -58,14 +58,14 @@ func TestConditionConvertToNative(t *testing.T) {
 
 	t.Run("a pointer target yields the same instance", func(t *testing.T) {
 		t.Parallel()
-		out, err := c.ConvertToNative(reflect.TypeOf((*Condition)(nil)))
+		out, err := c.ConvertToNative(reflect.TypeFor[*Condition]())
 		require.NoError(t, err)
 		assert.Same(t, c, out)
 	})
 
 	t.Run("a value target yields a copy", func(t *testing.T) {
 		t.Parallel()
-		out, err := c.ConvertToNative(reflect.TypeOf(Condition{}))
+		out, err := c.ConvertToNative(reflect.TypeFor[Condition]())
 		require.NoError(t, err)
 		copied, ok := out.(Condition)
 		require.True(t, ok)
@@ -74,7 +74,7 @@ func TestConditionConvertToNative(t *testing.T) {
 
 	t.Run("an unsupported target is an error, not a panic", func(t *testing.T) {
 		t.Parallel()
-		_, err := c.ConvertToNative(reflect.TypeOf(""))
+		_, err := c.ConvertToNative(reflect.TypeFor[string]())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), ConditionTypeName)
 	})
@@ -147,7 +147,7 @@ func TestConditionGet(t *testing.T) {
 func TestRuntimeSingletonRefVal(t *testing.T) {
 	t.Parallel()
 
-	_, err := RuntimeSingleton.ConvertToNative(reflect.TypeOf(map[string]any{}))
+	_, err := RuntimeSingleton.ConvertToNative(reflect.TypeFor[map[string]any]())
 	require.Error(t, err, "the runtime singleton has no native representation")
 	assert.Contains(t, err.Error(), RuntimeTypeName)
 
@@ -177,7 +177,7 @@ func TestOmitValRefVal(t *testing.T) {
 
 	t.Run("it converts to the sentinel struct", func(t *testing.T) {
 		t.Parallel()
-		out, err := omitInstance.ConvertToNative(reflect.TypeOf(sentinels.Omit{}))
+		out, err := omitInstance.ConvertToNative(reflect.TypeFor[sentinels.Omit]())
 		require.NoError(t, err)
 		assert.Equal(t, sentinels.Omit{}, out)
 	})
@@ -192,7 +192,7 @@ func TestOmitValRefVal(t *testing.T) {
 
 	t.Run("any other native target is an error", func(t *testing.T) {
 		t.Parallel()
-		_, err := omitInstance.ConvertToNative(reflect.TypeOf(""))
+		_, err := omitInstance.ConvertToNative(reflect.TypeFor[string]())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "omit")
 	})

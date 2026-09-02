@@ -30,17 +30,17 @@ func TestJSONUnmarshal(t *testing.T) {
 	testCases := []struct {
 		name     string
 		expr     string
-		expected interface{}
+		expected any
 	}{
 		{
 			name:     "parse object",
 			expr:     `json.unmarshal('{"name": "test", "count": 42}')`,
-			expected: map[string]interface{}{"name": "test", "count": float64(42)},
+			expected: map[string]any{"name": "test", "count": float64(42)},
 		},
 		{
 			name:     "parse array",
 			expr:     `json.unmarshal('[1, 2, 3]')`,
-			expected: []interface{}{float64(1), float64(2), float64(3)},
+			expected: []any{float64(1), float64(2), float64(3)},
 		},
 		{
 			name:     "parse string",
@@ -87,7 +87,7 @@ func TestJSONUnmarshal(t *testing.T) {
 			prg, err := env.Program(ast)
 			require.NoError(t, err)
 
-			out, _, err := prg.Eval(map[string]interface{}{})
+			out, _, err := prg.Eval(map[string]any{})
 			require.NoError(t, err)
 
 			result := out.Value()
@@ -133,7 +133,7 @@ func TestJSONUnmarshalErrors(t *testing.T) {
 			prg, err := env.Program(ast)
 			require.NoError(t, err)
 
-			result, _, err := prg.Eval(map[string]interface{}{})
+			result, _, err := prg.Eval(map[string]any{})
 			if err == nil {
 				t.Error("Expected error, got none")
 			}
@@ -220,7 +220,7 @@ func TestJSONMarshal(t *testing.T) {
 			prg, err := env.Program(ast)
 			require.NoError(t, err)
 
-			out, _, err := prg.Eval(map[string]interface{}{})
+			out, _, err := prg.Eval(map[string]any{})
 			require.NoError(t, err)
 
 			result := out.Value()

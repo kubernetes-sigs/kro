@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package compat
 
@@ -228,8 +229,8 @@ func compareEnumValues(path string, oldSchema, newSchema *v1.JSONSchemaProps, re
 		return
 	}
 
-	oldEnumSet := toJsonValueSet(oldSchema.Enum)
-	newEnumSet := toJsonValueSet(newSchema.Enum)
+	oldEnumSet := toJSONValueSet(oldSchema.Enum)
+	newEnumSet := toJSONValueSet(newSchema.Enum)
 
 	// Check for removed enum values (breaking)
 	for val := range oldEnumSet {
@@ -289,8 +290,8 @@ func toStringSet(slice []string) map[string]bool {
 	return set
 }
 
-// toJsonValueSet converts JSON values to strings for comparison
-func toJsonValueSet(values []v1.JSON) map[string]bool {
+// toJSONValueSet converts JSON values to strings for comparison
+func toJSONValueSet(values []v1.JSON) map[string]bool {
 	set := make(map[string]bool, len(values))
 	for _, val := range values {
 		set[string(val.Raw)] = true

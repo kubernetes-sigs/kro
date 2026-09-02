@@ -115,14 +115,14 @@ var _ = ginkgo.Describe("Post-Upgrade", ginkgo.Ordered, func() {
 	ginkgo.It("should be able to create a new instance post-upgrade", func() {
 		// Create a new instance using the simplest RGD (readywhen-nil, just a ConfigMap)
 		newInstance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "kro.run/v1alpha1",
 				"kind":       "UpgradeReadyNil",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "test-post-upgrade-new",
 					"namespace": "upgrade-test",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": "test-post-upgrade-new",
 				},
 			},
@@ -192,6 +192,7 @@ var _ = ginkgo.Describe("Post-Upgrade GraphRevision", ginkgo.Ordered, func() {
 		// the current count must not exceed what is expected given the known
 		// post-upgrade mutations:
 		//   - mutationRGDName: exactly +1 (one deliberate mutation by mutation suite)
+		//   - shrinkRGDName: exactly +1 (one deliberate mutation by template-shrink suite)
 		//   - retentionRGDName: capped at maxGraphRevisions (rapid-mutation suite)
 		//   - legacySelectorRGDName: exactly +1 (mutated by the legacy-selector
 		//     compatibility suite to force CRD regeneration)
@@ -202,7 +203,7 @@ var _ = ginkgo.Describe("Post-Upgrade GraphRevision", ginkgo.Ordered, func() {
 
 			var maxAllowed int
 			switch rgdName {
-			case mutationRGDName:
+			case mutationRGDName, shrinkRGDName:
 				maxAllowed = min(preCount+1, maxGraphRevisions)
 			case retentionRGDName:
 				maxAllowed = min(preCount+retentionMutations, maxGraphRevisions)

@@ -110,7 +110,7 @@ func (l *jsonLibrary) ProgramOptions() []cel.ProgramOption {
 }
 
 func unmarshalJSON(jsonString ref.Val) ref.Val {
-	native, err := jsonString.ConvertToNative(reflect.TypeOf(""))
+	native, err := jsonString.ConvertToNative(reflect.TypeFor[string]())
 	if err != nil {
 		return types.NewErr("json.unmarshal argument must be a string")
 	}
@@ -120,7 +120,7 @@ func unmarshalJSON(jsonString ref.Val) ref.Val {
 		return types.NewErr("json.unmarshal argument must be a string")
 	}
 
-	var result interface{}
+	var result any
 	if err := json.Unmarshal([]byte(str), &result); err != nil {
 		return types.NewErr("json.unmarshal failed to parse JSON: %s", err.Error())
 	}

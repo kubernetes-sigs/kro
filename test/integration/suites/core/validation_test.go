@@ -88,7 +88,7 @@ var _ = Describe("Validation", func() {
 				rgd := generator.NewResourceGraphDefinition(fmt.Sprintf("test-alias-validation-%s", rand.String(5)),
 					generator.WithSchema(
 						"AliasValidation", "v1alpha1",
-						map[string]interface{}{
+						map[string]any{
 							"name": "string",
 						},
 						nil,
@@ -129,7 +129,7 @@ var _ = Describe("Validation", func() {
 				rgd := generator.NewResourceGraphDefinition(fmt.Sprintf("test-kind-%s", rand.String(5)),
 					generator.WithSchema(
 						kind, "v1alpha1",
-						map[string]interface{}{
+						map[string]any{
 							"name": "string",
 						},
 						nil,
@@ -146,15 +146,15 @@ var _ = Describe("Validation", func() {
 			rgd := generator.NewResourceGraphDefinition("test-cleanup",
 				generator.WithSchema(
 					"TestCleanup", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("testResource", map[string]interface{}{
+				generator.WithResource("testResource", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ServiceAccount",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${Bad expression}",
 					},
 				}, nil, nil),

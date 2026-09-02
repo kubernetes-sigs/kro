@@ -50,7 +50,7 @@ import (
 
 type TestResource struct {
 	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
+	metav1.ObjectMeta `json:"metadata"`
 
 	runtime.Object // hack to adhere to the Object contract.
 

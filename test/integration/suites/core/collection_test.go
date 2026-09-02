@@ -60,19 +60,19 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-collection",
 			generator.WithSchema(
 				"MultiConfigMap", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"values": "[]string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configmaps", map[string]interface{}{
+			generator.WithResourceCollection("configmaps", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${value}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "${value}",
 				},
 			},
@@ -104,32 +104,22 @@ var _ = Describe("ForEach Collections", func() {
 
 		name := "test-multi-cm"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "MultiConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"values": []interface{}{"alpha", "beta", "gamma"},
+					"values": []any{"alpha", "beta", "gamma"},
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		for _, value := range []string{"alpha", "beta", "gamma"} {
 			cm := &corev1.ConfigMap{}
@@ -167,20 +157,20 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-cartesian",
 			generator.WithSchema(
 				"CartesianConfigMaps", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":    "string",
 					"regions": "[]string",
 					"tiers":   "[]string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configmaps", map[string]interface{}{
+			generator.WithResourceCollection("configmaps", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${region}-${tier}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"region": "${region}",
 					"tier":   "${tier}",
 				},
@@ -194,44 +184,27 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-cartesian"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "CartesianConfigMaps",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":    name,
-					"regions": []interface{}{"us", "eu"},
-					"tiers":   []interface{}{"web", "api"},
+					"regions": []any{"us", "eu"},
+					"tiers":   []any{"web", "api"},
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		expectedCombinations := []struct {
 			region string
@@ -280,20 +253,20 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-conditional-collection",
 			generator.WithSchema(
 				"ConditionalCollection", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":    "string",
 					"values":  "[]string",
 					"enabled": "boolean",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configmaps", map[string]interface{}{
+			generator.WithResourceCollection("configmaps", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${value}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "${value}",
 				},
 			},
@@ -307,45 +280,28 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		// Test 1: Create instance with enabled=false - no ConfigMaps should be created
 		name := "test-disabled"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "ConditionalCollection",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":    name,
-					"values":  []interface{}{"alpha", "beta"},
+					"values":  []any{"alpha", "beta"},
 					"enabled": false,
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		for _, value := range []string{"alpha", "beta"} {
 			cm := &corev1.ConfigMap{}
@@ -383,20 +339,20 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-toggle-collection",
 			generator.WithSchema(
 				"ToggleCollection", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":    "string",
 					"values":  "[]string",
 					"enabled": "boolean",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configs", map[string]interface{}{
+			generator.WithResourceCollection("configs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${value}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "${value}",
 				},
 			},
@@ -410,45 +366,28 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		// Phase 1: Create instance with enabled=false - no ConfigMaps should be created
 		name := "test-toggle"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "ToggleCollection",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":    name,
-					"values":  []interface{}{"alpha", "beta"},
+					"values":  []any{"alpha", "beta"},
 					"enabled": false,
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		for _, value := range []string{"alpha", "beta"} {
 			cm := &corev1.ConfigMap{}
@@ -536,31 +475,31 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-collection-dependency",
 			generator.WithSchema(
 				"CollectionWithDependency", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"values": "[]string",
 				},
 				nil,
 			),
 			// First resource: a regular ConfigMap
-			generator.WithResource("baseConfig", map[string]interface{}{
+			generator.WithResource("baseConfig", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-base",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"version": "v1.0.0",
 				},
 			}, nil, nil),
 			// Second resource: collection that depends on the base config
-			generator.WithResourceCollection("configs", map[string]interface{}{
+			generator.WithResourceCollection("configs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${value}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key":     "${value}",
 					"version": "${baseConfig.data.version}",
 				},
@@ -573,43 +512,26 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-dep"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "CollectionWithDependency",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"values": []interface{}{"one", "two"},
+					"values": []any{"one", "two"},
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		baseCM := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -657,33 +579,33 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-collection-chaining",
 			generator.WithSchema(
 				"CollectionChaining", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"values": "[]string",
 				},
 				nil,
 			),
 			// First resource: a regular ConfigMap that must exist before collection expands
-			generator.WithResource("baseConfig", map[string]interface{}{
+			generator.WithResource("baseConfig", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-base",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"enabled": "true",
 					"prefix":  "chained",
 				},
 			}, nil, nil),
 			// Second resource: collection with forEach that references the first resource
 			// The forEach expression checks if baseConfig.data.enabled exists
-			generator.WithResourceCollection("chainedConfigs", map[string]interface{}{
+			generator.WithResourceCollection("chainedConfigs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${val}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key":    "${val}",
 					"prefix": "${baseConfig.data.prefix}",
 				},
@@ -698,43 +620,26 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-chaining"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "CollectionChaining",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"values": []interface{}{"one", "two"},
+					"values": []any{"one", "two"},
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		baseCM := &corev1.ConfigMap{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -785,20 +690,20 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-collection-to-collection",
 			generator.WithSchema(
 				"CollectionToCollection", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"values": "[]string",
 				},
 				nil,
 			),
 			// First collection: creates multiple ConfigMaps
-			generator.WithResourceCollection("firstConfigs", map[string]interface{}{
+			generator.WithResourceCollection("firstConfigs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-first-${val}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key":    "${val}",
 					"source": "first-collection",
 				},
@@ -809,13 +714,13 @@ var _ = Describe("ForEach Collections", func() {
 				nil, nil),
 			// Second collection: iterates over the first collection
 			// ${firstConfigs} is typed as list(ConfigMap)
-			generator.WithResourceCollection("secondConfigs", map[string]interface{}{
+			generator.WithResourceCollection("secondConfigs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-second-${config.data.key}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"originalKey":    "${config.data.key}",
 					"originalSource": "${config.data.source}",
 					"source":         "second-collection",
@@ -830,43 +735,26 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-c2c"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "CollectionToCollection",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"values": []interface{}{"alpha", "beta"},
+					"values": []any{"alpha", "beta"},
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		for _, value := range []string{"alpha", "beta"} {
 			cm := &corev1.ConfigMap{}
@@ -918,19 +806,19 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-empty-collection",
 			generator.WithSchema(
 				"EmptyCollection", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"values": "[]string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configmaps", map[string]interface{}{
+			generator.WithResourceCollection("configmaps", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${value}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "${value}",
 				},
 			},
@@ -942,44 +830,27 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-empty"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "EmptyCollection",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"values": []interface{}{}, // Empty list
+					"values": []any{}, // Empty list
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
 		// Empty list means no resources to create - instance should still become ACTIVE
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 
@@ -1008,35 +879,35 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-deep-chaining",
 			generator.WithSchema(
 				"DeepChain", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"items":  "[]string",
 					"prefix": "string",
 				},
-				map[string]interface{}{
+				map[string]any{
 					"level1Count": "${string(size(level1Configs))}",
 					"level2Count": "${string(size(level2Configs))}",
 					"podCount":    "${string(size(finalPods))}",
 				},
 			),
-			generator.WithResource("baseConfig", map[string]interface{}{
+			generator.WithResource("baseConfig", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-base",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"prefix":    "${schema.spec.prefix}",
 					"itemCount": "${string(size(schema.spec.items))}",
 				},
 			}, nil, nil),
-			generator.WithResourceCollection("level1Configs", map[string]interface{}{
+			generator.WithResourceCollection("level1Configs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-l1-${entry}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"entry":  "${entry}",
 					"prefix": "${baseConfig.data.prefix}",
 					"level":  "1",
@@ -1047,13 +918,13 @@ var _ = Describe("ForEach Collections", func() {
 				},
 				nil, nil),
 			// Collection-to-collection: level2 iterates over level1
-			generator.WithResourceCollection("level2Configs", map[string]interface{}{
+			generator.WithResourceCollection("level2Configs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-l2-${l1.data.entry}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"sourceEntry":  "${l1.data.entry}",
 					"sourcePrefix": "${l1.data.prefix}",
 					"level":        "2",
@@ -1064,31 +935,31 @@ var _ = Describe("ForEach Collections", func() {
 				},
 				nil, nil),
 			// Aggregates data from level2 collection using size()
-			generator.WithResource("summaryConfig", map[string]interface{}{
+			generator.WithResource("summaryConfig", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-summary",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"level1Count": "${string(size(level1Configs))}",
 					"level2Count": "${string(size(level2Configs))}",
 				},
 			}, nil, nil),
 			// Final collection depends on summaryConfig
-			generator.WithResourceCollection("finalPods", map[string]interface{}{
+			generator.WithResourceCollection("finalPods", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Pod",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-pod-${l2.data.sourceEntry}",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"restartPolicy": "Never",
-					"containers": []interface{}{
-						map[string]interface{}{
+					"containers": []any{
+						map[string]any{
 							"name":    "worker",
 							"image":   "busybox:latest",
-							"command": []interface{}{"sh", "-c", "echo ${summaryConfig.data.level2Count} items && sleep 3600"},
+							"command": []any{"sh", "-c", "echo ${summaryConfig.data.level2Count} items && sleep 3600"},
 						},
 					},
 				},
@@ -1112,16 +983,16 @@ var _ = Describe("ForEach Collections", func() {
 
 		name := "test-deep"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "DeepChain",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"items":  []interface{}{"a", "b"},
+					"items":  []any{"a", "b"},
 					"prefix": "test",
 				},
 			},
@@ -1218,7 +1089,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// Update items to [a, b, c]
-			err = unstructured.SetNestedSlice(instance.Object, []interface{}{"a", "b", "c"}, "spec", "items")
+			err = unstructured.SetNestedSlice(instance.Object, []any{"a", "b", "c"}, "spec", "items")
 			g.Expect(err).ToNot(HaveOccurred())
 
 			err = env.Client.Update(ctx, instance)
@@ -1290,7 +1161,7 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// Update items to [a, c] (remove b)
-			err = unstructured.SetNestedSlice(instance.Object, []interface{}{"a", "c"}, "spec", "items")
+			err = unstructured.SetNestedSlice(instance.Object, []any{"a", "c"}, "spec", "items")
 			g.Expect(err).ToNot(HaveOccurred())
 
 			err = env.Client.Update(ctx, instance)
@@ -1392,26 +1263,26 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-collection-dag-blocking",
 			generator.WithSchema(
 				"WorkerCluster", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":    "string",
 					"workers": "[]string",
 				},
 				nil,
 			),
 			// readyWhen: each pod must be Running (AND across all items)
-			generator.WithResourceCollection("workerPods", map[string]interface{}{
+			generator.WithResourceCollection("workerPods", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Pod",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-worker-${worker}",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"restartPolicy": "Never",
-					"containers": []interface{}{
-						map[string]interface{}{
+					"containers": []any{
+						map[string]any{
 							"name":    "worker",
 							"image":   "busybox:latest",
-							"command": []interface{}{"sh", "-c", "sleep 3600"},
+							"command": []any{"sh", "-c", "sleep 3600"},
 						},
 					},
 				},
@@ -1422,13 +1293,13 @@ var _ = Describe("ForEach Collections", func() {
 				[]string{"${each.status.phase == 'Running'}"},
 				nil),
 			// Depends on workerPods - blocked until all workers are Running
-			generator.WithResource("coordinator", map[string]interface{}{
+			generator.WithResource("coordinator", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-coordinator",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"workerCount":  "${string(size(workerPods))}",
 					"firstWorker":  "${workerPods[0].metadata.name}",
 					"allWorkerIPs": "${workerPods.map(w, has(w.status.podIP) ? w.status.podIP : 'pending').join(',')}",
@@ -1438,28 +1309,21 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-dag"
 		workers := []string{"alpha", "beta", "gamma"}
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "WorkerCluster",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":    name,
-					"workers": []interface{}{"alpha", "beta", "gamma"},
+					"workers": []any{"alpha", "beta", "gamma"},
 				},
 			},
 		}
@@ -1578,19 +1442,19 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-readywhen-collection",
 			generator.WithSchema(
 				"ReadyWhenCollection", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"values": "[]string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configs", map[string]interface{}{
+			generator.WithResourceCollection("configs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${value}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key":   "${value}",
 					"ready": "true",
 				},
@@ -1604,43 +1468,26 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-ready"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "ReadyWhenCollection",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"values": []interface{}{"one", "two", "three"},
+					"values": []any{"one", "two", "three"},
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		for _, value := range []string{"one", "two", "three"} {
 			cm := &corev1.ConfigMap{}
@@ -1678,19 +1525,19 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-no-readywhen-collection",
 			generator.WithSchema(
 				"NoReadyWhenCollection", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"values": "[]string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configs", map[string]interface{}{
+			generator.WithResourceCollection("configs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${value}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "${value}",
 				},
 			},
@@ -1702,43 +1549,26 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-no-ready"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "NoReadyWhenCollection",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"values": []interface{}{"a", "b", "c"},
+					"values": []any{"a", "b", "c"},
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		for _, value := range []string{"a", "b", "c"} {
 			cm := &corev1.ConfigMap{}
@@ -1775,19 +1605,19 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-deletion-collection",
 			generator.WithSchema(
 				"DeletionTest", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"values": "[]string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configs", map[string]interface{}{
+			generator.WithResourceCollection("configs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${value}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "${value}",
 				},
 			},
@@ -1799,44 +1629,27 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-deletion"
 		values := []string{"one", "two", "three"}
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "DeletionTest",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"values": []interface{}{"one", "two", "three"},
+					"values": []any{"one", "two", "three"},
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		for _, value := range values {
 			cm := &corev1.ConfigMap{}
@@ -1886,20 +1699,20 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-drift-collection",
 			generator.WithSchema(
 				"DriftTest", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"items":  "[]string",
 					"prefix": "string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configs", map[string]interface{}{
+			generator.WithResourceCollection("configs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${entry}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"entry":  "${entry}",
 					"prefix": "${schema.spec.prefix}",
 					"static": "unchanged",
@@ -1927,16 +1740,16 @@ var _ = Describe("ForEach Collections", func() {
 
 		name := "test-drift"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "DriftTest",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"items":  []interface{}{"alpha", "beta"},
+					"items":  []any{"alpha", "beta"},
 					"prefix": "original",
 				},
 			},
@@ -2005,20 +1818,20 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-collection-readywhen-no-deps",
 			generator.WithSchema(
 				"StandaloneCollection", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":      "string",
 					"values":    "[]string",
 					"makeReady": "boolean | default=false", // Controls whether collection items are "ready"
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configs", map[string]interface{}{
+			generator.WithResourceCollection("configs", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${value}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key":   "${value}",
 					"ready": "${string(schema.spec.makeReady)}",
 				},
@@ -2032,27 +1845,20 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-standalone"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "StandaloneCollection",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":      name,
-					"values":    []interface{}{"alpha", "beta", "gamma"},
+					"values":    []any{"alpha", "beta", "gamma"},
 					"makeReady": false,
 				},
 			},
@@ -2114,17 +1920,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			status, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(status).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -2160,21 +1956,21 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-cross-ns-collection",
 			generator.WithSchema(
 				"CrossNamespaceCollection", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 					"ns1":  "string",
 					"ns2":  "string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configmaps", map[string]interface{}{
+			generator.WithResourceCollection("configmaps", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "${schema.spec.name}-item-${string(i)}",
 					"namespace": "${i % 2 == 0 ? schema.spec.ns1 : schema.spec.ns2}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"index": "${string(i)}",
 				},
 			},
@@ -2186,25 +1982,18 @@ var _ = Describe("ForEach Collections", func() {
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		name := "test-cross-ns"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "CrossNamespaceCollection",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": name,
 					"ns1":  namespace,
 					"ns2":  altNamespace,
@@ -2238,17 +2027,7 @@ var _ = Describe("ForEach Collections", func() {
 			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 		}
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			status, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(status).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 
@@ -2298,19 +2077,19 @@ var _ = Describe("ForEach Collections", func() {
 		rgd := generator.NewResourceGraphDefinition("test-empty-collection-dep",
 			generator.WithSchema(
 				"EmptyCollectionDep", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"names": "[]string",
 				},
 				nil,
 			),
 			// Collection of ConfigMaps - will be empty when names=[]
-			generator.WithResourceCollection("entries", map[string]interface{}{
+			generator.WithResourceCollection("entries", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.metadata.name}-entry-${name}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"name": "${name}",
 				},
 			},
@@ -2318,13 +2097,13 @@ var _ = Describe("ForEach Collections", func() {
 					{"name": "${schema.spec.names}"},
 				},
 				nil, nil),
-			generator.WithResource("summary", map[string]interface{}{
+			generator.WithResource("summary", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.metadata.name}-summary",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					// This expression references the 'entries' collection
 					// When entries is empty, CEL should evaluate size(entries) to 0
 					"itemCount": "${string(size(entries))}",
@@ -2335,44 +2114,27 @@ var _ = Describe("ForEach Collections", func() {
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
 		// Wait for RGD to become active
-		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name: rgd.Name,
-			}, createdRGD)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
 
 		// Create instance with EMPTY names array - this triggers the bug
 		name := "test-empty-dep"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "EmptyCollectionDep",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
-					"names": []interface{}{},
+				"spec": map[string]any{
+					"names": []any{},
 				},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
 		// The instance should become ACTIVE even with empty collection
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      name,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(val).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, name, instance)
 
 		// Verify the summary ConfigMap was created with itemCount=0
 		summaryCM := &corev1.ConfigMap{}

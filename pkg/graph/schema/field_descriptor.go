@@ -15,11 +15,8 @@
 package schema
 
 import (
-	"errors"
 	"fmt"
 
-	"github.com/google/cel-go/common/types"
-	"github.com/google/cel-go/common/types/ref"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
@@ -70,57 +67,6 @@ type fieldDescriptor struct {
 	// the CEL expression that generates the field value, then converting the result
 	// into an OpenAPI schema.
 	Schema *extv1.JSONSchemaProps
-}
-
-var (
-	// ErrInvalidEvaluationTypes is returned when the evaluation types are not valid
-	// for generating a schema.
-	ErrInvalidEvaluationTypes = errors.New("invalid evaluation type")
-)
-
-func GenerateSchemaFromEvals(evals map[string][]ref.Val) (*extv1.JSONSchemaProps, error) {
-	fieldDescriptors := make([]fieldDescriptor, 0, len(evals))
-
-	for path, evaluationValues := range evals {
-		if !areValidExpressionEvals(evaluationValues) {
-			return nil, fmt.Errorf("invalid evaluation types at %v: %w", path, ErrInvalidEvaluationTypes)
-		}
-		exprSchema, err := inferSchemaFromCELValue(evaluationValues[0])
-		if err != nil {
-			return nil, fmt.Errorf("failed to infer schema type: %w", err)
-		}
-		fieldDescriptors = append(fieldDescriptors, fieldDescriptor{
-			Path:   path,
-			Schema: exprSchema,
-		})
-	}
-
-	return generateJSONSchemaFromFieldDescriptors(fieldDescriptors)
-}
-
-// areValidExpressionEvals returns true if all the evaluation types
-// are the same, false otherwise.
-func areValidExpressionEvals(evaluationValues []ref.Val) bool {
-	if len(evaluationValues) == 0 {
-		return false // no expressions is problematic
-	}
-	if len(evaluationValues) == 1 {
-		return true // Single value is always valid
-	}
-	// The only way a multi-value expression is valid is if all the values
-	// are of type string. Imagine.. you can't really combine two arrays
-	// using two different CEL expression in a meaningful way.
-	// e.g: "${a}${b}"" where a and b are arrays.
-	firstType := evaluationValues[0].Type()
-	if firstType != types.StringType {
-		return false
-	}
-	for _, eval := range evaluationValues[1:] {
-		if eval.Type() != firstType {
-			return false
-		}
-	}
-	return true
 }
 
 // generateJSONSchemaFromFieldDescriptors generates a JSONSchemaProps from a list of StatusStructureParts

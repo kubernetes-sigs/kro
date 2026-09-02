@@ -107,6 +107,7 @@ func TestIsKROReservedWord(t *testing.T) {
 	}{
 		{"resourcegraphdefinition", true},
 		{"instance", true},
+		{"graphengine", true},
 		{"each", true}, // Reserved for per-item readiness in collections
 		{"notReserved", false},
 		{"RESOURCEGRAPHDEFINITION", false}, // Case-sensitive check
@@ -146,60 +147,60 @@ func TestIsValidResourceName(t *testing.T) {
 func TestValidateKubernetesObjectStructure(t *testing.T) {
 	tests := []struct {
 		name    string
-		obj     map[string]interface{}
+		obj     map[string]any
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "Valid Kubernetes object",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Pod",
-				"metadata":   map[string]interface{}{},
+				"metadata":   map[string]any{},
 			},
 			wantErr: false,
 		},
 		{
 			name: "Missing apiVersion",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"kind":     "Pod",
-				"metadata": map[string]interface{}{},
+				"metadata": map[string]any{},
 			},
 			wantErr: true,
 			errMsg:  "apiVersion field not found",
 		},
 		{
 			name: "apiVersion not a string",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": 123,
 				"kind":       "Pod",
-				"metadata":   map[string]interface{}{},
+				"metadata":   map[string]any{},
 			},
 			wantErr: true,
 			errMsg:  "apiVersion field is not a string",
 		},
 		{
 			name: "Missing kind",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": "v1",
-				"metadata":   map[string]interface{}{},
+				"metadata":   map[string]any{},
 			},
 			wantErr: true,
 			errMsg:  "kind field not found",
 		},
 		{
 			name: "kind not a string",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": "v1",
 				"kind":       123,
-				"metadata":   map[string]interface{}{},
+				"metadata":   map[string]any{},
 			},
 			wantErr: true,
 			errMsg:  "kind field is not a string",
 		},
 		{
 			name: "Missing metadata",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Pod",
 			},
@@ -208,7 +209,7 @@ func TestValidateKubernetesObjectStructure(t *testing.T) {
 		},
 		{
 			name: "metadata not a map",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Pod",
 				"metadata":   "not a map",
@@ -270,13 +271,13 @@ func TestValidateKubernetesVersion(t *testing.T) {
 }
 
 func TestValidateResourceGraphDefinition(t *testing.T) {
-	defaultRGDConfig := RGDConfig{
+	defaultRGDConfig := Config{
 		MaxCollectionDimensionSize: 10,
 	}
 	tests := []struct {
 		name      string
 		rgd       *v1alpha1.ResourceGraphDefinition
-		rgdConfig RGDConfig
+		rgdConfig Config
 		wantErr   bool
 	}{
 		{
@@ -418,13 +419,13 @@ func TestInferListElementType(t *testing.T) {
 }
 
 func TestValidateForEachDimensions(t *testing.T) {
-	defaultRGDConfig := RGDConfig{
+	defaultRGDConfig := Config{
 		MaxCollectionDimensionSize: 10,
 	}
 	tests := []struct {
 		name        string
 		rgd         *v1alpha1.ResourceGraphDefinition
-		rgdConfig   RGDConfig
+		rgdConfig   Config
 		expectError bool
 		errorMsg    string
 	}{
@@ -604,7 +605,7 @@ func TestValidateForEachDimensions(t *testing.T) {
 					},
 				},
 			},
-			rgdConfig:   RGDConfig{MaxCollectionDimensionSize: 0},
+			rgdConfig:   Config{MaxCollectionDimensionSize: 0},
 			expectError: true,
 			errorMsg:    "forEach cannot have more than 0 dimensions",
 		},
@@ -640,17 +641,17 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 	tests := []struct {
 		name        string
 		resourceID  string
-		obj         map[string]interface{}
+		obj         map[string]any
 		expectError bool
 		errorMsg    string
 	}{
 		{
 			name:       "no labels",
 			resourceID: "testResource",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "test",
 				},
 			},
@@ -659,12 +660,12 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 		{
 			name:       "empty labels",
 			resourceID: "testResource",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":   "test",
-					"labels": map[string]interface{}{},
+					"labels": map[string]any{},
 				},
 			},
 			expectError: false,
@@ -672,12 +673,12 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 		{
 			name:       "valid labels",
 			resourceID: "testResource",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "test",
-					"labels": map[string]interface{}{
+					"labels": map[string]any{
 						"app": "test",
 					},
 				},
@@ -687,12 +688,12 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 		{
 			name:       "kro-owned labels",
 			resourceID: "testResource",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "test",
-					"labels": map[string]interface{}{
+					"labels": map[string]any{
 						"app":           "test",
 						"kro.run/owned": "false",
 					},
@@ -704,12 +705,12 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 		{
 			name:       "valid labels without kro.run/ prefix",
 			resourceID: "testResource",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "test",
-					"labels": map[string]interface{}{
+					"labels": map[string]any{
 						"app":           "test",
 						"kro-run-owned": "false",
 					},
@@ -720,12 +721,12 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 		{
 			name:       "internal kro-owned labels",
 			resourceID: "testResource",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "test",
-					"labels": map[string]interface{}{
+					"labels": map[string]any{
 						"internal.kro.run/apply-order": "99",
 					},
 				},
@@ -753,33 +754,33 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 func TestValidateNoKROOwnedAnnotations(t *testing.T) {
 	tests := []struct {
 		name        string
-		annotations map[string]interface{}
+		annotations map[string]any
 		expectError bool
 		errorMsg    string
 	}{
 		{
 			name:        "public kro-owned annotation",
-			annotations: map[string]interface{}{"kro.run/example": "value"},
+			annotations: map[string]any{"kro.run/example": "value"},
 			expectError: true,
 			errorMsg:    "kro.run/",
 		},
 		{
 			name:        "internal kro-owned annotation",
-			annotations: map[string]interface{}{"internal.kro.run/apply-order": "99"},
+			annotations: map[string]any{"internal.kro.run/apply-order": "99"},
 			expectError: true,
 			errorMsg:    "internal.kro.run/",
 		},
 		{
 			name:        "unowned annotation",
-			annotations: map[string]interface{}{"example.com/key": "value"},
+			annotations: map[string]any{"example.com/key": "value"},
 			expectError: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			obj := map[string]interface{}{
-				"metadata": map[string]interface{}{"annotations": tt.annotations},
+			obj := map[string]any{
+				"metadata": map[string]any{"annotations": tt.annotations},
 			}
 			err := validateNoKROOwnedAnnotations("testResource", obj)
 			if tt.expectError {
@@ -986,7 +987,7 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 					"matchLabels": "${schema.spec.selector",
 				}),
 			},
-			wantErr: "expected object type for path metadata.selector.matchLabels, got string",
+			wantErr: "unterminated expression",
 		},
 		{
 			name: "matchLabels escaped CEL string is invalid",
@@ -1013,7 +1014,7 @@ func TestValidateExternalRefMetadata(t *testing.T) {
 					"matchExpressions": "${schema.spec.expressions",
 				}),
 			},
-			wantErr: "expected array type for path metadata.selector.matchExpressions, got string",
+			wantErr: "unterminated expression",
 		},
 		{
 			name: "matchLabels number with CEL elsewhere is invalid",
@@ -1134,7 +1135,7 @@ func TestValidateTemplateConstraints(t *testing.T) {
 	tests := []struct {
 		name               string
 		resource           *v1alpha1.Resource
-		object             map[string]interface{}
+		object             map[string]any
 		namespaced         bool
 		instanceNamespaced bool
 		wantErr            string
@@ -1144,7 +1145,7 @@ func TestValidateTemplateConstraints(t *testing.T) {
 			resource: &v1alpha1.Resource{
 				ID: "res",
 			},
-			object: map[string]interface{}{
+			object: map[string]any{
 				"metadata": "not-a-map",
 			},
 			instanceNamespaced: true,
@@ -1155,8 +1156,8 @@ func TestValidateTemplateConstraints(t *testing.T) {
 			resource: &v1alpha1.Resource{
 				ID: "res",
 			},
-			object: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			object: map[string]any{
+				"metadata": map[string]any{
 					"namespace": "default",
 				},
 			},
@@ -1168,8 +1169,8 @@ func TestValidateTemplateConstraints(t *testing.T) {
 			resource: &v1alpha1.Resource{
 				ID: "res",
 			},
-			object: map[string]interface{}{
-				"metadata": map[string]interface{}{},
+			object: map[string]any{
+				"metadata": map[string]any{},
 			},
 			namespaced:         true,
 			instanceNamespaced: false,
@@ -1180,8 +1181,8 @@ func TestValidateTemplateConstraints(t *testing.T) {
 			resource: &v1alpha1.Resource{
 				ID: "res",
 			},
-			object: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			object: map[string]any{
+				"metadata": map[string]any{
 					"namespace": "",
 				},
 			},
@@ -1194,9 +1195,9 @@ func TestValidateTemplateConstraints(t *testing.T) {
 			resource: &v1alpha1.Resource{
 				ID: "res",
 			},
-			object: map[string]interface{}{
-				"metadata": map[string]interface{}{
-					"labels": map[string]interface{}{
+			object: map[string]any{
+				"metadata": map[string]any{
+					"labels": map[string]any{
 						"kro.run/owned": "true",
 					},
 				},
@@ -1210,10 +1211,10 @@ func TestValidateTemplateConstraints(t *testing.T) {
 			resource: &v1alpha1.Resource{
 				ID: "res",
 			},
-			object: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			object: map[string]any{
+				"metadata": map[string]any{
 					"namespace": "default",
-					"labels": map[string]interface{}{
+					"labels": map[string]any{
 						"app": "demo",
 					},
 				},
@@ -1226,8 +1227,8 @@ func TestValidateTemplateConstraints(t *testing.T) {
 			resource: &v1alpha1.Resource{
 				ID: "res",
 			},
-			object: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			object: map[string]any{
+				"metadata": map[string]any{
 					"namespace": "${schema.spec.targetNamespace}",
 				},
 			},

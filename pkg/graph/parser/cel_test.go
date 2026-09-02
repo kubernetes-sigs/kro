@@ -79,9 +79,10 @@ func TestExtractExpressions(t *testing.T) {
 			want:  nil,
 		},
 		{
-			name:  "Incomplete expression",
-			input: "${incomplete",
-			want:  nil,
+			name:    "Incomplete expression",
+			input:   "${incomplete",
+			want:    nil,
+			wantErr: true,
 		},
 		{
 			name:  "Expression with escaped quotes",
@@ -143,12 +144,10 @@ func TestExtractExpressions(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:  "Mixed complete and incomplete",
-			input: "${complete} ${complete2} ${incomplete",
-			want: []exprMatch{
-				{expr: "complete", start: 0, end: 11},
-				{expr: "complete2", start: 12, end: 24},
-			},
+			name:    "Mixed complete and incomplete",
+			input:   "${complete} ${complete2} ${incomplete",
+			want:    nil,
+			wantErr: true,
 		},
 		{
 			name:    "Mixed incomplete and complete",
@@ -175,6 +174,29 @@ func TestExtractExpressions(t *testing.T) {
 			name:  "Ternary with has() and empty map",
 			input: "${has(schema.annotations) && includeAnnotations ? schema.annotations : {}}",
 			want:  []exprMatch{{expr: "has(schema.annotations) && includeAnnotations ? schema.annotations : {}", start: 0, end: 74}},
+		},
+		{
+			// Finding 6a: a "${" inside a single-quoted CEL string literal is
+			// ordinary text, not a nested expression start, and a "}" inside
+			// one must not close the outer expression.
+			name:  "Single-quoted literal containing ${ is not a nested expression",
+			input: "${resource.field == '${literal}'}",
+			want:  []exprMatch{{expr: "resource.field == '${literal}'", start: 0, end: 33}},
+		},
+		{
+			name:  "Single-quoted literal with a closing brace inside",
+			input: "${'text with } inside'}",
+			want:  []exprMatch{{expr: "'text with } inside'", start: 0, end: 23}},
+		},
+		{
+			name:  "Single-quoted literal with an escaped quote",
+			input: "${resource.field == 'escaped\\'quote'}",
+			want:  []exprMatch{{expr: "resource.field == 'escaped\\'quote'", start: 0, end: 37}},
+		},
+		{
+			name:  "Double quote inside a single-quoted literal is ordinary text",
+			input: "${'a \" b'}",
+			want:  []exprMatch{{expr: "'a \" b'", start: 0, end: 10}},
 		},
 	}
 
@@ -214,7 +236,7 @@ func TestIsOneShotExpression(t *testing.T) {
 		{"Not one-shot multiple", "${resource1.field}${resource2.field}", false, false},
 		{"Not expression", "plain string", false, false},
 		{"Empty string", "", false, false},
-		{"Incomplete expression", "${incomplete", false, false},
+		{"Incomplete expression", "${incomplete", false, true},
 		{"With map access", "${resource.map['key']}", true, false},
 		{"With list index", "${resource.list[0]}", true, false},
 		{"With escaped quotes", "${resource.field == \"escaped\\\"quote\"}", true, false},

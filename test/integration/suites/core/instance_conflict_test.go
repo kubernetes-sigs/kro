@@ -70,18 +70,18 @@ var _ = Describe("Instance Isolation", func() {
 		rgd1 := generator.NewResourceGraphDefinition("test-conflict-app1",
 			generator.WithSchema(
 				"TestConflictApp1", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				nil,
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"source": "app1",
 				},
 			}, nil, nil),
@@ -90,18 +90,18 @@ var _ = Describe("Instance Isolation", func() {
 		rgd2 := generator.NewResourceGraphDefinition("test-conflict-app2",
 			generator.WithSchema(
 				"TestConflictApp2", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				nil,
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"source": "app2",
 				},
 			}, nil, nil),
@@ -129,28 +129,28 @@ var _ = Describe("Instance Isolation", func() {
 		// Here we are purposefully creating 2 instances with the same name with different RGDs
 		// Both instances have the same name but are in 2 different namespaces
 		instance1 := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestConflictApp1",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "my-app",
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": "shared-resource",
 				},
 			},
 		}
 
 		instance2 := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestConflictApp2",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "my-app",
 					"namespace": namespace2,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": "shared-resource",
 				},
 			},

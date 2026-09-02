@@ -89,11 +89,11 @@ var _ = Describe("ClusterScopedInstance", func() {
 		rgd := generator.NewResourceGraphDefinition(rgdName,
 			generator.WithSchema(
 				"ClusterPolicy", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"targetNamespace": "string",
 					"envValues":       "[]string",
 				},
-				map[string]interface{}{
+				map[string]any{
 					// Status from external ref
 					"externalSetting": "${extconfig.data.setting}",
 					// Status from external collection
@@ -122,26 +122,26 @@ var _ = Describe("ClusterScopedInstance", func() {
 				},
 			}, nil, nil),
 			// 3. Normal resource — namespace set explicitly via CEL
-			generator.WithResource("policyCm", map[string]interface{}{
+			generator.WithResource("policyCm", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "${schema.metadata.name}-policy",
 					"namespace": "${schema.spec.targetNamespace}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"setting": "${extconfig.data.setting}",
 				},
 			}, nil, nil),
 			// 4. Collection — one ConfigMap per envValue, namespace explicit
-			generator.WithResourceCollection("envCms", map[string]interface{}{
+			generator.WithResourceCollection("envCms", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "${schema.metadata.name}-env-${val}",
 					"namespace": "${schema.spec.targetNamespace}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"env": "${val}",
 				},
 			},
@@ -170,15 +170,15 @@ var _ = Describe("ClusterScopedInstance", func() {
 		By("creating cluster-scoped instance (no namespace)")
 		instanceName := fmt.Sprintf("test-policy-%s", rand.String(5))
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "kro.run/v1alpha1",
 				"kind":       "ClusterPolicy",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": instanceName,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"targetNamespace": namespace,
-					"envValues":       []interface{}{"dev", "staging"},
+					"envValues":       []any{"dev", "staging"},
 				},
 			},
 		}

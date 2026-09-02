@@ -1,15 +1,16 @@
-// Copyright 2025 The Kubernetes Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package core_test
 
@@ -231,26 +232,26 @@ func nestedResourceGraphDefinition(rgName, token string) (
 	rg := generator.NewResourceGraphDefinition(rgName,
 		generator.WithSchema(
 			"NestedRGD"+rgName, "v1alpha1",
-			map[string]interface{}{
+			map[string]any{
 				"type":    "string",
 				"default": "string",
 			},
-			map[string]interface{}{},
+			map[string]any{},
 		),
-		generator.WithResource("nested", map[string]interface{}{
+		generator.WithResource("nested", map[string]any{
 			"apiVersion": "kro.run/v1alpha1",
 			"kind":       "ResourceGraphDefinition",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": fmt.Sprintf("rg-nested-${schema.spec.type}-%s", token),
 			},
-			"spec": map[string]interface{}{
-				"schema": map[string]interface{}{
+			"spec": map[string]any{
+				"schema": map[string]any{
 					"apiVersion": "v1alpha1",
 					"group":      nestedGroup,
 					"kind":       "NestedRGD${schema.spec.type}",
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name": "string",
-						"somefield": map[string]interface{}{
+						"somefield": map[string]any{
 							"nested": "${schema.spec.type} | default=${schema.spec.default}",
 						},
 					},
@@ -261,14 +262,14 @@ func nestedResourceGraphDefinition(rgName, token string) (
 
 	instanceGen := func(namespace, name string, typeVal string, defaultVal string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "NestedRGD" + rgName,
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"type":    typeVal,
 					"default": defaultVal,
 				},

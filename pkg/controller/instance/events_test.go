@@ -30,10 +30,10 @@ import (
 
 func newTestInst() *unstructured.Unstructured {
 	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "kro.run/v1alpha1",
 			"kind":       "WebApp",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "test-inst",
 				"namespace": "default",
 			},

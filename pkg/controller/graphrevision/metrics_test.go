@@ -38,22 +38,22 @@ func TestCompileMetricsTrackSuccessAndFailure(t *testing.T) {
 	resetGraphRevisionMetrics()
 
 	successReconciler := &GraphRevisionReconciler{
-		compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+		compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 			return testCompiledGraph(), nil
 		},
 		registry:  revisions.NewRegistry(),
-		rgdConfig: graph.RGDConfig{},
+		rgdConfig: graph.Config{},
 	}
 	_, _, err := successReconciler.compileGraphRevision(context.Background(), newTestGraphRevision("compile-success"))
 	require.NoError(t, err)
 	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionCompileTotal.WithLabelValues("success")))
 
 	failureReconciler := &GraphRevisionReconciler{
-		compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+		compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 			return nil, errors.New("compile boom")
 		},
 		registry:  revisions.NewRegistry(),
-		rgdConfig: graph.RGDConfig{},
+		rgdConfig: graph.Config{},
 	}
 	_, _, err = failureReconciler.compileGraphRevision(context.Background(), newTestGraphRevision("compile-failure"))
 	require.Error(t, err)
@@ -71,11 +71,11 @@ func TestReconcileMetricsTrackDeferredActivationAndFinalizerEviction(t *testing.
 		Build()
 	reconciler := &GraphRevisionReconciler{
 		Client: &statusPatchFailClient{Client: base, patchErr: errors.New("status patch failed")},
-		compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+		compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 			return testCompiledGraph(), nil
 		},
 		registry:  revisions.NewRegistry(),
-		rgdConfig: graph.RGDConfig{},
+		rgdConfig: graph.Config{},
 	}
 
 	_, err := reconciler.Reconcile(context.Background(), revision.DeepCopy())
@@ -101,7 +101,7 @@ func TestReconcileMetricsTrackDeferredActivationAndFinalizerEviction(t *testing.
 		Client:       deleteClient,
 		compileGraph: panicCompile,
 		registry:     registry,
-		rgdConfig:    graph.RGDConfig{},
+		rgdConfig:    graph.Config{},
 	}
 
 	_, err = reconciler.Reconcile(context.Background(), deleting.DeepCopy())

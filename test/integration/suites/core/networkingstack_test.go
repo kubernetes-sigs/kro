@@ -131,7 +131,7 @@ var _ = Describe("NetworkingStack", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Mock VPC status
-		vpc.Object["status"] = map[string]interface{}{
+		vpc.Object["status"] = map[string]any{
 			"vpcID": "vpc-12345",
 		}
 		Expect(env.Client.Status().Update(ctx, vpc)).To(Succeed())
@@ -159,7 +159,7 @@ var _ = Describe("NetworkingStack", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Mock security group status
-		sg.Object["status"] = map[string]interface{}{
+		sg.Object["status"] = map[string]any{
 			"id": "sg-12345",
 		}
 		Expect(env.Client.Status().Update(ctx, sg)).To(Succeed())
@@ -197,7 +197,7 @@ var _ = Describe("NetworkingStack", func() {
 			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			// Mock subnet status
-			subnet.Object["status"] = map[string]interface{}{
+			subnet.Object["status"] = map[string]any{
 				"subnetID": s.id,
 			}
 			Expect(env.Client.Status().Update(ctx, subnet)).To(Succeed())

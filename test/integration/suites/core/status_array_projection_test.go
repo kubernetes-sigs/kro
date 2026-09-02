@@ -61,27 +61,27 @@ var _ = Describe("StatusArrayProjection", func() {
 		rgd := generator.NewResourceGraphDefinition("test-status-array",
 			generator.WithSchema(
 				"TestStatusArray", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
-				map[string]interface{}{
-					"endpoints": []interface{}{
+				map[string]any{
+					"endpoints": []any{
 						"${primary.metadata.name}",
 						"${secondary.metadata.name}",
 					},
 				},
 			),
-			generator.WithResource("primary", map[string]interface{}{
+			generator.WithResource("primary", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-primary",
 				},
 			}, nil, nil),
-			generator.WithResource("secondary", map[string]interface{}{
+			generator.WithResource("secondary", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-secondary",
 				},
 			}, nil, nil),
@@ -93,7 +93,7 @@ var _ = Describe("StatusArrayProjection", func() {
 		waitForRGDActive(ctx, rgd.Name)
 
 		name := "status-array"
-		instance := newInstance("TestStatusArray", name, namespace, map[string]interface{}{
+		instance := newInstance("TestStatusArray", name, namespace, map[string]any{
 			"name": name,
 		})
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
@@ -117,21 +117,21 @@ var _ = Describe("StatusArrayProjection", func() {
 		rgd := generator.NewResourceGraphDefinition("test-status-nested-array",
 			generator.WithSchema(
 				"TestStatusNestedArray", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
-				map[string]interface{}{
-					"network": map[string]interface{}{
-						"names": []interface{}{
+				map[string]any{
+					"network": map[string]any{
+						"names": []any{
 							"${primary.metadata.name}",
 						},
 					},
 				},
 			),
-			generator.WithResource("primary", map[string]interface{}{
+			generator.WithResource("primary", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-primary",
 				},
 			}, nil, nil),
@@ -143,7 +143,7 @@ var _ = Describe("StatusArrayProjection", func() {
 		waitForRGDActive(ctx, rgd.Name)
 
 		name := "status-nested-array"
-		instance := newInstance("TestStatusNestedArray", name, namespace, map[string]interface{}{
+		instance := newInstance("TestStatusNestedArray", name, namespace, map[string]any{
 			"name": name,
 		})
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())

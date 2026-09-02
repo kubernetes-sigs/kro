@@ -865,14 +865,16 @@ func TestAddWatch_EnsureWatchSyncError(t *testing.T) {
 
 	watcher := coord.ForInstance(testParentGVR, instance)
 
-	// EnsureWatch will fail sync but addWatch logs and returns nil.
+	// EnsureWatch fails sync; addWatch now rolls back the added entry and
+	// returns the wrapped error (standardized on the watchrouter behavior).
 	err := watcher.Watch(WatchRequest{
 		NodeID:    "deploy",
 		GVR:       testDeployGVR,
 		Name:      "d1",
 		Namespace: "default",
 	})
-	assert.NoError(t, err) // addWatch does not propagate EnsureWatch errors
+	require.Error(t, err) // addWatch propagates EnsureWatch errors
+	assert.ErrorContains(t, err, "ensure watch for")
 
 	wm.Shutdown()
 }

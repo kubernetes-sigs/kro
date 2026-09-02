@@ -62,19 +62,19 @@ var _ = Describe("Recovery", func() {
 		rgd := generator.NewResourceGraphDefinition("test-recovery",
 			generator.WithSchema(
 				"TestRecovery", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":      "string",
 					"configKey": "string",
 				},
 				nil,
 			),
-			generator.WithResource("initialConfig", map[string]interface{}{
+			generator.WithResource("initialConfig", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key":     "${schema.spec.configKey}",
 					"version": "initial",
 				},
@@ -104,20 +104,20 @@ var _ = Describe("Recovery", func() {
 			rgd.Spec.Resources = append(rgd.Spec.Resources,
 				&krov1alpha1.Resource{
 					ID: "serviceA",
-					Template: toRawExtension(map[string]interface{}{
+					Template: toRawExtension(map[string]any{
 						"apiVersion": "v1",
 						"kind":       "Service",
-						"metadata": map[string]interface{}{
+						"metadata": map[string]any{
 							"name": "${serviceB.metadata.name}",
 						},
 					}),
 				},
 				&krov1alpha1.Resource{
 					ID: "serviceB",
-					Template: toRawExtension(map[string]interface{}{
+					Template: toRawExtension(map[string]any{
 						"apiVersion": "v1",
 						"kind":       "Service",
-						"metadata": map[string]interface{}{
+						"metadata": map[string]any{
 							"name": "${serviceA.metadata.name}",
 						},
 					}),
@@ -148,32 +148,32 @@ var _ = Describe("Recovery", func() {
 			rgd.Spec.Resources = []*krov1alpha1.Resource{
 				{
 					ID: "itsapodnow",
-					Template: toRawExtension(map[string]interface{}{
+					Template: toRawExtension(map[string]any{
 						"apiVersion": "apps/v1",
 						"kind":       "Deployment",
-						"metadata": map[string]interface{}{
+						"metadata": map[string]any{
 							"name": "${schema.spec.name}",
 						},
-						"spec": map[string]interface{}{
+						"spec": map[string]any{
 							"replicas": 1,
-							"selector": map[string]interface{}{
-								"matchLabels": map[string]interface{}{
+							"selector": map[string]any{
+								"matchLabels": map[string]any{
 									"app": "deployment",
 								},
 							},
-							"template": map[string]interface{}{
-								"metadata": map[string]interface{}{
-									"labels": map[string]interface{}{
+							"template": map[string]any{
+								"metadata": map[string]any{
+									"labels": map[string]any{
 										"app": "deployment",
 									},
 								},
-								"spec": map[string]interface{}{
-									"containers": []interface{}{
-										map[string]interface{}{
+								"spec": map[string]any{
+									"containers": []any{
+										map[string]any{
 											"name":  "${schema.spec.name}-deployment",
 											"image": "nginx",
-											"ports": []interface{}{
-												map[string]interface{}{
+											"ports": []any{
+												map[string]any{
 													"containerPort": 777,
 												},
 											},
@@ -202,14 +202,14 @@ var _ = Describe("Recovery", func() {
 		// Create instance
 		name := "test-recovery"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestRecovery",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":      name,
 					"configKey": "testKey",
 				},

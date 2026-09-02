@@ -16,14 +16,12 @@ package instance
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -40,17 +38,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	clientfake "github.com/kubernetes-sigs/kro/pkg/client/fake"
-	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
+	"github.com/kubernetes-sigs/kro/pkg/dag"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
-	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
-	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	krt "github.com/kubernetes-sigs/kro/pkg/runtime"
-	"github.com/kubernetes-sigs/kro/pkg/watch"
+	watch "github.com/kubernetes-sigs/kro/pkg/watch"
 )
 
 var (
@@ -61,33 +55,6 @@ var (
 	controllerTestCMGVR     = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 	controllerTestCMGVK     = schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
 )
-
-var controllerTestEnv = func() *cel.Env {
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{
-		"schema", "deploy", "external", "each", "item", "configs",
-	}))
-	if err != nil {
-		panic(err)
-	}
-	return env
-}()
-
-func mustCompileControllerExpr(t *testing.T, expr string, refs ...string) *krocel.Expression {
-	t.Helper()
-
-	ast, issues := controllerTestEnv.Compile(expr)
-	if issues != nil && issues.Err() != nil {
-		t.Fatalf("compile %q: %v", expr, issues.Err())
-	}
-	program, err := controllerTestEnv.Program(ast)
-	require.NoError(t, err)
-
-	return &krocel.Expression{
-		Original:   expr,
-		References: refs,
-		Program:    program,
-	}
-}
 
 func buildControllerTestRESTMapper() meta.RESTMapper {
 	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{
@@ -120,7 +87,7 @@ func newControllerTestDynamicClient(t *testing.T, objs ...apimachineryruntime.Ob
 }
 
 func addApplyReactor(client *dynamicfake.FakeDynamicClient) {
-	var rvCounter int64
+	var rvCounter atomic.Int64
 
 	client.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
 		patchAction, ok := action.(k8stesting.PatchAction)
@@ -144,7 +111,7 @@ func addApplyReactor(client *dynamicfake.FakeDynamicClient) {
 			if !apierrors.IsNotFound(err) {
 				return true, nil, err
 			}
-			current = &unstructured.Unstructured{Object: map[string]interface{}{}}
+			current = &unstructured.Unstructured{Object: map[string]any{}}
 			create = true
 		} else {
 			existing, ok := stored.(*unstructured.Unstructured)
@@ -165,7 +132,7 @@ func addApplyReactor(client *dynamicfake.FakeDynamicClient) {
 		if current.GetUID() == "" {
 			current.SetUID(types.UID("uid-" + current.GetName()))
 		}
-		current.SetResourceVersion(strconv.FormatInt(atomic.AddInt64(&rvCounter, 1), 10))
+		current.SetResourceVersion(strconv.FormatInt(rvCounter.Add(1), 10))
 
 		if create {
 			if err := client.Tracker().Create(gvr, current, namespace); err != nil {
@@ -179,10 +146,10 @@ func addApplyReactor(client *dynamicfake.FakeDynamicClient) {
 	})
 }
 
-func mergeMaps(dst, src map[string]interface{}) {
+func mergeMaps(dst, src map[string]any) {
 	for key, value := range src {
-		srcMap, srcIsMap := value.(map[string]interface{})
-		dstMap, dstIsMap := dst[key].(map[string]interface{})
+		srcMap, srcIsMap := value.(map[string]any)
+		dstMap, dstIsMap := dst[key].(map[string]any)
 		if srcIsMap && dstIsMap {
 			mergeMaps(dstMap, srcMap)
 			continue
@@ -228,55 +195,19 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 		zap.New(zap.UseDevMode(true)),
 		ReconcileConfig{
 			DefaultRequeueDuration: 2 * time.Second,
-			RGDConfig: graph.RGDConfig{
-				MaxCollectionSize:          10,
-				MaxCollectionDimensionSize: 10,
-			},
 		},
 		controllerTestParentGVR,
-		registry.ResolverForRGD(controllerTestParentGVR.Resource),
+		registry.ResolverFor(controllerTestParentGVR.Resource),
 		true,
 		clientSet,
 		metadata.NewKROMetaLabeler(),
 		metadata.NewKROMetaLabeler(),
 		newControllerTestCoordinator(t),
 		record.NewFakeRecorder(100),
+		nil, // graphEngineClient: nil in tests (flag off)
 	)
 
 	return controller, clientSet
-}
-
-func newControllerAndContext(
-	t *testing.T,
-	instance *unstructured.Unstructured,
-	g *graph.Graph,
-	extraObjs ...apimachineryruntime.Object,
-) (*Controller, *ReconcileContext, *dynamicfake.FakeDynamicClient) {
-	t.Helper()
-
-	objs := append([]apimachineryruntime.Object{instance.DeepCopy()}, extraObjs...)
-	raw := newControllerTestDynamicClient(t, objs...)
-	controller, clientSet := newControllerUnderTest(t, raw, g)
-
-	rt, err := krt.FromGraph(g, controller.reconcileConfig.RGDConfig, krt.WithInstance(instance.DeepCopy()))
-	require.NoError(t, err)
-
-	namespaced := instance.GetNamespace() != ""
-	rcx := NewReconcileContext(
-		context.Background(),
-		controller.log,
-		controllerTestParentGVR,
-		namespaced,
-		clientSet.Dynamic(),
-		clientSet.RESTMapper(),
-		controller.childResourceLabeler,
-		rt,
-		controller.reconcileConfig,
-		instance.DeepCopy(),
-	)
-	rcx.Watcher = dynamiccontroller.NoopInstanceWatcher{}
-
-	return controller, rcx, raw
 }
 
 func newControllerAndDeletionContext(
@@ -307,14 +238,14 @@ func newControllerAndDeletionContext(
 
 func newInstanceObject(name, namespace string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": controllerTestParentGVK.GroupVersion().String(),
 			"kind":       controllerTestParentGVK.Kind,
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      name,
 				"namespace": namespace,
 			},
-			"spec": map[string]interface{}{},
+			"spec": map[string]any{},
 		},
 	}
 	obj.SetGroupVersionKind(controllerTestParentGVK)
@@ -323,19 +254,12 @@ func newInstanceObject(name, namespace string) *unstructured.Unstructured {
 	return obj
 }
 
-func newClusterScopedInstanceObject(name string) *unstructured.Unstructured {
-	obj := newInstanceObject(name, "")
-	unstructured.RemoveNestedField(obj.Object, "metadata", "namespace")
-	obj.SetNamespace("")
-	return obj
-}
-
 func newDeploymentObject(name, namespace string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": controllerTestDeployGVK.GroupVersion().String(),
 			"kind":       controllerTestDeployGVK.Kind,
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      name,
 				"namespace": namespace,
 			},
@@ -347,29 +271,19 @@ func newDeploymentObject(name, namespace string) *unstructured.Unstructured {
 
 func newConfigMapObject(name, namespace string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": controllerTestCMGVK.GroupVersion().String(),
 			"kind":       controllerTestCMGVK.Kind,
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      name,
 				"namespace": namespace,
 			},
-			"data": map[string]interface{}{
+			"data": map[string]any{
 				"value": "x",
 			},
 		},
 	}
 	obj.SetGroupVersionKind(controllerTestCMGVK)
-	return obj
-}
-
-//nolint:unparam // namespace is always "default" in current tests but kept for flexibility
-func newApplysetManagedConfigMap(instance *unstructured.Unstructured, name, namespace string) *unstructured.Unstructured {
-	obj := newConfigMapObject(name, namespace)
-	obj.SetUID(types.UID(name + "-uid"))
-	obj.SetLabels(map[string]string{
-		applyset.ApplysetPartOfLabel: applyset.ID(instance),
-	})
 	return obj
 }
 
@@ -382,8 +296,8 @@ func newTestGraph(nodes ...*graph.Node) *graph.Graph {
 			Namespaced: true,
 		},
 		Template: &unstructured.Unstructured{
-			Object: map[string]interface{}{
-				"status": map[string]interface{}{},
+			Object: map[string]any{
+				"status": map[string]any{},
 			},
 		},
 	}
@@ -432,16 +346,6 @@ func newTestGraphWithInstance(instanceNode *graph.Node, nodes ...*graph.Node) *g
 	}
 }
 
-func standaloneField(path string, expr *krocel.Expression, kind variable.ResourceVariableKind) *variable.ResourceField {
-	return &variable.ResourceField{
-		FieldDescriptor: variable.FieldDescriptor{
-			Path:       path,
-			Expression: expr,
-		},
-		Kind: kind,
-	}
-}
-
 func conditionByType(t *testing.T, obj *unstructured.Unstructured, condType string) v1alpha1.Condition {
 	t.Helper()
 
@@ -463,8 +367,3 @@ func getStoredParentObject(t *testing.T, client *dynamicfake.FakeDynamicClient) 
 	require.NoError(t, err)
 	return obj
 }
-
-type erroringWatcher struct{}
-
-func (erroringWatcher) Watch(dynamiccontroller.WatchRequest) error { return errors.New("watch failed") }
-func (erroringWatcher) Done(bool)                                  {}

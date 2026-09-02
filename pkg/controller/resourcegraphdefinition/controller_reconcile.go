@@ -191,14 +191,14 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		"controllerKind", processedRGD.CRD.Spec.Names.Kind,
 	)
 
-	return instancectrl.NewController(
+	instCtrl := instancectrl.NewController(
 		instanceLogger,
 		instancectrl.ReconcileConfig{
-			DefaultRequeueDuration:    r.cfg.InstanceRequeueInterval,
-			DeletionGraceTimeDuration: 30 * time.Second,
-			DeletionPolicy:            "Delete",
-			RGDConfig:                 r.cfg.RGDConfig,
-			HasAuthorConditions:       len(processedRGD.Instance.Conditions) > 0,
+			DefaultRequeueDuration: r.cfg.InstanceRequeueInterval,
+			HasAuthorConditions:    len(processedRGD.Instance.Conditions) > 0,
+			MaxCollectionSize:      r.cfg.RGDConfig.MaxCollectionSize,
+			ApplyConcurrency:       r.cfg.ApplyConcurrency,
+			CELCostLimit:           r.cfg.CELCostLimit,
 		},
 		gvr,
 		r.revisionsRegistry.ResolverFor(rgd.Name),
@@ -209,7 +209,17 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		r.dynamicController.Coordinator(),
 		// recorder keyed by CRD name to uniquely identify the event source
 		r.newEventRecorder(fmt.Sprintf("kro/%s-controller", processedRGD.CRD.Name)),
+		// graphEngineClient: the controller-runtime client used by the Graph
+		// engine executor.  r.Client is set by SetupWithManager, which always
+		// runs before the first micro-controller is created.
+		r.Client,
 	)
+
+	// Wire the graph-engine compiler.  The compiler is injected separately
+	// (two-phase init) because it owns a rest.Config reference that the
+	// instance controller does not otherwise need.
+	instCtrl.WithGraphEngineCompiler(r.graphEngineCompiler)
+	return instCtrl
 }
 
 // resolveGraphRevisions determines whether the RGD can proceed to serving
@@ -405,27 +415,47 @@ func (r *ResourceGraphDefinitionReconciler) ensureServingState(
 	return processedRGD.TopologicalOrder, resourcesInfo, nil
 }
 
-// Error types for the resourcegraphdefinition controller
-type (
-	graphError           struct{ err error }
-	crdError             struct{ err error }
-	microControllerError struct{ err error }
+// Sentinel errors identifying which stage of reconciliation failed. Each
+// wrapped error also satisfies errors.Is against its sentinel, and errors.As
+// against its named *xError type below (kept for call-site type assertions).
+var (
+	ErrGraph           = errors.New("graph error")
+	ErrCRD             = errors.New("crd error")
+	ErrMicroController = errors.New("microcontroller error")
 )
 
-// Error interface implementation
-func (e *graphError) Error() string           { return e.err.Error() }
-func (e *crdError) Error() string             { return e.err.Error() }
-func (e *microControllerError) Error() string { return e.err.Error() }
+// wrappedErr is the shared representation behind graphError, crdError, and
+// microControllerError: it preserves the original error's Error() text
+// (callers/tests compare against the inner message, not a prefixed one)
+// while also unwrapping to both the sentinel (for errors.Is) and the
+// original cause.
+type wrappedErr struct {
+	sentinel error
+	err      error
+}
 
-// Unwrap interface implementation
-func (e *graphError) Unwrap() error           { return e.err }
-func (e *crdError) Unwrap() error             { return e.err }
-func (e *microControllerError) Unwrap() error { return e.err }
+func (e *wrappedErr) Error() string { return e.err.Error() }
+
+// Unwrap returns both the sentinel and the original error so errors.Is
+// matches either ErrGraph/ErrCRD/ErrMicroController or the wrapped cause.
+func (e *wrappedErr) Unwrap() []error { return []error{e.sentinel, e.err} }
+
+type (
+	graphError           struct{ *wrappedErr }
+	crdError             struct{ *wrappedErr }
+	microControllerError struct{ *wrappedErr }
+)
 
 // Error constructors
-func newGraphError(err error) error           { return &graphError{err} }
-func newCRDError(err error) error             { return &crdError{err} }
-func newMicroControllerError(err error) error { return &microControllerError{err} }
+func newGraphError(err error) error {
+	return &graphError{&wrappedErr{sentinel: ErrGraph, err: err}}
+}
+func newCRDError(err error) error {
+	return &crdError{&wrappedErr{sentinel: ErrCRD, err: err}}
+}
+func newMicroControllerError(err error) error {
+	return &microControllerError{&wrappedErr{sentinel: ErrMicroController, err: err}}
+}
 
 // listGraphRevisions returns the graph revisions for an RGD, split into live
 // and terminating sets, and identifies orphans that need adoption.

@@ -34,13 +34,13 @@ func TestGoNativeType_EmptyList(t *testing.T) {
 	prog, err := env.Program(ast)
 	require.NoError(t, err)
 
-	val, _, err := prog.Eval(map[string]interface{}{})
+	val, _, err := prog.Eval(map[string]any{})
 	require.NoError(t, err)
 
 	native, err := GoNativeType(val)
 	require.NoError(t, err)
 
-	list, ok := native.([]interface{})
+	list, ok := native.([]any)
 	require.True(t, ok, "Expected []interface{}, got %T", native)
 	assert.NotNil(t, list)
 	assert.Equal(t, 0, len(list))
@@ -56,23 +56,23 @@ func TestGoNativeType_ListMap(t *testing.T) {
 	prog, err := env.Program(ast)
 	require.NoError(t, err)
 
-	val, _, err := prog.Eval(map[string]interface{}{})
+	val, _, err := prog.Eval(map[string]any{})
 	require.NoError(t, err)
 
 	native, err := GoNativeType(val)
 	require.NoError(t, err)
 
 	// Check type
-	list, ok := native.([]interface{})
+	list, ok := native.([]any)
 	require.True(t, ok, "Expected []interface{}, got %T", native)
 	require.Equal(t, 2, len(list))
 
 	// Check element type
-	map1, ok := list[0].(map[string]interface{})
+	map1, ok := list[0].(map[string]any)
 	require.True(t, ok, "Expected map[string]interface{} for element 0, got %T", list[0])
 	assert.EqualValues(t, 1, map1["a"])
 
-	map2, ok := list[1].(map[string]interface{})
+	map2, ok := list[1].(map[string]any)
 	require.True(t, ok, "Expected map[string]interface{} for element 1, got %T", list[1])
 	assert.EqualValues(t, 2, map2["b"])
 
@@ -96,7 +96,7 @@ func TestGoNativeType_ComplexNested(t *testing.T) {
 	prog, err := env.Program(ast)
 	require.NoError(t, err)
 
-	val, _, err := prog.Eval(map[string]interface{}{})
+	val, _, err := prog.Eval(map[string]any{})
 	require.NoError(t, err)
 
 	native, err := GoNativeType(val)
@@ -121,7 +121,7 @@ func TestGoNativeType_Bytes(t *testing.T) {
 	prog, err := env.Program(ast)
 	require.NoError(t, err)
 
-	val, _, err := prog.Eval(map[string]interface{}{})
+	val, _, err := prog.Eval(map[string]any{})
 	require.NoError(t, err)
 
 	native, err := GoNativeType(val)
@@ -139,7 +139,7 @@ func TestGoNativeType_Uint(t *testing.T) {
 	prog, err := env.Program(ast)
 	require.NoError(t, err)
 
-	val, _, err := prog.Eval(map[string]interface{}{})
+	val, _, err := prog.Eval(map[string]any{})
 	require.NoError(t, err)
 
 	native, err := GoNativeType(val)
@@ -187,20 +187,20 @@ func TestEnsureJSONSafe_UintOverflow(t *testing.T) {
 }
 
 func TestEnsureJSONSafe_NestedList(t *testing.T) {
-	safe, err := EnsureJSONSafe([]interface{}{uint64(42), "ok"})
+	safe, err := EnsureJSONSafe([]any{uint64(42), "ok"})
 	require.NoError(t, err)
-	assert.Equal(t, []interface{}{int64(42), "ok"}, safe)
+	assert.Equal(t, []any{int64(42), "ok"}, safe)
 
-	_, err = EnsureJSONSafe([]interface{}{[]byte("bad")})
+	_, err = EnsureJSONSafe([]any{[]byte("bad")})
 	require.ErrorIs(t, err, ErrUnsupportedType)
 }
 
 func TestEnsureJSONSafe_NestedMap(t *testing.T) {
-	safe, err := EnsureJSONSafe(map[string]interface{}{"n": uint64(42)})
+	safe, err := EnsureJSONSafe(map[string]any{"n": uint64(42)})
 	require.NoError(t, err)
-	assert.Equal(t, map[string]interface{}{"n": int64(42)}, safe)
+	assert.Equal(t, map[string]any{"n": int64(42)}, safe)
 
-	_, err = EnsureJSONSafe(map[string]interface{}{"b": []byte("bad")})
+	_, err = EnsureJSONSafe(map[string]any{"b": []byte("bad")})
 	require.ErrorIs(t, err, ErrUnsupportedType)
 }
 
@@ -208,12 +208,12 @@ func TestConvertMap_DeepCopiesRawMap(t *testing.T) {
 	// When the underlying CEL value wraps a raw map[string]interface{},
 	// convertMap should return a deep copy so that mutations to the
 	// result do not affect the original.
-	original := map[string]interface{}{
+	original := map[string]any{
 		"key": "value",
-		"nested": map[string]interface{}{
+		"nested": map[string]any{
 			"inner": "data",
 		},
-		"list": []interface{}{"a", "b"},
+		"list": []any{"a", "b"},
 	}
 
 	// Wrap the raw map as a CEL ref.Val via the default type adapter.
@@ -224,7 +224,7 @@ func TestConvertMap_DeepCopiesRawMap(t *testing.T) {
 	result, err := GoNativeType(celVal)
 	require.NoError(t, err)
 
-	resultMap, ok := result.(map[string]interface{})
+	resultMap, ok := result.(map[string]any)
 	require.True(t, ok, "Expected map[string]interface{}, got %T", result)
 
 	// The values should be equal.
@@ -234,10 +234,10 @@ func TestConvertMap_DeepCopiesRawMap(t *testing.T) {
 	resultMap["key"] = "mutated"
 	assert.Equal(t, "value", original["key"], "Original should not be affected by mutation of result")
 
-	nestedResult, ok := resultMap["nested"].(map[string]interface{})
+	nestedResult, ok := resultMap["nested"].(map[string]any)
 	require.True(t, ok)
 	nestedResult["inner"] = "mutated"
-	nestedOriginal := original["nested"].(map[string]interface{})
+	nestedOriginal := original["nested"].(map[string]any)
 	assert.Equal(t, "data", nestedOriginal["inner"], "Original nested map should not be affected by mutation of result")
 }
 
@@ -251,7 +251,7 @@ func TestGoNativeType_Duration(t *testing.T) {
 	prog, err := env.Program(ast)
 	require.NoError(t, err)
 
-	val, _, err := prog.Eval(map[string]interface{}{})
+	val, _, err := prog.Eval(map[string]any{})
 	require.NoError(t, err)
 
 	native, err := GoNativeType(val)
@@ -279,7 +279,7 @@ func TestGoNativeType_Timestamp(t *testing.T) {
 	prog, err := env.Program(ast)
 	require.NoError(t, err)
 
-	val, _, err := prog.Eval(map[string]interface{}{})
+	val, _, err := prog.Eval(map[string]any{})
 	require.NoError(t, err)
 
 	native, err := GoNativeType(val)

@@ -153,7 +153,7 @@ func listsSetAtIndex(args ...ref.Val) ref.Val {
 		return types.NewErr("lists.setAtIndex: index %d out of bounds [0, %d)", idx, size)
 	}
 	elems := make([]ref.Val, size)
-	for i := int64(0); i < size; i++ {
+	for i := range size {
 		if i == idx {
 			elems[i] = args[2]
 		} else {
@@ -182,7 +182,7 @@ func listsInsertAtIndex(args ...ref.Val) ref.Val {
 		return types.NewErr("lists.insertAtIndex: index %d out of bounds [0, %d]", idx, size)
 	}
 	elems := make([]ref.Val, size+1)
-	for i := int64(0); i < idx; i++ {
+	for i := range idx {
 		elems[i] = lister.Get(types.Int(i))
 	}
 	elems[idx] = args[2]
@@ -207,7 +207,7 @@ func listsRemoveAtIndex(arrVal, idxVal ref.Val) ref.Val {
 		return types.NewErr("lists.removeAtIndex: index %d out of bounds [0, %d)", idx, size)
 	}
 	elems := make([]ref.Val, size-1)
-	for i := int64(0); i < idx; i++ {
+	for i := range idx {
 		elems[i] = lister.Get(types.Int(i))
 	}
 	for i := idx + 1; i < size; i++ {

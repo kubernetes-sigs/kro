@@ -26,17 +26,17 @@ import (
 func TestBuildOpenAPISchema(t *testing.T) {
 	tests := []struct {
 		name    string
-		obj     map[string]interface{}
-		types   map[string]interface{}
+		obj     map[string]any
+		types   map[string]any
 		want    *extv1.JSONSchemaProps
 		wantErr bool
 	}{
 		{
 			name: "Complex nested schema",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"name": "string | required=true",
 				"age":  "integer | default=18",
-				"contacts": map[string]interface{}{
+				"contacts": map[string]any{
 					"email":   "string",
 					"phone":   "string | default=\"000-000-0000\"",
 					"address": "Address",
@@ -47,13 +47,13 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				"attributes": "map[string]boolean",
 				"friends":    "[]Person",
 			},
-			types: map[string]interface{}{
-				"Address": map[string]interface{}{
+			types: map[string]any{
+				"Address": map[string]any{
 					"street":  "string",
 					"city":    "string",
 					"country": "string",
 				},
-				"Person": map[string]interface{}{
+				"Person": map[string]any{
 					"name": "string",
 					"age":  "integer",
 				},
@@ -128,7 +128,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Schema with complex map",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"config": "map[string]map[string]integer",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -151,7 +151,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Schema with complex array",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"matrix": "[][]float",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -174,7 +174,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Schema with array of objects",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"items": "[]object",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -195,7 +195,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Schema with nested array of objects",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"matrix": "[][]object",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -221,7 +221,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Schema with invalid type",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"invalid": "unknownType",
 			},
 			want:    nil,
@@ -229,7 +229,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Nested slices",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"matrix": "[][][]string",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -257,11 +257,11 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Nested slices with custom type",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"matrix": "[][][]Person",
 			},
-			types: map[string]interface{}{
-				"Person": map[string]interface{}{
+			types: map[string]any{
+				"Person": map[string]any{
 					"name": "string",
 					"age":  "integer",
 				},
@@ -297,11 +297,11 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Nested maps",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"matrix": "map[string]map[string]map[string]Person",
 			},
-			types: map[string]interface{}{
-				"Person": map[string]interface{}{
+			types: map[string]any{
+				"Person": map[string]any{
 					"name": "string",
 					"age":  "integer",
 				},
@@ -337,7 +337,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Map of arrays",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"tags": "map[string][]string",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -360,7 +360,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Array of maps",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"configs": "[]map[string]integer",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -383,11 +383,11 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Custom types with nested collections",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"data": "Record",
 			},
-			types: map[string]interface{}{
-				"Record": map[string]interface{}{
+			types: map[string]any{
+				"Record": map[string]any{
 					"tags":   "map[string][]string",
 					"matrix": "[][]integer",
 				},
@@ -428,7 +428,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Schema with map of objects",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"config": "map[string]object",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -449,7 +449,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Schema with nested map of objects",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"config": "map[string]map[string]object",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -475,9 +475,9 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Schema with multiple enum types",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"logLevel": "string | enum=\"debug,info,warn,error\" default=\"info\"",
-				"features": map[string]interface{}{
+				"features": map[string]any{
 					"logFormat": "string | enum=\"json,text,csv\" default=\"json\"",
 					"errorCode": "integer | enum=\"400,404,500\" default=500",
 				},
@@ -526,7 +526,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Object with unknown fields",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"values": "object",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -542,7 +542,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Object with unknown fields in combination with required marker",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"values": "object | required=true",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -559,7 +559,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Object with unknown fields in combination with default marker",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"values": "object | default={\"a\":\"b\"}",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -577,7 +577,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Simple string validation",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"name": `string | validation="self.name != 'invalid'"`,
 			},
 			want: &extv1.JSONSchemaProps{
@@ -598,7 +598,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Multiple field validations",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"age":  `integer | validation="self.age >= 0 && self.age <= 120"`,
 				"name": `string | validation="self.name.length() >= 3"`,
 			},
@@ -629,7 +629,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Simple immutable field",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"id": "string | immutable=true",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -650,7 +650,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Simple immutable field with false value",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"name": "string | immutable=false",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -665,7 +665,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Immutable with other markers",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"resourceId": `string | required=true immutable=true description="Unique resource identifier"`,
 			},
 			want: &extv1.JSONSchemaProps{
@@ -688,10 +688,10 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Custom simple type (required)",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"myValue": "myType",
 			},
-			types: map[string]interface{}{
+			types: map[string]any{
 				"myType": "string | required=true description=\"my description\"",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -708,7 +708,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Required Marker handling",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"req_1": "string | required=true",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -722,7 +722,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "String field with pattern validation",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"email": "string | pattern=\"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$\"",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -738,7 +738,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "String field with minLength and maxLength",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"username": "string | minLength=3 maxLength=20",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -755,7 +755,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "String field with all validation markers",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"code": "string | pattern=\"^[A-Z]{2}[0-9]{4}$\" minLength=6 maxLength=6 description=\"Country code format\"",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -774,7 +774,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Array field with uniqueItems true",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"tags": "[]string | uniqueItems=true",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -793,7 +793,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Array field with uniqueItems false",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"comments": "[]string | uniqueItems=false",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -811,8 +811,8 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Complex object with multiple new validation markers",
-			obj: map[string]interface{}{
-				"user": map[string]interface{}{
+			obj: map[string]any{
+				"user": map[string]any{
 					"email":    "string | pattern=\"^[\\w\\.-]+@[\\w\\.-]+\\.\\w+$\"",
 					"username": "string | minLength=3 maxLength=15 pattern=\"^[a-zA-Z0-9_]+$\"",
 					"roles":    "[]string | uniqueItems=true",
@@ -856,7 +856,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Array field with minItems",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"items": "[]string | minItems=2",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -875,7 +875,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Array field with maxItems",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"tags": "[]string | maxItems=10",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -894,7 +894,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Array field with minItems and maxItems",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"priorities": "[]integer | minItems=1 maxItems=5",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -914,7 +914,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Array field with all validation markers",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"codes": "[]string | uniqueItems=true minItems=2 maxItems=8",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -935,7 +935,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Array field with zero minItems",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"optional": "[]string | minItems=0",
 			},
 			want: &extv1.JSONSchemaProps{
@@ -954,10 +954,10 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Cyclic dependency in custom types",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"data": "TypeA",
 			},
-			types: map[string]interface{}{
+			types: map[string]any{
 				"TypeA": "TypeB",
 				"TypeB": "TypeA",
 			},
@@ -965,41 +965,41 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Undefined custom type reference",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"data": "string",
 			},
-			types: map[string]interface{}{
+			types: map[string]any{
 				"TypeA": "UndefinedType",
 			},
 			wantErr: true,
 		},
 		{
 			name: "Invalid custom type spec",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"data": "string",
 			},
-			types: map[string]interface{}{
+			types: map[string]any{
 				"BadType": 123,
 			},
 			wantErr: true,
 		},
 		{
 			name: "Invalid string custom type",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"data": "string",
 			},
-			types: map[string]interface{}{
+			types: map[string]any{
 				"BadType": "[]",
 			},
 			wantErr: true,
 		},
 		{
 			name: "Invalid map custom type",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"data": "string",
 			},
-			types: map[string]interface{}{
-				"BadType": map[string]interface{}{
+			types: map[string]any{
+				"BadType": map[string]any{
 					"field": 123,
 				},
 			},
@@ -1007,28 +1007,28 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Invalid field spec type",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"data": 123,
 			},
 			wantErr: true,
 		},
 		{
 			name: "Invalid string custom type triggers buildFieldFromString error",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"data": "string",
 			},
-			types: map[string]interface{}{
+			types: map[string]any{
 				"BadType": "string | minLength=abc",
 			},
 			wantErr: true,
 		},
 		{
 			name: "Invalid map custom type triggers buildSchema error",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"data": "string",
 			},
-			types: map[string]interface{}{
-				"BadType": map[string]interface{}{
+			types: map[string]any{
+				"BadType": map[string]any{
 					"field": "string | minLength=abc",
 				},
 			},
@@ -1036,8 +1036,8 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Invalid nested field triggers buildSchema error",
-			obj: map[string]interface{}{
-				"outer": map[string]interface{}{
+			obj: map[string]any{
+				"outer": map[string]any{
 					"inner": "string | minLength=abc",
 				},
 			},
@@ -1045,21 +1045,21 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		},
 		{
 			name: "Invalid field type string",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"data": "string | =bad",
 			},
 			wantErr: true,
 		},
 		{
 			name: "Slice with undefined element type",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"items": "[]UndefinedType",
 			},
 			wantErr: true,
 		},
 		{
 			name: "Map with undefined value type",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"data": "map[string]UndefinedType",
 			},
 			wantErr: true,
@@ -1084,14 +1084,14 @@ func TestBuildOpenAPISchema(t *testing.T) {
 func TestDefaultPropagation(t *testing.T) {
 	tests := []struct {
 		name    string
-		obj     map[string]interface{}
-		types   map[string]interface{}
+		obj     map[string]any
+		types   map[string]any
 		want    *extv1.JSONSchemaProps
 		wantErr bool
 	}{
 		{
 			name: "child defaults propagate to parent",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"timeout": "integer | default=30",
 				"retries": "integer | default=3",
 			},
@@ -1112,7 +1112,7 @@ func TestDefaultPropagation(t *testing.T) {
 		},
 		{
 			name: "required field blocks parent default",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"name":    "string | required=true",
 				"timeout": "integer | default=30",
 			},
@@ -1130,7 +1130,7 @@ func TestDefaultPropagation(t *testing.T) {
 		},
 		{
 			name: "no defaults means no parent default",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"name":    "string",
 				"timeout": "integer",
 			},
@@ -1144,11 +1144,11 @@ func TestDefaultPropagation(t *testing.T) {
 		},
 		{
 			name: "custom type with defaults",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"config": "Config",
 			},
-			types: map[string]interface{}{
-				"Config": map[string]interface{}{
+			types: map[string]any{
+				"Config": map[string]any{
 					"timeout": "integer | default=30",
 					"retries": "integer | default=3",
 				},
@@ -1176,11 +1176,11 @@ func TestDefaultPropagation(t *testing.T) {
 		},
 		{
 			name: "custom type with required blocks default",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"config": "Config",
 			},
-			types: map[string]interface{}{
-				"Config": map[string]interface{}{
+			types: map[string]any{
+				"Config": map[string]any{
 					"name":    "string | required=true",
 					"timeout": "integer | default=30",
 				},
@@ -1204,14 +1204,14 @@ func TestDefaultPropagation(t *testing.T) {
 		},
 		{
 			name: "nested custom types with defaults",
-			obj: map[string]interface{}{
+			obj: map[string]any{
 				"app": "App",
 			},
-			types: map[string]interface{}{
-				"Config": map[string]interface{}{
+			types: map[string]any{
+				"Config": map[string]any{
 					"port": "integer | default=8080",
 				},
-				"App": map[string]interface{}{
+				"App": map[string]any{
 					"name":   "string",
 					"config": "Config",
 				},
@@ -1242,9 +1242,9 @@ func TestDefaultPropagation(t *testing.T) {
 		},
 		{
 			name: "deeply nested required blocks default at that level only",
-			obj: map[string]interface{}{
-				"outer": map[string]interface{}{
-					"inner": map[string]interface{}{
+			obj: map[string]any{
+				"outer": map[string]any{
+					"inner": map[string]any{
 						"required_field": "string | required=true",
 						"optional_field": "integer | default=42",
 					},
@@ -1295,44 +1295,34 @@ func TestDefaultPropagation(t *testing.T) {
 	}
 }
 
-func TestFromOpenAPISpec(t *testing.T) {
-	_, err := FromOpenAPISpec(nil)
-	if err == nil {
-		t.Error("FromOpenAPISpec() expected error, got nil")
-	}
-	if err.Error() != "not implemented" {
-		t.Errorf("FromOpenAPISpec() expected 'not implemented' error, got %v", err)
-	}
-}
-
 func TestComplexSchemaE2E(t *testing.T) {
-	types := map[string]interface{}{
+	types := map[string]any{
 		"RequiredString": "string | required=true",
 		"Port":           "integer | default=8080 minimum=1 maximum=65535",
-		"DatabaseConfig": map[string]interface{}{
+		"DatabaseConfig": map[string]any{
 			"host":     "string | required=true",
 			"port":     "Port",
 			"username": "string | required=true",
 			"password": "string | required=true",
 			"database": "string | default=\"postgres\"",
 		},
-		"RetryConfig": map[string]interface{}{
+		"RetryConfig": map[string]any{
 			"maxRetries":  "integer | default=3 minimum=0 maximum=10",
 			"backoffMs":   "integer | default=1000",
 			"exponential": "boolean | default=true",
 		},
-		"ServiceEndpoint": map[string]interface{}{
+		"ServiceEndpoint": map[string]any{
 			"name":    "RequiredString",
 			"url":     "string | required=true pattern=\"^https?://\"",
 			"timeout": "integer | default=30 minimum=1 maximum=300",
 		},
-		"Label": map[string]interface{}{
+		"Label": map[string]any{
 			"key":   "string | required=true minLength=1 maxLength=63",
 			"value": "string | default=\"\"",
 		},
 	}
 
-	obj := map[string]interface{}{
+	obj := map[string]any{
 		"name":        "RequiredString",
 		"environment": "string | default=\"development\" enum=\"development,staging,production\" description=\"Deployment environment\"",
 		"database":    "DatabaseConfig",
@@ -1342,7 +1332,7 @@ func TestComplexSchemaE2E(t *testing.T) {
 		"labels":      "[]Label | uniqueItems=true",
 		"clusterId":   "string | immutable=true",
 		"replicas":    "integer | default=1 minimum=0 maximum=100 validation=\"self <= 10 || self % 2 == 0\"",
-		"resources": map[string]interface{}{
+		"resources": map[string]any{
 			"cpu":    "string | default=\"100m\" pattern=\"^[0-9]+m?$\"",
 			"memory": "string | default=\"128Mi\" pattern=\"^[0-9]+(Mi|Gi)$\"",
 		},

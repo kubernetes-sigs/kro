@@ -56,19 +56,19 @@ var _ = Describe("Omit", func() {
 		rgd := generator.NewResourceGraphDefinition("test-omit",
 			generator.WithSchema(
 				"TestOmit", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":     "string",
 					"optional": "string | default=\"\"",
 				},
 				nil,
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"always":   "present",
 					"optional": `${schema.spec.optional != "" ? schema.spec.optional : omit()}`,
 				},
@@ -88,14 +88,14 @@ var _ = Describe("Omit", func() {
 		// --- Case 1: optional is empty → field should be omitted ---
 		name1 := fmt.Sprintf("omit-yes-%s", rand.String(4))
 		instance1 := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestOmit",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name1,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":     name1,
 					"optional": "",
 				},
@@ -161,14 +161,14 @@ var _ = Describe("Omit", func() {
 		// --- Case 2: optional is set → field should be present ---
 		name2 := fmt.Sprintf("omit-no-%s", rand.String(4))
 		instance2 := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestOmit",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name2,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":     name2,
 					"optional": "my-value",
 				},
@@ -221,24 +221,24 @@ var _ = Describe("Omit", func() {
 		rgd := generator.NewResourceGraphDefinition("test-omit-array",
 			generator.WithSchema(
 				"TestOmitArray", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":        "string",
 					"optionalArg": "string | default=\"\"",
 				},
 				nil,
 			),
-			generator.WithResource("pod", map[string]interface{}{
+			generator.WithResource("pod", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Pod",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}",
 				},
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
 							"name":  "main",
 							"image": "busybox",
-							"command": []interface{}{
+							"command": []any{
 								"echo",
 								`${schema.spec.optionalArg != "" ? schema.spec.optionalArg : omit()}`,
 							},
@@ -260,14 +260,14 @@ var _ = Describe("Omit", func() {
 		// --- Case 1: optionalArg is empty → array element should be omitted ---
 		name1 := fmt.Sprintf("omit-arr-yes-%s", rand.String(4))
 		instance1 := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestOmitArray",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name1,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":        name1,
 					"optionalArg": "",
 				},
@@ -295,14 +295,14 @@ var _ = Describe("Omit", func() {
 		// --- Case 2: optionalArg is set → array element should be present ---
 		name2 := fmt.Sprintf("omit-arr-no-%s", rand.String(4))
 		instance2 := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestOmitArray",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name2,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":        name2,
 					"optionalArg": "hello",
 				},

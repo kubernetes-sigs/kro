@@ -150,11 +150,23 @@ var _ = Describe("DeploymentService", func() {
 			instanceIsReady(g, ctx, env, namespace, instance)
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		// // annotate instance with "kro.run/reconcile:disabled"
-		currentAnnotations := instance.GetAnnotations()
-		currentAnnotations[krov1alpha1.InstanceReconcileAnnotation] = krov1alpha1.ReconcileLegacyDisabled
-		instance.SetAnnotations(currentAnnotations)
-		Expect(env.Client.Update(ctx, instance)).To(Succeed())
+		// Annotate the instance with "kro.run/reconcile:disabled". Refetch and
+		// retry so a concurrent status write cannot lose this update to an
+		// optimistic-concurrency conflict (author status and conditions/state are
+		// written under separate field managers).
+		Eventually(func(g Gomega, ctx SpecContext) {
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      "test-instance",
+				Namespace: namespace,
+			}, instance)).To(Succeed())
+			ann := instance.GetAnnotations()
+			if ann == nil {
+				ann = map[string]string{}
+			}
+			ann[krov1alpha1.InstanceReconcileAnnotation] = krov1alpha1.ReconcileLegacyDisabled
+			instance.SetAnnotations(ann)
+			g.Expect(env.Client.Update(ctx, instance)).To(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Instance should show ReconciliationSuspended condition after suspension.
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -167,9 +179,9 @@ var _ = Describe("DeploymentService", func() {
 			conditions, found, _ := unstructured.NestedSlice(instance.Object, "status", "conditions")
 			g.Expect(found).To(BeTrue())
 
-			var readyCondition map[string]interface{}
+			var readyCondition map[string]any
 			for _, c := range conditions {
-				cm := c.(map[string]interface{})
+				cm := c.(map[string]any)
 				if cm["type"] == ctrlinstance.Ready {
 					readyCondition = cm
 					break
@@ -181,11 +193,15 @@ var _ = Describe("DeploymentService", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// update instance spec to have replicas=2.
-		// this should be ignored since the instance has the reconcile:disabled label
-		err := unstructured.SetNestedField(instance.Object, int64(2), "spec", "replicas")
-		Expect(err).ToNot(HaveOccurred())
-
-		Expect(env.Client.Update(ctx, instance)).To(Succeed())
+		// this should be ignored since the instance has the reconcile:disabled annotation.
+		Eventually(func(g Gomega, ctx SpecContext) {
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      "test-instance",
+				Namespace: namespace,
+			}, instance)).To(Succeed())
+			g.Expect(unstructured.SetNestedField(instance.Object, int64(2), "spec", "replicas")).To(Succeed())
+			g.Expect(env.Client.Update(ctx, instance)).To(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// deployment should stay at 1 replica
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -290,9 +306,9 @@ func instanceIsReady(g Gomega,
 	g.Expect(statusConditions).ToNot(BeEmpty())
 
 	// Find the Ready condition
-	var readyCondition map[string]interface{}
+	var readyCondition map[string]any
 	for _, condInterface := range statusConditions {
-		if cond, ok := condInterface.(map[string]interface{}); ok {
+		if cond, ok := condInterface.(map[string]any); ok {
 			condType, _ := cond["type"].(string)
 			if condType == ctrlinstance.Ready {
 				readyCondition = cond

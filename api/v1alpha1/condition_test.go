@@ -177,7 +177,7 @@ func TestConditionRoundTrip(t *testing.T) {
 	t.Logf("Marshaled JSON: %s", string(conditionsJSON))
 
 	// Step 2: Unmarshal to []interface{} (what SetConditions stores in unstructured)
-	var conditionsInterface []interface{}
+	var conditionsInterface []any
 	if err := json.Unmarshal(conditionsJSON, &conditionsInterface); err != nil {
 		t.Fatalf("Failed to unmarshal to interface{} slice: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestConditionRoundTripWithoutOptionalFields(t *testing.T) {
 
 	// Perform the same round trip
 	conditionsJSON, _ := json.Marshal(conditions)
-	var conditionsInterface []interface{}
+	var conditionsInterface []any
 	_ = json.Unmarshal(conditionsJSON, &conditionsInterface)
 	interfaceJSON, _ := json.Marshal(conditionsInterface)
 	var finalConditions []Condition

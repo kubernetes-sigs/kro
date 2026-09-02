@@ -118,7 +118,7 @@ func intOrStringSchema() *openapi.Schema {
 }
 
 func mapListSchema(itemProps map[string]spec.Schema, mapKeys []string) *openapi.Schema {
-	keys := make([]interface{}, len(mapKeys))
+	keys := make([]any, len(mapKeys))
 	for i, k := range mapKeys {
 		keys[i] = k
 	}
@@ -198,7 +198,7 @@ func TestUnstructuredToVal_StringBytes(t *testing.T) {
 func TestUnstructuredToVal_Integer(t *testing.T) {
 	tests := []struct {
 		name  string
-		input interface{}
+		input any
 	}{
 		{"int", int(42)},
 		{"int32", int32(42)},
@@ -216,7 +216,7 @@ func TestUnstructuredToVal_Integer(t *testing.T) {
 func TestUnstructuredToVal_Integer_RejectsNonInteger(t *testing.T) {
 	tests := []struct {
 		name  string
-		input interface{}
+		input any
 	}{
 		{"float64 fractional", float64(1.5)},
 		{"float64 NaN", math.NaN()},
@@ -236,7 +236,7 @@ func TestUnstructuredToVal_Integer_RejectsNonInteger(t *testing.T) {
 func TestUnstructuredToVal_Number(t *testing.T) {
 	tests := []struct {
 		name  string
-		input interface{}
+		input any
 		want  types.Double
 	}{
 		{"float64", float64(3.14), types.Double(3.14)},
@@ -272,7 +272,7 @@ func TestUnstructuredToVal_ObjectWithProperties(t *testing.T) {
 		"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
 		"age":  {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
 	})
-	data := map[string]interface{}{
+	data := map[string]any{
 		"name": "alice",
 		"age":  int64(30),
 	}
@@ -293,7 +293,7 @@ func TestUnstructuredToVal_ObjectWithAdditionalProperties(t *testing.T) {
 	s := objectSchemaWithAdditionalProps(&spec.Schema{
 		SchemaProps: spec.SchemaProps{Type: []string{"string"}},
 	})
-	data := map[string]interface{}{
+	data := map[string]any{
 		"key1": "val1",
 		"key2": "val2",
 	}
@@ -309,7 +309,7 @@ func TestUnstructuredToVal_ObjectWithAdditionalProperties(t *testing.T) {
 func TestUnstructuredToVal_ObjectUnknownFields(t *testing.T) {
 	// Object with no properties and no additionalProperties — falls back to NativeToValue.
 	s := schema("object")
-	data := map[string]interface{}{
+	data := map[string]any{
 		"anything": "goes",
 	}
 	val := UnstructuredToVal(data, s)
@@ -321,7 +321,7 @@ func TestUnstructuredToVal_ArrayWithItems(t *testing.T) {
 	s := arraySchema(&spec.Schema{
 		SchemaProps: spec.SchemaProps{Type: []string{"string"}},
 	})
-	data := []interface{}{"a", "b", "c"}
+	data := []any{"a", "b", "c"}
 	val := UnstructuredToVal(data, s)
 	lister, ok := val.(traits.Lister)
 	require.True(t, ok, "expected Lister, got %T", val)
@@ -334,7 +334,7 @@ func TestUnstructuredToVal_ArrayWithItems(t *testing.T) {
 
 func TestUnstructuredToVal_PreserveUnknownFields(t *testing.T) {
 	s := preserveUnknownFieldsSchema()
-	data := map[string]interface{}{
+	data := map[string]any{
 		"arbitrary": "data",
 	}
 	val := UnstructuredToVal(data, s)
@@ -361,7 +361,7 @@ func TestUnstructuredToVal_IntOrString(t *testing.T) {
 func TestUnstructuredToVal_TypeErrors(t *testing.T) {
 	tests := []struct {
 		name   string
-		input  interface{}
+		input  any
 		schema *openapi.Schema
 	}{
 		{"string expects string", int64(1), schema("string")},
@@ -395,7 +395,7 @@ func TestUnstructuredMap_Find_NullPropertyTreatedAsAbsent(t *testing.T) {
 			Format: "date-time",
 		}},
 	})
-	data := map[string]interface{}{
+	data := map[string]any{
 		"completionTime": nil,                    // null - should be treated as absent
 		"startTime":      "2024-01-15T10:00:00Z", // present - should be found
 	}
@@ -431,7 +431,7 @@ func TestUnstructuredMap_Find_NullInAdditionalProperties(t *testing.T) {
 			Nullable: true,
 		},
 	})
-	data := map[string]interface{}{
+	data := map[string]any{
 		"key1": nil,
 		"key2": "value",
 	}
@@ -451,14 +451,14 @@ func TestUnstructuredList_Operations(t *testing.T) {
 	})
 
 	t.Run("Contains", func(t *testing.T) {
-		val := UnstructuredToVal([]interface{}{int64(1), int64(2), int64(3)}, s)
+		val := UnstructuredToVal([]any{int64(1), int64(2), int64(3)}, s)
 		lister := val.(traits.Lister)
 		assert.Equal(t, types.True, lister.Contains(types.Int(2)))
 		assert.Equal(t, types.False, lister.Contains(types.Int(99)))
 	})
 
 	t.Run("Iterator", func(t *testing.T) {
-		val := UnstructuredToVal([]interface{}{int64(10), int64(20)}, s)
+		val := UnstructuredToVal([]any{int64(10), int64(20)}, s)
 		lister := val.(traits.Lister)
 		it := lister.Iterator()
 
@@ -470,8 +470,8 @@ func TestUnstructuredList_Operations(t *testing.T) {
 	})
 
 	t.Run("Add", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{int64(1)}, s).(traits.Adder)
-		b := UnstructuredToVal([]interface{}{int64(2)}, s)
+		a := UnstructuredToVal([]any{int64(1)}, s).(traits.Adder)
+		b := UnstructuredToVal([]any{int64(2)}, s)
 		result := a.Add(b)
 		lister := result.(traits.Lister)
 		assert.Equal(t, types.Int(2), lister.Size())
@@ -482,7 +482,7 @@ func TestUnstructuredMap_Iterator(t *testing.T) {
 	s := objectSchemaWithAdditionalProps(&spec.Schema{
 		SchemaProps: spec.SchemaProps{Type: []string{"string"}},
 	})
-	data := map[string]interface{}{
+	data := map[string]any{
 		"a": "1",
 		"b": "2",
 	}
@@ -503,7 +503,7 @@ func TestUnstructuredMap_Equal(t *testing.T) {
 	s := objectSchemaWithAdditionalProps(&spec.Schema{
 		SchemaProps: spec.SchemaProps{Type: []string{"string"}},
 	})
-	data := map[string]interface{}{
+	data := map[string]any{
 		"x": "1",
 	}
 
@@ -511,7 +511,7 @@ func TestUnstructuredMap_Equal(t *testing.T) {
 	b := UnstructuredToVal(data, s)
 	assert.Equal(t, types.True, a.Equal(b))
 
-	c := UnstructuredToVal(map[string]interface{}{"x": "2"}, s)
+	c := UnstructuredToVal(map[string]any{"x": "2"}, s)
 	assert.Equal(t, types.False, a.Equal(c))
 }
 
@@ -520,7 +520,7 @@ func TestUnstructuredToVal_ConvertToType(t *testing.T) {
 		s := objectSchemaWithAdditionalProps(&spec.Schema{
 			SchemaProps: spec.SchemaProps{Type: []string{"string"}},
 		})
-		val := UnstructuredToVal(map[string]interface{}{"k": "v"}, s)
+		val := UnstructuredToVal(map[string]any{"k": "v"}, s)
 		assert.Equal(t, types.MapType, val.ConvertToType(types.TypeType))
 		assert.Equal(t, val, val.ConvertToType(types.MapType))
 	})
@@ -529,7 +529,7 @@ func TestUnstructuredToVal_ConvertToType(t *testing.T) {
 		s := arraySchema(&spec.Schema{
 			SchemaProps: spec.SchemaProps{Type: []string{"string"}},
 		})
-		val := UnstructuredToVal([]interface{}{"a"}, s)
+		val := UnstructuredToVal([]any{"a"}, s)
 		assert.Equal(t, types.ListType, val.ConvertToType(types.TypeType))
 		assert.Equal(t, val, val.ConvertToType(types.ListType))
 	})
@@ -544,34 +544,34 @@ func TestUnstructuredMapList_Equal(t *testing.T) {
 	}, []string{"name"})
 
 	t.Run("same elements different order", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{
-			map[string]interface{}{"name": "x", "value": "1"},
-			map[string]interface{}{"name": "y", "value": "2"},
+		a := UnstructuredToVal([]any{
+			map[string]any{"name": "x", "value": "1"},
+			map[string]any{"name": "y", "value": "2"},
 		}, s)
-		b := UnstructuredToVal([]interface{}{
-			map[string]interface{}{"name": "y", "value": "2"},
-			map[string]interface{}{"name": "x", "value": "1"},
+		b := UnstructuredToVal([]any{
+			map[string]any{"name": "y", "value": "2"},
+			map[string]any{"name": "x", "value": "1"},
 		}, s)
 		assert.Equal(t, types.True, a.Equal(b))
 	})
 
 	t.Run("different elements", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{
-			map[string]interface{}{"name": "x", "value": "1"},
+		a := UnstructuredToVal([]any{
+			map[string]any{"name": "x", "value": "1"},
 		}, s)
-		b := UnstructuredToVal([]interface{}{
-			map[string]interface{}{"name": "x", "value": "CHANGED"},
+		b := UnstructuredToVal([]any{
+			map[string]any{"name": "x", "value": "CHANGED"},
 		}, s)
 		assert.Equal(t, types.False, a.Equal(b))
 	})
 
 	t.Run("different sizes", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{
-			map[string]interface{}{"name": "x", "value": "1"},
+		a := UnstructuredToVal([]any{
+			map[string]any{"name": "x", "value": "1"},
 		}, s)
-		b := UnstructuredToVal([]interface{}{
-			map[string]interface{}{"name": "x", "value": "1"},
-			map[string]interface{}{"name": "y", "value": "2"},
+		b := UnstructuredToVal([]any{
+			map[string]any{"name": "x", "value": "1"},
+			map[string]any{"name": "y", "value": "2"},
 		}, s)
 		assert.Equal(t, types.False, a.Equal(b))
 	})
@@ -584,12 +584,12 @@ func TestUnstructuredMapList_Add(t *testing.T) {
 	}, []string{"name"})
 
 	t.Run("overlapping keys overwrite", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{
-			map[string]interface{}{"name": "x", "value": "old"},
-			map[string]interface{}{"name": "y", "value": "keep"},
+		a := UnstructuredToVal([]any{
+			map[string]any{"name": "x", "value": "old"},
+			map[string]any{"name": "y", "value": "keep"},
 		}, s)
-		b := UnstructuredToVal([]interface{}{
-			map[string]interface{}{"name": "x", "value": "new"},
+		b := UnstructuredToVal([]any{
+			map[string]any{"name": "x", "value": "new"},
 		}, s)
 		result := a.(traits.Adder).Add(b)
 		lister := result.(traits.Lister)
@@ -611,11 +611,11 @@ func TestUnstructuredMapList_Add(t *testing.T) {
 	})
 
 	t.Run("non-overlapping keys append", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{
-			map[string]interface{}{"name": "x", "value": "1"},
+		a := UnstructuredToVal([]any{
+			map[string]any{"name": "x", "value": "1"},
 		}, s)
-		b := UnstructuredToVal([]interface{}{
-			map[string]interface{}{"name": "y", "value": "2"},
+		b := UnstructuredToVal([]any{
+			map[string]any{"name": "y", "value": "2"},
 		}, s)
 		result := a.(traits.Adder).Add(b)
 		lister := result.(traits.Lister)
@@ -631,20 +631,20 @@ func TestUnstructuredSetList_Equal(t *testing.T) {
 	})
 
 	t.Run("same elements different order", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{"a", "b", "c"}, s)
-		b := UnstructuredToVal([]interface{}{"c", "a", "b"}, s)
+		a := UnstructuredToVal([]any{"a", "b", "c"}, s)
+		b := UnstructuredToVal([]any{"c", "a", "b"}, s)
 		assert.Equal(t, types.True, a.Equal(b))
 	})
 
 	t.Run("different elements", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{"a", "b"}, s)
-		b := UnstructuredToVal([]interface{}{"a", "z"}, s)
+		a := UnstructuredToVal([]any{"a", "b"}, s)
+		b := UnstructuredToVal([]any{"a", "z"}, s)
 		assert.Equal(t, types.False, a.Equal(b))
 	})
 
 	t.Run("different sizes", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{"a"}, s)
-		b := UnstructuredToVal([]interface{}{"a", "b"}, s)
+		a := UnstructuredToVal([]any{"a"}, s)
+		b := UnstructuredToVal([]any{"a", "b"}, s)
 		assert.Equal(t, types.False, a.Equal(b))
 	})
 }
@@ -655,8 +655,8 @@ func TestUnstructuredSetList_Add(t *testing.T) {
 	})
 
 	t.Run("union no duplicates", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{"a", "b"}, s)
-		b := UnstructuredToVal([]interface{}{"b", "c"}, s)
+		a := UnstructuredToVal([]any{"a", "b"}, s)
+		b := UnstructuredToVal([]any{"b", "c"}, s)
 		result := a.(traits.Adder).Add(b)
 		lister := result.(traits.Lister)
 		assert.Equal(t, types.Int(3), lister.Size())
@@ -666,8 +666,8 @@ func TestUnstructuredSetList_Add(t *testing.T) {
 	})
 
 	t.Run("non-overlapping append", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{"a"}, s)
-		b := UnstructuredToVal([]interface{}{"b", "c"}, s)
+		a := UnstructuredToVal([]any{"a"}, s)
+		b := UnstructuredToVal([]any{"b", "c"}, s)
 		result := a.(traits.Adder).Add(b)
 		lister := result.(traits.Lister)
 		assert.Equal(t, types.Int(3), lister.Size())
@@ -683,20 +683,20 @@ func TestUnstructuredMap_ObjectEquality(t *testing.T) {
 	})
 
 	t.Run("equal objects", func(t *testing.T) {
-		a := UnstructuredToVal(map[string]interface{}{"name": "alice", "age": int64(30)}, s)
-		b := UnstructuredToVal(map[string]interface{}{"name": "alice", "age": int64(30)}, s)
+		a := UnstructuredToVal(map[string]any{"name": "alice", "age": int64(30)}, s)
+		b := UnstructuredToVal(map[string]any{"name": "alice", "age": int64(30)}, s)
 		assert.Equal(t, types.True, a.Equal(b))
 	})
 
 	t.Run("different property values", func(t *testing.T) {
-		a := UnstructuredToVal(map[string]interface{}{"name": "alice", "age": int64(30)}, s)
-		b := UnstructuredToVal(map[string]interface{}{"name": "bob", "age": int64(30)}, s)
+		a := UnstructuredToVal(map[string]any{"name": "alice", "age": int64(30)}, s)
+		b := UnstructuredToVal(map[string]any{"name": "bob", "age": int64(30)}, s)
 		assert.Equal(t, types.False, a.Equal(b))
 	})
 
 	t.Run("different sizes", func(t *testing.T) {
-		a := UnstructuredToVal(map[string]interface{}{"name": "alice", "age": int64(30)}, s)
-		b := UnstructuredToVal(map[string]interface{}{"name": "alice"}, s)
+		a := UnstructuredToVal(map[string]any{"name": "alice", "age": int64(30)}, s)
+		b := UnstructuredToVal(map[string]any{"name": "alice"}, s)
 		assert.Equal(t, types.False, a.Equal(b))
 	})
 }
@@ -709,26 +709,26 @@ func TestUnstructuredList_Equal(t *testing.T) {
 	})
 
 	t.Run("same elements same order", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{int64(1), int64(2), int64(3)}, s)
-		b := UnstructuredToVal([]interface{}{int64(1), int64(2), int64(3)}, s)
+		a := UnstructuredToVal([]any{int64(1), int64(2), int64(3)}, s)
+		b := UnstructuredToVal([]any{int64(1), int64(2), int64(3)}, s)
 		assert.Equal(t, types.True, a.Equal(b))
 	})
 
 	t.Run("different sizes", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{int64(1)}, s)
-		b := UnstructuredToVal([]interface{}{int64(1), int64(2)}, s)
+		a := UnstructuredToVal([]any{int64(1)}, s)
+		b := UnstructuredToVal([]any{int64(1), int64(2)}, s)
 		assert.Equal(t, types.False, a.Equal(b))
 	})
 
 	t.Run("different elements", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{int64(1), int64(2)}, s)
-		b := UnstructuredToVal([]interface{}{int64(1), int64(99)}, s)
+		a := UnstructuredToVal([]any{int64(1), int64(2)}, s)
+		b := UnstructuredToVal([]any{int64(1), int64(99)}, s)
 		assert.Equal(t, types.False, a.Equal(b))
 	})
 
 	t.Run("order matters for atomic list", func(t *testing.T) {
-		a := UnstructuredToVal([]interface{}{int64(1), int64(2)}, s)
-		b := UnstructuredToVal([]interface{}{int64(2), int64(1)}, s)
+		a := UnstructuredToVal([]any{int64(1), int64(2)}, s)
+		b := UnstructuredToVal([]any{int64(2), int64(1)}, s)
 		assert.Equal(t, types.False, a.Equal(b))
 	})
 }
@@ -740,7 +740,7 @@ func TestUnstructuredMap_Find_AbsentKey(t *testing.T) {
 		"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
 		"age":  {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
 	})
-	data := map[string]interface{}{
+	data := map[string]any{
 		"name": "alice",
 	}
 	val := UnstructuredToVal(data, s)
@@ -769,7 +769,7 @@ func TestUnstructuredList_GetOutOfBounds(t *testing.T) {
 	s := arraySchema(&spec.Schema{
 		SchemaProps: spec.SchemaProps{Type: []string{"string"}},
 	})
-	val := UnstructuredToVal([]interface{}{"a", "b"}, s)
+	val := UnstructuredToVal([]any{"a", "b"}, s)
 	lister := val.(traits.Lister)
 
 	t.Run("negative index", func(t *testing.T) {
@@ -787,7 +787,7 @@ func TestUnstructuredList_GetNonIntIndex(t *testing.T) {
 	s := arraySchema(&spec.Schema{
 		SchemaProps: spec.SchemaProps{Type: []string{"string"}},
 	})
-	val := UnstructuredToVal([]interface{}{"a", "b"}, s)
+	val := UnstructuredToVal([]any{"a", "b"}, s)
 	lister := val.(traits.Lister)
 
 	result := lister.Get(types.String("not-an-int"))
@@ -816,12 +816,12 @@ func TestUnstructuredMap_NestedObject(t *testing.T) {
 			},
 		},
 	})
-	data := map[string]interface{}{
-		"metadata": map[string]interface{}{
+	data := map[string]any{
+		"metadata": map[string]any{
 			"name":      "my-pod",
 			"namespace": "default",
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"replicas": int64(3),
 		},
 	}
@@ -851,16 +851,16 @@ func TestUnstructuredList_ConvertToNative(t *testing.T) {
 	s := arraySchema(&spec.Schema{
 		SchemaProps: spec.SchemaProps{Type: []string{"string"}},
 	})
-	val := UnstructuredToVal([]interface{}{"hello", "world"}, s)
+	val := UnstructuredToVal([]any{"hello", "world"}, s)
 
 	t.Run("string list to []string", func(t *testing.T) {
-		native, err := val.(ref.Val).ConvertToNative(reflect.TypeOf([]string{}))
+		native, err := val.ConvertToNative(reflect.TypeFor[[]string]())
 		require.NoError(t, err)
 		assert.Equal(t, []string{"hello", "world"}, native)
 	})
 
 	t.Run("unsupported target type", func(t *testing.T) {
-		_, err := val.(ref.Val).ConvertToNative(reflect.TypeOf(0))
+		_, err := val.ConvertToNative(reflect.TypeFor[int]())
 		assert.Error(t, err)
 	})
 }
@@ -868,7 +868,7 @@ func TestUnstructuredList_ConvertToNative(t *testing.T) {
 // --- CEL expression evaluation tests ---
 
 type typedValue struct {
-	value  interface{}
+	value  any
 	schema *openapi.Schema
 }
 
@@ -896,7 +896,7 @@ func evalCEL(t *testing.T, expr string, vars map[string]typedValue) (ref.Val, er
 		return nil, fmt.Errorf("failed to create CEL program: %w", err)
 	}
 
-	activation := make(map[string]interface{}, len(vars))
+	activation := make(map[string]any, len(vars))
 	for name, tv := range vars {
 		activation[name] = UnstructuredToVal(tv.value, tv.schema)
 	}
@@ -924,7 +924,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 	t.Run("map label access", func(t *testing.T) {
 		vars := map[string]typedValue{
 			"c": {
-				value:  map[string]interface{}{"key1": "val1", "key2": "val2"},
+				value:  map[string]any{"key1": "val1", "key2": "val2"},
 				schema: labelsSchema,
 			},
 		}
@@ -936,7 +936,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 	t.Run("map 'in' operator", func(t *testing.T) {
 		vars := map[string]typedValue{
 			"c": {
-				value:  map[string]interface{}{"key1": "val1", "key2": "val2"},
+				value:  map[string]any{"key1": "val1", "key2": "val2"},
 				schema: labelsSchema,
 			},
 		}
@@ -952,7 +952,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 	t.Run("map size", func(t *testing.T) {
 		vars := map[string]typedValue{
 			"c": {
-				value:  map[string]interface{}{"key1": "val1", "key2": "val2"},
+				value:  map[string]any{"key1": "val1", "key2": "val2"},
 				schema: labelsSchema,
 			},
 		}
@@ -963,7 +963,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("list index access", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: []interface{}{"a", "b", "c"}, schema: tagsSchema},
+			"c": {value: []any{"a", "b", "c"}, schema: tagsSchema},
 		}
 		out, err := evalCEL(t, "c[1] == 'b'", vars)
 		require.NoError(t, err)
@@ -972,7 +972,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("list size", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: []interface{}{"a", "b", "c"}, schema: tagsSchema},
+			"c": {value: []any{"a", "b", "c"}, schema: tagsSchema},
 		}
 		out, err := evalCEL(t, "size(c) == 3", vars)
 		require.NoError(t, err)
@@ -981,7 +981,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("list 'in' operator", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: []interface{}{"a", "b", "c"}, schema: tagsSchema},
+			"c": {value: []any{"a", "b", "c"}, schema: tagsSchema},
 		}
 		out, err := evalCEL(t, "'b' in c", vars)
 		require.NoError(t, err)
@@ -994,7 +994,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("list all macro", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: []interface{}{"a", "b", "c"}, schema: tagsSchema},
+			"c": {value: []any{"a", "b", "c"}, schema: tagsSchema},
 		}
 		out, err := evalCEL(t, "c.all(t, t != '')", vars)
 		require.NoError(t, err)
@@ -1003,7 +1003,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("list exists macro", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: []interface{}{"a", "b", "c"}, schema: tagsSchema},
+			"c": {value: []any{"a", "b", "c"}, schema: tagsSchema},
 		}
 		out, err := evalCEL(t, "c.exists(t, t == 'a')", vars)
 		require.NoError(t, err)
@@ -1016,8 +1016,8 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("list add size", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c1": {value: []interface{}{"a", "b"}, schema: tagsSchema},
-			"c2": {value: []interface{}{"c", "d", "e"}, schema: tagsSchema},
+			"c1": {value: []any{"a", "b"}, schema: tagsSchema},
+			"c2": {value: []any{"c", "d", "e"}, schema: tagsSchema},
 		}
 		out, err := evalCEL(t, "size(c1 + c2) == 5", vars)
 		require.NoError(t, err)
@@ -1072,7 +1072,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("type check list", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: []interface{}{"a"}, schema: tagsSchema},
+			"c": {value: []any{"a"}, schema: tagsSchema},
 		}
 		out, err := evalCEL(t, "type(c) == list", vars)
 		require.NoError(t, err)
@@ -1081,7 +1081,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("type check map", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: map[string]interface{}{"k": "v"}, schema: labelsSchema},
+			"c": {value: map[string]any{"k": "v"}, schema: labelsSchema},
 		}
 		out, err := evalCEL(t, "type(c) == map", vars)
 		require.NoError(t, err)
@@ -1090,7 +1090,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("string index on list errors", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: []interface{}{"a", "b"}, schema: tagsSchema},
+			"c": {value: []any{"a", "b"}, schema: tagsSchema},
 		}
 		_, err := evalCEL(t, "c['a']", vars)
 		assert.Error(t, err, "string index on list should error")
@@ -1098,7 +1098,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("list out of bounds errors", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: []interface{}{"a", "b"}, schema: tagsSchema},
+			"c": {value: []any{"a", "b"}, schema: tagsSchema},
 		}
 		_, err := evalCEL(t, "c[99]", vars)
 		assert.Error(t, err, "out of bounds index should error")
@@ -1109,8 +1109,8 @@ func TestCELExpressionEvaluation(t *testing.T) {
 			SchemaProps: spec.SchemaProps{Type: []string{"string"}},
 		})
 		vars := map[string]typedValue{
-			"a": {value: []interface{}{"x", "y", "z"}, schema: setSchema},
-			"b": {value: []interface{}{"z", "x", "y"}, schema: setSchema},
+			"a": {value: []any{"x", "y", "z"}, schema: setSchema},
+			"b": {value: []any{"z", "x", "y"}, schema: setSchema},
 		}
 		out, err := evalCEL(t, "a == b", vars)
 		require.NoError(t, err)
@@ -1122,8 +1122,8 @@ func TestCELExpressionEvaluation(t *testing.T) {
 			SchemaProps: spec.SchemaProps{Type: []string{"string"}},
 		})
 		vars := map[string]typedValue{
-			"a": {value: []interface{}{"x", "y"}, schema: setSchema},
-			"b": {value: []interface{}{"y", "z"}, schema: setSchema},
+			"a": {value: []any{"x", "y"}, schema: setSchema},
+			"b": {value: []any{"y", "z"}, schema: setSchema},
 		}
 		out, err := evalCEL(t, "size(a + b) == 3", vars)
 		require.NoError(t, err)
@@ -1137,16 +1137,16 @@ func TestCELExpressionEvaluation(t *testing.T) {
 		}, []string{"key"})
 		vars := map[string]typedValue{
 			"a": {
-				value: []interface{}{
-					map[string]interface{}{"key": "k1", "val": "v1"},
-					map[string]interface{}{"key": "k2", "val": "v2"},
+				value: []any{
+					map[string]any{"key": "k1", "val": "v1"},
+					map[string]any{"key": "k2", "val": "v2"},
 				},
 				schema: mlSchema,
 			},
 			"b": {
-				value: []interface{}{
-					map[string]interface{}{"key": "k2", "val": "v2"},
-					map[string]interface{}{"key": "k1", "val": "v1"},
+				value: []any{
+					map[string]any{"key": "k2", "val": "v2"},
+					map[string]any{"key": "k1", "val": "v1"},
 				},
 				schema: mlSchema,
 			},
@@ -1163,15 +1163,15 @@ func TestCELExpressionEvaluation(t *testing.T) {
 		}, []string{"key"})
 		vars := map[string]typedValue{
 			"a": {
-				value: []interface{}{
-					map[string]interface{}{"key": "k1", "val": "old"},
+				value: []any{
+					map[string]any{"key": "k1", "val": "old"},
 				},
 				schema: mlSchema,
 			},
 			"b": {
-				value: []interface{}{
-					map[string]interface{}{"key": "k1", "val": "new"},
-					map[string]interface{}{"key": "k2", "val": "added"},
+				value: []any{
+					map[string]any{"key": "k1", "val": "new"},
+					map[string]any{"key": "k2", "val": "added"},
 				},
 				schema: mlSchema,
 			},
@@ -1194,8 +1194,8 @@ func TestCELExpressionEvaluation(t *testing.T) {
 		})
 		vars := map[string]typedValue{
 			"c": {
-				value: map[string]interface{}{
-					"metadata": map[string]interface{}{"name": "test-pod"},
+				value: map[string]any{
+					"metadata": map[string]any{"name": "test-pod"},
 				},
 				schema: objSchema,
 			},
@@ -1245,16 +1245,16 @@ func TestCELExpressionEvaluation(t *testing.T) {
 		}, []string{"ns", "name"})
 		vars := map[string]typedValue{
 			"a": {
-				value: []interface{}{
-					map[string]interface{}{"ns": "default", "name": "x", "val": "1"},
-					map[string]interface{}{"ns": "kube-system", "name": "y", "val": "2"},
+				value: []any{
+					map[string]any{"ns": "default", "name": "x", "val": "1"},
+					map[string]any{"ns": "kube-system", "name": "y", "val": "2"},
 				},
 				schema: mlSchema,
 			},
 			"b": {
-				value: []interface{}{
-					map[string]interface{}{"ns": "kube-system", "name": "y", "val": "2"},
-					map[string]interface{}{"ns": "default", "name": "x", "val": "1"},
+				value: []any{
+					map[string]any{"ns": "kube-system", "name": "y", "val": "2"},
+					map[string]any{"ns": "default", "name": "x", "val": "1"},
 				},
 				schema: mlSchema,
 			},
@@ -1266,7 +1266,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("empty map size", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: map[string]interface{}{}, schema: labelsSchema},
+			"c": {value: map[string]any{}, schema: labelsSchema},
 		}
 		out, err := evalCEL(t, "size(c) == 0", vars)
 		require.NoError(t, err)
@@ -1275,7 +1275,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("empty list size", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: []interface{}{}, schema: tagsSchema},
+			"c": {value: []any{}, schema: tagsSchema},
 		}
 		out, err := evalCEL(t, "size(c) == 0", vars)
 		require.NoError(t, err)
@@ -1284,7 +1284,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("list all on empty list", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: []interface{}{}, schema: tagsSchema},
+			"c": {value: []any{}, schema: tagsSchema},
 		}
 		out, err := evalCEL(t, "c.all(t, t != '')", vars)
 		require.NoError(t, err)
@@ -1293,7 +1293,7 @@ func TestCELExpressionEvaluation(t *testing.T) {
 
 	t.Run("list exists on empty list", func(t *testing.T) {
 		vars := map[string]typedValue{
-			"c": {value: []interface{}{}, schema: tagsSchema},
+			"c": {value: []any{}, schema: tagsSchema},
 		}
 		out, err := evalCEL(t, "c.exists(t, t == 'a')", vars)
 		require.NoError(t, err)
@@ -1312,7 +1312,7 @@ func TestUnstructuredToVal_OneOfStringNumber(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		input interface{}
+		input any
 		want  ref.Val
 	}{
 		{"string quantity", "500m", types.String("500m")},
@@ -1336,13 +1336,13 @@ func TestCELExpressionEvaluation_ResourceQuotaQuantities(t *testing.T) {
 	require.NoError(t, err)
 	rqSchema := &openapi.Schema{Schema: rqSpec}
 
-	data := map[string]interface{}{
-		"metadata": map[string]interface{}{
+	data := map[string]any{
+		"metadata": map[string]any{
 			"name":      "team-alpha",
 			"namespace": "default",
 		},
-		"spec": map[string]interface{}{
-			"hard": map[string]interface{}{
+		"spec": map[string]any{
+			"hard": map[string]any{
 				"requests.cpu":    "4",
 				"requests.memory": "8Gi",
 				"limits.cpu":      "8",

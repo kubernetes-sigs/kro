@@ -32,13 +32,13 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
-func findInstanceConditionByType(inst *unstructured.Unstructured, condType string) map[string]interface{} {
+func findInstanceConditionByType(inst *unstructured.Unstructured, condType string) map[string]any {
 	statusConditions, found, _ := unstructured.NestedSlice(inst.Object, "status", "conditions")
 	if !found {
 		return nil
 	}
 	for _, c := range statusConditions {
-		m, ok := c.(map[string]interface{})
+		m, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -56,7 +56,7 @@ func getConditionTypes(inst *unstructured.Unstructured) []string {
 	}
 	var out []string
 	for _, c := range statusConditions {
-		m, ok := c.(map[string]interface{})
+		m, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -113,20 +113,20 @@ var _ = Describe("Instance Custom Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition(rgdName,
 			generator.WithSchema(
 				instanceKind, "v1alpha1",
-				map[string]interface{}{"name": "string"},
-				map[string]interface{}{
-					"conditions": []interface{}{
+				map[string]any{"name": "string"},
+				map[string]any{
+					"conditions": []any{
 						`${runtime.newCondition({type: 'PrimaryReady', status: 'True', reason: 'OK',
 							message: 'always healthy in this test'})}`,
 						`${runtime.newCondition({type: 'AppReady', status: 'False', reason: 'Init', message: ''})}`,
 					},
 				},
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
-				"data":       map[string]interface{}{"foo": "${schema.spec.name}"},
+				"metadata":   map[string]any{"name": "${schema.spec.name}"},
+				"data":       map[string]any{"foo": "${schema.spec.name}"},
 			}, nil, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -139,11 +139,11 @@ var _ = Describe("Instance Custom Conditions", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}).WithContext(ctx).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
 
-		instance := &unstructured.Unstructured{Object: map[string]interface{}{
+		instance := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 			"kind":       instanceKind,
-			"metadata":   map[string]interface{}{"name": "demo", "namespace": namespace},
-			"spec":       map[string]interface{}{"name": "demo"},
+			"metadata":   map[string]any{"name": "demo", "namespace": namespace},
+			"spec":       map[string]any{"name": "demo"},
 		}}
 		createInstanceWithCleanup(ctx, instance)
 
@@ -181,21 +181,21 @@ var _ = Describe("Instance Custom Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition(rgdName,
 			generator.WithSchema(
 				instanceKind, "v1alpha1",
-				map[string]interface{}{"name": "string", "label": "string | default=initial"},
-				map[string]interface{}{
-					"conditions": []interface{}{
+				map[string]any{"name": "string", "label": "string | default=initial"},
+				map[string]any{
+					"conditions": []any{
 						`${runtime.newCondition({type: 'AlwaysTrue', status: 'True', reason: 'X', message: ''})}`,
 					},
 				},
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":   "${schema.spec.name}",
-					"labels": map[string]interface{}{"app": "${schema.spec.label}"},
+					"labels": map[string]any{"app": "${schema.spec.label}"},
 				},
-				"data": map[string]interface{}{"foo": "${schema.spec.name}"},
+				"data": map[string]any{"foo": "${schema.spec.name}"},
 			}, nil, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -207,15 +207,15 @@ var _ = Describe("Instance Custom Conditions", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}).WithContext(ctx).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
 
-		instance := &unstructured.Unstructured{Object: map[string]interface{}{
+		instance := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 			"kind":       instanceKind,
-			"metadata":   map[string]interface{}{"name": "demo", "namespace": namespace},
-			"spec":       map[string]interface{}{"name": "demo", "label": "initial"},
+			"metadata":   map[string]any{"name": "demo", "namespace": namespace},
+			"spec":       map[string]any{"name": "demo", "label": "initial"},
 		}}
 		createInstanceWithCleanup(ctx, instance)
 
-		var firstLTT interface{}
+		var firstLTT any
 		Eventually(func(g Gomega) {
 			g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "demo", Namespace: namespace}, instance)).To(Succeed())
 			c := findInstanceConditionByType(instance, "AlwaysTrue")
@@ -246,14 +246,14 @@ var _ = Describe("Instance Custom Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition(rgdName,
 			generator.WithSchema(
 				instanceKind, "v1alpha1",
-				map[string]interface{}{"name": "string"},
+				map[string]any{"name": "string"},
 				nil,
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
-				"data":       map[string]interface{}{"foo": "${schema.spec.name}"},
+				"metadata":   map[string]any{"name": "${schema.spec.name}"},
+				"data":       map[string]any{"foo": "${schema.spec.name}"},
 			}, nil, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -265,11 +265,11 @@ var _ = Describe("Instance Custom Conditions", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}).WithContext(ctx).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
 
-		instance := &unstructured.Unstructured{Object: map[string]interface{}{
+		instance := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 			"kind":       instanceKind,
-			"metadata":   map[string]interface{}{"name": "demo", "namespace": namespace},
-			"spec":       map[string]interface{}{"name": "demo"},
+			"metadata":   map[string]any{"name": "demo", "namespace": namespace},
+			"spec":       map[string]any{"name": "demo"},
 		}}
 		createInstanceWithCleanup(ctx, instance)
 
@@ -290,18 +290,18 @@ var _ = Describe("Instance Custom Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition("test-cc-author-ready",
 			generator.WithSchema(
 				"TestCcAuthorReady", "v1alpha1",
-				map[string]interface{}{"name": "string"},
-				map[string]interface{}{
-					"conditions": []interface{}{
+				map[string]any{"name": "string"},
+				map[string]any{
+					"conditions": []any{
 						`${runtime.newCondition({type: 'Ready', status: 'False', reason: 'AuthorSaysNo', message: 'this is a test'})}`,
 					},
 				},
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
-				"data":       map[string]interface{}{"foo": "${schema.spec.name}"},
+				"metadata":   map[string]any{"name": "${schema.spec.name}"},
+				"data":       map[string]any{"foo": "${schema.spec.name}"},
 			}, nil, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -313,11 +313,11 @@ var _ = Describe("Instance Custom Conditions", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}).WithContext(ctx).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
 
-		instance := &unstructured.Unstructured{Object: map[string]interface{}{
+		instance := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 			"kind":       "TestCcAuthorReady",
-			"metadata":   map[string]interface{}{"name": "demo", "namespace": namespace},
-			"spec":       map[string]interface{}{"name": "demo"},
+			"metadata":   map[string]any{"name": "demo", "namespace": namespace},
+			"spec":       map[string]any{"name": "demo"},
 		}}
 		createInstanceWithCleanup(ctx, instance)
 
@@ -339,22 +339,22 @@ var _ = Describe("Instance Custom Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition(rgdName,
 			generator.WithSchema(
 				instanceKind, "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":    "string",
 					"healthy": "boolean | default=true",
 				},
-				map[string]interface{}{
-					"conditions": []interface{}{
+				map[string]any{
+					"conditions": []any{
 						`${runtime.newCondition({type: 'AppReady', status: schema.spec.healthy ? 'True' : 'False',
 							reason: 'CheckedSpec', message: ''})}`,
 					},
 				},
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
-				"data":       map[string]interface{}{"foo": "${schema.spec.name}"},
+				"metadata":   map[string]any{"name": "${schema.spec.name}"},
+				"data":       map[string]any{"foo": "${schema.spec.name}"},
 			}, nil, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -366,11 +366,11 @@ var _ = Describe("Instance Custom Conditions", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}).WithContext(ctx).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
 
-		instance := &unstructured.Unstructured{Object: map[string]interface{}{
+		instance := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 			"kind":       instanceKind,
-			"metadata":   map[string]interface{}{"name": "demo", "namespace": namespace},
-			"spec":       map[string]interface{}{"name": "demo", "healthy": true},
+			"metadata":   map[string]any{"name": "demo", "namespace": namespace},
+			"spec":       map[string]any{"name": "demo", "healthy": true},
 		}}
 		createInstanceWithCleanup(ctx, instance)
 
@@ -401,9 +401,9 @@ var _ = Describe("Instance Custom Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition(rgdName,
 			generator.WithSchema(
 				instanceKind, "v1alpha1",
-				map[string]interface{}{"name": "string"},
-				map[string]interface{}{
-					"conditions": []interface{}{
+				map[string]any{"name": "string"},
+				map[string]any{
+					"conditions": []any{
 						`${runtime.newCondition({
 							type: 'ResourcesReady',
 							status: 'True',
@@ -419,11 +419,11 @@ var _ = Describe("Instance Custom Conditions", func() {
 					},
 				},
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
-				"data":       map[string]interface{}{"foo": "${schema.spec.name}"},
+				"metadata":   map[string]any{"name": "${schema.spec.name}"},
+				"data":       map[string]any{"foo": "${schema.spec.name}"},
 			}, []string{`${configmap.data["ready"] == "true"}`}, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -435,11 +435,11 @@ var _ = Describe("Instance Custom Conditions", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}).WithContext(ctx).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
 
-		instance := &unstructured.Unstructured{Object: map[string]interface{}{
+		instance := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 			"kind":       instanceKind,
-			"metadata":   map[string]interface{}{"name": "demo", "namespace": namespace},
-			"spec":       map[string]interface{}{"name": "demo"},
+			"metadata":   map[string]any{"name": "demo", "namespace": namespace},
+			"spec":       map[string]any{"name": "demo"},
 		}}
 		createInstanceWithCleanup(ctx, instance)
 
@@ -469,20 +469,20 @@ var _ = Describe("Instance Custom Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition(rgdName,
 			generator.WithSchema(
 				instanceKind, "v1alpha1",
-				map[string]interface{}{"name": "string"},
-				map[string]interface{}{
-					"conditions": []interface{}{
+				map[string]any{"name": "string"},
+				map[string]any{
+					"conditions": []any{
 						`${runtime.newCondition({type: 'Survivor', status: 'True', reason: '', message: ''})}`,
 						`${runtime.newCondition({type: 'Same-' + schema.spec.name, status: 'True', reason: '', message: ''})}`,
 						`${runtime.newCondition({type: 'Same-' + schema.spec.name, status: 'False', reason: '', message: ''})}`,
 					},
 				},
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
-				"data":       map[string]interface{}{"foo": "${schema.spec.name}"},
+				"metadata":   map[string]any{"name": "${schema.spec.name}"},
+				"data":       map[string]any{"foo": "${schema.spec.name}"},
 			}, nil, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -494,11 +494,11 @@ var _ = Describe("Instance Custom Conditions", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}).WithContext(ctx).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
 
-		instance := &unstructured.Unstructured{Object: map[string]interface{}{
+		instance := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 			"kind":       instanceKind,
-			"metadata":   map[string]interface{}{"name": "demo", "namespace": namespace},
-			"spec":       map[string]interface{}{"name": "demo"},
+			"metadata":   map[string]any{"name": "demo", "namespace": namespace},
+			"spec":       map[string]any{"name": "demo"},
 		}}
 		createInstanceWithCleanup(ctx, instance)
 
@@ -526,21 +526,21 @@ var _ = Describe("Instance Custom Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition(rgdName,
 			generator.WithSchema(
 				instanceKind, "v1alpha1",
-				map[string]interface{}{"name": "string", "label": "string | default=initial"},
-				map[string]interface{}{
-					"conditions": []interface{}{
+				map[string]any{"name": "string", "label": "string | default=initial"},
+				map[string]any{
+					"conditions": []any{
 						`${runtime.newCondition({type: 'ResourcesReady', status: 'True', reason: 'AuthorOverride', message: ''})}`,
 					},
 				},
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":   "${schema.spec.name}",
-					"labels": map[string]interface{}{"app": "${schema.spec.label}"},
+					"labels": map[string]any{"app": "${schema.spec.label}"},
 				},
-				"data": map[string]interface{}{"foo": "${schema.spec.name}"},
+				"data": map[string]any{"foo": "${schema.spec.name}"},
 			}, []string{`${configmap.data["ready"] == "true"}`}, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -552,15 +552,15 @@ var _ = Describe("Instance Custom Conditions", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}).WithContext(ctx).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
 
-		instance := &unstructured.Unstructured{Object: map[string]interface{}{
+		instance := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 			"kind":       instanceKind,
-			"metadata":   map[string]interface{}{"name": "demo", "namespace": namespace},
-			"spec":       map[string]interface{}{"name": "demo", "label": "initial"},
+			"metadata":   map[string]any{"name": "demo", "namespace": namespace},
+			"spec":       map[string]any{"name": "demo", "label": "initial"},
 		}}
 		createInstanceWithCleanup(ctx, instance)
 
-		var firstLTT interface{}
+		var firstLTT any
 		Eventually(func(g Gomega) {
 			g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "demo", Namespace: namespace}, instance)).To(Succeed())
 			c := findInstanceConditionByType(instance, ctrlinstance.ResourcesReady)
@@ -594,12 +594,12 @@ var _ = Describe("Instance Custom Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition(rgdName,
 			generator.WithSchema(
 				instanceKind, "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 					"key":  "string",
 				},
-				map[string]interface{}{
-					"conditions": []interface{}{
+				map[string]any{
+					"conditions": []any{
 						`${runtime.newCondition({type: 'Static', status: 'True', reason: '', message: ''})}`,
 						`${runtime.newCondition({type: 'DataDriven',
 							status: configmap.data[schema.spec.key] == 'x' ? 'True' : 'False',
@@ -607,11 +607,11 @@ var _ = Describe("Instance Custom Conditions", func() {
 					},
 				},
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
-				"data":       map[string]interface{}{"phase": "x"},
+				"metadata":   map[string]any{"name": "${schema.spec.name}"},
+				"data":       map[string]any{"phase": "x"},
 			}, nil, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -623,11 +623,11 @@ var _ = Describe("Instance Custom Conditions", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}).WithContext(ctx).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
 
-		instance := &unstructured.Unstructured{Object: map[string]interface{}{
+		instance := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 			"kind":       instanceKind,
-			"metadata":   map[string]interface{}{"name": "demo", "namespace": namespace},
-			"spec":       map[string]interface{}{"name": "demo", "key": "phase"},
+			"metadata":   map[string]any{"name": "demo", "namespace": namespace},
+			"spec":       map[string]any{"name": "demo", "key": "phase"},
 		}}
 		createInstanceWithCleanup(ctx, instance)
 
@@ -665,18 +665,18 @@ var _ = Describe("Instance Custom Conditions", func() {
 
 		withConditions := generator.WithSchema(
 			instanceKind, "v1alpha1",
-			map[string]interface{}{"name": "string"},
-			map[string]interface{}{
-				"conditions": []interface{}{
+			map[string]any{"name": "string"},
+			map[string]any{
+				"conditions": []any{
 					`${runtime.newCondition({type: 'AppReady', status: 'True', reason: '', message: ''})}`,
 				},
 			},
 		)
-		configmap := generator.WithResource("configmap", map[string]interface{}{
+		configmap := generator.WithResource("configmap", map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
-			"data":       map[string]interface{}{"foo": "${schema.spec.name}"},
+			"metadata":   map[string]any{"name": "${schema.spec.name}"},
+			"data":       map[string]any{"foo": "${schema.spec.name}"},
 		}, nil, nil)
 
 		rgd := generator.NewResourceGraphDefinition(rgdName, withConditions, configmap)
@@ -689,11 +689,11 @@ var _ = Describe("Instance Custom Conditions", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}).WithContext(ctx).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
 
-		instance := &unstructured.Unstructured{Object: map[string]interface{}{
+		instance := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 			"kind":       instanceKind,
-			"metadata":   map[string]interface{}{"name": "demo", "namespace": namespace},
-			"spec":       map[string]interface{}{"name": "demo"},
+			"metadata":   map[string]any{"name": "demo", "namespace": namespace},
+			"spec":       map[string]any{"name": "demo"},
 		}}
 		createInstanceWithCleanup(ctx, instance)
 
@@ -705,7 +705,7 @@ var _ = Describe("Instance Custom Conditions", func() {
 		// Drop the conditions block; kro's built-ins take the wire back and
 		// the author condition is cleaned up.
 		withoutConditions := generator.NewResourceGraphDefinition(rgdName,
-			generator.WithSchema(instanceKind, "v1alpha1", map[string]interface{}{"name": "string"}, nil),
+			generator.WithSchema(instanceKind, "v1alpha1", map[string]any{"name": "string"}, nil),
 			configmap,
 		)
 		Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, rgd)).To(Succeed())

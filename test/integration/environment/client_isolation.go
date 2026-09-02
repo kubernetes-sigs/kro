@@ -33,7 +33,10 @@ import (
 // baseGroup is the real API group kro serves instances under (kro.run).
 const baseGroup = krov1alpha1.KRODomainName
 
-const rgdKind = "ResourceGraphDefinition"
+const (
+	rgdKind   = "ResourceGraphDefinition"
+	graphKind = "Graph"
+)
 
 // groupIsolatingClient virtualizes the kro.run API group so that specs running
 // on different Ginkgo parallel processes against a SINGLE shared apiserver do
@@ -177,7 +180,7 @@ func kroInstance(obj client.Object) (*unstructured.Unstructured, bool) {
 		return nil, false
 	}
 	gvk := u.GroupVersionKind()
-	if gvk.Group == baseGroup && gvk.Kind != rgdKind {
+	if gvk.Group == baseGroup && gvk.Kind != rgdKind && gvk.Kind != graphKind {
 		return u, true
 	}
 	return nil, false
@@ -219,8 +222,8 @@ func (g *groupIsolatingClient) procCRDName(name string) string {
 // "<plural>.<to>". Names that do not end in ".<from>" are returned unchanged.
 func rewriteCRDNameSuffix(name, from, to string) string {
 	suffix := "." + from
-	if strings.HasSuffix(name, suffix) {
-		return strings.TrimSuffix(name, suffix) + "." + to
+	if before, ok := strings.CutSuffix(name, suffix); ok {
+		return before + "." + to
 	}
 	return name
 }
@@ -241,7 +244,7 @@ func rewriteAPIVersionGroup(apiVersion, from, to string) string {
 // kind. It returns the rewritten bytes and whether parsing succeeded; on parse
 // failure the caller keeps the original bytes.
 func (g *groupIsolatingClient) rewriteRawTemplateGroup(raw []byte) ([]byte, bool) {
-	var content map[string]interface{}
+	var content map[string]any
 	if err := json.Unmarshal(raw, &content); err != nil {
 		return nil, false
 	}
@@ -257,9 +260,9 @@ func (g *groupIsolatingClient) rewriteRawTemplateGroup(raw []byte) ([]byte, bool
 // group of an object's "apiVersion" from the base group to the per-process
 // group, but only when that object's "kind" is a known RGD-generated kind.
 // This leaves references to user-created CRDs untouched.
-func (g *groupIsolatingClient) rewriteGroupInValue(v interface{}) {
+func (g *groupIsolatingClient) rewriteGroupInValue(v any) {
 	switch t := v.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		if av, ok := t["apiVersion"].(string); ok {
 			if kind, ok := t["kind"].(string); ok && g.isKnownKind(kind) {
 				t["apiVersion"] = rewriteAPIVersionGroup(av, baseGroup, g.procGroup)
@@ -268,7 +271,7 @@ func (g *groupIsolatingClient) rewriteGroupInValue(v interface{}) {
 		for _, val := range t {
 			g.rewriteGroupInValue(val)
 		}
-	case []interface{}:
+	case []any:
 		for i := range t {
 			g.rewriteGroupInValue(t[i])
 		}

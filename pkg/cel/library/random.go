@@ -151,7 +151,7 @@ func generateDeterministicString(length ref.Val, seed ref.Val) ref.Val {
 	// Generate string from hash
 	result := make([]byte, n)
 	charsLen := len(alphanumericChars)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// Use 4 bytes at a time from the hash
 		start := (i * 4) % len(hash)
 		end := start + 4

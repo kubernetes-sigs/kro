@@ -79,18 +79,18 @@ var _ = Describe("ResourceOwnership", func() {
 		rgd := generator.NewResourceGraphDefinition("test-field-manager",
 			generator.WithSchema(
 				"TestFieldManager", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				nil,
 			),
-			generator.WithResource("cm", map[string]interface{}{
+			generator.WithResource("cm", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-cm",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"managed": "yes",
 				},
 			}, nil, nil),
@@ -102,7 +102,7 @@ var _ = Describe("ResourceOwnership", func() {
 		waitForRGDActive(ctx, rgd.Name)
 
 		name := "field-manager"
-		instance := newInstance("TestFieldManager", name, namespace, map[string]interface{}{
+		instance := newInstance("TestFieldManager", name, namespace, map[string]any{
 			"name": name,
 		})
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
@@ -138,18 +138,18 @@ var _ = Describe("ResourceOwnership", func() {
 		rgd := generator.NewResourceGraphDefinition("test-shared-target",
 			generator.WithSchema(
 				"TestSharedTarget", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"owner": "string",
 				},
 				nil,
 			),
-			generator.WithResource("cm", map[string]interface{}{
+			generator.WithResource("cm", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "shared-target",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"owner": "${schema.spec.owner}",
 				},
 			}, nil, nil),
@@ -160,7 +160,7 @@ var _ = Describe("ResourceOwnership", func() {
 		})
 		waitForRGDActive(ctx, rgd.Name)
 
-		first := newInstance("TestSharedTarget", "owner-a", namespace, map[string]interface{}{
+		first := newInstance("TestSharedTarget", "owner-a", namespace, map[string]any{
 			"owner": "a",
 		})
 		Expect(env.Client.Create(ctx, first)).To(Succeed())
@@ -183,7 +183,7 @@ var _ = Describe("ResourceOwnership", func() {
 			"managed resource should carry an ApplySet membership label")
 
 		// A second instance now claims the same object.
-		second := newInstance("TestSharedTarget", "owner-b", namespace, map[string]interface{}{
+		second := newInstance("TestSharedTarget", "owner-b", namespace, map[string]any{
 			"owner": "b",
 		})
 		Expect(env.Client.Create(ctx, second)).To(Succeed())

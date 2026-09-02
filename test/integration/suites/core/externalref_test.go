@@ -56,8 +56,8 @@ var _ = Describe("ExternalRef", func() {
 		rgd := generator.NewResourceGraphDefinition("test-externalref",
 			generator.WithSchema(
 				"TestExternalRef", "v1alpha1",
-				map[string]interface{}{},
-				map[string]interface{}{},
+				map[string]any{},
+				map[string]any{},
 			),
 			generator.WithExternalRef("deployment1", &krov1alpha1.ExternalRef{
 				APIVersion: "apps/v1",
@@ -68,28 +68,28 @@ var _ = Describe("ExternalRef", func() {
 					// Namespace: namespace,
 				},
 			}, nil, nil),
-			generator.WithResource("deployment", map[string]interface{}{
+			generator.WithResource("deployment", map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.metadata.name}",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"replicas": "${deployment1.spec.replicas}",
-					"selector": map[string]interface{}{
-						"matchLabels": map[string]interface{}{
+					"selector": map[string]any{
+						"matchLabels": map[string]any{
 							"app": "deployment",
 						},
 					},
-					"template": map[string]interface{}{
-						"metadata": map[string]interface{}{
-							"labels": map[string]interface{}{
+					"template": map[string]any{
+						"metadata": map[string]any{
+							"labels": map[string]any{
 								"app": "deployment",
 							},
 						},
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
 									"name":  "web",
 									"image": "nginx",
 								},
@@ -131,10 +131,10 @@ var _ = Describe("ExternalRef", func() {
 		By("creating instance")
 		// Create instance
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "kro.run/v1alpha1",
 				"kind":       "TestExternalRef",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "foo-instance",
 					"namespace": namespace,
 				},
@@ -312,10 +312,10 @@ var _ = Describe("ExternalRef", func() {
 		rgd := generator.NewResourceGraphDefinition("test-crd-externalref",
 			generator.WithSchema(
 				"TestCRDExternalRef", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"crdName": "string",
 				},
-				map[string]interface{}{
+				map[string]any{
 					"observedPhase": "${crd.metadata.annotations[\"phase\"]}",
 				},
 			),
@@ -348,14 +348,14 @@ var _ = Describe("ExternalRef", func() {
 		By("creating instance")
 
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "kro.run/v1alpha1",
 				"kind":       "TestCRDExternalRef",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "test-instance",
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"crdName": crdName,
 				},
 			},
@@ -440,8 +440,8 @@ var _ = Describe("ExternalRef", func() {
 		rgd := generator.NewResourceGraphDefinition("test-extcoll-empty-sel",
 			generator.WithSchema(
 				"TestExtCollEmptySel", "v1alpha1",
-				map[string]interface{}{},
-				map[string]interface{}{
+				map[string]any{},
+				map[string]any{
 					"configCount": "${string(size(allconfigs))}",
 					"teamValues": "${allconfigs.filter(" +
 						"c, c.metadata.name == 'config-alpha' || c.metadata.name == 'config-beta'" +
@@ -471,10 +471,10 @@ var _ = Describe("ExternalRef", func() {
 
 		By("creating the instance")
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "kro.run/v1alpha1",
 				"kind":       "TestExtCollEmptySel",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "test-empty-selector",
 					"namespace": namespace,
 				},
@@ -786,7 +786,7 @@ var _ = Describe("ExternalRef", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
-		expectRGDInactiveWithError(ctx, rgd, "expected object type for path metadata.selector.matchLabels, got string")
+		expectRGDInactiveWithError(ctx, rgd, "unterminated expression")
 	})
 
 	It("should reject a selector whose matchLabels field starts with an escaped CEL marker",
@@ -856,8 +856,8 @@ var _ = Describe("ExternalRef", func() {
 		rgd := generator.NewResourceGraphDefinition(rgdName,
 			generator.WithSchema(
 				"TestCrossNsExtColl", "v1alpha1",
-				map[string]interface{}{},
-				map[string]interface{}{
+				map[string]any{},
+				map[string]any{
 					"configCount": "${string(size(allconfigs))}",
 				},
 			),
@@ -887,10 +887,10 @@ var _ = Describe("ExternalRef", func() {
 
 		By("creating the instance in its own namespace")
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "kro.run/v1alpha1",
 				"kind":       "TestCrossNsExtColl",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "cross-ns-test",
 					"namespace": instanceNS,
 				},

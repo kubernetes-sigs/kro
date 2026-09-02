@@ -87,13 +87,13 @@ func TestParseField(t *testing.T) {
 func TestParseSpec(t *testing.T) {
 	tests := []struct {
 		name    string
-		input   interface{}
+		input   any
 		want    types.Type
 		wantErr bool
 	}{
 		{
 			name: "struct",
-			input: map[string]interface{}{
+			input: map[string]any{
 				"name": "string",
 				"age":  "integer",
 			},
@@ -104,8 +104,8 @@ func TestParseSpec(t *testing.T) {
 		},
 		{
 			name: "nested struct",
-			input: map[string]interface{}{
-				"person": map[string]interface{}{
+			input: map[string]any{
+				"person": map[string]any{
 					"name": "string",
 				},
 			},
@@ -122,7 +122,7 @@ func TestParseSpec(t *testing.T) {
 		},
 		{
 			name: "invalid field in struct",
-			input: map[string]interface{}{
+			input: map[string]any{
 				"name": "string",
 				"bad":  123,
 			},

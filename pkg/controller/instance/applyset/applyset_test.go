@@ -116,14 +116,14 @@ func (m *resettableTestRESTMapper) Reset() {
 
 func newConfigMap(name, namespace string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      name,
 				"namespace": namespace,
 			},
-			"data": map[string]interface{}{
+			"data": map[string]any{
 				"key": "value",
 			},
 		},
@@ -132,14 +132,14 @@ func newConfigMap(name, namespace string) *unstructured.Unstructured {
 
 func newSecret(name, namespace string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Secret",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      name,
 				"namespace": namespace,
 			},
-			"stringData": map[string]interface{}{
+			"stringData": map[string]any{
 				"password": "secret",
 			},
 		},
@@ -155,7 +155,7 @@ func newFakeDynamicClient(objs ...runtime.Object) *fake.FakeDynamicClient {
 // addSSAReactor makes the fake client handle SSA Patch calls by simulating create/update.
 // It assigns UIDs and increments resourceVersion on each call.
 func addSSAReactor(client *fake.FakeDynamicClient) {
-	var rvCounter int64
+	var rvCounter atomic.Int64
 	client.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		patchAction, ok := action.(k8stesting.PatchAction)
 		if !ok {
@@ -176,7 +176,7 @@ func addSSAReactor(client *fake.FakeDynamicClient) {
 		if obj.GetUID() == "" {
 			obj.SetUID(types.UID("generated-uid-" + obj.GetName()))
 		}
-		newRV := atomic.AddInt64(&rvCounter, 1)
+		newRV := rvCounter.Add(1)
 		obj.SetResourceVersion(string(rune('0' + newRV)))
 
 		return true, obj, nil
@@ -828,7 +828,7 @@ func TestPrune_UIDPrecondition(t *testing.T) {
 				return false, nil, nil
 			}
 			list := &unstructured.UnstructuredList{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMapList",
 				},
@@ -1192,10 +1192,10 @@ func TestApply_ReturnsBatchOnlyMetadata(t *testing.T) {
 
 func newNamespace(name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Namespace",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": name,
 			},
 		},
@@ -1604,10 +1604,10 @@ func TestProject_DuplicateResources(t *testing.T) {
 				{
 					ID: "configmap1",
 					Object: &unstructured.Unstructured{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]interface{}{
+							"metadata": map[string]any{
 								"name":      "config-one",
 								"namespace": "default",
 							},
@@ -1617,10 +1617,10 @@ func TestProject_DuplicateResources(t *testing.T) {
 				{
 					ID: "configmap2",
 					Object: &unstructured.Unstructured{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]interface{}{
+							"metadata": map[string]any{
 								"name":      "config-two",
 								"namespace": "default",
 							},
@@ -1636,10 +1636,10 @@ func TestProject_DuplicateResources(t *testing.T) {
 				{
 					ID: "configmap1",
 					Object: &unstructured.Unstructured{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]interface{}{
+							"metadata": map[string]any{
 								"name":      "config",
 								"namespace": "default",
 							},
@@ -1649,10 +1649,10 @@ func TestProject_DuplicateResources(t *testing.T) {
 				{
 					ID: "configmap2",
 					Object: &unstructured.Unstructured{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]interface{}{
+							"metadata": map[string]any{
 								"name":      "config",
 								"namespace": "default",
 							},
@@ -1669,10 +1669,10 @@ func TestProject_DuplicateResources(t *testing.T) {
 				{
 					ID: "configmap1",
 					Object: &unstructured.Unstructured{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]interface{}{
+							"metadata": map[string]any{
 								"name":      "config",
 								"namespace": "default",
 							},
@@ -1682,10 +1682,10 @@ func TestProject_DuplicateResources(t *testing.T) {
 				{
 					ID: "configmap2",
 					Object: &unstructured.Unstructured{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]interface{}{
+							"metadata": map[string]any{
 								"name":      "config",
 								"namespace": "default",
 							},
@@ -1695,10 +1695,10 @@ func TestProject_DuplicateResources(t *testing.T) {
 				{
 					ID: "secret1",
 					Object: &unstructured.Unstructured{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"apiVersion": "v1",
 							"kind":       "Secret",
-							"metadata": map[string]interface{}{
+							"metadata": map[string]any{
 								"name":      "creds",
 								"namespace": "default",
 							},
@@ -1708,10 +1708,10 @@ func TestProject_DuplicateResources(t *testing.T) {
 				{
 					ID: "secret2",
 					Object: &unstructured.Unstructured{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"apiVersion": "v1",
 							"kind":       "Secret",
-							"metadata": map[string]interface{}{
+							"metadata": map[string]any{
 								"name":      "creds",
 								"namespace": "default",
 							},
@@ -1728,10 +1728,10 @@ func TestProject_DuplicateResources(t *testing.T) {
 				{
 					ID: "configmap1",
 					Object: &unstructured.Unstructured{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]interface{}{
+							"metadata": map[string]any{
 								"name":      "config",
 								"namespace": "default",
 							},
@@ -1742,10 +1742,10 @@ func TestProject_DuplicateResources(t *testing.T) {
 				{
 					ID: "configmap2",
 					Object: &unstructured.Unstructured{
-						Object: map[string]interface{}{
+						Object: map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]interface{}{
+							"metadata": map[string]any{
 								"name":      "config",
 								"namespace": "default",
 							},

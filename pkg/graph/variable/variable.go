@@ -81,27 +81,6 @@ const (
 	//    spec:
 	//	    vpcID: ${vpc.status.vpcID}
 	ResourceVariableKindDynamic ResourceVariableKind = "dynamic"
-	// ResourceVariableKindReadyWhen represents readyWhen variables. ReadyWhen variables
-	// are resolved at runtime. The difference between them, and the dynamic variables
-	// is that dynamic variable resolutions wait for other resources to provide a value
-	// while ReadyWhen variables are created and wait for certain conditions before
-	// moving forward to the next resource to create
-	//
-	// For example:
-	//   name: cluster
-	//   readyWhen:
-	//   - ${cluster.status.status == "Active"}
-	ResourceVariableKindReadyWhen ResourceVariableKind = "readyWhen"
-	// ResourceVariableKindIncludeWhen represents an includeWhen variable.
-	// IncludeWhen variables are resolved at the beginning of the execution and
-	// their value is constant. They decide whether we are going to create
-	// a resource or not
-	//
-	// For example:
-	//   name: deployment
-	//   includeWhen:
-	//   - ${schema.spec.replicas > 1}
-	ResourceVariableKindIncludeWhen ResourceVariableKind = "includeWhen"
 	// ResourceVariableKindIteration represents an iteration variable. Iteration
 	// variables are expressions inside a collection resource (one with forEach)
 	// that reference iterator variables. They are evaluated during collection
@@ -128,11 +107,6 @@ func (r ResourceVariableKind) IsStatic() bool {
 // IsDynamic returns true if the ResourceVariableKind is dynamic
 func (r ResourceVariableKind) IsDynamic() bool {
 	return r == ResourceVariableKindDynamic
-}
-
-// IsIncludeWhen returns true if the ResourceVariableKind is includeWhen
-func (r ResourceVariableKind) IsIncludeWhen() bool {
-	return r == ResourceVariableKindIncludeWhen
 }
 
 // IsIteration returns true if the ResourceVariableKind is iteration

@@ -62,19 +62,19 @@ var _ = Describe("CRD", func() {
 			rgd := generator.NewResourceGraphDefinition("test-crd",
 				generator.WithSchema(
 					"TestResource", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"field1": "string",
 						"field2": "integer | default=42",
 					},
 					nil,
 				),
-				generator.WithResource("res1", map[string]interface{}{
+				generator.WithResource("res1", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.field1}",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"key":  "value",
 						"key2": "${string(schema.spec.field2)}",
 					},
@@ -113,7 +113,7 @@ var _ = Describe("CRD", func() {
 			rgd := generator.NewResourceGraphDefinition("test-crd-update",
 				generator.WithSchema(
 					"TestUpdate", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"field1": "string",
 						"field2": "integer | default=42",
 					},
@@ -137,7 +137,7 @@ var _ = Describe("CRD", func() {
 				}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]any{
 					"field1": "string",
 					"field2": "integer | default=42",
 					"field3": "boolean",
@@ -166,7 +166,7 @@ var _ = Describe("CRD", func() {
 			rgd := generator.NewResourceGraphDefinition("test-crd-names",
 				generator.WithSchema(
 					"TestNames", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"field": "string",
 					},
 					nil,
@@ -218,7 +218,7 @@ var _ = Describe("CRD", func() {
 			rgd := generator.NewResourceGraphDefinition("test-crd-delete",
 				generator.WithSchema(
 					"TestDelete", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"field1": "string",
 					},
 					nil,
@@ -263,7 +263,7 @@ var _ = Describe("CRD", func() {
 			rgd1 := generator.NewResourceGraphDefinition("test-crd-owner-1",
 				generator.WithSchema(
 					"ConflictTest", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"field1": "string",
 					},
 					nil,
@@ -285,7 +285,7 @@ var _ = Describe("CRD", func() {
 			rgd2 := generator.NewResourceGraphDefinition("test-crd-owner-2",
 				generator.WithSchema(
 					"ConflictTest", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"field1": "string",
 						"field2": "integer",
 					},
@@ -312,19 +312,19 @@ var _ = Describe("CRD", func() {
 			rgd1 := generator.NewResourceGraphDefinition("test-controller-preserve-1",
 				generator.WithSchema(
 					"PreserveTest", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("cm", map[string]interface{}{
+				generator.WithResource("cm", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "${schema.metadata.name}-cm",
 						"namespace": namespace,
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"key": "${schema.spec.name}",
 					},
 				}, nil, nil),
@@ -340,14 +340,14 @@ var _ = Describe("CRD", func() {
 
 			// Create an instance of RGD1
 			instance1 := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "PreserveTest",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-instance-1",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name": "value1",
 					},
 				},
@@ -369,7 +369,7 @@ var _ = Describe("CRD", func() {
 			rgd2 := generator.NewResourceGraphDefinition("test-controller-preserve-2",
 				generator.WithSchema(
 					"PreserveTest", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
@@ -400,14 +400,14 @@ var _ = Describe("CRD", func() {
 
 			// Create a new instance of RGD1 to verify controller still works
 			instance2 := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "PreserveTest",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-instance-2",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name": "value2",
 					},
 				},
@@ -438,7 +438,7 @@ var _ = Describe("CRD", func() {
 			rgd := generator.NewResourceGraphDefinition("test-breaking-change",
 				generator.WithSchema(
 					"BreakingTest", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"field1": "string",
 						"field2": "integer | default=42",
 					},
@@ -465,7 +465,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 
 				// Remove field2 - this is a breaking change
-				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]any{
 					"field1": "string",
 				})
 
@@ -505,7 +505,7 @@ var _ = Describe("CRD", func() {
 				rgd.Annotations[krov1alpha1.AllowBreakingChangesAnnotation] = "true"
 
 				// Touch spec to trigger reconcile (annotation changes don't increment generation)
-				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]any{
 					"field1": "string",
 				})
 
@@ -538,7 +538,7 @@ var _ = Describe("CRD", func() {
 			rgd := generator.NewResourceGraphDefinition("test-nonbreaking-change",
 				generator.WithSchema(
 					"NonBreakingTest", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"field1": "string",
 					},
 					nil,
@@ -559,7 +559,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 
 				// Add field2 - this is a non-breaking change
-				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]any{
 					"field1": "string",
 					"field2": "integer | default=42",
 				})
@@ -592,7 +592,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 
 				// Add field2 - this is a non-breaking change
-				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]any{
 					"field1": "string",
 					"field2": "integer | default=52",
 				})
@@ -628,7 +628,7 @@ var _ = Describe("CRD", func() {
 			rgd := generator.NewResourceGraphDefinition("test-constraint-removal",
 				generator.WithSchema(
 					"ConstraintRemoval", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"replicas": "integer | default=3 minimum=1 maximum=10",
 					},
 					nil,
@@ -660,7 +660,7 @@ var _ = Describe("CRD", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]any{
 					"replicas": "integer | default=3",
 				})
 
@@ -695,7 +695,7 @@ var _ = Describe("CRD", func() {
 			rgd := generator.NewResourceGraphDefinition(rgdName,
 				generator.WithSchema(
 					"TestWatch", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"field1": "string",
 						"field2": "integer | default=42",
 					},
@@ -768,19 +768,19 @@ var _ = Describe("CRD", func() {
 			rgd := generator.NewResourceGraphDefinition(rgdName,
 				generator.WithSchema(
 					"TestExtDeletion", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"field1": "string",
 						"field2": "integer | default=42",
 					},
 					nil,
 				),
-				generator.WithResource("res1", map[string]interface{}{
+				generator.WithResource("res1", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.field1}",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"key":  "value",
 						"key2": "${string(schema.spec.field2)}",
 					},

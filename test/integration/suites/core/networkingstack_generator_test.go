@@ -32,11 +32,11 @@ func networkingStack(
 	resourcegraphdefinition := generator.NewResourceGraphDefinition(name,
 		generator.WithSchema(
 			"NetworkingStack", "v1alpha1",
-			map[string]interface{}{
+			map[string]any{
 				"name": "string",
 			},
-			map[string]interface{}{
-				"networkingInfo": map[string]interface{}{
+			map[string]any{
+				"networkingInfo": map[string]any{
 					"vpcID":         "${vpc.status.vpcID}",
 					"subnetAZA":     "${subnetAZA.status.subnetID}",
 					"subnetAZB":     "${subnetAZB.status.subnetID}",
@@ -54,14 +54,14 @@ func networkingStack(
 
 	instanceGenerator := func(namespace, name string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "NetworkingStack",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": name,
 				},
 			},
@@ -70,15 +70,15 @@ func networkingStack(
 	return resourcegraphdefinition, instanceGenerator
 }
 
-func nsVPCDef() map[string]interface{} {
-	return map[string]interface{}{
+func nsVPCDef() map[string]any {
+	return map[string]any{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "VPC",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "vpc-${schema.spec.name}",
 		},
-		"spec": map[string]interface{}{
-			"cidrBlocks": []interface{}{
+		"spec": map[string]any{
+			"cidrBlocks": []any{
 				"192.168.0.0/16",
 			},
 			"enableDNSHostnames": false,
@@ -87,14 +87,14 @@ func nsVPCDef() map[string]interface{} {
 	}
 }
 
-func nsSubnetDef(suffix, az, cidr string) map[string]interface{} {
-	return map[string]interface{}{
+func nsSubnetDef(suffix, az, cidr string) map[string]any {
+	return map[string]any{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "Subnet",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "subnet-" + suffix + "-${schema.spec.name}",
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"availabilityZone": az,
 			"cidrBlock":        cidr,
 			"vpcID":            "${vpc.status.vpcID}",
@@ -102,14 +102,14 @@ func nsSubnetDef(suffix, az, cidr string) map[string]interface{} {
 	}
 }
 
-func securityGroupDef() map[string]interface{} {
-	return map[string]interface{}{
+func securityGroupDef() map[string]any {
+	return map[string]any{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "SecurityGroup",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "security-group-${schema.spec.name}",
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"vpcID":       "${vpc.status.vpcID}",
 			"name":        "my-sg-${schema.spec.name}",
 			"description": "something something",

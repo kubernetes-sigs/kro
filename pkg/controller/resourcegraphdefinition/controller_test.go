@@ -84,7 +84,7 @@ type stubManager struct {
 }
 
 type stubGraphBuilder struct {
-	build func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error)
+	build func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error)
 }
 
 type stubHandlerRegistration struct{}
@@ -184,7 +184,7 @@ func (m *stubManager) GetEventRecorderFor(name string) record.EventRecorder {
 
 func (m *stubManager) GetFieldIndexer() client.FieldIndexer { return nil }
 
-func (s *stubGraphBuilder) NewResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, config graph.RGDConfig) (*graph.Graph, error) {
+func (s *stubGraphBuilder) NewResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, config graph.Config) (*graph.Graph, error) {
 	return s.build(rgd, config)
 }
 
@@ -373,7 +373,7 @@ func newProcessedGraph() *graph.Graph {
 
 func newTestBuilder() resourceGraphBuilder {
 	return &stubGraphBuilder{
-		build: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+		build: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 			return newProcessedGraph(), nil
 		},
 	}
@@ -381,7 +381,7 @@ func newTestBuilder() resourceGraphBuilder {
 
 func newFailingBuilder(err error) resourceGraphBuilder {
 	return &stubGraphBuilder{
-		build: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+		build: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 			return nil, err
 		},
 	}
@@ -443,43 +443,43 @@ func newTestRGD(name string) *v1alpha1.ResourceGraphDefinition {
 	rgd := generator.NewResourceGraphDefinition(name,
 		generator.WithSchema(
 			"Network", "v1alpha1",
-			map[string]interface{}{
+			map[string]any{
 				"name": "string",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"vpcID": "${vpc.status.vpcID}",
 			},
 		),
-		generator.WithResource("vpc", map[string]interface{}{
+		generator.WithResource("vpc", map[string]any{
 			"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 			"kind":       "VPC",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": "test-vpc",
 			},
-			"spec": map[string]interface{}{
-				"cidrBlocks":         []interface{}{"10.0.0.0/16"},
+			"spec": map[string]any{
+				"cidrBlocks":         []any{"10.0.0.0/16"},
 				"enableDNSSupport":   true,
 				"enableDNSHostnames": true,
 			},
 		}, []string{"${vpc.status.state == 'available'}"}, nil),
-		generator.WithResource("subnetA", map[string]interface{}{
+		generator.WithResource("subnetA", map[string]any{
 			"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 			"kind":       "Subnet",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": "test-subnet-a",
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"cidrBlock": "10.0.1.0/24",
 				"vpcID":     "${vpc.status.vpcID}",
 			},
 		}, []string{"${subnetA.status.state == 'available'}"}, nil),
-		generator.WithResource("subnetB", map[string]interface{}{
+		generator.WithResource("subnetB", map[string]any{
 			"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 			"kind":       "Subnet",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": "test-subnet-b",
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"cidrBlock": "10.0.2.0/24",
 				"vpcID":     "${vpc.status.vpcID}",
 			},
@@ -551,7 +551,8 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 			ProgressRequeueDelay:    5 * time.Second,
 			MaxConcurrentReconciles: 7,
 			MaxGraphRevisions:       20,
-			RGDConfig:               graph.RGDConfig{MaxCollectionSize: 32},
+			ApplyConcurrency:        15,
+			RGDConfig:               graph.Config{MaxCollectionSize: 32},
 		},
 	)
 
@@ -561,7 +562,8 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 	assert.Equal(t, 9*time.Second, r.cfg.InstanceRequeueInterval)
 	assert.Equal(t, 5*time.Second, r.cfg.ProgressRequeueDelay)
 	assert.Equal(t, 7, r.cfg.MaxConcurrentReconciles)
-	assert.Equal(t, graph.RGDConfig{MaxCollectionSize: 32}, r.cfg.RGDConfig)
+	assert.Equal(t, 15, r.cfg.ApplyConcurrency)
+	assert.Equal(t, graph.Config{MaxCollectionSize: 32}, r.cfg.RGDConfig)
 	assert.Equal(t, metadata.NewKROMetaLabeler().Labels(), r.metadataLabeler.Labels())
 }
 

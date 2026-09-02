@@ -43,34 +43,34 @@ func BenchmarkNewRGD_SimplePodAndConfig(b *testing.B) {
 	rgd := generator.NewResourceGraphDefinition("bench-simple",
 		generator.WithSchema(
 			"SimpleApp", "v1alpha1",
-			map[string]interface{}{
+			map[string]any{
 				"name": "string",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"configName": "${config.metadata.name}",
 			},
 		),
-		generator.WithResource("config", map[string]interface{}{
+		generator.WithResource("config", map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "${schema.spec.name}-config",
 				"namespace": "default",
 			},
-			"data": map[string]interface{}{
+			"data": map[string]any{
 				"app": "${schema.spec.name}",
 			},
 		}, nil, nil),
-		generator.WithResource("pod", map[string]interface{}{
+		generator.WithResource("pod", map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Pod",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "${schema.spec.name}",
 				"namespace": "default",
 			},
-			"spec": map[string]interface{}{
-				"containers": []interface{}{
-					map[string]interface{}{
+			"spec": map[string]any{
+				"containers": []any{
+					map[string]any{
 						"name":  "app",
 						"image": "nginx",
 					},
@@ -93,31 +93,30 @@ func BenchmarkNewRGD_SimplePodAndConfig(b *testing.B) {
 func BenchmarkNewRGD_ManyPods(b *testing.B) {
 	builder := newBenchBuilder(b)
 
-	opts := []generator.ResourceGraphDefinitionOption{
-		generator.WithSchema(
-			"PodSet", "v1alpha1",
-			map[string]interface{}{
-				"name": "string",
-			},
-			map[string]interface{}{
-				"pod00Phase": "${pod00.status.phase}",
-			},
-		),
-	}
+	opts := make([]generator.ResourceGraphDefinitionOption, 0, 21)
+	opts = append(opts, generator.WithSchema(
+		"PodSet", "v1alpha1",
+		map[string]any{
+			"name": "string",
+		},
+		map[string]any{
+			"pod00Phase": "${pod00.status.phase}",
+		},
+	))
 
 	// 20 pods, each referencing schema.spec.name
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		id := fmt.Sprintf("pod%02d", i)
-		opts = append(opts, generator.WithResource(id, map[string]interface{}{
+		opts = append(opts, generator.WithResource(id, map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Pod",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "${schema.spec.name}-" + id,
 				"namespace": "default",
 			},
-			"spec": map[string]interface{}{
-				"containers": []interface{}{
-					map[string]interface{}{
+			"spec": map[string]any{
+				"containers": []any{
+					map[string]any{
 						"name":  id,
 						"image": "nginx",
 					},
@@ -144,24 +143,24 @@ func BenchmarkNewRGD_WithCollections(b *testing.B) {
 	rgd := generator.NewResourceGraphDefinition("bench-collections",
 		generator.WithSchema(
 			"PodPerRegion", "v1alpha1",
-			map[string]interface{}{
+			map[string]any{
 				"name":    "string",
 				"regions": "[]string",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"podCount": "${string(pods.size())}",
 			},
 		),
-		generator.WithResourceCollection("pods", map[string]interface{}{
+		generator.WithResourceCollection("pods", map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Pod",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "${schema.spec.name + '-' + region}",
 				"namespace": "default",
 			},
-			"spec": map[string]interface{}{
-				"containers": []interface{}{
-					map[string]interface{}{
+			"spec": map[string]any{
+				"containers": []any{
+					map[string]any{
 						"name":  "app",
 						"image": "nginx",
 					},

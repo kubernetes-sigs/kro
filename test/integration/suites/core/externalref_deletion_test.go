@@ -64,8 +64,8 @@ var _ = Describe("ExternalRef Deletion", func() {
 			rgd := generator.NewResourceGraphDefinition(rgdName,
 				generator.WithSchema(
 					"TestExternalRefDeletion", "v1alpha1",
-					map[string]interface{}{},
-					map[string]interface{}{},
+					map[string]any{},
+					map[string]any{},
 				),
 				// extcm listed first → becomes root in topological order (no deps)
 				generator.WithExternalRef("extcm", &krov1alpha1.ExternalRef{
@@ -76,13 +76,13 @@ var _ = Describe("ExternalRef Deletion", func() {
 					},
 				}, nil, nil),
 				// managedcm depends on extcm fields for both identity and data
-				generator.WithResource("managedcm", map[string]interface{}{
+				generator.WithResource("managedcm", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${extcm.data.managedName}",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"inherited": "${extcm.data.value}",
 					},
 				}, nil, nil),
@@ -115,10 +115,10 @@ var _ = Describe("ExternalRef Deletion", func() {
 
 			By("creating the instance")
 			instance := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "TestExternalRefDeletion",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      instanceName,
 						"namespace": ns.Name,
 					},
@@ -183,15 +183,15 @@ var _ = Describe("ExternalRef Deletion", func() {
 		rgdName := fmt.Sprintf("test-ordered-deletion-%s", rand.String(5))
 		const instanceName = "ordered-deletion"
 		rgd := generator.NewResourceGraphDefinition(rgdName,
-			generator.WithSchema("TestOrderedDeletion", "v1alpha1", map[string]interface{}{}, map[string]interface{}{}),
-			generator.WithResource("a", map[string]interface{}{
+			generator.WithSchema("TestOrderedDeletion", "v1alpha1", map[string]any{}, map[string]any{}),
+			generator.WithResource("a", map[string]any{
 				"apiVersion": "v1", "kind": "ConfigMap",
-				"metadata": map[string]interface{}{"name": instanceName + "-a"},
+				"metadata": map[string]any{"name": instanceName + "-a"},
 			}, nil, nil),
-			generator.WithResource("b", map[string]interface{}{
+			generator.WithResource("b", map[string]any{
 				"apiVersion": "v1", "kind": "ConfigMap",
-				"metadata": map[string]interface{}{"name": instanceName + "-b"},
-				"data":     map[string]interface{}{"dependency": "${a.metadata.name}"},
+				"metadata": map[string]any{"name": instanceName + "-b"},
+				"data":     map[string]any{"dependency": "${a.metadata.name}"},
 			}, nil, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -202,9 +202,9 @@ var _ = Describe("ExternalRef Deletion", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
-		instance := &unstructured.Unstructured{Object: map[string]interface{}{
+		instance := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "kro.run/v1alpha1", "kind": "TestOrderedDeletion",
-			"metadata": map[string]interface{}{"name": instanceName, "namespace": ns.Name},
+			"metadata": map[string]any{"name": instanceName, "namespace": ns.Name},
 		}}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 

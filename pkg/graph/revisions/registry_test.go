@@ -234,7 +234,7 @@ func TestRegistryCases(t *testing.T) {
 					Entry{OwnerKey: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: two},
 				)
 
-				resolver := reg.ResolverForRGD("demo-rgd")
+				resolver := reg.ResolverFor("demo-rgd")
 				latest, ok := resolver.GetLatestRevision()
 				require.True(t, ok)
 				assert.Equal(t, RevisionStateActive, latest.State)

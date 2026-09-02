@@ -39,6 +39,29 @@ linters:
           - unparam
           - gocyclo
         path: (_test\.go|^test/integration/.*\.go|^pkg/testutil/.*\.go)$
+      # Pre-existing staticcheck findings deferred to a dedicated cleanup PR
+      # (tracked in docs/pr-1355-open-todos.md). SA1019 deprecated-API
+      # migrations (scheme.Builder, client.Apply→SSA ApplyConfiguration,
+      # GetEventRecorderFor, sets.String, FieldsV1.Raw) change behavior/ripple
+      # through generated scaffolding, and two exported-symbol renames (ST1003:
+      # V1ApplySetIdFormat, ApiExtensionsClient) ripple across consumers — both
+      # are out of scope here. staticcheck is otherwise fully enabled (it was
+      # previously disabled entirely via checks: [-QF1008]); the follow-up PR
+      # does the SA1019 migration and drops these exclusions.
+      - linters:
+          - staticcheck
+        text: "SA1019"
+      - linters:
+          - staticcheck
+        text: "ST1003"
+        path: (pkg/controller/instance/applyset/const\.go|pkg/client/fake/fake\.go)
+      # ST1000 (missing package comment) is pervasive pre-existing doc debt
+      # across ~36 packages repo-wide, unrelated to this PR. Deferred to the
+      # same follow-up cleanup PR (tracked in docs/pr-1355-open-todos.md);
+      # excluding it as a class avoids touching 36 unrelated packages here.
+      - linters:
+          - staticcheck
+        text: "ST1000"
     paths:
       - third_party$
       - builtin$
@@ -72,6 +95,7 @@ linters:
         - "int"
     staticcheck:
       checks:
+        - all
         - -QF1008
 formatters:
   enable:
@@ -79,7 +103,7 @@ formatters:
     - goimports
   settings:
     goimports:
-      local-prefixes: [ "github.com/kubernetes-sigs/kro" ]
+      local-prefixes: ["github.com/kubernetes-sigs/kro"]
   exclusions:
     generated: lax
     paths:

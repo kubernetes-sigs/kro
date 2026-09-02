@@ -103,10 +103,14 @@ type Controller struct {
 	graphResolver GraphRevisionResolver
 	namespaced    bool
 
-	instanceLabeler      metadata.Labeler
-	childResourceLabeler metadata.Labeler
-	reconcileConfig      ReconcileConfig
-	coordinator          *dynamiccontroller.WatchCoordinator
+	instanceLabeler      metadata.MetadataUpdater
+	childResourceLabeler metadata.MetadataUpdater
+	// instanceAnnotations are controller-owned annotations stamped on the
+	// instance alongside the labels. Annotations carry values that may not fit
+	// in a label (e.g. the full RGD name).
+	instanceAnnotations map[string]string
+	reconcileConfig     ReconcileConfig
+	coordinator         *dynamiccontroller.WatchCoordinator
 
 	// eventRecorder emits K8s Events on condition transitions.
 	eventRecorder record.EventRecorder
@@ -125,8 +129,8 @@ func NewController(
 	graphResolver GraphRevisionResolver,
 	namespaced bool,
 	client kroclient.SetInterface,
-	instanceLabeler metadata.Labeler,
-	childResourceLabeler metadata.Labeler,
+	instanceLabeler metadata.MetadataUpdater,
+	childResourceLabeler metadata.MetadataUpdater,
 	coord *dynamiccontroller.WatchCoordinator,
 	eventRecorder record.EventRecorder,
 ) *Controller {
@@ -398,7 +402,7 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 		}
 	}
 
-	wantLabels := c.instanceLabeler.Labels()
+	wantLabels := c.instanceLabeler.GetLabels()
 	haveLabels := obj.GetLabels()
 	needLabelPatch := false
 
@@ -409,7 +413,16 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 		}
 	}
 
-	if needPatch := needFinalizer || needLabelPatch; !needPatch {
+	haveAnnotations := obj.GetAnnotations()
+	needAnnotationPatch := false
+	for k, v := range c.instanceAnnotations {
+		if haveAnnotations[k] != v {
+			needAnnotationPatch = true
+			break
+		}
+	}
+
+	if needPatch := needFinalizer || needLabelPatch || needAnnotationPatch; !needPatch {
 		return nil, nil
 	}
 
@@ -422,6 +435,10 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	// we patch together here because otherwise we could revert a previous patch
 	// result if only one of finalizers or labels change.
 	patchLabels := maps.Clone(wantLabels)
+	patchAnnotations := maps.Clone(c.instanceAnnotations)
+	if patchAnnotations == nil {
+		patchAnnotations = map[string]string{}
+	}
 	if needFinalizer && !hasInventoryMetadata {
 		// Install a valid empty inventory in the same write as the finalizer.
 		// This guarantees that deletion can make progress even if normal
@@ -431,9 +448,12 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 			Tooling: applyset.ToolingID(),
 		}
 		maps.Copy(patchLabels, emptyInventory.Labels())
-		patch.SetAnnotations(emptyInventory.Annotations())
+		maps.Copy(patchAnnotations, emptyInventory.Annotations())
 	}
 	patch.SetLabels(patchLabels)
+	if len(patchAnnotations) > 0 {
+		patch.SetAnnotations(patchAnnotations)
+	}
 	metadata.SetInstanceFinalizer(patch)
 
 	patched, err := rcx.InstanceClient().Apply(

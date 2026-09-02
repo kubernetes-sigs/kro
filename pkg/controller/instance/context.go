@@ -37,7 +37,7 @@ type ReconcileContext struct {
 	Namespaced bool
 	Client     dynamic.Interface
 	RestMapper meta.RESTMapper
-	Labeler    metadata.Labeler
+	Labeler    metadata.MetadataUpdater
 
 	Runtime  runtime.Interface
 	Instance *unstructured.Unstructured
@@ -94,7 +94,7 @@ func NewReconcileContext(
 	namespaced bool,
 	client dynamic.Interface,
 	restMapper meta.RESTMapper,
-	labeler metadata.Labeler,
+	labeler metadata.MetadataUpdater,
 	rt runtime.Interface,
 	config ReconcileConfig,
 	instance *unstructured.Unstructured,

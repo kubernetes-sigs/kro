@@ -102,7 +102,7 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ct
 		return nil
 	}
 
-	owner, ok := crd.GetLabels()[metadata.ResourceGraphDefinitionNameLabel]
+	owner, ok := metadata.GetResourceGraphDefinitionName(crd)
 	if !ok || owner != rgdName {
 		ctrl.LoggerFrom(ctx).V(1).Info(
 			"skipping CRD deletion, not owned by this RGD",

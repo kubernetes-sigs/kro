@@ -15,6 +15,7 @@
 package metadata
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,12 +70,14 @@ func TestIsKROOwned(t *testing.T) {
 
 func TestCompareRGDOwnership(t *testing.T) {
 	cases := []struct {
-		name              string
-		existingLabels    map[string]string
-		desiredLabels     map[string]string
-		expectedKROOwned  bool
-		expectedNameMatch bool
-		expectedIDMatch   bool
+		name                string
+		existingLabels      map[string]string
+		existingAnnotations map[string]string
+		desiredLabels       map[string]string
+		desiredAnnotations  map[string]string
+		expectedKROOwned    bool
+		expectedNameMatch   bool
+		expectedIDMatch     bool
 	}{
 		{
 			name: "same RGD - normal update",
@@ -139,12 +142,51 @@ func TestCompareRGDOwnership(t *testing.T) {
 			expectedNameMatch: true,
 			expectedIDMatch:   false,
 		},
+		{
+			name: "over-long name recorded only in annotations - match",
+			existingLabels: map[string]string{
+				OwnedLabel:                     "true",
+				ResourceGraphDefinitionIDLabel: "test-id",
+			},
+			existingAnnotations: map[string]string{
+				ResourceGraphDefinitionNameAnnotation: strings.Repeat("a", 100),
+			},
+			desiredLabels: map[string]string{
+				OwnedLabel:                     "true",
+				ResourceGraphDefinitionIDLabel: "test-id",
+			},
+			desiredAnnotations: map[string]string{
+				ResourceGraphDefinitionNameAnnotation: strings.Repeat("a", 100),
+			},
+			expectedKROOwned:  true,
+			expectedNameMatch: true,
+			expectedIDMatch:   true,
+		},
+		{
+			name: "pre-annotation object with label only matches annotated desired",
+			existingLabels: map[string]string{
+				OwnedLabel:                       "true",
+				ResourceGraphDefinitionNameLabel: "test-rgd",
+				ResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			desiredLabels: map[string]string{
+				OwnedLabel:                       "true",
+				ResourceGraphDefinitionNameLabel: "test-rgd",
+				ResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			desiredAnnotations: map[string]string{
+				ResourceGraphDefinitionNameAnnotation: "test-rgd",
+			},
+			expectedKROOwned:  true,
+			expectedNameMatch: true,
+			expectedIDMatch:   true,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			existing := metav1.ObjectMeta{Labels: tc.existingLabels}
-			desired := metav1.ObjectMeta{Labels: tc.desiredLabels}
+			existing := metav1.ObjectMeta{Labels: tc.existingLabels, Annotations: tc.existingAnnotations}
+			desired := metav1.ObjectMeta{Labels: tc.desiredLabels, Annotations: tc.desiredAnnotations}
 
 			kroOwned, nameMatch, idMatch := CompareRGDOwnership(existing, desired)
 
@@ -159,19 +201,19 @@ func TestGenericLabeler(t *testing.T) {
 	t.Run("ApplyLabels", func(t *testing.T) {
 		cases := []struct {
 			name         string
-			labeler      GenericLabeler
+			labeler      MetadataUpdater
 			objectLabels map[string]string
 			expected     map[string]string
 		}{
 			{
 				name:         "Apply labels to empty object",
-				labeler:      GenericLabeler{"key1": "value1", "key2": "value2"},
+				labeler:      GenericMetadataUpdater{Labels: map[string]string{"key1": "value1", "key2": "value2"}},
 				objectLabels: nil,
 				expected:     map[string]string{"key1": "value1", "key2": "value2"},
 			},
 			{
 				name:         "Apply labels to object with existing labels",
-				labeler:      GenericLabeler{"key2": "newvalue2", "key3": "value3"},
+				labeler:      GenericMetadataUpdater{Labels: map[string]string{"key2": "newvalue2", "key3": "value3"}},
 				objectLabels: map[string]string{"key1": "value1", "key2": "value2"},
 				expected:     map[string]string{"key1": "value1", "key2": "newvalue2", "key3": "value3"},
 			},
@@ -180,7 +222,7 @@ func TestGenericLabeler(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Labels: tc.objectLabels}}
-				tc.labeler.ApplyLabels(obj)
+				tc.labeler.Apply(obj)
 				assert.Equal(t, tc.expected, obj.Labels)
 			})
 		}
@@ -189,22 +231,22 @@ func TestGenericLabeler(t *testing.T) {
 	t.Run("Merge", func(t *testing.T) {
 		cases := []struct {
 			name           string
-			labeler1       GenericLabeler
-			labeler2       GenericLabeler
-			expectedMerged GenericLabeler
+			labeler1       MetadataUpdater
+			labeler2       MetadataUpdater
+			expectedMerged MetadataUpdater
 			expectError    bool
 		}{
 			{
 				name:           "Merge non-overlapping labelers",
-				labeler1:       GenericLabeler{"key1": "value1", "key2": "value2"},
-				labeler2:       GenericLabeler{"key3": "value3", "key4": "value4"},
-				expectedMerged: GenericLabeler{"key1": "value1", "key2": "value2", "key3": "value3", "key4": "value4"},
+				labeler1:       GenericMetadataUpdater{Labels: map[string]string{"key1": "value1", "key2": "value2"}},
+				labeler2:       GenericMetadataUpdater{Labels: map[string]string{"key3": "value3", "key4": "value4"}},
+				expectedMerged: GenericMetadataUpdater{Labels: map[string]string{"key1": "value1", "key2": "value2", "key3": "value3", "key4": "value4"}},
 				expectError:    false,
 			},
 			{
 				name:        "Merge with duplicate keys",
-				labeler1:    GenericLabeler{"key1": "value1", "key2": "value2"},
-				labeler2:    GenericLabeler{"key2": "value3", "key3": "value4"},
+				labeler1:    GenericMetadataUpdater{Labels: map[string]string{"key1": "value1", "key2": "value2"}},
+				labeler2:    GenericMetadataUpdater{Labels: map[string]string{"key2": "value3", "key3": "value4"}},
 				expectError: true,
 			},
 		}
@@ -230,9 +272,46 @@ func TestNewResourceGraphDefinitionLabeler(t *testing.T) {
 		uid := types.UID("rgd-uid")
 		obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Name: name, UID: uid}}
 		labeler := NewResourceGraphDefinitionLabeler(obj)
-		assert.Equal(t, GenericLabeler{
-			ResourceGraphDefinitionNameLabel: name,
-			ResourceGraphDefinitionIDLabel:   string(uid),
+		assert.Equal(t, GenericMetadataUpdater{
+			Labels: map[string]string{
+				ResourceGraphDefinitionNameLabel: name,
+				ResourceGraphDefinitionIDLabel:   string(uid),
+			},
+		}, labeler)
+	})
+
+	t.Run("omits name label when name exceeds label value limit", func(t *testing.T) {
+		name := strings.Repeat("a", 64)
+		uid := types.UID("rgd-uid")
+		obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Name: name, UID: uid}}
+		labeler := NewResourceGraphDefinitionLabeler(obj)
+		assert.Equal(t, GenericMetadataUpdater{
+			Labels: map[string]string{
+				ResourceGraphDefinitionIDLabel: string(uid),
+			},
+		}, labeler)
+	})
+}
+
+func TestNewResourceGraphDefinitionNameLabeler(t *testing.T) {
+	t.Run("sets name label when short enough", func(t *testing.T) {
+		labeler := NewResourceGraphDefinitionNameLabeler("my-rgd")
+		assert.Equal(t, GenericMetadataUpdater{
+			Labels: map[string]string{
+				ResourceGraphDefinitionNameLabel: "my-rgd",
+			},
+			Annotations: map[string]string{
+				ResourceGraphDefinitionNameAnnotation: "my-rgd",
+			},
+		}, labeler)
+	})
+
+	t.Run("returns only annotation labeler for over-long name", func(t *testing.T) {
+		labeler := NewResourceGraphDefinitionNameLabeler(strings.Repeat("a", 64))
+		assert.Equal(t, GenericMetadataUpdater{
+			Annotations: map[string]string{
+				ResourceGraphDefinitionNameAnnotation: strings.Repeat("a", 64),
+			},
 		}, labeler)
 	})
 }
@@ -240,8 +319,8 @@ func TestNewResourceGraphDefinitionLabeler(t *testing.T) {
 func TestNewGraphRevisionHashLabeler(t *testing.T) {
 	t.Run("sets hash label directly", func(t *testing.T) {
 		labeler := NewGraphRevisionHashLabeler("hash-1")
-		assert.Equal(t, GenericLabeler{
-			GraphRevisionHashLabel: "hash-1",
+		assert.Equal(t, GenericMetadataUpdater{
+			Labels: map[string]string{GraphRevisionHashLabel: "hash-1"},
 		}, labeler)
 	})
 }
@@ -266,13 +345,15 @@ func TestNewInstanceLabeler(t *testing.T) {
 		})
 
 		labeler := NewInstanceLabeler(obj, true)
-		assert.Equal(t, GenericLabeler{
-			InstanceLabel:          name,
-			InstanceNamespaceLabel: namespace,
-			InstanceIDLabel:        string(uid),
-			InstanceGroupLabel:     group,
-			InstanceVersionLabel:   version,
-			InstanceKindLabel:      kind,
+		assert.Equal(t, GenericMetadataUpdater{
+			Labels: map[string]string{
+				InstanceLabel:          name,
+				InstanceNamespaceLabel: namespace,
+				InstanceIDLabel:        string(uid),
+				InstanceGroupLabel:     group,
+				InstanceVersionLabel:   version,
+				InstanceKindLabel:      kind,
+			},
 		}, labeler)
 	})
 
@@ -293,12 +374,14 @@ func TestNewInstanceLabeler(t *testing.T) {
 		})
 
 		labeler := NewInstanceLabeler(obj, false)
-		assert.Equal(t, GenericLabeler{
-			InstanceLabel:        name,
-			InstanceIDLabel:      string(uid),
-			InstanceGroupLabel:   group,
-			InstanceVersionLabel: version,
-			InstanceKindLabel:    kind,
+		assert.Equal(t, GenericMetadataUpdater{
+			Labels: map[string]string{
+				InstanceLabel:        name,
+				InstanceIDLabel:      string(uid),
+				InstanceGroupLabel:   group,
+				InstanceVersionLabel: version,
+				InstanceKindLabel:    kind,
+			},
 		}, labeler)
 	})
 }
@@ -306,9 +389,11 @@ func TestNewInstanceLabeler(t *testing.T) {
 func TestNewKROMetaLabeler(t *testing.T) {
 	t.Run("NewKROMetaLabeler", func(t *testing.T) {
 		labeler := NewKROMetaLabeler()
-		assert.Equal(t, GenericLabeler{
-			OwnedLabel:      "true",
-			KROVersionLabel: version.GetVersionInfo().GitVersion,
+		assert.Equal(t, GenericMetadataUpdater{
+			Labels: map[string]string{
+				OwnedLabel:      "true",
+				KROVersionLabel: version.GetVersionInfo().GitVersion,
+			},
 		}, labeler)
 	})
 }
@@ -316,8 +401,10 @@ func TestNewKROMetaLabeler(t *testing.T) {
 func TestNewNodeLabeler(t *testing.T) {
 	t.Run("NewNodeLabeler", func(t *testing.T) {
 		labeler := NewNodeLabeler()
-		assert.Equal(t, GenericLabeler{
-			ManagedByLabelKey: ManagedByKROValue,
+		assert.Equal(t, GenericMetadataUpdater{
+			Labels: map[string]string{
+				ManagedByLabelKey: ManagedByKROValue,
+			},
 		}, labeler)
 	})
 }

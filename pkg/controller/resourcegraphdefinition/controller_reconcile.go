@@ -182,7 +182,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	rgd *v1alpha1.ResourceGraphDefinition,
 	processedRGD *graph.Graph,
-	instanceLabeler metadata.Labeler,
+	instanceLabeler metadata.MetadataUpdater,
 ) *instancectrl.Controller {
 	gvr := processedRGD.Instance.Meta.GVR
 	instanceLogger := r.instanceLogger.WithName(fmt.Sprintf("%s-controller", gvr.Resource)).WithValues(
@@ -349,7 +349,7 @@ func (r *ResourceGraphDefinitionReconciler) ensureResourceGraphDefinitionControl
 	ctx context.Context,
 	rgd *v1alpha1.ResourceGraphDefinition,
 	processedRGD *graph.Graph,
-	instanceLabeler metadata.Labeler,
+	instanceLabeler metadata.MetadataUpdater,
 ) error {
 	controller := r.setupMicroController(rgd, processedRGD, instanceLabeler)
 
@@ -382,7 +382,7 @@ func (r *ResourceGraphDefinitionReconciler) ensureServingState(
 	}
 
 	crd := processedRGD.CRD
-	instanceLabeler.ApplyLabels(&crd.ObjectMeta)
+	instanceLabeler.Apply(&crd.ObjectMeta)
 
 	log.V(1).Info("ensuring resource graph definition CRD")
 	allowBreakingChanges := rgd.Annotations[v1alpha1.AllowBreakingChangesAnnotation] == "true"
@@ -570,10 +570,7 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 	specHash string,
 ) (*internalv1alpha1.GraphRevision, error) {
 	// GraphRevisions are tracked by RGD name, so the UID label is not needed.
-	// The spec hash label is kept for user-facing queries (kubectl).
-	rgdNameLabeler := metadata.GenericLabeler{
-		metadata.ResourceGraphDefinitionNameLabel: rgd.Name,
-	}
+	rgdNameLabeler := metadata.NewResourceGraphDefinitionNameLabeler(rgd.Name)
 	graphRevisionLabeler, err := r.metadataLabeler.Merge(rgdNameLabeler)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup graph revision labels: %w", err)
@@ -599,7 +596,7 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 			},
 		},
 	}
-	graphRevisionLabeler.ApplyLabels(&graphRevision.ObjectMeta)
+	graphRevisionLabeler.Apply(&graphRevision.ObjectMeta)
 
 	if err := r.Create(ctx, graphRevision); err != nil {
 		return nil, fmt.Errorf("creating graph revision %q: %w", graphRevision.Name, err)

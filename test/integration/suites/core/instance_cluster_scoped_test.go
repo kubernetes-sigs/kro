@@ -116,9 +116,9 @@ var _ = Describe("ClusterScopedInstance", func() {
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
 					Namespace: "${schema.spec.targetNamespace}",
-					Selector: &metav1.LabelSelector{
+					Selector: toRawExtension(metav1.LabelSelector{
 						MatchLabels: map[string]string{"role": "team-config"},
-					},
+					}),
 				},
 			}, nil, nil),
 			// 3. Normal resource — namespace set explicitly via CEL

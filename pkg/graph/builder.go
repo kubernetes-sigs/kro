@@ -362,6 +362,11 @@ func (b *Builder) rgResourceSpec(rgResource *v1alpha1.Resource, order int) (Reso
 	if err := validateCombinableResourceFields(rgResource.ID, len(rgResource.Template.Raw) > 0, rgResource.ExternalRef != nil, len(rgResource.ForEach)); err != nil {
 		return ResourceSpec{}, fmt.Errorf("invalid combination of resource fields: %w", err)
 	}
+	if rgResource.ExternalRef != nil {
+		if err := validateExternalRefMetadata(rgResource.ExternalRef.Metadata); err != nil {
+			return ResourceSpec{}, fmt.Errorf("invalid external ref metadata for resource %s: %w", rgResource.ID, err)
+		}
+	}
 
 	resourceObject := map[string]interface{}{}
 	if len(rgResource.Template.Raw) > 0 {
@@ -384,7 +389,7 @@ func (b *Builder) rgResourceSpec(rgResource *v1alpha1.Resource, order int) (Reso
 		ID:          rgResource.ID,
 		Object:      resourceObject,
 		ExternalRef: rgResource.ExternalRef != nil,
-		Collection:  rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.Selector != nil,
+		Collection:  rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.HasSelector(),
 		ReadyWhen:   rgResource.ReadyWhen,
 		IncludeWhen: rgResource.IncludeWhen,
 		ForEach:     forEach,
@@ -1206,7 +1211,19 @@ func resolveSchemaAndTypeName(c *schema.Cache, segments []fieldpath.Segment, roo
 
 // expectedTypeForField computes the expected CEL type for a field descriptor
 // by deriving it from the OpenAPI schema at the path.
-func expectedTypeForField(bc *buildContext, descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string) *cel.Type {
+func expectedTypeForField(bc *buildContext, descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string, nodeType NodeType) *cel.Type {
+	// Paths under metadata.selector come from ExternalRef synthetic resources.
+	// The selector is always a LabelSelector, whose structure is known, but
+	// it doesn't exist in the target resource's OpenAPI schema. Return the
+	// concrete types so the CEL type checker can catch mismatches. Other node
+	// types keep schema-derived typing: a schemaless resource may legitimately
+	// carry an unrelated field at metadata.selector.
+	if nodeType == NodeTypeExternalCollection {
+		if t := selectorFieldType(descriptor.Path); t != nil {
+			return t
+		}
+	}
+
 	segments, err := fieldpath.Parse(descriptor.Path)
 	if err != nil {
 		return cel.DynType
@@ -1218,6 +1235,29 @@ func expectedTypeForField(bc *buildContext, descriptor *variable.FieldDescriptor
 	}
 
 	return celTypeFromSchema(bc, s, typeName)
+}
+
+// selectorFieldType returns the expected CEL type for well-known
+// LabelSelector fields under metadata.selector. Returns nil for paths
+// that are not part of the selector structure.
+//
+// These types are intentionally lenient (dyn-valued maps/lists) so that a
+// standalone expression like `selector: ${schema.spec.selector}` type-checks
+// against a loosely-typed user schema field. Structural validation of the
+// selector is handled by validateSelector in pkg/graph/validation.go.
+func selectorFieldType(path string) *cel.Type {
+	switch {
+	case path == "metadata.selector":
+		return cel.MapType(cel.StringType, cel.DynType)
+	case path == "metadata.selector.matchLabels":
+		return cel.MapType(cel.StringType, cel.StringType)
+	case strings.HasPrefix(path, "metadata.selector.matchLabels."):
+		return cel.StringType
+	case path == "metadata.selector.matchExpressions":
+		return cel.ListType(cel.DynType)
+	default:
+		return nil
+	}
 }
 
 // celTypeFromSchema looks up a pre-registered CEL type by name from the
@@ -1365,7 +1405,7 @@ func validateAndCompileTemplates(
 
 	for _, templateVariable := range node.Variables {
 		// Compute expected type for this field
-		expectedType := expectedTypeForField(bc, &templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID)
+		expectedType := expectedTypeForField(bc, &templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, node.Meta.Type)
 
 		expression := templateVariable.Expression
 		displayExpr := expression.UserExpression()

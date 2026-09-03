@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
@@ -172,5 +173,105 @@ var _ = Describe("Validation", func() {
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
+
+		It("should reject an external collection with a mis-shaped selector object", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-invalid-external-selector",
+				generator.WithSchema(
+					"TestInvalidExternalSelector", "v1alpha1",
+					map[string]interface{}{},
+					nil,
+				),
+				generator.WithExternalRef("extconfigs", &krov1alpha1.ExternalRef{
+					APIVersion: "v1",
+					Kind:       "ConfigMap",
+					Metadata: krov1alpha1.ExternalRefMetadata{
+						Selector: toRawExtension(map[string]interface{}{
+							"matchLabels": "team=platform",
+						}),
+					},
+				}, nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			expectRGDInactiveWithError(ctx, rgd, "expected object type for path metadata.selector.matchLabels")
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		It("should reject an external collection with an unknown selector field", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-unknown-external-selector-field",
+				generator.WithSchema(
+					"TestUnknownExternalSelectorField", "v1alpha1",
+					map[string]interface{}{},
+					nil,
+				),
+				generator.WithExternalRef("extconfigs", &krov1alpha1.ExternalRef{
+					APIVersion: "v1",
+					Kind:       "ConfigMap",
+					Metadata: krov1alpha1.ExternalRefMetadata{
+						Selector: toRawExtension(map[string]interface{}{
+							"matchLabels": map[string]interface{}{"team": "platform"},
+							"bogusField":  "value",
+						}),
+					},
+				}, nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			expectRGDInactiveWithError(ctx, rgd, "schema not found for field bogusField")
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		It("should reject an external collection with an invalid literal selector operator", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-invalid-external-selector-operator",
+				generator.WithSchema(
+					"TestInvalidExternalSelectorOperator", "v1alpha1",
+					map[string]interface{}{},
+					nil,
+				),
+				generator.WithExternalRef("extconfigs", &krov1alpha1.ExternalRef{
+					APIVersion: "v1",
+					Kind:       "ConfigMap",
+					Metadata: krov1alpha1.ExternalRefMetadata{
+						Selector: toRawExtension(map[string]interface{}{
+							"matchExpressions": []map[string]interface{}{{
+								"key":      "team",
+								"operator": "NotARealOperator",
+							}},
+						}),
+					},
+				}, nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			expectRGDInactiveWithError(ctx, rgd, "invalid label selector")
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
 	})
 })
+
+// expectRGDInactiveWithError waits for the RGD to become inactive and validates
+// that the Ready condition contains the expected error message substring.
+func expectRGDInactiveWithError(
+	ctx SpecContext,
+	rgd *krov1alpha1.ResourceGraphDefinition,
+	expectedErrorSubstring string,
+) {
+	Eventually(func(g Gomega, ctx SpecContext) {
+		err := env.Client.Get(ctx, types.NamespacedName{
+			Name: rgd.Name,
+		}, rgd)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
+
+		var condition *krov1alpha1.Condition
+		for _, cond := range rgd.Status.Conditions {
+			if cond.Type == resourcegraphdefinition.Ready {
+				condition = &cond
+				break
+			}
+		}
+		g.Expect(condition).ToNot(BeNil())
+		g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(*condition.Message).To(ContainSubstring(expectedErrorSubstring))
+	}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+}

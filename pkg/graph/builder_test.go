@@ -24,7 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	apiservercel "k8s.io/apiserver/pkg/cel"
@@ -2383,6 +2382,111 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 	}
 }
 
+// TestGraphBuilder_ExternalCollectionSelectorCELTypes checks that a CEL
+// expression used in an external-collection selector is type-checked against
+// the LabelSelector shape at build time: the expression must resolve to a value
+// of the type the selector position expects (a map for the whole selector or
+// matchLabels, a string for a matchLabels value, a list for matchExpressions).
+// This is the "does the expression actually reference a LabelSelector object"
+// guarantee — a selector whose CEL resolves to the wrong type must be rejected
+// before the RGD is accepted, not fail at reconcile time.
+func TestGraphBuilder_ExternalCollectionSelectorCELTypes(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+
+	// externalCollectionRGD builds an RGD whose single resource is a ConfigMap
+	// external collection selected by the given selector, with the given schema
+	// spec field types available for the selector's CEL expressions to reference.
+	externalCollectionRGD := func(specTypes map[string]interface{}, selector interface{}) *krov1alpha1.ResourceGraphDefinition {
+		return generator.NewResourceGraphDefinition("test-selector-cel",
+			generator.WithSchema("Test", "v1alpha1", specTypes, nil),
+			generator.WithExternalRef("configs", &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: toRawExtension(t, selector),
+				},
+			}, nil, nil),
+		)
+	}
+
+	tests := []struct {
+		name      string
+		specTypes map[string]interface{}
+		selector  interface{}
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name:      "whole-selector CEL resolving to a map is valid",
+			specTypes: map[string]interface{}{"sel": "map[string]string"},
+			selector:  "${schema.spec.sel}",
+		},
+		{
+			name:      "whole-selector CEL resolving to a string is rejected",
+			specTypes: map[string]interface{}{"sel": "string"},
+			selector:  "${schema.spec.sel}",
+			wantErr:   true,
+			// selector position expects a map; a string does not reference a
+			// LabelSelector object.
+			errMsg: `at path "metadata.selector"`,
+		},
+		{
+			name:      "matchLabels CEL resolving to map[string]string is valid",
+			specTypes: map[string]interface{}{"labels": "map[string]string"},
+			selector:  map[string]interface{}{"matchLabels": "${schema.spec.labels}"},
+		},
+		{
+			name:      "matchLabels CEL resolving to a string is rejected",
+			specTypes: map[string]interface{}{"labels": "string"},
+			selector:  map[string]interface{}{"matchLabels": "${schema.spec.labels}"},
+			wantErr:   true,
+			errMsg:    `at path "metadata.selector.matchLabels"`,
+		},
+		{
+			name:      "matchLabels value CEL resolving to a string is valid",
+			specTypes: map[string]interface{}{"tier": "string"},
+			selector: map[string]interface{}{
+				"matchLabels": map[string]interface{}{"app": "${schema.spec.tier}"},
+			},
+		},
+		{
+			name:      "matchLabels value CEL resolving to an int is rejected",
+			specTypes: map[string]interface{}{"tier": "integer"},
+			selector: map[string]interface{}{
+				"matchLabels": map[string]interface{}{"app": "${schema.spec.tier}"},
+			},
+			wantErr: true,
+			errMsg:  `at path "metadata.selector.matchLabels.app"`,
+		},
+		{
+			name:      "matchExpressions CEL resolving to a string is rejected",
+			specTypes: map[string]interface{}{"exprs": "string"},
+			selector:  map[string]interface{}{"matchExpressions": "${schema.spec.exprs}"},
+			wantErr:   true,
+			errMsg:    `at path "metadata.selector.matchExpressions"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := externalCollectionRGD(tt.specTypes, tt.selector)
+			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "type mismatch")
+				assert.Contains(t, err.Error(), tt.errMsg)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestNewBuilder(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	fakeRESTMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
@@ -4073,9 +4177,27 @@ spec:
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{"app": "demo"},
-					},
+					Selector: toRawExtension(t, map[string]any{
+						"matchLabels": map[string]any{
+							"app": "demo",
+						},
+					}),
+				},
+			},
+		}, true)
+		require.NoError(t, err)
+		assert.Equal(t, NodeTypeExternalCollection, node.Meta.Type)
+	})
+
+	t.Run("external selector CEL string becomes collection", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		node, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
+			ID: "external",
+			ExternalRef: &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: toRawExtension(t, "${schema.spec.selector}"),
 				},
 			},
 		}, true)
@@ -4434,10 +4556,10 @@ func TestBuilderHelperCases(t *testing.T) {
 			run: func(t *testing.T) {
 				assert.Equal(t, cel.DynType, expectedTypeForField(bc, &variable.FieldDescriptor{
 					Path: "spec[",
-				}, rootSchema, "resource"))
+				}, rootSchema, "resource", NodeTypeResource))
 				assert.Equal(t, cel.DynType, expectedTypeForField(bc, &variable.FieldDescriptor{
 					Path: "spec.missing",
-				}, rootSchema, "resource"))
+				}, rootSchema, "resource", NodeTypeResource))
 			},
 		},
 		{
@@ -4639,6 +4761,63 @@ func TestBuilderHelperCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, tt.run)
 	}
+}
+
+func TestSelectorFieldType(t *testing.T) {
+	tests := []struct {
+		path string
+		want *cel.Type
+	}{
+		{"metadata.selector", cel.MapType(cel.StringType, cel.DynType)},
+		{"metadata.selector.matchLabels", cel.MapType(cel.StringType, cel.StringType)},
+		{"metadata.selector.matchLabels.app", cel.StringType},
+		{"metadata.selector.matchLabels.some-key", cel.StringType},
+		{"metadata.selector.matchExpressions", cel.ListType(cel.DynType)},
+		{"metadata.name", nil},
+		{"spec.replicas", nil},
+		{"metadata.labels", nil},
+		{"", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := selectorFieldType(tt.path)
+			if tt.want == nil {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.True(t, tt.want.IsEquivalentType(got),
+					"path %q: got %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+// The LabelSelector typing shortcut must only apply to external collection
+// nodes. A regular resource may legitimately carry an unrelated field at
+// metadata.selector (e.g. a schemaless CRD template), and its expected type
+// must still come from the resource schema.
+func TestExpectedTypeForFieldSelectorIsExternalCollectionOnly(t *testing.T) {
+	rootSchema := objectSchema(map[string]spec.Schema{
+		"metadata": *objectSchema(map[string]spec.Schema{
+			"selector": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+		}),
+	})
+	env, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{"resource": rootSchema})
+	bc := newTestBuildContext(t, env, provider)
+	descriptor := &variable.FieldDescriptor{Path: "metadata.selector"}
+
+	for _, nodeType := range []NodeType{NodeTypeResource, NodeTypeCollection, NodeTypeExternal} {
+		t.Run(nodeType.String(), func(t *testing.T) {
+			got := expectedTypeForField(bc, descriptor, rootSchema, "resource", nodeType)
+			assert.True(t, cel.StringType.IsEquivalentType(got), "got %v, want string", got)
+		})
+	}
+
+	t.Run(NodeTypeExternalCollection.String(), func(t *testing.T) {
+		got := expectedTypeForField(bc, descriptor, rootSchema, "resource", NodeTypeExternalCollection)
+		assert.True(t, cel.MapType(cel.StringType, cel.DynType).IsEquivalentType(got), "got %v, want map(string, dyn)", got)
+	})
 }
 
 func newConditionsBuildContext(t *testing.T) (*buildContext, *cel.Env, *ast.Inspector) {

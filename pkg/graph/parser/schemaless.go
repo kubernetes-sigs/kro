@@ -56,7 +56,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 			allPlainFieldPaths = append(allPlainFieldPaths, plainFieldPaths...)
 		}
 	case string:
-		ok, err := isStandaloneExpression(field)
+		ok, err := IsStandaloneExpression(field)
 		if err != nil {
 			return nil, nil, err
 		}

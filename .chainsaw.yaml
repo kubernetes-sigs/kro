@@ -1,0 +1,15 @@
+# Instance deletion in Kro is behind a finalizer flag. Deletion remove the
+# finalizer only once every child resource is gone. A Delete, therefore,
+# together with the terminationGracePeriodSeconds can take longer then that
+# on a machine with cold kind nodes. Here, we set the cleanup to longer
+# BUT we also set the grace period to 0 to make the deletion immediate
+# to avoid weird "context deadline exceeded" errors, while still failing on
+# geniuen timeouts that are blocked finalizer related.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Configuration
+metadata:
+  name: kro
+spec:
+  timeouts:
+    cleanup: 120s
+    delete: 120s

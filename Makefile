@@ -329,13 +329,17 @@ start-kind:
 	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} create namespace kro-system
 
+# allowCRDDeletion controls whether kro deletes an instance CRD when its RGD is
+# deleted. Defaults to true, but is overwritten by the chainsaw e2e test.
+ALLOW_CRD_DELETION ?= true
+
 .PHONY: deploy-kind-helm
 deploy-kind-helm: export KO_DOCKER_REPO=kind.local
 deploy-kind-helm: ko start-kind
 	make install
 	# This generates deployment with ko://... used in image.
 	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
-	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(WITH_GOFLAGS) $(KO) apply -f -
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=$(ALLOW_CRD_DELETION) | $(WITH_GOFLAGS) $(KO) apply -f -
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
@@ -386,7 +390,9 @@ deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
 
 # Default end to end tests uses helm deployments
 .PHONY: test-e2e-kind
-test-e2e-kind: deploy-kind-helm
+test-e2e-kind: ALLOW_CRD_DELETION=false
+test-e2e-kind: chainsaw deploy-kind-helm
+	$(CHAINSAW) test ./test/e2e/chainsaw
 
 ##@ Upgrade Tests
 

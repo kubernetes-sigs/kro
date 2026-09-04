@@ -16,14 +16,17 @@ package instance
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -728,6 +731,7 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 
 	assert.Equal(t, "yes", obj.GetLabels()["keep"])
 	assert.Equal(t, "configs", obj.GetLabels()[metadata.NodeIDLabel])
+	assert.Equal(t, "configs", obj.GetAnnotations()[metadata.NodeIDAnnotation])
 	assert.Equal(t, "4", obj.GetAnnotations()[metadata.ApplyOrderAnnotation])
 	assert.Equal(t, "1", obj.GetLabels()[metadata.CollectionIndexLabel])
 	assert.Equal(t, string(instance.GetUID()), obj.GetLabels()[metadata.InstanceIDLabel])
@@ -741,6 +745,104 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 	}))
 	stored := getStoredParentObject(t, raw)
 	assert.Equal(t, "demo", stored.GetLabels()[applyset.ApplySetParentIDLabel])
+}
+
+func TestApplyDecoratorEncodesLongNodeID(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph())
+
+	longID := "my" + strings.Repeat("Segment", 20)
+	obj := newConfigMapObject("demo", "default")
+	controller.applyDecoratorMetadata(rcx, obj, longID, 0, nil)
+
+	encoded := obj.GetLabels()[metadata.NodeIDLabel]
+	assert.NotEqual(t, longID, encoded, "long id should be encoded in the label")
+	assert.Empty(t, content.IsLabelValue(encoded))
+	assert.Equal(t, longID, obj.GetAnnotations()[metadata.NodeIDAnnotation],
+		"annotation should keep the readable id")
+}
+
+func TestCollectionSelectorParsesWithEncodedNodeID(t *testing.T) {
+	t.Parallel()
+
+	longID := "my" + strings.Repeat("Segment", 20)
+	raw := fmt.Sprintf("%s=%s,%s=%s",
+		metadata.InstanceIDLabel, "a1b2c3",
+		metadata.NodeIDLabel, metadata.EncodeLabelValue(longID),
+	)
+
+	parsed, err := labels.Parse(raw)
+	require.NoError(t, err)
+	assert.True(t, parsed.Matches(labels.Set{
+		metadata.InstanceIDLabel: "a1b2c3",
+		metadata.NodeIDLabel:     metadata.EncodeLabelValue(longID),
+	}))
+}
+
+func TestPruneOrphansMatchesEncodedNodeID(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+
+	longID := "my" + strings.Repeat("Segment", 20)
+	shortID := "shortNode"
+
+	longNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         longID,
+			Type:       graph.NodeTypeResource,
+			GVR:        controllerTestCMGVR,
+			Namespaced: true,
+		},
+		Template: newConfigMapObject("long", ""),
+	}
+	shortNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:           shortID,
+			Type:         graph.NodeTypeResource,
+			GVR:          controllerTestCMGVR,
+			Namespaced:   true,
+			Dependencies: []string{longID},
+		},
+		Template: newConfigMapObject("short", ""),
+	}
+
+	orphanLong := newApplysetManagedConfigMap(instance, "orphan-long", "default")
+	orphanLong.SetLabels(mergeLabels(orphanLong.GetLabels(), map[string]string{
+		metadata.NodeIDLabel: metadata.EncodeLabelValue(longID),
+	}))
+	orphanShort := newApplysetManagedConfigMap(instance, "orphan-short", "default")
+	orphanShort.SetLabels(mergeLabels(orphanShort.GetLabels(), map[string]string{
+		metadata.NodeIDLabel: metadata.EncodeLabelValue(shortID),
+	}))
+
+	controller, rcx, raw := newControllerAndContext(t, instance,
+		newTestGraph(longNode, shortNode),
+		orphanLong, orphanShort,
+	)
+
+	var deletionOrder []string
+	var deletionMu sync.Mutex
+	raw.PrependReactor("delete", "configmaps", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+		da := action.(k8stesting.DeleteAction)
+		deletionMu.Lock()
+		deletionOrder = append(deletionOrder, da.GetName())
+		deletionMu.Unlock()
+		return false, nil, nil
+	})
+
+	applier := controller.createApplySet(rcx)
+	pruned, retry, err := controller.pruneOrphans(rcx, applier, &applyset.ApplyResult{}, applyset.Metadata{
+		GroupKinds: sets.New[schema.GroupKind](controllerTestCMGVK.GroupKind()),
+	}, applyset.Metadata{})
+
+	require.NoError(t, err)
+	assert.True(t, pruned)
+	assert.False(t, retry)
+	require.Len(t, deletionOrder, 2)
+
+	assert.Less(t,
+		slices.Index(deletionOrder, "orphan-short"),
+		slices.Index(deletionOrder, "orphan-long"),
+		"dependent orphan should be deleted before the node it depends on")
 }
 
 func TestReconcileNodesBackfillsApplyOrderOnExistingResource(t *testing.T) {

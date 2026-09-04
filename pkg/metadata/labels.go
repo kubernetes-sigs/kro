@@ -210,9 +210,13 @@ func NewKROMetaLabeler() GenericLabeler {
 // - node-id: the resource ID from the RGD (e.g "workerPods")
 // - collection-index: the position in the collection (e.g "0", "1", "2")
 // - collection-size: the total number of items in the collection (e.g "3")
+//
+// Deprecated: collection labels are set inline by the instance controller in
+// `applyDecoratorMetadata`. This function has no uses but is left as is
+// because it's part of the public API of this package.
 func NewCollectionItemLabeler(nodeID string, index, size int) GenericLabeler {
 	return map[string]string{
-		NodeIDLabel:          nodeID,
+		NodeIDLabel:          EncodeLabelValue(nodeID),
 		CollectionIndexLabel: strconv.Itoa(index),
 		CollectionSizeLabel:  strconv.Itoa(size),
 	}

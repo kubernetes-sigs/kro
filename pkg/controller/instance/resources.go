@@ -17,6 +17,7 @@ package instance
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"sync"
@@ -245,11 +246,12 @@ func (c *Controller) pruneOrphans(
 		return false, false, nil
 	}
 
-	// Build node-id → topological position map from the runtime graph.
+	// Build node-id → topological position map from the runtime graph. Keys are
+	// encoded to match the label written by applyDecoratorMetadata.
 	nodes := rcx.Runtime.Nodes()
 	nodePosition := make(map[string]int, len(nodes))
 	for i, node := range nodes {
-		nodePosition[node.Spec.Meta.ID] = i
+		nodePosition[metadata.EncodeLabelValue(node.Spec.Meta.ID)] = i
 	}
 	// Unmapped orphans (unknown or missing node-id) are assigned a position
 	// beyond the last node so they are deleted in the first wave (highest
@@ -486,12 +488,12 @@ func (c *Controller) applyDecoratorMetadata(
 		rcx.Log.V(1).Info("label merge conflict, using instance labels only", "error", err)
 		toolLabels = instanceLabeler
 	}
-	for k, v := range toolLabels.Labels() {
-		labels[k] = v
-	}
+	maps.Copy(labels, toolLabels.Labels())
 
 	// Add searchable identity labels and persist deletion order as an annotation.
-	labels[metadata.NodeIDLabel] = nodeID
+	// Long node IDs are hashed to fit a label value. The annotation below keeps
+	// the readable form.
+	labels[metadata.NodeIDLabel] = metadata.EncodeLabelValue(nodeID)
 
 	// Add collection labels if applicable
 	if collectionInfo != nil {
@@ -506,6 +508,7 @@ func (c *Controller) applyDecoratorMetadata(
 		annotations = make(map[string]string)
 	}
 	annotations[metadata.ApplyOrderAnnotation] = strconv.Itoa(applyOrder)
+	annotations[metadata.NodeIDAnnotation] = nodeID // added for debuggability
 	obj.SetAnnotations(annotations)
 }
 

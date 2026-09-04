@@ -17,4 +17,10 @@ package metadata
 const (
 	// ApplyOrderAnnotation persists a managed resource's reverse topological deletion wave.
 	ApplyOrderAnnotation = InternalKROPrefix + "apply-order"
+
+	// NodeIDAnnotation records a managed resource's node ID in full. It shares
+	// its key with NodeIDLabel: the label carries the selectable form, which is
+	// hashed when the ID overflows a label value, while the annotation is always
+	// the value the RGD author wrote.
+	NodeIDAnnotation = KROPrefix + "node-id"
 )

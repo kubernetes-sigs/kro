@@ -1099,6 +1099,34 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 	}
 }
 
+// TestNode_CheckReadiness_MessageIdentifiesResource verifies that a
+// readyWhen-false error names the actual resource being waited on (group,
+// version, kind, namespace, name) instead of only the internal node ID, and
+// that it no longer carries the redundant "waiting for readiness" suffix
+// that ErrWaitingForReadiness's own Error() text used to append via %w.
+func TestNode_CheckReadiness_MessageIdentifiesResource(t *testing.T) {
+	schema := newTestNode("schema", graph.NodeTypeInstance).withObserved(map[string]any{}).build()
+	observed := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"namespace": "team-a",
+			"name":      "db-config",
+		},
+		"status": map[string]any{"ready": false},
+	}}
+	node := newTestNode("vpc", graph.NodeTypeResource).
+		withDep(schema).
+		withObservedUnstructured(observed).
+		withReadyWhen("vpc.status.ready == true").build()
+
+	err := node.CheckReadiness()
+	require.ErrorIs(t, err, ErrWaitingForReadiness)
+	assert.Contains(t, err.Error(), "ConfigMap")
+	assert.Contains(t, err.Error(), "team-a/db-config")
+	assert.NotContains(t, err.Error(), "waiting for readiness")
+}
+
 func TestNode_EvaluateExprs(t *testing.T) {
 	tests := []struct {
 		name           string

@@ -84,7 +84,7 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 				metadata.SetInstanceFinalizer(instance)
 			}
 			if tt.presetLabels {
-				metadata.NewKROMetaLabeler().ApplyLabels(instance)
+				metadata.NewKROMetaLabeler().Apply(instance)
 			}
 			if tt.presetInventory {
 				addDeletionScope(instance, controllerTestDeployGVK, "other")
@@ -102,7 +102,7 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 				require.NotNil(t, patched)
 			}
 			assert.True(t, metadata.HasInstanceFinalizer(patched))
-			for key, value := range metadata.NewKROMetaLabeler().Labels() {
+			for key, value := range metadata.NewKROMetaLabeler().GetLabels() {
 				assert.Equal(t, value, patched.GetLabels()[key])
 			}
 			if tt.wantInventory {
@@ -437,7 +437,7 @@ func TestReconcileGraphResolveFailureKeepsOnlyAuthorConditionsOnWire(t *testing.
 func TestReconcileManagedFastPathDoesNotLeakBuiltins(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	metadata.SetInstanceFinalizer(instance)
-	metadata.NewKROMetaLabeler().ApplyLabels(instance)
+	metadata.NewKROMetaLabeler().Apply(instance)
 	require.NoError(t, unstructured.SetNestedField(instance.Object, int64(1), "metadata", "generation"))
 	require.NoError(t, unstructured.SetNestedSlice(instance.Object, []interface{}{
 		map[string]interface{}{
@@ -488,7 +488,7 @@ func TestReconcileManagedFastPathDoesNotLeakBuiltins(t *testing.T) {
 func TestReconcileManagedFastPathSkipsNoopStatusWrite(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	metadata.SetInstanceFinalizer(instance)
-	metadata.NewKROMetaLabeler().ApplyLabels(instance)
+	metadata.NewKROMetaLabeler().Apply(instance)
 	require.NoError(t, unstructured.SetNestedField(instance.Object, int64(1), "metadata", "generation"))
 	require.NoError(t, unstructured.SetNestedField(instance.Object,
 		string(v1alpha1.InstanceStateActive), "status", "state"))
@@ -529,7 +529,7 @@ func TestReconcileManagedFastPathSkipsNoopStatusWrite(t *testing.T) {
 func TestReconcileSkipsNoopStatusWriteForWholeNumbers(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	metadata.SetInstanceFinalizer(instance)
-	metadata.NewKROMetaLabeler().ApplyLabels(instance)
+	metadata.NewKROMetaLabeler().Apply(instance)
 	require.NoError(t, unstructured.SetNestedField(instance.Object, int64(1), "metadata", "generation"))
 	require.NoError(t, unstructured.SetNestedField(instance.Object,
 		string(v1alpha1.InstanceStateActive), "status", "state"))

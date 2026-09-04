@@ -67,7 +67,7 @@ type ResourceGraphDefinitionReconciler struct {
 
 	clientSet             kroclient.SetInterface
 	crdManager            kroclient.CRDClient
-	metadataLabeler       metadata.Labeler
+	metadataLabeler       metadata.MetadataUpdater
 	rgBuilder             resourceGraphBuilder
 	dynamicController     *dynamiccontroller.DynamicController
 	revisionsRegistry     *revisions.Registry
@@ -224,7 +224,9 @@ func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, 
 		return nil
 	}
 
-	rgdName, ok := mobj.GetLabels()[metadata.ResourceGraphDefinitionNameLabel]
+	// Annotation-first: for RGD names longer than 63 characters only the
+	// annotation carries the (full) name; the label is omitted.
+	rgdName, ok := metadata.GetResourceGraphDefinitionName(mobj)
 	if !ok {
 		return nil
 	}

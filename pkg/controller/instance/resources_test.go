@@ -717,8 +717,8 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
 
-	conflictingLabeler := metadata.GenericLabeler{
-		metadata.InstanceIDLabel: "conflict",
+	conflictingLabeler := metadata.GenericMetadataUpdater{
+		Labels: map[string]string{metadata.InstanceIDLabel: "conflict"},
 	}
 	rcx.Labeler = conflictingLabeler
 

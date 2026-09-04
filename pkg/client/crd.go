@@ -138,7 +138,7 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 		}
 
 		if !nameMatch {
-			existingRGDName := existing.Labels[metadata.ResourceGraphDefinitionNameLabel]
+			existingRGDName, _ := metadata.GetResourceGraphDefinitionName(existing)
 			return fmt.Errorf(
 				"failed to update CRD %s: CRD is owned by another ResourceGraphDefinition %s",
 				desired.Name, existingRGDName,

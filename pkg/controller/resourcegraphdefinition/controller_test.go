@@ -17,6 +17,7 @@ package resourcegraphdefinition
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -562,7 +563,7 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 	assert.Equal(t, 5*time.Second, r.cfg.ProgressRequeueDelay)
 	assert.Equal(t, 7, r.cfg.MaxConcurrentReconciles)
 	assert.Equal(t, graph.RGDConfig{MaxCollectionSize: 32}, r.cfg.RGDConfig)
-	assert.Equal(t, metadata.NewKROMetaLabeler().Labels(), r.metadataLabeler.Labels())
+	assert.Equal(t, metadata.NewKROMetaLabeler().GetLabels(), r.metadataLabeler.GetLabels())
 }
 
 func TestNewResourceGraphDefinitionReconcilerPreservesZeroInstanceRequeueInterval(t *testing.T) {
@@ -619,6 +620,41 @@ func TestFindRGDsForCRD(t *testing.T) {
 					Labels: map[string]string{
 						metadata.ManagedByLabelKey:                metadata.ManagedByKROValue,
 						metadata.ResourceGraphDefinitionNameLabel: "demo-rgd",
+					},
+				},
+			},
+			want: []reconcile.Request{{
+				NamespacedName: types.NamespacedName{Name: "demo-rgd"},
+			}},
+		},
+		{
+			name: "maps owned CRDs via annotation when rgd name exceeds label limit",
+			obj: &extv1.CustomResourceDefinition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "owned",
+					Labels: map[string]string{
+						metadata.ManagedByLabelKey: metadata.ManagedByKROValue,
+					},
+					Annotations: map[string]string{
+						metadata.ResourceGraphDefinitionNameAnnotation: strings.Repeat("a", 100),
+					},
+				},
+			},
+			want: []reconcile.Request{{
+				NamespacedName: types.NamespacedName{Name: strings.Repeat("a", 100)},
+			}},
+		},
+		{
+			name: "prefers annotation over label",
+			obj: &extv1.CustomResourceDefinition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "owned",
+					Labels: map[string]string{
+						metadata.ManagedByLabelKey:                metadata.ManagedByKROValue,
+						metadata.ResourceGraphDefinitionNameLabel: "stale-rgd",
+					},
+					Annotations: map[string]string{
+						metadata.ResourceGraphDefinitionNameAnnotation: "demo-rgd",
 					},
 				},
 			},

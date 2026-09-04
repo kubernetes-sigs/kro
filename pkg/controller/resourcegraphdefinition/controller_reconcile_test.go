@@ -320,7 +320,7 @@ func TestCreateGraphRevision_HashLabelMergeError(t *testing.T) {
 
 	registry := revisions.NewRegistry()
 	reconciler := &ResourceGraphDefinitionReconciler{
-		metadataLabeler:   metadata.GenericLabeler{metadata.GraphRevisionHashLabel: "existing-hash"},
+		metadataLabeler:   metadata.GenericMetadataUpdater{Labels: map[string]string{metadata.GraphRevisionHashLabel: "existing-hash"}},
 		revisionsRegistry: registry,
 	}
 
@@ -434,8 +434,8 @@ func TestEnsureServingState_LabelerSetupFailure(t *testing.T) {
 
 	rgd := newTestRGD("rgd-serving-labeler-fail")
 	reconciler := &ResourceGraphDefinitionReconciler{
-		metadataLabeler: metadata.GenericLabeler{
-			metadata.ResourceGraphDefinitionNameLabel: "conflict",
+		metadataLabeler: metadata.GenericMetadataUpdater{
+			Labels: map[string]string{metadata.ResourceGraphDefinitionNameLabel: "conflict"},
 		},
 	}
 	mark := NewConditionsMarkerFor(rgd)
@@ -784,8 +784,8 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 				return &ResourceGraphDefinitionReconciler{
 					Client:    cl,
 					apiReader: cl,
-					metadataLabeler: metadata.GenericLabeler{
-						metadata.ResourceGraphDefinitionNameLabel: "conflict",
+					metadataLabeler: metadata.GenericMetadataUpdater{
+						Labels: map[string]string{metadata.ResourceGraphDefinitionNameLabel: "conflict"},
 					},
 					rgBuilder:         newTestBuilder(),
 					revisionsRegistry: revisions.NewRegistry(),
@@ -2466,7 +2466,7 @@ func newListedGraphRevision(rgd *v1alpha1.ResourceGraphDefinition, revision int6
 			Name: graphRevisionName(rgd.Name, revision),
 			Labels: map[string]string{
 				metadata.ResourceGraphDefinitionNameLabel: rgd.Name,
-				metadata.GraphRevisionHashLabel:           metadata.NewGraphRevisionHashLabeler(specHash)[metadata.GraphRevisionHashLabel],
+				metadata.GraphRevisionHashLabel:           metadata.NewGraphRevisionHashLabeler(specHash).GetLabels()[metadata.GraphRevisionHashLabel],
 			},
 		},
 		Spec: internalv1alpha1.GraphRevisionSpec{

@@ -486,7 +486,7 @@ func (c *Controller) applyDecoratorMetadata(
 		rcx.Log.V(1).Info("label merge conflict, using instance labels only", "error", err)
 		toolLabels = instanceLabeler
 	}
-	for k, v := range toolLabels.Labels() {
+	for k, v := range toolLabels.GetLabels() {
 		labels[k] = v
 	}
 

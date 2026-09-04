@@ -24,7 +24,9 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -142,6 +144,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 			return ctrl.Result{}, nil, nil, err
 		}
 		mark.ResourceGraphValid()
+		r.warnOnEncodedResourceIDs(rgd)
 
 		revision := max(rgd.Status.LastIssuedRevision, latestRevisionView.RevisionNumber) + 1
 		createdGR, createErr := r.createGraphRevision(ctx, rgd, revision, currentSpecHash)
@@ -308,6 +311,24 @@ func (r *ResourceGraphDefinitionReconciler) buildResourceGraphDefinition(_ conte
 	}
 
 	return processedRGD, resourcesInfoFromGraph(processedRGD), nil
+}
+
+// warnOnEncodedResourceIDs emits an event for each resource ID too long to be
+// stored verbatim in the kro.run/node-id label.
+func (r *ResourceGraphDefinitionReconciler) warnOnEncodedResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) {
+	if r.recorder == nil {
+		return
+	}
+	for _, res := range rgd.Spec.Resources {
+		if !metadata.LabelValueOverflows(res.ID) {
+			continue
+		}
+		r.recorder.Eventf(rgd, corev1.EventTypeWarning, "NodeIDEncoded",
+			"resource id %q exceeds the %d character label value limit; %s is set to %q, "+
+				"; the full id is stored in the %s annotation on each managed resource",
+			res.ID, content.LabelValueMaxLength, metadata.NodeIDLabel,
+			metadata.EncodeLabelValue(res.ID), metadata.NodeIDAnnotation)
+	}
 }
 
 // buildResourceInfo creates a ResourceInformation struct from name and dependencies

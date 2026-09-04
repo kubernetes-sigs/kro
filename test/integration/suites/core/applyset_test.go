@@ -65,35 +65,35 @@ var _ = Describe("ApplySet", func() {
 			rgd := generator.NewResourceGraphDefinition("test-applyset-multi-gvk",
 				generator.WithSchema(
 					"ApplySetMultiGVK", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("configMap", map[string]interface{}{
+				generator.WithResource("configMap", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-cm",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"key": "value",
 					},
 				}, nil, nil),
-				generator.WithResource("secret", map[string]interface{}{
+				generator.WithResource("secret", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Secret",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-secret",
 					},
-					"stringData": map[string]interface{}{
+					"stringData": map[string]any{
 						"password": "secret123",
 					},
 				}, nil, nil),
-				generator.WithResource("serviceAccount", map[string]interface{}{
+				generator.WithResource("serviceAccount", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ServiceAccount",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-sa",
 					},
 				}, nil, nil),
@@ -105,22 +105,18 @@ var _ = Describe("ApplySet", func() {
 			})
 
 			By("waiting for RGD to become active")
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
 
 			By("creating instance")
 			instance := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "ApplySetMultiGVK",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-multi",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name": "multi",
 					},
 				},
@@ -219,29 +215,29 @@ var _ = Describe("ApplySet", func() {
 			rgd := generator.NewResourceGraphDefinition("test-applyset-prune",
 				generator.WithSchema(
 					"ApplySetPrune", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":          "string",
 						"includeSecret": "boolean",
 					},
 					nil,
 				),
-				generator.WithResource("configMap", map[string]interface{}{
+				generator.WithResource("configMap", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-cm",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"key": "always-present",
 					},
 				}, nil, nil),
-				generator.WithResource("secret", map[string]interface{}{
+				generator.WithResource("secret", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Secret",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-secret",
 					},
-					"stringData": map[string]interface{}{
+					"stringData": map[string]any{
 						"password": "conditional",
 					},
 				}, nil, []string{"${schema.spec.includeSecret}"}),
@@ -253,22 +249,18 @@ var _ = Describe("ApplySet", func() {
 			})
 
 			By("waiting for RGD to become active")
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
 
 			By("creating instance with includeSecret=true")
 			instance := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "ApplySetPrune",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-prune",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":          "prune",
 						"includeSecret": true,
 					},
@@ -406,29 +398,29 @@ var _ = Describe("ApplySet", func() {
 			rgd := generator.NewResourceGraphDefinition("test-applyset-upstream-includewhen",
 				generator.WithSchema(
 					"ApplySetUpstreamIncludeWhen", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":            "string",
 						"enableDependent": "boolean",
 					},
 					nil,
 				),
-				generator.WithResource("source", map[string]interface{}{
+				generator.WithResource("source", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-source",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"enabled": "${schema.spec.enableDependent ? 'true' : 'false'}",
 					},
 				}, nil, nil),
-				generator.WithResource("dependent", map[string]interface{}{
+				generator.WithResource("dependent", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-dependent",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"key": "created-from-upstream-condition",
 					},
 				}, nil, []string{"${source.data.enabled == 'true'}"}),
@@ -439,21 +431,17 @@ var _ = Describe("ApplySet", func() {
 				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 			})
 
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
 
 			instance := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "ApplySetUpstreamIncludeWhen",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-upstream-condition",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":            "upstream",
 						"enableDependent": true,
 					},
@@ -522,39 +510,39 @@ var _ = Describe("ApplySet", func() {
 			rgd := generator.NewResourceGraphDefinition("test-applyset-upstream-contagious-prune",
 				generator.WithSchema(
 					"ApplySetUpstreamContagiousPrune", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":         "string",
 						"enableMiddle": "boolean",
 					},
 					nil,
 				),
-				generator.WithResource("source", map[string]interface{}{
+				generator.WithResource("source", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-source",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"enabled": "${schema.spec.enableMiddle ? 'true' : 'false'}",
 					},
 				}, nil, nil),
-				generator.WithResource("middle", map[string]interface{}{
+				generator.WithResource("middle", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-middle",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"value": "middle",
 					},
 				}, nil, []string{"${source.data.enabled == 'true'}"}),
-				generator.WithResource("child", map[string]interface{}{
+				generator.WithResource("child", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${middle.metadata.name}-child",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"fromMiddle": "${middle.data.value}",
 					},
 				}, nil, nil),
@@ -565,21 +553,17 @@ var _ = Describe("ApplySet", func() {
 				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 			})
 
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
 
 			instance := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "ApplySetUpstreamContagiousPrune",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-upstream-contagious-prune",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":         "upstream-contagious",
 						"enableMiddle": true,
 					},
@@ -650,33 +634,33 @@ var _ = Describe("ApplySet", func() {
 			rgd := generator.NewResourceGraphDefinition("test-applyset-status-includewhen",
 				generator.WithSchema(
 					"ApplySetStatusIncludeWhen", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("source", map[string]interface{}{
+				generator.WithResource("source", map[string]any{
 					"apiVersion": "apps/v1",
 					"kind":       "Deployment",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-source",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"replicas": 1,
-						"selector": map[string]interface{}{
-							"matchLabels": map[string]interface{}{
+						"selector": map[string]any{
+							"matchLabels": map[string]any{
 								"app": "${schema.spec.name}",
 							},
 						},
-						"template": map[string]interface{}{
-							"metadata": map[string]interface{}{
-								"labels": map[string]interface{}{
+						"template": map[string]any{
+							"metadata": map[string]any{
+								"labels": map[string]any{
 									"app": "${schema.spec.name}",
 								},
 							},
-							"spec": map[string]interface{}{
-								"containers": []interface{}{
-									map[string]interface{}{
+							"spec": map[string]any{
+								"containers": []any{
+									map[string]any{
 										"name":  "nginx",
 										"image": "nginx",
 									},
@@ -685,13 +669,13 @@ var _ = Describe("ApplySet", func() {
 						},
 					},
 				}, nil, nil),
-				generator.WithResource("dependent", map[string]interface{}{
+				generator.WithResource("dependent", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-dependent",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"key": "status-backed",
 					},
 				}, nil, []string{"${source.status.conditions[0].status == 'True'}"}),
@@ -702,21 +686,17 @@ var _ = Describe("ApplySet", func() {
 				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 			})
 
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
 
 			instance := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "ApplySetStatusIncludeWhen",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-status-condition",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name": "status-condition",
 					},
 				},
@@ -799,7 +779,7 @@ var _ = Describe("ApplySet", func() {
 			rgd := generator.NewResourceGraphDefinition("test-annotation-tracking",
 				generator.WithSchema(
 					"AnnotationTracking", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":          "string",
 						"includeSecret": "boolean",
 						"includeSA":     "boolean",
@@ -807,32 +787,32 @@ var _ = Describe("ApplySet", func() {
 					nil,
 				),
 				// ConfigMap is always present
-				generator.WithResource("configMap", map[string]interface{}{
+				generator.WithResource("configMap", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-cm",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"key": "always-present",
 					},
 				}, nil, nil),
 				// Secret is conditional
-				generator.WithResource("secret", map[string]interface{}{
+				generator.WithResource("secret", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Secret",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-secret",
 					},
-					"stringData": map[string]interface{}{
+					"stringData": map[string]any{
 						"password": "conditional",
 					},
 				}, nil, []string{"${schema.spec.includeSecret}"}),
 				// ServiceAccount is conditional
-				generator.WithResource("serviceAccount", map[string]interface{}{
+				generator.WithResource("serviceAccount", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ServiceAccount",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-sa",
 					},
 				}, nil, []string{"${schema.spec.includeSA}"}),
@@ -844,22 +824,18 @@ var _ = Describe("ApplySet", func() {
 			})
 
 			By("waiting for RGD to become active")
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
 
 			By("PHASE 1: creating instance with only ConfigMap (no Secret, no SA)")
 			instance := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "AnnotationTracking",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-tracking",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":          "track",
 						"includeSecret": false,
 						"includeSA":     false,
@@ -1060,19 +1036,19 @@ var _ = Describe("ApplySet", func() {
 			rgd := generator.NewResourceGraphDefinition("test-applyset-collection",
 				generator.WithSchema(
 					"ApplySetCollection", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":   "string",
 						"values": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("configmaps", map[string]interface{}{
+				generator.WithResourceCollection("configmaps", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-${element}",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"value": "${element}",
 					},
 				},
@@ -1088,24 +1064,20 @@ var _ = Describe("ApplySet", func() {
 			})
 
 			By("waiting for RGD to become active")
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
 
 			By("creating instance with 3 values")
 			instance := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "ApplySetCollection",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-collection",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":   "coll",
-						"values": []interface{}{"alpha", "beta", "gamma"},
+						"values": []any{"alpha", "beta", "gamma"},
 					},
 				},
 			}
@@ -1191,19 +1163,19 @@ var _ = Describe("ApplySet", func() {
 			rgd := generator.NewResourceGraphDefinition("test-applyset-coll-prune",
 				generator.WithSchema(
 					"ApplySetCollPrune", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":   "string",
 						"values": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("secrets", map[string]interface{}{
+				generator.WithResourceCollection("secrets", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Secret",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-${element}",
 					},
-					"stringData": map[string]interface{}{
+					"stringData": map[string]any{
 						"value": "${element}",
 					},
 				},
@@ -1219,24 +1191,20 @@ var _ = Describe("ApplySet", func() {
 			})
 
 			By("waiting for RGD to become active")
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
 
 			By("creating instance with 3 values")
 			instance := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "ApplySetCollPrune",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-coll-prune",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":   "shrink",
-						"values": []interface{}{"one", "two", "three"},
+						"values": []any{"one", "two", "three"},
 					},
 				},
 			}
@@ -1312,18 +1280,18 @@ var _ = Describe("ApplySet", func() {
 			rgd1 := generator.NewResourceGraphDefinition("test-isolation-rgd1",
 				generator.WithSchema(
 					"IsolationRGD1", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("configMap", map[string]interface{}{
+				generator.WithResource("configMap", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-rgd1-cm",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"source": "rgd1",
 					},
 				}, nil, nil),
@@ -1338,18 +1306,18 @@ var _ = Describe("ApplySet", func() {
 			rgd2 := generator.NewResourceGraphDefinition("test-isolation-rgd2",
 				generator.WithSchema(
 					"IsolationRGD2", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("configMap", map[string]interface{}{
+				generator.WithResource("configMap", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-rgd2-cm",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"source": "rgd2",
 					},
 				}, nil, nil),
@@ -1362,23 +1330,19 @@ var _ = Describe("ApplySet", func() {
 
 			By("waiting for both RGDs to become active")
 			for _, rgd := range []*krov1alpha1.ResourceGraphDefinition{rgd1, rgd2} {
-				Eventually(func(g Gomega, ctx SpecContext) {
-					err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-					g.Expect(err).ToNot(HaveOccurred())
-					g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-				}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+				waitForRGDActive(ctx, rgd.Name)
 			}
 
 			By("creating instance from RGD1")
 			instance1 := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "IsolationRGD1",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-iso1",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name": "shared",
 					},
 				},
@@ -1392,14 +1356,14 @@ var _ = Describe("ApplySet", func() {
 			// Using the same instance name ("test-iso1") to verify that different Kinds
 			// produce different ApplySet IDs even with identical names (GKNN includes Kind)
 			instance2 := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "IsolationRGD2",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-iso1",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name": "shared",
 					},
 				},
@@ -1496,18 +1460,18 @@ var _ = Describe("ApplySet", func() {
 			rgd := generator.NewResourceGraphDefinition("test-isolation-instances",
 				generator.WithSchema(
 					"IsolationInstances", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("configMap", map[string]interface{}{
+				generator.WithResource("configMap", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-cm",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"instance": "${schema.spec.name}",
 					},
 				}, nil, nil),
@@ -1519,22 +1483,18 @@ var _ = Describe("ApplySet", func() {
 			})
 
 			By("waiting for RGD to become active")
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
 
 			By("creating first instance")
 			instance1 := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "IsolationInstances",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "instance-a",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name": "instance-a",
 					},
 				},
@@ -1546,14 +1506,14 @@ var _ = Describe("ApplySet", func() {
 
 			By("creating second instance")
 			instance2 := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "IsolationInstances",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "instance-b",
 						"namespace": namespace,
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name": "instance-b",
 					},
 				},
@@ -1688,18 +1648,18 @@ var _ = Describe("ApplySet", func() {
 			rgd := generator.NewResourceGraphDefinition("test-label-preserve",
 				generator.WithSchema(
 					"LabelPreserve", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("configMap", map[string]interface{}{
+				generator.WithResource("configMap", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-cm",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"key": "value",
 					},
 				}, nil, nil),
@@ -1711,30 +1671,26 @@ var _ = Describe("ApplySet", func() {
 			})
 
 			By("waiting for RGD to become active")
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			waitForRGDActive(ctx, rgd.Name)
 
 			By("creating instance with custom labels and annotations")
 			instance := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": "kro.run/v1alpha1",
 					"kind":       "LabelPreserve",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "test-preserve",
 						"namespace": namespace,
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"custom-label":           "custom-value",
 							"app.kubernetes.io/team": "platform",
 						},
-						"annotations": map[string]interface{}{
+						"annotations": map[string]any{
 							"custom-annotation": "custom-annotation-value",
 							"description":       "This is a test instance",
 						},
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name": "preserve",
 					},
 				},

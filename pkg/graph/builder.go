@@ -16,6 +16,7 @@ package graph
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -38,9 +39,9 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	"github.com/kubernetes-sigs/kro/pkg/cel/conversion"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
+	"github.com/kubernetes-sigs/kro/pkg/dag"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/crd"
-	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
@@ -105,6 +106,7 @@ type Builder struct {
 	// schemaResolver is used to resolve the OpenAPI schema for the resources.
 	schemaResolver resolver.SchemaResolver
 	restMapper     meta.RESTMapper
+	costLimit      uint64
 }
 
 // BuilderOption is an option for configuring a Builder.
@@ -120,16 +122,17 @@ func WithRESTMapper(rm meta.RESTMapper) BuilderOption {
 	return func(b *Builder) { b.restMapper = rm }
 }
 
+// WithCostLimit allows configuring a custom CEL evaluation cost limit for a Builder.
+// Setting costLimit to 0 disables cost limiting (default).
+func WithCostLimit(limit uint64) BuilderOption {
+	return func(b *Builder) { b.costLimit = limit }
+}
+
 // Config holds runtime configuration parameters shared by every graph consumer.
 type Config struct {
 	MaxCollectionSize          int
 	MaxCollectionDimensionSize int
 }
-
-// RGDConfig is a compatibility alias for Config.
-//
-// Deprecated: use Config.
-type RGDConfig = Config
 
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
 // CRD. The ResourceGraphDefinition object is a fully processed and validated representation
@@ -145,31 +148,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
 	}
 
-	crdScope := extv1.NamespaceScoped
-	if rgd.Spec.Schema.Scope == v1alpha1.ResourceScopeCluster {
-		crdScope = extv1.ClusterScoped
-	}
-
-	// SimpleSchema -> instance spec schema, then synthesize the CRD (status filled
-	// in later once inferred). Both depend only on the schema block, not resources,
-	// so they are computed up front and fed to CompileSource via the Source.
-	instanceSpecSchema, err := buildInstanceSpecSchema(rgd.Spec.Schema)
+	// SimpleSchema -> instance spec schema -> synthesized CRD + status-stripped
+	// CEL schema + scope. Depends only on the schema block, not resources, so it
+	// is computed up front and fed to compileSource via the source.
+	instanceCRD, schemaWithoutStatus, crdScope, err := synthesizeInstanceCRD(rgd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition %q: %w", rgd.Name, err)
-	}
-	instanceCRD := crd.SynthesizeCRD(
-		rgd.Spec.Schema.Group,
-		rgd.Spec.Schema.APIVersion,
-		rgd.Spec.Schema.Kind,
-		*instanceSpecSchema,
-		extv1.JSONSchemaProps{}, // empty status placeholder
-		false,                   // don't add default fields yet
-		crdScope,
-		rgd.Spec.Schema,
-	)
-	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get schema without status: %w", err)
 	}
 
 	resourceSpecs := make([]ResourceSpec, 0, len(rgd.Spec.Resources))
@@ -181,7 +165,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		resourceSpecs = append(resourceSpecs, rs)
 	}
 
-	g, statusSchema, err := b.CompileSource(rgdSource{
+	g, statusSchema, err := b.compileSource(rgdSource{
 		resources:       resourceSpecs,
 		instanceGVR:     metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind),
 		namespaced:      crdScope == extv1.NamespaceScoped,
@@ -197,7 +181,55 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	return g, nil
 }
 
-// rgdSource adapts a ResourceGraphDefinition's precomputed pieces to Source.
+// InstanceSchemaForCEL returns the OpenAPI schema bound to the `schema` CEL
+// variable when compiling expressions for the given RGD: the instance spec
+// converted from the RGD's SimpleSchema plus apiVersion/kind/metadata, with
+// status stripped (status references are not allowed in RGD resource
+// expressions).
+//
+// Exported so graph consumers can bind this as the type of the `schema` CEL
+// variable, giving compile-time typing from the declared SimpleSchema rather
+// than from a runtime instance value.
+func InstanceSchemaForCEL(rgd *v1alpha1.ResourceGraphDefinition) (*spec.Schema, error) {
+	_, schemaWithoutStatus, _, err := synthesizeInstanceCRD(rgd)
+	return schemaWithoutStatus, err
+}
+
+// synthesizeInstanceCRD converts the RGD's SimpleSchema into the instance CRD
+// (status placeholder empty, filled in later once inferred) and the
+// status-stripped OpenAPI schema bound to the `schema` CEL variable, plus the
+// CRD scope. Shared by NewResourceGraphDefinition and InstanceSchemaForCEL so
+// the compile-time typing and the synthesized CRD stay in lock-step.
+func synthesizeInstanceCRD(rgd *v1alpha1.ResourceGraphDefinition) (*extv1.CustomResourceDefinition, *spec.Schema, extv1.ResourceScope, error) {
+	if rgd.Spec.Schema == nil {
+		return nil, nil, "", fmt.Errorf("resourcegraphdefinition %q: schema is required", rgd.Name)
+	}
+	instanceSpecSchema, err := buildInstanceSpecSchema(rgd.Spec.Schema)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	crdScope := extv1.NamespaceScoped
+	if rgd.Spec.Schema.Scope == v1alpha1.ResourceScopeCluster {
+		crdScope = extv1.ClusterScoped
+	}
+	instanceCRD := crd.SynthesizeCRD(
+		rgd.Spec.Schema.Group,
+		rgd.Spec.Schema.APIVersion,
+		rgd.Spec.Schema.Kind,
+		*instanceSpecSchema,
+		extv1.JSONSchemaProps{}, // empty status placeholder
+		false,                   // don't add default fields yet
+		crdScope,
+		rgd.Spec.Schema,
+	)
+	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return instanceCRD, schemaWithoutStatus, crdScope, nil
+}
+
+// rgdSource adapts a ResourceGraphDefinition's precomputed pieces to source.
 type rgdSource struct {
 	resources       []ResourceSpec
 	instanceGVR     k8sschema.GroupVersionResource
@@ -212,12 +244,12 @@ func (s rgdSource) InstanceNamespaced() bool                    { return s.names
 func (s rgdSource) SchemaVarSchema() *spec.Schema               { return s.schemaVarSchema }
 func (s rgdSource) StatusRaw() []byte                           { return s.statusRaw }
 
-// CompileSource compiles a Source into a Graph: it builds resource nodes, derives
+// compileSource compiles a source into a Graph: it builds resource nodes, derives
 // the dependency DAG, type-checks every CEL expression against target schemas,
 // infers the instance status schema, and assembles the instance node. It does not
 // synthesize a CRD; callers that need one attach it to the returned Graph using
 // the returned status schema. This is the shared entry point for any graph consumer.
-func (b *Builder) CompileSource(src Source) (*Graph, *extv1.JSONSchemaProps, error) {
+func (b *Builder) compileSource(src source) (*Graph, *extv1.JSONSchemaProps, error) {
 	// Per-build schema cache: pointer-stable field lookups, discarded after build.
 	schemaCache := schema.NewCache()
 	p := parser.New(schemaCache)
@@ -285,6 +317,7 @@ func (b *Builder) CompileSource(src Source) (*Graph, *extv1.JSONSchemaProps, err
 		declTypes:    make(map[*spec.Schema]*apiservercel.DeclType),
 		checkedASTs:  make(map[checkedASTKey]*cel.Ast),
 		extendedEnvs: make(map[extendedEnvKey]*cel.Env),
+		costLimit:    b.costLimit,
 	}
 
 	for id, node := range nodes {
@@ -293,7 +326,7 @@ func (b *Builder) CompileSource(src Source) (*Graph, *extv1.JSONSchemaProps, err
 		}
 	}
 
-	unstructuredStatus := map[string]interface{}{}
+	unstructuredStatus := map[string]any{}
 	if err := yaml.UnmarshalStrict(src.StatusRaw(), &unstructuredStatus); err != nil {
 		return nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
 	}
@@ -326,9 +359,7 @@ func (b *Builder) CompileSource(src Source) (*Graph, *extv1.JSONSchemaProps, err
 	}
 
 	resourceSchemas := make(map[string]*spec.Schema, len(schemas)+1)
-	for id, sch := range schemas {
-		resourceSchemas[id] = sch
-	}
+	maps.Copy(resourceSchemas, schemas)
 	resourceSchemas[InstanceNodeID] = src.SchemaVarSchema()
 
 	g := &Graph{
@@ -347,7 +378,7 @@ func (b *Builder) CompileSource(src Source) (*Graph, *extv1.JSONSchemaProps, err
 // The selector (if any) is embedded directly in the template so that ParseSchemalessResource
 // can extract CEL expressions from the entire resource in a single pass.
 func (b *Builder) buildExternalRefResource(
-	externalRef *v1alpha1.ExternalRef) (map[string]interface{}, error) {
+	externalRef *v1alpha1.ExternalRef) (map[string]any, error) {
 	result, err := runtime.DefaultUnstructuredConverter.ToUnstructured(externalRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert ExternalRef to unstructured: %w", err)
@@ -368,7 +399,7 @@ func (b *Builder) rgResourceSpec(rgResource *v1alpha1.Resource, order int) (Reso
 		}
 	}
 
-	resourceObject := map[string]interface{}{}
+	resourceObject := map[string]any{}
 	if len(rgResource.Template.Raw) > 0 {
 		if err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject); err != nil {
 			return ResourceSpec{}, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
@@ -692,7 +723,7 @@ func buildInstanceNode(
 	gvr k8sschema.GroupVersionResource,
 	namespaced bool,
 	statusVariables []variable.FieldDescriptor,
-	statusTemplate map[string]interface{},
+	statusTemplate map[string]any,
 	conditions []*krocel.Expression,
 	inspector *ast.Inspector,
 ) (*Node, error) {
@@ -753,7 +784,7 @@ func buildInstanceNode(
 			Dependencies: instanceDeps,
 		},
 		Template: &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"status": statusTemplate,
 			},
 		},
@@ -764,13 +795,22 @@ func buildInstanceNode(
 	return instance, nil
 }
 
+// BuildInstanceSpecSchema converts an RGD Schema's SimpleSchema spec (and
+// optional custom types) into the OpenAPI JSONSchemaProps used to synthesize
+// the instance CRD. Exported so graph consumers can reuse the same
+// SimpleSchema → OpenAPI conversion without depending on unexported builder
+// internals.
+func BuildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps, error) {
+	return buildInstanceSpecSchema(rgSchema)
+}
+
 // buildInstanceSpecSchema builds the instance spec schema that will be
 // used to generate the CRD for the instance resource. The instance spec
 // schema is expected to be defined using the "SimpleSchema" format.
 func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps, error) {
 	// We need to unmarshal the instance schema to a map[string]interface{} to
 	// make it easier to work with.
-	instanceSpec := map[string]interface{}{}
+	instanceSpec := map[string]any{}
 	err := yaml.UnmarshalStrict(rgSchema.Spec.Raw, &instanceSpec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal spec schema: %w", err)
@@ -778,7 +818,7 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 
 	// Also the custom types must be unmarshalled to a map[string]interface{} to
 	// make handling easier.
-	customTypes := map[string]interface{}{}
+	customTypes := map[string]any{}
 	err = yaml.UnmarshalStrict(rgSchema.Types.Raw, &customTypes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal predefined types: %w", err)
@@ -807,12 +847,12 @@ func buildStatusSchema(
 ) (
 	*extv1.JSONSchemaProps,
 	[]variable.FieldDescriptor,
-	map[string]interface{},
+	map[string]any,
 	[]string,
 	error,
 ) {
 	// The instance resource has a schema defined using the "SimpleSchema" format.
-	unstructuredStatus := map[string]interface{}{}
+	unstructuredStatus := map[string]any{}
 	err := yaml.UnmarshalStrict(rgSchema.Status.Raw, &unstructuredStatus)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
@@ -826,13 +866,13 @@ func buildStatusSchema(
 // Returns: (schema, fieldDescriptors, statusTemplate, conditionExprs, error).
 func inferStatusSchema(
 	bc *buildContext,
-	unstructuredStatus map[string]interface{},
+	unstructuredStatus map[string]any,
 	nodeNames []string,
 	inspector *ast.Inspector,
 ) (
 	*extv1.JSONSchemaProps,
 	[]variable.FieldDescriptor,
-	map[string]interface{},
+	map[string]any,
 	[]string,
 	error,
 ) {
@@ -903,7 +943,7 @@ func inferStatusSchema(
 // strings (each wrapped in `${...}`). Anything else is rejected.
 //
 // If the key is absent, returns (nil, nil).
-func extractConditionExpressions(unstructuredStatus map[string]interface{}) ([]string, error) {
+func extractConditionExpressions(unstructuredStatus map[string]any) ([]string, error) {
 	const conditionsKey = "conditions"
 
 	raw, ok := unstructuredStatus[conditionsKey]
@@ -912,7 +952,7 @@ func extractConditionExpressions(unstructuredStatus map[string]interface{}) ([]s
 	}
 	delete(unstructuredStatus, conditionsKey)
 
-	rawList, ok := raw.([]interface{})
+	rawList, ok := raw.([]any)
 	if !ok {
 		return nil, fmt.Errorf("status.conditions must be a list, got %T", raw)
 	}
@@ -1120,6 +1160,14 @@ func extractConditionDependencies(
 	var allDeps []string
 
 	for _, expression := range expressions {
+		inspectionResult, err := inspector.Inspect(expression.Original)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect expression: %w", err)
+		}
+		if inspectionResult.UsesOmit() {
+			return nil, fmt.Errorf("omit() can only be used in resource template expressions")
+		}
+
 		nodeDeps, _, err := extractDependencies(inspector, expression, nil)
 		if err != nil {
 			return nil, err

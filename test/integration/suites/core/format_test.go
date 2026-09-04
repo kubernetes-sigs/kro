@@ -48,23 +48,23 @@ var _ = Describe("Format function in ResourceGraphDefinition templates", func() 
 			generator.WithSchema(
 				"TestFormat",
 				"v1alpha1",
-				map[string]interface{}{},
-				map[string]interface{}{},
+				map[string]any{},
+				map[string]any{},
 			),
-			generator.WithResource("serviceAccount", map[string]interface{}{
+			generator.WithResource("serviceAccount", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ServiceAccount",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.metadata.name}",
 				},
 			}, nil, nil),
-			generator.WithResource("configMap", map[string]interface{}{
+			generator.WithResource("configMap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.metadata.name}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": `${"%s:%s".format([schema.metadata.namespace, serviceAccount.metadata.name])}`,
 				},
 			}, nil, nil),
@@ -88,10 +88,10 @@ var _ = Describe("Format function in ResourceGraphDefinition templates", func() 
 		By("creating instance")
 
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "kro.run/v1alpha1",
 				"kind":       "TestFormat",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "test-format",
 					"namespace": namespace,
 				},

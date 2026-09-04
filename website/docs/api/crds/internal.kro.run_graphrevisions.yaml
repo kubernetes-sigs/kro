@@ -443,6 +443,9 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               resources:
                 description: Resources provides detailed information about each resource
                   in the graph.

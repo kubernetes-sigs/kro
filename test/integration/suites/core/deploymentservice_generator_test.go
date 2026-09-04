@@ -33,12 +33,12 @@ func deploymentService(
 	resourcegraphdefinition := generator.NewResourceGraphDefinition(name,
 		generator.WithSchema(
 			"DeploymentService", "v1alpha1",
-			map[string]interface{}{
+			map[string]any{
 				"name":     "string",
 				"port":     "integer | default=80",
 				"replicas": "integer | default=1",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"deploymentConditions": "${deployment.status.conditions}",
 				"availableReplicas":    "${deployment.status.availableReplicas}",
 
@@ -54,14 +54,14 @@ func deploymentService(
 	)
 	instanceGenerator := func(namespace, name string, port int) *unstructured.Unstructured {
 		return &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "DeploymentService",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": name,
 					"port": port,
 				},
@@ -71,33 +71,33 @@ func deploymentService(
 	return resourcegraphdefinition, instanceGenerator
 }
 
-func deploymentDef() map[string]interface{} {
-	return map[string]interface{}{
+func deploymentDef() map[string]any {
+	return map[string]any{
 		"apiVersion": "apps/v1",
 		"kind":       "Deployment",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "${schema.spec.name}",
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"replicas": "${schema.spec.replicas}",
-			"selector": map[string]interface{}{
-				"matchLabels": map[string]interface{}{
+			"selector": map[string]any{
+				"matchLabels": map[string]any{
 					"app": "deployment",
 				},
 			},
-			"template": map[string]interface{}{
-				"metadata": map[string]interface{}{
-					"labels": map[string]interface{}{
+			"template": map[string]any{
+				"metadata": map[string]any{
+					"labels": map[string]any{
 						"app": "deployment",
 					},
 				},
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
 							"name":  "${schema.spec.name}-deployment",
 							"image": "nginx",
-							"ports": []interface{}{
-								map[string]interface{}{
+							"ports": []any{
+								map[string]any{
 									"containerPort": "${schema.spec.port}",
 								},
 							},
@@ -109,19 +109,19 @@ func deploymentDef() map[string]interface{} {
 	}
 }
 
-func serviceDef() map[string]interface{} {
-	return map[string]interface{}{
+func serviceDef() map[string]any {
+	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name": "${schema.spec.name}",
 		},
-		"spec": map[string]interface{}{
-			"selector": map[string]interface{}{
+		"spec": map[string]any{
+			"selector": map[string]any{
 				"app": "deployment",
 			},
-			"ports": []interface{}{
-				map[string]interface{}{
+			"ports": []any{
+				map[string]any{
 					"port":       "${schema.spec.port}",
 					"targetPort": "${schema.spec.port}",
 				},

@@ -132,7 +132,7 @@ func waitForControllerReady() {
 
 			established := false
 			for _, c := range conditions {
-				cond, ok := c.(map[string]interface{})
+				cond, ok := c.(map[string]any)
 				if !ok {
 					continue
 				}

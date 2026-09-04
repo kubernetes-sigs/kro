@@ -39,34 +39,34 @@ func newSchema(props spec.SchemaProps) spec.Schema {
 
 func TestParseResource(t *testing.T) {
 	t.Run("Simple resource with various types", func(t *testing.T) {
-		resource := map[string]interface{}{
+		resource := map[string]any{
 			"stringField": "${string.value}",
 			"intField":    "${int.value}",
 			"boolField":   "${bool.value}",
-			"nestedObject": map[string]interface{}{
+			"nestedObject": map[string]any{
 				"nestedString":         "${nested.string}",
 				"nestedStringMultiple": "${nested.string1}-${nested.string2}",
 			},
-			"simpleArray": []interface{}{
+			"simpleArray": []any{
 				"${array[0]}",
 				"${array[1]}",
 			},
-			"mapField": map[string]interface{}{
+			"mapField": map[string]any{
 				"key1": "${map.key1}",
 				"key2": "${map.key2}",
 			},
-			"specialCharacters": map[string]interface{}{
+			"specialCharacters": map[string]any{
 				"simpleAnnotation":     "${simpleannotation}",
 				"doted.annotation.key": "${dotedannotationvalue}",
 				"":                     "${emptyannotation}",
-				"array.name.with.dots": []interface{}{
+				"array.name.with.dots": []any{
 					"${value}",
 				},
 			},
-			"schemalessField": map[string]interface{}{
+			"schemalessField": map[string]any{
 				"key":       "value",
 				"something": "${schemaless.value}",
-				"nestedSomething": map[string]interface{}{
+				"nestedSomething": map[string]any{
 					"key":    "value",
 					"nested": "${schemaless.nested.value}",
 				},
@@ -195,7 +195,7 @@ func TestParseResource(t *testing.T) {
 	})
 
 	t.Run("Invalid type for field", func(t *testing.T) {
-		resource := map[string]interface{}{
+		resource := map[string]any{
 			"intField": "invalid-integer",
 		}
 
@@ -218,14 +218,14 @@ func TestParseResource(t *testing.T) {
 func TestTypeMismatches(t *testing.T) {
 	testCases := []struct {
 		name          string
-		resource      map[string]interface{}
+		resource      map[string]any
 		schema        *spec.Schema
 		wantErr       bool
 		expectedError string
 	}{
 		{
 			name: "String instead of integer",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"intField": "not an int",
 			},
 			schema: &spec.Schema{
@@ -241,7 +241,7 @@ func TestTypeMismatches(t *testing.T) {
 		},
 		{
 			name: "Integer instead of string",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"stringField": 123,
 			},
 			schema: &spec.Schema{
@@ -257,7 +257,7 @@ func TestTypeMismatches(t *testing.T) {
 		},
 		{
 			name: "Boolean instead of number",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"numberField": true,
 			},
 			schema: &spec.Schema{
@@ -273,8 +273,8 @@ func TestTypeMismatches(t *testing.T) {
 		},
 		{
 			name: "Array instead of object",
-			resource: map[string]interface{}{
-				"objectField": []interface{}{"not", "an", "object"},
+			resource: map[string]any{
+				"objectField": []any{"not", "an", "object"},
 			},
 			schema: &spec.Schema{
 				SchemaProps: spec.SchemaProps{
@@ -289,8 +289,8 @@ func TestTypeMismatches(t *testing.T) {
 		},
 		{
 			name: "Object instead of array",
-			resource: map[string]interface{}{
-				"arrayField": map[string]interface{}{"key": "value"},
+			resource: map[string]any{
+				"arrayField": map[string]any{"key": "value"},
 			},
 			schema: &spec.Schema{
 				SchemaProps: spec.SchemaProps{
@@ -305,9 +305,9 @@ func TestTypeMismatches(t *testing.T) {
 		},
 		{
 			name: "Nested field type mismatch - string instead of number at 3 levels",
-			resource: map[string]interface{}{
-				"level1": map[string]interface{}{
-					"level2": map[string]interface{}{
+			resource: map[string]any{
+				"level1": map[string]any{
+					"level2": map[string]any{
 						"numberField": "not-a-number",
 					},
 				},
@@ -343,7 +343,7 @@ func TestTypeMismatches(t *testing.T) {
 		},
 		{
 			name: "Nil schema",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field": "value",
 			},
 			schema:  nil,
@@ -351,7 +351,7 @@ func TestTypeMismatches(t *testing.T) {
 		},
 		{
 			name: "Schema with OneOf",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field": "value",
 			},
 			schema: &spec.Schema{
@@ -374,7 +374,7 @@ func TestTypeMismatches(t *testing.T) {
 		},
 		{
 			name: "Schema with empty type",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field": "value",
 			},
 			schema: &spec.Schema{
@@ -387,13 +387,13 @@ func TestTypeMismatches(t *testing.T) {
 		},
 		{
 			name: "Valid types (no mismatch)",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"stringField": "valid string",
 				"intField":    42,
 				"boolField":   true,
 				"numberField": 3.14,
-				"objectField": map[string]interface{}{"key": "value"},
-				"arrayField":  []interface{}{1, 2, 3},
+				"objectField": map[string]any{"key": "value"},
+				"arrayField":  []any{1, 2, 3},
 			},
 			schema: &spec.Schema{
 				SchemaProps: spec.SchemaProps{
@@ -450,18 +450,18 @@ func TestTypeMismatches(t *testing.T) {
 }
 
 func TestParseWithExpectedSchema(t *testing.T) {
-	resource := map[string]interface{}{
+	resource := map[string]any{
 		"stringField": "${string.value}",
 		"objectField": "${object.value}", // Entire object as a CEL expression
-		"nestedObjectField": map[string]interface{}{
+		"nestedObjectField": map[string]any{
 			"nestedString": "${nested.string}",
-			"nestedObject": map[string]interface{}{
+			"nestedObject": map[string]any{
 				"deepNested": "${deep.nested}",
 			},
 		},
-		"arrayField": []interface{}{
+		"arrayField": []any{
 			"${array[0]}",
-			map[string]interface{}{
+			map[string]any{
 				"objectInArray": "${object.in.array}",
 			},
 		},
@@ -601,7 +601,7 @@ func TestParserEdgeCases(t *testing.T) {
 	testCases := []struct {
 		name          string
 		schema        *spec.Schema
-		resource      interface{}
+		resource      any
 		expectedError string
 	}{
 		{
@@ -612,7 +612,7 @@ func TestParserEdgeCases(t *testing.T) {
 					Items: &spec.SchemaOrArray{},
 				},
 			},
-			resource:      []interface{}{"test"},
+			resource:      []any{"test"},
 			expectedError: "invalid array schema for path : neither Items.Schema nor Properties are defined",
 		},
 		{
@@ -632,7 +632,7 @@ func TestParserEdgeCases(t *testing.T) {
 					Type: []string{"object"},
 				},
 			},
-			resource:      []interface{}{"test"},
+			resource:      []any{"test"},
 			expectedError: "expected object type for path , got array",
 		},
 		{
@@ -679,7 +679,7 @@ func TestParserEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			resource:      map[string]interface{}{"key": "value"},
+			resource:      map[string]any{"key": "value"},
 			expectedError: "expected array type for path , got object",
 		},
 		{
@@ -693,7 +693,7 @@ func TestParserEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"name":    "random parrot",
 				"surname": "the parrot",
 			},
@@ -710,7 +710,7 @@ func TestParserEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"name": "John",
 				"age":  30,
 			},
@@ -728,7 +728,7 @@ func TestParserEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			resource:      map[string]interface{}{"name": "John", "age": 30},
+			resource:      map[string]any{"name": "John", "age": 30},
 			expectedError: "",
 		},
 		{
@@ -751,7 +751,7 @@ func TestParserEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{"id": "123", "metadata": map[string]interface{}{
+			resource: map[string]any{"id": "123", "metadata": map[string]any{
 				"name": "John", "age": 30, "test": "${test.value}",
 			}},
 			expectedError: "",
@@ -766,7 +766,7 @@ func TestParserEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"name": "John",
 			},
 			expectedError: "schema at path name has no valid type, OneOf, AnyOf, or AdditionalProperties",
@@ -823,7 +823,7 @@ func TestPartScalerTypesShortSpecTypes(t *testing.T) {
 	tests := []struct {
 		name   string
 		schema *spec.Schema
-		field  interface{}
+		field  any
 	}{
 		{"int short type for integer", &spec.Schema{SchemaProps: spec.SchemaProps{Type: []string{"int"}}}, 42},
 		{"bool short type for boolean", &spec.Schema{SchemaProps: spec.SchemaProps{Type: []string{"bool"}}}, true},
@@ -866,27 +866,27 @@ func TestXKubernetesIntOrString(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		resource   map[string]interface{}
+		resource   map[string]any
 		wantErr    bool
 		wantErrMsg string
 	}{
 		{
 			name: "Field is integer",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"myField": 42,
 			},
 			wantErr: false,
 		},
 		{
 			name: "Field is string",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"myField": "forty-two",
 			},
 			wantErr: false,
 		},
 		{
 			name: "Field is bool (invalid)",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"myField": true,
 			},
 			wantErr:    true,
@@ -941,14 +941,14 @@ func TestNestedXKubernetesIntOrString(t *testing.T) {
 
 		testCases := []struct {
 			name          string
-			resource      map[string]interface{}
+			resource      map[string]any
 			wantErr       bool
 			expectedError string
 		}{
 			{
 				name: "nestedField as integer",
-				resource: map[string]interface{}{
-					"outerObject": map[string]interface{}{
+				resource: map[string]any{
+					"outerObject": map[string]any{
 						"nestedField": 123,
 					},
 				},
@@ -956,8 +956,8 @@ func TestNestedXKubernetesIntOrString(t *testing.T) {
 			},
 			{
 				name: "nestedField as string",
-				resource: map[string]interface{}{
-					"outerObject": map[string]interface{}{
+				resource: map[string]any{
+					"outerObject": map[string]any{
 						"nestedField": "one-two-three",
 					},
 				},
@@ -965,8 +965,8 @@ func TestNestedXKubernetesIntOrString(t *testing.T) {
 			},
 			{
 				name: "nestedField as bool (invalid)",
-				resource: map[string]interface{}{
-					"outerObject": map[string]interface{}{
+				resource: map[string]any{
+					"outerObject": map[string]any{
 						"nestedField": true,
 					},
 				},
@@ -994,7 +994,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 	testCases := []struct {
 		name          string
 		schema        *spec.Schema
-		resource      interface{}
+		resource      any
 		wantErr       bool
 		expectedError string
 	}{
@@ -1015,7 +1015,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field": "valid string",
 			},
 			wantErr: false,
@@ -1037,7 +1037,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field": 42,
 			},
 			wantErr: false,
@@ -1059,7 +1059,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field": true,
 			},
 			wantErr:       true,
@@ -1082,7 +1082,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field": "valid string",
 			},
 			wantErr: false,
@@ -1104,7 +1104,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field": 42,
 			},
 			wantErr: false,
@@ -1126,7 +1126,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field": true,
 			},
 			wantErr:       true,
@@ -1156,8 +1156,8 @@ func TestOneOfAndAnyOf(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
-				"nestedField": map[string]interface{}{
+			resource: map[string]any{
+				"nestedField": map[string]any{
 					"innerField": "valid string",
 				},
 			},
@@ -1187,8 +1187,8 @@ func TestOneOfAndAnyOf(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
-				"nestedField": map[string]interface{}{
+			resource: map[string]any{
+				"nestedField": map[string]any{
 					"innerField": true,
 				},
 			},
@@ -1267,8 +1267,8 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 			},
 		}
 
-		resource := map[string]interface{}{
-			"networkRef": map[string]interface{}{
+		resource := map[string]any{
+			"networkRef": map[string]any{
 				"name": "${network.metadata.name}",
 			},
 		}
@@ -1351,8 +1351,8 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 			},
 		}
 
-		resource := map[string]interface{}{
-			"networkRef": map[string]interface{}{
+		resource := map[string]any{
+			"networkRef": map[string]any{
 				"external": "${network.selfLink}",
 			},
 		}
@@ -1384,7 +1384,7 @@ func TestPreserveUnknownFields(t *testing.T) {
 	testCases := []struct {
 		name                string
 		schema              *spec.Schema
-		resource            map[string]interface{}
+		resource            map[string]any
 		wantErr             bool
 		expectedError       string
 		expectedExpressions []variable.FieldDescriptor
@@ -1398,8 +1398,8 @@ func TestPreserveUnknownFields(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
+			resource: map[string]any{
+				"spec": map[string]any{
 					"template": "${template.value}",
 				},
 			},
@@ -1420,12 +1420,12 @@ func TestPreserveUnknownFields(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
+			resource: map[string]any{
+				"spec": map[string]any{
 					"field1": "noisy string",
-					"template": map[string]interface{}{
-						"nested": []interface{}{
-							map[string]interface{}{
+					"template": map[string]any{
+						"nested": []any{
+							map[string]any{
 								"key": "${template.value}",
 							},
 						},
@@ -1478,16 +1478,16 @@ func TestPreserveUnknownFields(t *testing.T) {
 					},
 				},
 			},
-			resource: map[string]interface{}{
-				"program": map[string]interface{}{
-					"resources": map[string]interface{}{
-						"app": map[string]interface{}{
-							"properties": map[string]interface{}{
-								"spec": map[string]interface{}{
+			resource: map[string]any{
+				"program": map[string]any{
+					"resources": map[string]any{
+						"app": map[string]any{
+							"properties": map[string]any{
+								"spec": map[string]any{
 									"name":   "${schema.spec.name}",
 									"region": "${schema.spec.region}",
-									"services": []interface{}{
-										map[string]interface{}{
+									"services": []any{
+										map[string]any{
 											"name":          "${schema.spec.name}-service",
 											"instanceCount": "${schema.spec.instanceCount}",
 										},
@@ -1657,14 +1657,14 @@ func TestCollectTypesFromSubSchemas(t *testing.T) {
 func TestEmptyBracesInExpressions(t *testing.T) {
 	testCases := []struct {
 		name             string
-		resource         map[string]interface{}
+		resource         map[string]any
 		schema           *spec.Schema
 		expectedExprPath string // Path where we expect to find the expression
 		expectedExpr     string // The exact expression we expect (without ${})
 	}{
 		{
 			name: "Ternary with empty map literal",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"annotations": "${includeAnnotations ? annotations : {}}",
 			},
 			schema: &spec.Schema{
@@ -1690,8 +1690,8 @@ func TestEmptyBracesInExpressions(t *testing.T) {
 		},
 		{
 			name: "Complex ternary with has() and empty map",
-			resource: map[string]interface{}{
-				"metadata": map[string]interface{}{
+			resource: map[string]any{
+				"metadata": map[string]any{
 					"annotations": "${has(schema.annotations) && includeAnnotations ? schema.annotations : {}}",
 				},
 			},
@@ -1725,7 +1725,7 @@ func TestEmptyBracesInExpressions(t *testing.T) {
 		},
 		{
 			name: "Ternary with empty maps on both sides",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"config": "${condition ? {} : {}}",
 			},
 			schema: &spec.Schema{

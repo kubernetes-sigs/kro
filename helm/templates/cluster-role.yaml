@@ -70,6 +70,30 @@ rules:
   - patch
   - update
 - apiGroups:
+  - kro.run
+  resources:
+  - graphs
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kro.run
+  resources:
+  - graphs/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - kro.run
+  resources:
+  - graphs/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - internal.kro.run
   resources:
   - graphrevisions
@@ -119,6 +143,22 @@ rules:
   - update
   - patch
   - delete
+{{- if index .Values.config.featureGates "GraphKind" }}
+# kro impersonates a ServiceAccount in the instance's namespace when applying a
+# graph's child resources (see GraphSpec.serviceAccountName),
+# confining child-resource access to that ServiceAccount's RBAC by default. The
+# controller therefore needs the "impersonate" verb on serviceaccounts.
+# This is ONLY used by the Graph controller (the RGD/instance path applies under
+# the controller's own identity), so the grant is gated behind the GraphKind
+# feature — a default install without GraphKind does not receive cluster-wide
+# ServiceAccount impersonation.
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - impersonate
+{{- end }}
 - apiGroups:
   - coordination.k8s.io
   resources:

@@ -46,7 +46,7 @@ func NewResourceGraphDefinition(name string, opts ...ResourceGraphDefinitionOpti
 
 // WithSchema sets the definition and status of the ResourceGraphDefinition
 // and optionally applies schema options like WithTypes
-func WithSchema(kind, version string, spec, status map[string]interface{}, opts ...SchemaOption) ResourceGraphDefinitionOption {
+func WithSchema(kind, version string, spec, status map[string]any, opts ...SchemaOption) ResourceGraphDefinitionOption {
 	rawSpec, err := json.Marshal(spec)
 	if err != nil {
 		panic(err)
@@ -115,7 +115,7 @@ func WithExternalRefAndForEach(
 // readyWhen and includeWhen expressions are optional.
 func WithResource(
 	id string,
-	template map[string]interface{},
+	template map[string]any,
 	readyWhen []string,
 	includeWhen []string,
 ) ResourceGraphDefinitionOption {
@@ -137,7 +137,7 @@ func WithResource(
 }
 
 // WithTypes returns a SchemaOption that sets the types for the schema
-func WithTypes(types map[string]interface{}) SchemaOption {
+func WithTypes(types map[string]any) SchemaOption {
 	rawTypes, err := json.Marshal(types)
 	if err != nil {
 		panic(err)
@@ -161,7 +161,7 @@ func WithScope(scope krov1alpha1.ResourceScope) SchemaOption {
 // WithResourceCollection adds a collection resource with forEach iterators to the ResourceGraphDefinition.
 func WithResourceCollection(
 	id string,
-	template map[string]interface{},
+	template map[string]any,
 	forEach []krov1alpha1.ForEachDimension,
 	readyWhen []string,
 	includeWhen []string,

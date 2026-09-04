@@ -365,22 +365,24 @@ func applyDefaultMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
 	return nil
 }
 
-func applyMinimumMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
+// applyFloat64Marker parses marker.Value as a float64 and passes it to assign.
+// errLabel is used to build the parse-error message, matching each call site's
+// original wording (e.g. "minimum" -> "failed to parse minimum enum value: %w").
+func applyFloat64Marker(marker *Marker, errLabel string, assign func(*float64)) error {
 	val, err := strconv.ParseFloat(marker.Value, 64)
 	if err != nil {
-		return fmt.Errorf("failed to parse minimum enum value: %w", err)
+		return fmt.Errorf("failed to parse %s enum value: %w", errLabel, err)
 	}
-	schema.Minimum = &val
+	assign(&val)
 	return nil
 }
 
+func applyMinimumMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
+	return applyFloat64Marker(marker, "minimum", func(v *float64) { schema.Minimum = v })
+}
+
 func applyMaximumMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
-	val, err := strconv.ParseFloat(marker.Value, 64)
-	if err != nil {
-		return fmt.Errorf("failed to parse maximum enum value: %w", err)
-	}
-	schema.Maximum = &val
-	return nil
+	return applyFloat64Marker(marker, "maximum", func(v *float64) { schema.Maximum = v })
 }
 
 func applyValidationMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
@@ -436,28 +438,27 @@ func applyEnumMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
 	return nil
 }
 
-func applyMinLengthMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
-	if schema.Type != schemaTypeString {
-		return fmt.Errorf("minLength marker is only valid for string types, got type: %s", schema.Type)
+// applyInt64Marker validates schema.Type == requiredType, parses marker.Value as
+// an int64, and passes it to assign. markerName is used to build both the
+// type-mismatch and parse-error messages, matching each call site's original wording.
+func applyInt64Marker(schema *extv1.JSONSchemaProps, marker *Marker, markerName, requiredType string, assign func(*int64)) error {
+	if schema.Type != requiredType {
+		return fmt.Errorf("%s marker is only valid for %s types, got type: %s", markerName, requiredType, schema.Type)
 	}
 	val, err := strconv.ParseInt(marker.Value, 10, 64)
 	if err != nil {
-		return fmt.Errorf("failed to parse minLength value: %w", err)
+		return fmt.Errorf("failed to parse %s value: %w", markerName, err)
 	}
-	schema.MinLength = &val
+	assign(&val)
 	return nil
 }
 
+func applyMinLengthMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
+	return applyInt64Marker(schema, marker, "minLength", schemaTypeString, func(v *int64) { schema.MinLength = v })
+}
+
 func applyMaxLengthMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
-	if schema.Type != schemaTypeString {
-		return fmt.Errorf("maxLength marker is only valid for string types, got type: %s", schema.Type)
-	}
-	val, err := strconv.ParseInt(marker.Value, 10, 64)
-	if err != nil {
-		return fmt.Errorf("failed to parse maxLength value: %w", err)
-	}
-	schema.MaxLength = &val
-	return nil
+	return applyInt64Marker(schema, marker, "maxLength", schemaTypeString, func(v *int64) { schema.MaxLength = v })
 }
 
 func applyPatternMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
@@ -494,25 +495,9 @@ func applyUniqueItemsMarker(schema *extv1.JSONSchemaProps, marker *Marker) error
 }
 
 func applyMinItemsMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
-	if schema.Type != schemaTypeArray {
-		return fmt.Errorf("minItems marker is only valid for array types, got type: %s", schema.Type)
-	}
-	val, err := strconv.ParseInt(marker.Value, 10, 64)
-	if err != nil {
-		return fmt.Errorf("failed to parse minItems value: %w", err)
-	}
-	schema.MinItems = &val
-	return nil
+	return applyInt64Marker(schema, marker, "minItems", schemaTypeArray, func(v *int64) { schema.MinItems = v })
 }
 
 func applyMaxItemsMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
-	if schema.Type != schemaTypeArray {
-		return fmt.Errorf("maxItems marker is only valid for array types, got type: %s", schema.Type)
-	}
-	val, err := strconv.ParseInt(marker.Value, 10, 64)
-	if err != nil {
-		return fmt.Errorf("failed to parse maxItems value: %w", err)
-	}
-	schema.MaxItems = &val
-	return nil
+	return applyInt64Marker(schema, marker, "maxItems", schemaTypeArray, func(v *int64) { schema.MaxItems = v })
 }

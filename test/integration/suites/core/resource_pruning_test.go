@@ -66,30 +66,30 @@ var _ = Describe("ResourcePruning", func() {
 			opts := []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"TestPruneWhileUnready", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("gate", map[string]interface{}{
+				generator.WithResource("gate", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-gate",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"ready": "false",
 					},
 				}, []string{`${gate.data.ready == "true"}`}, nil),
 			}
 			if withRetired {
-				opts = append(opts, generator.WithResource("retired", map[string]interface{}{
+				opts = append(opts, generator.WithResource("retired", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-retired",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"keep": "for-now",
 					},
 				}, nil, nil))
@@ -105,7 +105,7 @@ var _ = Describe("ResourcePruning", func() {
 		waitForRGDActive(ctx, rgd.Name)
 
 		name := "prune-unready"
-		instance := newInstance("TestPruneWhileUnready", name, namespace, map[string]interface{}{
+		instance := newInstance("TestPruneWhileUnready", name, namespace, map[string]any{
 			"name": name,
 		})
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())

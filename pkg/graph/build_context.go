@@ -18,9 +18,7 @@ import (
 	"fmt"
 
 	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/common/types"
 	apiservercel "k8s.io/apiserver/pkg/cel"
-	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
@@ -38,6 +36,7 @@ type buildContext struct {
 	env          *cel.Env
 	typeProvider *krocel.DeclTypeProvider
 	schemaCache  *schema.Cache
+	costLimit    uint64
 
 	// schema pointer → DeclType. Avoids redundant SchemaDeclTypeWithMetadata
 	// calls for schemas already converted. Schema pointers are live in the
@@ -73,7 +72,7 @@ func (bc *buildContext) schemaDeclType(s *spec.Schema) *apiservercel.DeclType {
 	if dt, ok := bc.declTypes[s]; ok {
 		return dt
 	}
-	dt := krocel.SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: s}, false)
+	dt := krocel.SchemaDeclType(s)
 	bc.declTypes[s] = dt
 	return dt
 }
@@ -86,13 +85,9 @@ func (bc *buildContext) parseAndCheck(env *cel.Env, expr *krocel.Expression) (*c
 		return ast, nil
 	}
 
-	parsedAST, issues := env.Parse(expr.Original)
-	if issues != nil && issues.Err() != nil {
-		return nil, issues.Err()
-	}
-	checkedAST, issues := env.Check(parsedAST)
-	if issues != nil && issues.Err() != nil {
-		return nil, issues.Err()
+	checkedAST, err := krocel.ParseAndCheck(env, expr.Original)
+	if err != nil {
+		return nil, err
 	}
 
 	bc.checkedASTs[key] = checkedAST
@@ -113,7 +108,7 @@ func (bc *buildContext) compile(env *cel.Env, expr *krocel.Expression) (*cel.Ast
 		}
 	}
 
-	program, err := env.Program(checkedAST)
+	program, err := env.Program(checkedAST, krocel.ProgramOptions(bc.costLimit)...)
 	if err != nil {
 		return nil, fmt.Errorf("compile: %w", err)
 	}
@@ -135,24 +130,7 @@ func (bc *buildContext) extendWithTypedVar(parent *cel.Env, varName string, s *s
 		return nil, fmt.Errorf("failed to build DeclType for schema")
 	}
 
-	typeName := krocel.TypeNamePrefix + varName
-	declType = declType.MaybeAssignTypeName(typeName)
-
-	provider := krocel.NewDeclTypeProvider(declType)
-	provider.SetRecognizeKeywordAsFieldName(true)
-
-	celType := declType.CelType()
-
-	registry := types.NewEmptyRegistry()
-	wrappedProvider, err := provider.WithTypeProvider(registry)
-	if err != nil {
-		return nil, err
-	}
-
-	extended, err := parent.Extend(
-		cel.Variable(varName, celType),
-		cel.CustomTypeProvider(wrappedProvider),
-	)
+	extended, err := krocel.ExtendWithTypedVar(parent, varName, declType)
 	if err != nil {
 		return nil, err
 	}

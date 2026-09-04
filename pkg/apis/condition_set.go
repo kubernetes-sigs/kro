@@ -18,16 +18,45 @@
 package apis
 
 import (
+	"cmp"
 	"fmt"
 	"reflect"
 	"slices"
-	"sort"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
+
+// compareConditionTime compares two possibly-nil LastTransitionTime values.
+// It returns a negative number if a sorts before b, zero if they are
+// equivalent, and a positive number if a sorts after b.
+//
+// nil is treated as "earliest" (sorts before any non-nil time). When
+// descending is true, the comparison direction is inverted, i.e. later times
+// (and non-nil over nil) sort first.
+func compareConditionTime(a, b *metav1.Time, descending bool) int {
+	var cmp int
+	switch {
+	case a == nil && b == nil:
+		cmp = 0
+	case a == nil:
+		cmp = -1
+	case b == nil:
+		cmp = 1
+	case a.Time.Before(b.Time):
+		cmp = -1
+	case b.Time.Before(a.Time):
+		cmp = 1
+	default:
+		cmp = 0
+	}
+	if descending {
+		return -cmp
+	}
+	return cmp
+}
 
 // ConditionSet provides methods for evaluating Conditions.
 // +k8s:deepcopy-gen=false
@@ -119,10 +148,8 @@ func (c ConditionSet) IsTrue(conditionTypes ...string) bool {
 
 // IsDependentCondition returns true if the provided condition is involved in calculating the root condition.
 func (c ConditionSet) IsDependentCondition(t string) bool {
-	for _, cond := range c.dependents {
-		if cond == t {
-			return true
-		}
+	if slices.Contains(c.dependents, t) {
+		return true
 	}
 	return t == c.root
 }
@@ -168,24 +195,22 @@ func (c ConditionSet) Set(condition v1alpha1.Condition) (modified bool) {
 	}
 	conditions = append(conditions, condition)
 	// Sorted for convenience of the consumer, i.e. kubectl.
-	sort.SliceStable(conditions, func(i, j int) bool {
+	slices.SortStableFunc(conditions, func(a, b v1alpha1.Condition) int {
 		// Order the root status condition at the end
-		if conditions[i].Type.String() == c.root || conditions[j].Type.String() == c.root {
-			return conditions[j].Type.String() == c.root
+		aIsRoot := a.Type.String() == c.root
+		bIsRoot := b.Type.String() == c.root
+		if aIsRoot || bIsRoot {
+			switch {
+			case aIsRoot && bIsRoot:
+				return 0
+			case aIsRoot:
+				return 1
+			default:
+				return -1
+			}
 		}
 
-		// Handle nil LastTransitionTime
-		if conditions[i].LastTransitionTime == nil && conditions[j].LastTransitionTime == nil {
-			return false // Equal, order doesn't matter
-		}
-		if conditions[i].LastTransitionTime == nil {
-			return true // nil comes before non-nil
-		}
-		if conditions[j].LastTransitionTime == nil {
-			return false // non-nil comes after nil
-		}
-
-		return conditions[i].LastTransitionTime.Time.Before(conditions[j].LastTransitionTime.Time)
+		return compareConditionTime(a.LastTransitionTime, b.LastTransitionTime, false)
 	})
 	c.object.SetConditions(conditions)
 
@@ -218,7 +243,7 @@ func (c ConditionSet) Clear(t string) error {
 	}
 
 	// Sorted for convenience of the consumer, i.e. kubectl.
-	sort.Slice(conditions, func(i, j int) bool { return conditions[i].Type < conditions[j].Type })
+	slices.SortFunc(conditions, func(a, b v1alpha1.Condition) int { return cmp.Compare(a.Type, b.Type) })
 	c.object.SetConditions(conditions)
 
 	return nil
@@ -288,19 +313,8 @@ func (c ConditionSet) recomputeRootCondition(conditionType string) {
 
 func findMostUnhealthy(deps []v1alpha1.Condition) (v1alpha1.Condition, bool) {
 	// Sort set conditions by time.
-	sort.Slice(deps, func(i, j int) bool {
-		// Handle nil LastTransitionTime
-		if deps[i].LastTransitionTime == nil && deps[j].LastTransitionTime == nil {
-			return false // Equal, order doesn't matter
-		}
-		if deps[i].LastTransitionTime == nil {
-			return false // nil comes after non-nil (opposite of Before)
-		}
-		if deps[j].LastTransitionTime == nil {
-			return true // non-nil comes before nil (opposite of Before)
-		}
-
-		return deps[i].LastTransitionTime.After(deps[j].LastTransitionTime.Time)
+	slices.SortFunc(deps, func(a, b v1alpha1.Condition) int {
+		return compareConditionTime(a.LastTransitionTime, b.LastTransitionTime, true)
 	})
 
 	// First check the conditions with Status == False.
@@ -335,19 +349,8 @@ func (c ConditionSet) findUnhealthyDependents() []v1alpha1.Condition {
 	}
 
 	// Sort set conditions by time.
-	sort.Slice(deps, func(i, j int) bool {
-		// Handle nil LastTransitionTime
-		if deps[i].LastTransitionTime == nil && deps[j].LastTransitionTime == nil {
-			return false // Equal, order doesn't matter
-		}
-		if deps[i].LastTransitionTime == nil {
-			return false // nil comes after non-nil (opposite of Before)
-		}
-		if deps[j].LastTransitionTime == nil {
-			return true // non-nil comes before nil (opposite of Before)
-		}
-
-		return deps[i].LastTransitionTime.After(deps[j].LastTransitionTime.Time)
+	slices.SortFunc(deps, func(a, b v1alpha1.Condition) int {
+		return compareConditionTime(a.LastTransitionTime, b.LastTransitionTime, true)
 	})
 	return deps
 }

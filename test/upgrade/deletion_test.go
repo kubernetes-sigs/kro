@@ -86,14 +86,14 @@ var _ = ginkgo.Describe("Post-Upgrade Deletion", ginkgo.Ordered, func() {
 	ginkgo.It("should recreate the instance and see it become ACTIVE with child resources", func() {
 		ginkgo.By("Recreating the instance")
 		newInstance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "kro.run/v1alpha1",
 				"kind":       "UpgradeDeletionTarget",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      deletionInstance,
 					"namespace": deletionInstanceNS,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": deletionInstance,
 				},
 			},

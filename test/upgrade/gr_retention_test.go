@@ -57,17 +57,17 @@ var _ = ginkgo.Describe("Post-Upgrade Rapid Mutations", ginkgo.Ordered, func() {
 				if res == nil || res.ID != "configmap" {
 					continue
 				}
-				var template map[string]interface{}
+				var template map[string]any
 				gomega.Expect(json.Unmarshal(res.Template.Raw, &template)).To(gomega.Succeed())
 
-				metadata, _ := template["metadata"].(map[string]interface{})
+				metadata, _ := template["metadata"].(map[string]any)
 				if metadata == nil {
-					metadata = map[string]interface{}{}
+					metadata = map[string]any{}
 					template["metadata"] = metadata
 				}
-				annotations, _ := metadata["annotations"].(map[string]interface{})
+				annotations, _ := metadata["annotations"].(map[string]any)
 				if annotations == nil {
-					annotations = map[string]interface{}{}
+					annotations = map[string]any{}
 					metadata["annotations"] = annotations
 				}
 				annotations["upgrade-test/rapid-iteration"] = fmt.Sprintf("%d", i)
@@ -145,10 +145,7 @@ var _ = ginkgo.Describe("Post-Upgrade Rapid Mutations", ginkgo.Ordered, func() {
 
 			// The retained revisions should be the most recent ones
 			// e.g. after 10 mutations with retention=5, revisions 6-10 should remain
-			expectedLowest := highestRevision - int64(maxGraphRevisions) + 1
-			if expectedLowest < 1 {
-				expectedLowest = 1
-			}
+			expectedLowest := max(highestRevision-int64(maxGraphRevisions)+1, 1)
 			g.Expect(lowestRevision).To(gomega.BeNumerically(">=", expectedLowest),
 				"Lowest retained revision should be >= %d (highest=%d, max=%d), got %d",
 				expectedLowest, highestRevision, maxGraphRevisions, lowestRevision)

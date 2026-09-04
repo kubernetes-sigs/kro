@@ -17,11 +17,11 @@ package simpleschema
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
-	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
+	"github.com/kubernetes-sigs/kro/pkg/dag"
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema/types"
 )
 
@@ -36,7 +36,7 @@ type transformer struct {
 }
 
 // newTransformer creates a new transformer with the given custom types.
-func newTransformer(customTypes map[string]interface{}) (*transformer, error) {
+func newTransformer(customTypes map[string]any) (*transformer, error) {
 	t := &transformer{
 		customTypes: make(map[string]customType),
 	}
@@ -61,7 +61,7 @@ func (t *transformer) IsRequired(name string) bool {
 	return t.customTypes[name].Required
 }
 
-func (t *transformer) loadCustomTypes(customTypes map[string]interface{}) error {
+func (t *transformer) loadCustomTypes(customTypes map[string]any) error {
 	if len(customTypes) == 0 {
 		return nil
 	}
@@ -110,7 +110,7 @@ func (t *transformer) loadCustomTypes(customTypes map[string]interface{}) error 
 // buildCustomTypeSchema builds a schema for a custom type definition.
 // Returns the schema and whether the type has required=true marker.
 // Precondition: spec is string or map[string]interface{} (parseSpec validates this).
-func (t *transformer) buildCustomTypeSchema(name string, spec interface{}) (*extv1.JSONSchemaProps, bool, error) {
+func (t *transformer) buildCustomTypeSchema(name string, spec any) (*extv1.JSONSchemaProps, bool, error) {
 	switch val := spec.(type) {
 	case string:
 		// Type alias: "MyType": "string | default=foo"
@@ -123,7 +123,7 @@ func (t *transformer) buildCustomTypeSchema(name string, spec interface{}) (*ext
 		return schema, required, nil
 	default:
 		// Struct type: "MyType": { "field": "string" }
-		schema, err := t.buildSchema(val.(map[string]interface{}))
+		schema, err := t.buildSchema(val.(map[string]any))
 		if err != nil {
 			return nil, false, err
 		}
@@ -131,7 +131,7 @@ func (t *transformer) buildCustomTypeSchema(name string, spec interface{}) (*ext
 	}
 }
 
-func (t *transformer) buildSchema(spec map[string]interface{}) (*extv1.JSONSchemaProps, error) {
+func (t *transformer) buildSchema(spec map[string]any) (*extv1.JSONSchemaProps, error) {
 	schema := &extv1.JSONSchemaProps{
 		Type:       "object",
 		Properties: make(map[string]extv1.JSONSchemaProps),
@@ -161,16 +161,16 @@ func (t *transformer) buildSchema(spec map[string]interface{}) (*extv1.JSONSchem
 	// Field iteration above ranges over a map, so the required list is built in
 	// nondeterministic order. Sort it to keep the synthesized CRD stable across
 	// builds (avoids spurious server-side-apply diffs on re-reconcile).
-	sort.Strings(schema.Required)
+	slices.Sort(schema.Required)
 
 	return schema, nil
 }
 
-func (t *transformer) buildFieldSchema(name string, spec interface{}, parent *extv1.JSONSchemaProps) (*extv1.JSONSchemaProps, error) {
+func (t *transformer) buildFieldSchema(name string, spec any, parent *extv1.JSONSchemaProps) (*extv1.JSONSchemaProps, error) {
 	switch val := spec.(type) {
 	case string:
 		return t.buildFieldFromString(name, val, parent)
-	case map[string]interface{}:
+	case map[string]any:
 		return t.buildSchema(val)
 	default:
 		return nil, fmt.Errorf("unexpected type: %T", spec)

@@ -16,6 +16,7 @@ package hash
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -51,12 +52,20 @@ func Spec(spec v1alpha1.ResourceGraphDefinitionSpec) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return FNV64a(normalized, jsonMarshal)
+}
 
-	data, err := jsonMarshal(normalized)
+// FNV64a returns the hex-encoded FNV-64a hash of marshal(v). It is the shared
+// tail of every spec hash: marshal the already-normalized value to canonical
+// bytes, then FNV-64a + hex-encode. marshal is a seam so callers can inject
+// failures in tests. This is the single canonical implementation; other
+// hashing sites (e.g. graphengine/registry) delegate here rather than
+// reimplementing the marshal/hash/encode sequence.
+func FNV64a(v any, marshal func(any) ([]byte, error)) (string, error) {
+	data, err := marshal(v)
 	if err != nil {
 		return "", fmt.Errorf("marshal normalized spec: %w", err)
 	}
-
 	h := fnv.New64a()
 	h.Write(data)
 	return hex.EncodeToString(h.Sum(nil)), nil
@@ -103,22 +112,7 @@ func normalizeSpec(spec v1alpha1.ResourceGraphDefinitionSpec) (v1alpha1.Resource
 	}
 
 	slices.SortFunc(normalized.Resources, func(a, b *v1alpha1.Resource) int {
-		if a == nil && b == nil {
-			return 0
-		}
-		if a == nil {
-			return -1
-		}
-		if b == nil {
-			return 1
-		}
-		if a.ID < b.ID {
-			return -1
-		}
-		if a.ID > b.ID {
-			return 1
-		}
-		return 0
+		return cmp.Compare(resourceID(a), resourceID(b))
 	})
 
 	for i := range normalized.Resources {
@@ -144,6 +138,16 @@ func normalizeSpec(spec v1alpha1.ResourceGraphDefinitionSpec) (v1alpha1.Resource
 	}
 
 	return *normalized, nil
+}
+
+// resourceID returns r.ID, or "" for a nil Resource, so nil-safe sorting can
+// delegate directly to cmp.Compare. nil sorts consistently before any named
+// resource, matching the previous explicit nil-first ordering.
+func resourceID(r *v1alpha1.Resource) string {
+	if r == nil {
+		return ""
+	}
+	return r.ID
 }
 
 func normalizeRawExtension(ext runtime.RawExtension) (runtime.RawExtension, error) {

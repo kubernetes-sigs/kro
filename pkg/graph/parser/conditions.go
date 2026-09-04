@@ -28,7 +28,7 @@ import (
 //
 // Each input must be exactly one standalone ${...}. Interpolation forms
 // like "prefix-${expr}-suffix" or concatenations like "${a}${b}" are
-// rejected. For interpolation-style strings, see ExtractExpressions in
+// rejected. For interpolation-style strings, see extractExpressions in
 // cel.go.
 func UnwrapExpressions(conditions []string) ([]*krocel.Expression, error) {
 	expressions := make([]*krocel.Expression, 0, len(conditions))

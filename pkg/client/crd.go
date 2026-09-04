@@ -86,14 +86,6 @@ type CRDWrapperConfig struct {
 	Timeout      time.Duration
 }
 
-// DefaultConfig returns a CRDWrapperConfig with default values
-func DefaultCRDWrapperConfig() CRDWrapperConfig {
-	return CRDWrapperConfig{
-		PollInterval: defaultPollInterval,
-		Timeout:      defaultTimeout,
-	}
-}
-
 // newCRDWrapper creates a new CRD wrapper
 func newCRDWrapper(cfg CRDWrapperConfig) *CRDWrapper {
 	if cfg.PollInterval == 0 {

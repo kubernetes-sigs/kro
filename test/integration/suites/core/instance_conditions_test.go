@@ -59,18 +59,18 @@ var _ = Describe("Instance Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition("test-instance-conditions-success",
 			generator.WithSchema(
 				"TestInstanceConditions", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"configData": "string",
 				},
 				nil,
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.metadata.name}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"config": "${schema.spec.configData}",
 				},
 			}, nil, nil),
@@ -97,14 +97,14 @@ var _ = Describe("Instance Conditions", func() {
 
 		// Create instance
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestInstanceConditions",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "test-instance-conditions",
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"configData": "test-data",
 				},
 			},
@@ -126,9 +126,9 @@ var _ = Describe("Instance Conditions", func() {
 			g.Expect(statusConditions).ToNot(BeEmpty())
 
 			// Find the Ready condition
-			var readyCondition map[string]interface{}
+			var readyCondition map[string]any
 			for _, condInterface := range statusConditions {
-				if cond, ok := condInterface.(map[string]interface{}); ok {
+				if cond, ok := condInterface.(map[string]any); ok {
 					condType, _ := cond["type"].(string)
 					if condType == ctrlinstance.Ready {
 						readyCondition = cond
@@ -168,18 +168,18 @@ var _ = Describe("Instance Conditions", func() {
 		rgd := generator.NewResourceGraphDefinition("test-instance-conditions-deletion",
 			generator.WithSchema(
 				"TestInstanceDeletion", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"configData": "string",
 				},
 				nil,
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.metadata.name}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"config": "${schema.spec.configData}",
 				},
 			}, nil, nil),
@@ -206,14 +206,14 @@ var _ = Describe("Instance Conditions", func() {
 
 		// Create instance
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestInstanceDeletion",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "test-instance-deletion",
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"configData": "delete-test-data",
 				},
 			},
@@ -232,9 +232,9 @@ var _ = Describe("Instance Conditions", func() {
 			statusConditions, found, _ := unstructured.NestedSlice(instance.Object, "status", "conditions")
 			g.Expect(found).To(BeTrue())
 
-			var readyCondition map[string]interface{}
+			var readyCondition map[string]any
 			for _, condInterface := range statusConditions {
-				if cond, ok := condInterface.(map[string]interface{}); ok {
+				if cond, ok := condInterface.(map[string]any); ok {
 					if cond["type"] == ctrlinstance.Ready {
 						readyCondition = cond
 						break
@@ -263,7 +263,7 @@ var _ = Describe("Instance Conditions", func() {
 			if found && len(statusConditions) > 0 {
 				// If conditions are present during deletion, they should maintain valid structure
 				for _, condInterface := range statusConditions {
-					if cond, ok := condInterface.(map[string]interface{}); ok {
+					if cond, ok := condInterface.(map[string]any); ok {
 						g.Expect(cond["type"]).ToNot(BeNil(), "Condition type should not be nil during deletion")
 						g.Expect(cond["status"]).ToNot(BeNil(), "Condition status should not be nil during deletion")
 					}

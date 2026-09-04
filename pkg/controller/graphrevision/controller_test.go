@@ -66,7 +66,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 	}{
 		{
 			name: "compile success marks revision active",
-			compile: func(rgd *v1alpha1.ResourceGraphDefinition, _ graph.RGDConfig) (*graph.Graph, error) {
+			compile: func(rgd *v1alpha1.ResourceGraphDefinition, _ graph.Config) (*graph.Graph, error) {
 				assert.Equal(t, "demo-rgd", rgd.Name)
 				return compiled, nil
 			},
@@ -89,7 +89,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 		},
 		{
 			name: "compile failure marks revision failed",
-			compile: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+			compile: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 				return nil, errors.New("graph compile failed")
 			},
 			wantErrContains:     []string{"graph compile failed"},
@@ -118,7 +118,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 					Build()
 				return &statusPatchFailClient{Client: base, patchErr: errors.New("status patch failed")}
 			},
-			compile: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+			compile: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 				return compiled, nil
 			},
 			wantErrContains: []string{"status patch failed"},
@@ -149,7 +149,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 					CompiledGraph: compiled,
 				})
 			},
-			compile: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+			compile: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 				return compiled, nil
 			},
 			wantErrContains: []string{"status patch failed"},
@@ -229,7 +229,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 					Build()
 				return &statusPatchFailClient{Client: base, patchErr: errors.New("status patch failed")}
 			},
-			compile: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+			compile: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 				return nil, errors.New("graph compile failed")
 			},
 			wantErrContains: []string{"graph compile failed", "status patch failed"},
@@ -252,7 +252,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 					CompiledGraph: compiled,
 				})
 			},
-			compile: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+			compile: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 				return nil, errors.New("graph compile failed")
 			},
 			wantErrContains: []string{"graph compile failed"},
@@ -300,7 +300,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 				Client:                  cl,
 				compileGraph:            tt.compile,
 				registry:                registry,
-				rgdConfig:               graph.RGDConfig{},
+				rgdConfig:               graph.Config{},
 				maxConcurrentReconciles: 1,
 			}
 
@@ -581,7 +581,7 @@ func TestGraphRevisionStatusCases(t *testing.T) {
 
 func TestGraphRevisionConstructorCase(t *testing.T) {
 	registry := revisions.NewRegistry()
-	cfg := graph.RGDConfig{MaxCollectionSize: 10, MaxCollectionDimensionSize: 3}
+	cfg := graph.Config{MaxCollectionSize: 10, MaxCollectionDimensionSize: 3}
 
 	reconciler := NewGraphRevisionReconciler(nil, registry, 7, cfg)
 
@@ -600,8 +600,8 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 
 		reconciler := &GraphRevisionReconciler{
 			registry:  registry,
-			rgdConfig: graph.RGDConfig{},
-			compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+			rgdConfig: graph.Config{},
+			compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 				entry, ok := registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision)
 				require.True(t, ok)
 				assert.Equal(t, revisions.RevisionStatePending, entry.State)
@@ -636,8 +636,8 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 
 		reconciler := &GraphRevisionReconciler{
 			registry:  registry,
-			rgdConfig: graph.RGDConfig{},
-			compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+			rgdConfig: graph.Config{},
+			compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 				entry, ok := registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision)
 				require.True(t, ok)
 				assert.Equal(t, revisions.RevisionStateActive, entry.State)
@@ -668,7 +668,7 @@ func TestGraphRevisionReconcilerFailsCleanlyWhenSpecHashingFails(t *testing.T) {
 	reconciler := &GraphRevisionReconciler{
 		compileGraph: panicCompile,
 		registry:     registry,
-		rgdConfig:    graph.RGDConfig{},
+		rgdConfig:    graph.Config{},
 	}
 
 	topologicalOrder, resources, activeEntry, err := reconciler.reconcileGraphRevision(context.Background(), revision)
@@ -847,7 +847,7 @@ func mustSpecHash(t *testing.T, spec v1alpha1.ResourceGraphDefinitionSpec) strin
 	return h
 }
 
-func panicCompile(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+func panicCompile(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error) {
 	return nil, errors.New("compile should not be called")
 }
 

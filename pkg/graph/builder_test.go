@@ -64,7 +64,7 @@ func disableOmitFeatureGate(t *testing.T) {
 	})
 }
 
-var defaultRGDConfig = RGDConfig{MaxCollectionDimensionSize: 5}
+var defaultRGDConfig = Config{MaxCollectionDimensionSize: 5}
 
 func TestLookupSchemaAtField_AdditionalProperties(t *testing.T) {
 	tests := []struct {
@@ -287,7 +287,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					nil,
-					map[string]interface{}{
+					map[string]any{
 						"status": "string", // Invalid reference
 					},
 				),
@@ -300,15 +300,15 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "unknown.k8s.aws/v1alpha1", // Unknown API group
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
 				}, nil, nil),
@@ -321,15 +321,15 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc-1", map[string]interface{}{ // Invalid id with operator
+				generator.WithResource("vpc-1", map[string]any{ // Invalid id with operator
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
 				}, nil, nil),
@@ -342,7 +342,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"invalidKind", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
@@ -356,12 +356,12 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{ // Invalid name with operator
+				generator.WithResource("vpc", map[string]any{ // Invalid name with operator
 					"vvvvv": "ec2.services.k8s.aws/v1alpha1",
 				}, nil, nil),
 			},
@@ -373,15 +373,15 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("crd", map[string]interface{}{
+				generator.WithResource("crd", map[string]any{
 					"apiVersion": "apiextensions.k8s.io/v1",
 					"kind":       "CustomResourceDefinition",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "tests.kro.run",
 						"namespace": "default",
 					},
@@ -395,15 +395,15 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
 				}, []string{"invalid ! syntax"}, nil),
@@ -416,15 +416,15 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
 				}, nil, []string{"invalid ! syntax"}),
@@ -437,15 +437,15 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("subnet", map[string]interface{}{
+				generator.WithResource("subnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
 				}, nil, []string{"${missing.status.state == 'available'}"}),
@@ -458,17 +458,17 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
 					// Missing metadata
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
 			},
@@ -480,18 +480,18 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("subnet", map[string]interface{}{
+				generator.WithResource("subnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-subnet",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"vpcID": "${vpc.status.nonexistentField}", // Invalid field
 					},
 				}, nil, nil),
@@ -504,42 +504,42 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":          "string",
 						"enableSubnets": "boolean",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks":         []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks":         []any{"10.0.0.0/16"},
 						"enableDNSSupport":   true,
 						"enableDNSHostnames": true,
 					},
 				}, []string{"${vpc.status.state == 'available'}"}, nil),
-				generator.WithResource("subnet1", map[string]interface{}{
+				generator.WithResource("subnet1", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-subnet",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.1.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
 				}, []string{"${subnet1.status.state == 'available'}"}, []string{"${schema.spec.enableSubnets == true}"}),
-				generator.WithResource("subnet2", map[string]interface{}{
+				generator.WithResource("subnet2", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-subnet-2",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.127.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
@@ -551,15 +551,15 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "unknown.k8s.aws/v1alpha1", // Unknown API group
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
 				}, nil, nil),
@@ -572,7 +572,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"port": "wrongtype",
 					},
 					nil,
@@ -586,17 +586,17 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"status": "${nonexistent.status}", // invalid reference
 					},
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
 				}, nil, nil),
@@ -609,10 +609,10 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"ready": "${true}",
 					},
 				),
@@ -625,21 +625,21 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"host": "string",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"url": "${vpc.status.vpcID + '/' + schema.spec.host}",
 					},
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
 			},
@@ -650,17 +650,17 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"host": "string",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"echoHost": "${schema.spec.host}",
 					},
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
 				}, nil, nil),
@@ -672,18 +672,18 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlocks": "10.0.0.0/16", // should be array
 					},
 				}, nil, nil),
@@ -696,21 +696,21 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("somecrd", map[string]interface{}{
+				generator.WithResource("somecrd", map[string]any{
 					"apiVersion": "apiextensions.k8s.io/v1",
 					"kind":       "CustomResourceDefinition",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "vpcs.ec2.services.k8s.aws",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"group":   "ec2.services.k8s.aws",
 						"version": "v1alpha1",
-						"names": map[string]interface{}{
+						"names": map[string]any{
 							"kind":     "VPC",
 							"listKind": "VPCList",
 							"singular": "vpc",
@@ -728,21 +728,21 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"crdName": "string",
 					},
 					nil,
 				),
-				generator.WithResource("somecrd", map[string]interface{}{
+				generator.WithResource("somecrd", map[string]any{
 					"apiVersion": "apiextensions.k8s.io/v1",
 					"kind":       "CustomResourceDefinition",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.crdName}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"group":   "ec2.services.k8s.aws",
 						"version": "v1alpha1",
-						"names": map[string]interface{}{
+						"names": map[string]any{
 							"kind":     "VPC",
 							"listKind": "VPCList",
 							"singular": "vpc",
@@ -759,7 +759,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"crdName": "string",
 					},
 					nil,
@@ -779,22 +779,22 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"crdName": "string",
 					},
 					nil,
 				),
-				generator.WithResource("somecrd", map[string]interface{}{
+				generator.WithResource("somecrd", map[string]any{
 					"apiVersion": "apiextensions.k8s.io/v1",
 					"kind":       "CustomResourceDefinition",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						// Non-standalone expression (string template) - should not panic
 						"name": "crd-${schema.spec.crdName}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"group":   "ec2.services.k8s.aws",
 						"version": "v1alpha1",
-						"names": map[string]interface{}{
+						"names": map[string]any{
 							"kind":     "VPC",
 							"listKind": "VPCList",
 							"singular": "vpc",
@@ -811,25 +811,25 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":     "string",
 						"port":     "integer | default=80",
 						"tags":     "map[string]string",
 						"replicas": "integer | default=3",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"state": "${vpc.status.state}",
 						"id":    "${vpc.status.vpcID}",
 					},
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
 			},
@@ -840,22 +840,22 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"state": "${vpc.status.?state}",
 						"vpcID": "${vpc.status.?vpcID}",
 					},
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
 			},
@@ -866,7 +866,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"items": "[]string",
 					},
 					nil,
@@ -893,15 +893,15 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("cfgmap", map[string]interface{}{
+				generator.WithResource("cfgmap", map[string]any{
 					"apiVersion": "invalid/version/format",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test",
 					},
 				}, nil, nil),
@@ -946,79 +946,79 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
 				// First layer: Base resources with no dependencies
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "testvpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
-				generator.WithResource("clusterpolicy", map[string]interface{}{
+				generator.WithResource("clusterpolicy", map[string]any{
 					"apiVersion": "iam.services.k8s.aws/v1alpha1",
 					"kind":       "Policy",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "clusterpolicy",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":     "testclusterpolicy",
 						"document": "{}",
 					},
 				}, nil, nil),
 				// Second layer: Resources depending on first layer
-				generator.WithResource("clusterrole", map[string]interface{}{
+				generator.WithResource("clusterrole", map[string]any{
 					"apiVersion": "iam.services.k8s.aws/v1alpha1",
 					"kind":       "Role",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "clusterrole",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":                     "${clusterpolicy.status.policyID}role",
 						"assumeRolePolicyDocument": "{}",
 					},
 				}, nil, nil),
-				generator.WithResource("subnet1", map[string]interface{}{
+				generator.WithResource("subnet1", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "subnet1",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.1.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
 				}, nil, nil),
-				generator.WithResource("subnet2", map[string]interface{}{
+				generator.WithResource("subnet2", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "subnet2",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.2.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
 				}, nil, nil),
 				// Third layer: EKS Cluster depending on roles and subnets
-				generator.WithResource("cluster", map[string]interface{}{
+				generator.WithResource("cluster", map[string]any{
 					"apiVersion": "eks.services.k8s.aws/v1alpha1",
 					"kind":       "Cluster",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "cluster",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":    "testcluster",
 						"roleARN": "${clusterrole.status.roleID}",
-						"resourcesVPCConfig": map[string]interface{}{
-							"subnetIDs": []interface{}{
+						"resourcesVPCConfig": map[string]any{
+							"subnetIDs": []any{
 								"${subnet1.status.subnetID}",
 								"${subnet2.status.subnetID}",
 							},
@@ -1054,18 +1054,18 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("subnet", map[string]interface{}{
+				generator.WithResource("subnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "subnet",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.0.0/24",
 						"vpcID":     "${missingvpc.status.vpcID}",
 					},
@@ -1079,29 +1079,29 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("role1", map[string]interface{}{
+				generator.WithResource("role1", map[string]any{
 					"apiVersion": "iam.services.k8s.aws/v1alpha1",
 					"kind":       "Role",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${role2.metadata.name}1",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":                     "testrole1",
 						"assumeRolePolicyDocument": "{}",
 					},
 				}, nil, nil),
-				generator.WithResource("role2", map[string]interface{}{
+				generator.WithResource("role2", map[string]any{
 					"apiVersion": "iam.services.k8s.aws/v1alpha1",
 					"kind":       "Role",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${role1.metadata.name}2",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":                     "testrole2",
 						"assumeRolePolicyDocument": "{}",
 					},
@@ -1115,65 +1115,65 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("pod1", map[string]interface{}{
+				generator.WithResource("pod1", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "pod1",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx1",
 								"image": "nginx:latest",
 							},
 						},
 					},
 				}, nil, nil),
-				generator.WithResource("pod2", map[string]interface{}{
+				generator.WithResource("pod2", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "pod2",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx2",
 								"image": "nginx:latest",
 							},
 						},
 					},
 				}, nil, nil),
-				generator.WithResource("pod3", map[string]interface{}{
+				generator.WithResource("pod3", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "pod3",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx3",
 								"image": "nginx:latest",
 							},
 						},
 					},
 				}, nil, nil),
-				generator.WithResource("pod4", map[string]interface{}{
+				generator.WithResource("pod4", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "pod4",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx4",
 								"image": "nginx:latest",
 							},
@@ -1196,65 +1196,65 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("pod1", map[string]interface{}{
+				generator.WithResource("pod1", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${pod4.status.podIP}app1",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx1",
 								"image": "nginx:latest",
 							},
 						},
 					},
 				}, nil, nil),
-				generator.WithResource("pod2", map[string]interface{}{
+				generator.WithResource("pod2", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${pod1.status.podIP}app2",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx2",
 								"image": "nginx:latest",
 							},
 						},
 					},
 				}, nil, nil),
-				generator.WithResource("pod3", map[string]interface{}{
+				generator.WithResource("pod3", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${pod2.status.podIP}app3",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx3",
 								"image": "nginx:latest",
 							},
 						},
 					},
 				}, nil, nil),
-				generator.WithResource("pod4", map[string]interface{}{
+				generator.WithResource("pod4", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${pod3.status.podIP}app4",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx4",
 								"image": "nginx:latest",
 							},
@@ -1270,30 +1270,30 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
 				// This resource references vpc from multiple fields — each
 				// field should contribute at most one dependency entry.
-				generator.WithResource("subnet", map[string]interface{}{
+				generator.WithResource("subnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "subnet",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "${vpc.status.vpcID}",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
@@ -1309,97 +1309,97 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
 				// Base infrastructure
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
-				generator.WithResource("subnet1", map[string]interface{}{
+				generator.WithResource("subnet1", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "subnet1",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.1.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
 				}, nil, nil),
-				generator.WithResource("subnet2", map[string]interface{}{
+				generator.WithResource("subnet2", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "subnet2",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.2.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
 				}, nil, nil),
-				generator.WithResource("subnet3", map[string]interface{}{
+				generator.WithResource("subnet3", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "subnet3",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.3.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
 				}, nil, nil),
-				generator.WithResource("secgroup", map[string]interface{}{
+				generator.WithResource("secgroup", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "SecurityGroup",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "secgroup",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"vpcID": "${vpc.status.vpcID}",
 					},
 				}, nil, nil),
-				generator.WithResource("policy", map[string]interface{}{
+				generator.WithResource("policy", map[string]any{
 					"apiVersion": "iam.services.k8s.aws/v1alpha1",
 					"kind":       "Policy",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "policy",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"document": "{}",
 					},
 				}, nil, nil),
-				generator.WithResource("role", map[string]interface{}{
+				generator.WithResource("role", map[string]any{
 					"apiVersion": "iam.services.k8s.aws/v1alpha1",
 					"kind":       "Role",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "role",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name":                     "${policy.status.policyID}role",
 						"assumeRolePolicyDocument": "{}",
 					},
 				}, nil, nil),
 				// Three clusters using the same infrastructure
-				generator.WithResource("cluster1", map[string]interface{}{
+				generator.WithResource("cluster1", map[string]any{
 					"apiVersion": "eks.services.k8s.aws/v1alpha1",
 					"kind":       "Cluster",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "cluster1",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"roleARN": "${role.status.roleID}",
-						"resourcesVPCConfig": map[string]interface{}{
-							"subnetIDs": []interface{}{
+						"resourcesVPCConfig": map[string]any{
+							"subnetIDs": []any{
 								"${subnet1.status.subnetID}",
 								"${subnet2.status.subnetID}",
 								"${subnet3.status.subnetID}",
@@ -1407,16 +1407,16 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 						},
 					},
 				}, nil, nil),
-				generator.WithResource("cluster2", map[string]interface{}{
+				generator.WithResource("cluster2", map[string]any{
 					"apiVersion": "eks.services.k8s.aws/v1alpha1",
 					"kind":       "Cluster",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "cluster2",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"roleARN": "${role.status.roleID}",
-						"resourcesVPCConfig": map[string]interface{}{
-							"subnetIDs": []interface{}{
+						"resourcesVPCConfig": map[string]any{
+							"subnetIDs": []any{
 								"${subnet1.status.subnetID}",
 								"${subnet2.status.subnetID}",
 								"${subnet3.status.subnetID}",
@@ -1424,16 +1424,16 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 						},
 					},
 				}, nil, nil),
-				generator.WithResource("cluster3", map[string]interface{}{
+				generator.WithResource("cluster3", map[string]any{
 					"apiVersion": "eks.services.k8s.aws/v1alpha1",
 					"kind":       "Cluster",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "cluster3",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"roleARN": "${role.status.roleID}",
-						"resourcesVPCConfig": map[string]interface{}{
-							"subnetIDs": []interface{}{
+						"resourcesVPCConfig": map[string]any{
+							"subnetIDs": []any{
 								"${subnet1.status.subnetID}",
 								"${subnet2.status.subnetID}",
 								"${subnet3.status.subnetID}",
@@ -1442,27 +1442,27 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 					},
 				}, nil, nil),
 				// Pod depending on all clusters
-				generator.WithResource("monitor", map[string]interface{}{
+				generator.WithResource("monitor", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "monitor",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "monitor",
 								"image": "monitor:latest",
-								"env": []interface{}{
-									map[string]interface{}{
+								"env": []any{
+									map[string]any{
 										"name":  "CLUSTER1_ARN",
 										"value": "${cluster1.status.ackResourceMetadata.arn}",
 									},
-									map[string]interface{}{
+									map[string]any{
 										"name":  "CLUSTER2_ARN",
 										"value": "${cluster2.status.ackResourceMetadata.arn}",
 									},
-									map[string]interface{}{
+									map[string]any{
 										"name":  "CLUSTER3_ARN",
 										"value": "${cluster3.status.ackResourceMetadata.arn}",
 									},
@@ -1548,7 +1548,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"replicas":         "integer | default=3",
 						"environment":      "string | default=dev",
 						"region":           "string | default=us-west-2",
@@ -1557,42 +1557,42 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					nil,
 				),
 				// Resource with no expressions
-				generator.WithResource("policy", map[string]interface{}{
+				generator.WithResource("policy", map[string]any{
 					"apiVersion": "iam.services.k8s.aws/v1alpha1",
 					"kind":       "Policy",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "policy",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"document": "{}",
 					},
 				}, nil, nil),
 				// Resource with only readyWhen expressions
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, []string{
 					"${vpc.status.state == 'available'}",
 					"${vpc.status.vpcID != ''}",
 				}, nil),
 				// Resource with mix of static and dynamic expressions
-				generator.WithResource("subnet", map[string]interface{}{
+				generator.WithResource("subnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "subnet",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.1.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
-						"tags": []interface{}{
-							map[string]interface{}{
+						"tags": []any{
+							map[string]any{
 								"key":   "Environment",
 								"value": "${schema.spec.environment}",
 							},
@@ -1600,16 +1600,16 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					},
 				}, []string{"${subnet.status.state == 'available'}"}, nil),
 				// Non-standalone expressions
-				generator.WithResource("cluster", map[string]interface{}{
+				generator.WithResource("cluster", map[string]any{
 					"apiVersion": "eks.services.k8s.aws/v1alpha1",
 					"kind":       "Cluster",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${vpc.metadata.name}cluster${schema.spec.environment}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"name": "testcluster",
-						"resourcesVPCConfig": map[string]interface{}{
-							"subnetIDs": []interface{}{
+						"resourcesVPCConfig": map[string]any{
+							"subnetIDs": []any{
 								"${subnet.status.subnetID}",
 							},
 						},
@@ -1620,12 +1620,12 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					"${schema.spec.createMonitoring}",
 				}),
 				// All the above combined
-				generator.WithResource("monitor", map[string]interface{}{
+				generator.WithResource("monitor", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "monitor",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"environment":  "${schema.spec.environment}",
 							"cluster":      "${cluster.metadata.name}",
 							"combined":     "${cluster.metadata.name}-${schema.spec.environment}",
@@ -1633,17 +1633,17 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 							"two.dynamics": "${vpc.metadata.name}-${cluster.status.ackResourceMetadata.arn}",
 						},
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "monitor",
 								"image": "monitor:latest",
-								"env": []interface{}{
-									map[string]interface{}{
+								"env": []any{
+									map[string]any{
 										"name":  "CLUSTER_ARN",
 										"value": "${cluster.status.ackResourceMetadata.arn}",
 									},
-									map[string]interface{}{
+									map[string]any{
 										"name":  "REGION",
 										"value": "${schema.spec.region}",
 									},
@@ -1756,21 +1756,21 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("somecrd", map[string]interface{}{
+				generator.WithResource("somecrd", map[string]any{
 					"apiVersion": "apiextensions.k8s.io/v1",
 					"kind":       "CustomResourceDefinition",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "somecrd.ec2.services.k8s.aws",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"group":   "ec2.services.k8s.aws",
 						"version": "v1alpha1",
-						"names": map[string]interface{}{
+						"names": map[string]any{
 							"kind":     "SomeCRD",
 							"listKind": "SomeCRDList",
 							"singular": "SomeCRD",
@@ -1779,26 +1779,26 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						"scope": "Namespaced",
 					},
 				}, nil, nil),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, []string{
 					"${vpc.status.state == 'available'}",
 					"${vpc.status.vpcID != ''}",
 				}, nil),
-				generator.WithResource("subnet1", map[string]interface{}{
+				generator.WithResource("subnet1", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "subnet1",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"vpcID":     "${vpc.metadata.name}",
 						"cidrBlock": "10.0.1.0/24",
 					},
@@ -1888,22 +1888,22 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"podName": "${pod.metadata.name}",
 					},
 				),
-				generator.WithResource("pod", map[string]interface{}{
+				generator.WithResource("pod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-pod",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx",
 								"image": "nginx:latest",
 							},
@@ -1918,29 +1918,29 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
-				generator.WithResource("subnet", map[string]interface{}{
+				generator.WithResource("subnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":   "test-subnet",
 						"labels": "${vpc.metadata.labels}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.1.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
@@ -1953,29 +1953,29 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
-				generator.WithResource("subnet", map[string]interface{}{
+				generator.WithResource("subnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":        "test-subnet",
 						"annotations": "${vpc.metadata.annotations}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.1.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
@@ -1988,22 +1988,22 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"invalid": "${pod.metadata.nonExistentField}",
 					},
 				),
-				generator.WithResource("pod", map[string]interface{}{
+				generator.WithResource("pod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-pod",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx",
 								"image": "nginx:latest",
 							},
@@ -2021,19 +2021,19 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, []string{"${vpc.status.vpcID}"}, nil), // Returns string, not bool
 			},
@@ -2045,19 +2045,19 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"count": "integer",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, []string{"${schema.spec.count}"}), // Returns integer, not bool
 			},
@@ -2069,19 +2069,19 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, []string{"${vpc.status.state == 'available'}"}, nil),
 			},
@@ -2092,19 +2092,19 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"enabled": "boolean",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, []string{"${schema.spec.enabled}"}),
 			},
@@ -2117,21 +2117,21 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"state": "${vpc.status.?state}",
 					},
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
 			},
@@ -2142,21 +2142,21 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"count": "integer",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"name": "${vpc.status.?state}", // state is string
 					},
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
 			},
@@ -2169,28 +2169,28 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
-				generator.WithResource("subnet", map[string]interface{}{
+				generator.WithResource("subnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-subnet",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"vpcID": "${vpc.metadata.name.field}", // name is string, not object
 					},
 				}, nil, nil),
@@ -2203,31 +2203,31 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-vpc",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"env": "prod",
 						},
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
-				generator.WithResource("subnet", map[string]interface{}{
+				generator.WithResource("subnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${vpc.metadata.labels['env']}-subnet", // Accessing map value
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.1.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
@@ -2245,32 +2245,32 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"names": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("vpcs", map[string]interface{}{
+				generator.WithResourceCollection("vpcs", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${name}-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				},
 					[]krov1alpha1.ForEachDimension{
 						{"name": "${schema.spec.names}"},
 					},
 					[]string{"${each.status.vpcID != \"\"}"}, nil),
-				generator.WithResourceCollection("subnets", map[string]interface{}{
+				generator.WithResourceCollection("subnets", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${name}-subnet",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "10.0.1.0/24",
 					},
 				},
@@ -2286,18 +2286,18 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"items": "[]string",
 					},
 					nil,
 				),
-				generator.WithResource("configmap", map[string]interface{}{
+				generator.WithResource("configmap", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-config",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"items": "${schema.spec.items}",
 					},
 				}, nil, nil),
@@ -2310,15 +2310,15 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"ForEachTest", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"queues": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("queues", map[string]interface{}{
+				generator.WithResourceCollection("queues", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.metadata.name + '-' + queue}",
 					},
 				},
@@ -2326,14 +2326,14 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 						{"queue": "${schema.spec.queues}"},
 					},
 					nil, nil),
-				generator.WithResource("configmap", map[string]interface{}{
+				generator.WithResource("configmap", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "${schema.metadata.name}-output",
 						"namespace": "${schema.metadata.namespace}",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"queues": "${queues.map(q, {\"name\": q.metadata.name, \"queueARN\": q.status.phase})}",
 					},
 				}, nil, nil),
@@ -2350,16 +2350,16 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"value": "string",
 					},
 					nil,
 				),
-				generator.WithResource("configmap", map[string]interface{}{
+				generator.WithResource("configmap", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata":   map[string]interface{}{"name": "${schema.metadata.name}"},
-					"data":       map[string]interface{}{"foo": "${schema.spec.value}"},
+					"metadata":   map[string]any{"name": "${schema.metadata.name}"},
+					"data":       map[string]any{"foo": "${schema.spec.value}"},
 				}, nil, []string{"${schema.spec.convex.enabled}"}),
 			},
 			wantErr: true,
@@ -2516,6 +2516,12 @@ func TestNewBuilder(t *testing.T) {
 			opts:   []BuilderOption{WithRESTMapper(fakeRESTMapper)},
 		},
 		{
+			name:   "success with WithCostLimit",
+			config: &rest.Config{},
+			client: &http.Client{},
+			opts:   []BuilderOption{WithCostLimit(5000)},
+		},
+		{
 			name:   "success with both options overridden skips defaults",
 			config: &rest.Config{Host: "://bad"}, // would fail default resolver creation
 			client: nil,                          // would fail default REST mapper creation
@@ -2570,27 +2576,27 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"PodSetup", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"podName":    "string",
 						"containers": "[]containerConfig",
 					},
 					nil,
-					generator.WithTypes(map[string]interface{}{
-						"containerConfig": map[string]interface{}{
+					generator.WithTypes(map[string]any{
+						"containerConfig": map[string]any{
 							"name":  "string",
 							"image": "string",
 						},
 					}),
 				),
-				generator.WithResource("pod", map[string]interface{}{
+				generator.WithResource("pod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.podName}",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "${schema.spec.containers[0].name}",
 								"image": "${schema.spec.containers[0].image}",
 							},
@@ -2605,26 +2611,26 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"AppSetup", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"app": "appConfig",
 					},
 					nil,
-					generator.WithTypes(map[string]interface{}{
-						"appConfig": map[string]interface{}{
+					generator.WithTypes(map[string]any{
+						"appConfig": map[string]any{
 							"name":  "string",
 							"image": "string",
 						},
 					}),
 				),
-				generator.WithResource("pod", map[string]interface{}{
+				generator.WithResource("pod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.app.name}",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "${schema.spec.app.name}",
 								"image": "${schema.spec.app.image}",
 							},
@@ -2639,49 +2645,49 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"EnvSetup", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"basic": "basicEnv",
 						"full":  "fullEnv",
 					},
 					nil,
-					generator.WithTypes(map[string]interface{}{
-						"basicEnv": map[string]interface{}{
+					generator.WithTypes(map[string]any{
+						"basicEnv": map[string]any{
 							"name": "string",
 						},
-						"fullEnv": map[string]interface{}{
+						"fullEnv": map[string]any{
 							"name":  "string",
 							"value": "string",
 						},
 					}),
 				),
-				generator.WithResource("podBasic", map[string]interface{}{
+				generator.WithResource("podBasic", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "basic-pod",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "${schema.spec.basic.name}",
 								"image": "nginx",
 							},
 						},
 					},
 				}, nil, nil),
-				generator.WithResource("podFull", map[string]interface{}{
+				generator.WithResource("podFull", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "full-pod",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "${schema.spec.full.name}",
 								"image": "nginx",
-								"env": []interface{}{
-									map[string]interface{}{
+								"env": []any{
+									map[string]any{
 										"name":  "${schema.spec.full.name}",
 										"value": "${schema.spec.full.value}",
 									},
@@ -2698,32 +2704,32 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"ServiceWithPorts", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"appName": "string",
 						"ports":   "[]portConfig",
 					},
 					nil,
-					generator.WithTypes(map[string]interface{}{
-						"portConfig": map[string]interface{}{
+					generator.WithTypes(map[string]any{
+						"portConfig": map[string]any{
 							"name":          "string",
 							"containerPort": "integer",
 							"protocol":      "string",
 						},
 					}),
 				),
-				generator.WithResource("pod", map[string]interface{}{
+				generator.WithResource("pod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.appName}",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "${schema.spec.appName}",
 								"image": "nginx",
-								"ports": []interface{}{
-									map[string]interface{}{
+								"ports": []any{
+									map[string]any{
 										"name":          "${schema.spec.ports[0].name}",
 										"containerPort": "${schema.spec.ports[0].containerPort}",
 										"protocol":      "${schema.spec.ports[0].protocol}",
@@ -2741,24 +2747,24 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"ContainerSetup", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"containers": "[]containerSubset",
 					},
 					nil,
-					generator.WithTypes(map[string]interface{}{
-						"containerSubset": map[string]interface{}{
+					generator.WithTypes(map[string]any{
+						"containerSubset": map[string]any{
 							"name":  "string",
 							"image": "string",
 						},
 					}),
 				),
-				generator.WithResource("pod", map[string]interface{}{
+				generator.WithResource("pod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-pod",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"containers": "${schema.spec.containers}",
 					},
 				}, nil, nil),
@@ -2770,25 +2776,25 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"ContainerSetup", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"containers": "[]containerWithExtra",
 					},
 					nil,
-					generator.WithTypes(map[string]interface{}{
-						"containerWithExtra": map[string]interface{}{
+					generator.WithTypes(map[string]any{
+						"containerWithExtra": map[string]any{
 							"name":       "string",
 							"image":      "string",
 							"extraField": "string",
 						},
 					}),
 				),
-				generator.WithResource("pod", map[string]interface{}{
+				generator.WithResource("pod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-pod",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"containers": "${schema.spec.containers}",
 					},
 				}, nil, nil),
@@ -2801,24 +2807,24 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"ContainerSetup", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"containers": "[]containerWrongType",
 					},
 					nil,
-					generator.WithTypes(map[string]interface{}{
-						"containerWrongType": map[string]interface{}{
+					generator.WithTypes(map[string]any{
+						"containerWrongType": map[string]any{
 							"name":  "integer",
 							"image": "string",
 						},
 					}),
 				),
-				generator.WithResource("pod", map[string]interface{}{
+				generator.WithResource("pod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "test-pod",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"containers": "${schema.spec.containers}",
 					},
 				}, nil, nil),
@@ -2831,42 +2837,42 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"PodReplicator", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"sourcePodName": "string",
 						"targetPodName": "string",
 					},
 					nil,
 				),
-				generator.WithResource("sourcePod", map[string]interface{}{
+				generator.WithResource("sourcePod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.sourcePodName}",
-						"labels": map[string]interface{}{
+						"labels": map[string]any{
 							"app": "source",
 						},
-						"annotations": map[string]interface{}{
+						"annotations": map[string]any{
 							"description": "source pod",
 						},
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx",
 								"image": "nginx:1.19",
 							},
 						},
 					},
 				}, nil, nil),
-				generator.WithResource("targetPod", map[string]interface{}{
+				generator.WithResource("targetPod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":        "${schema.spec.targetPodName}",
 						"labels":      "${sourcePod.metadata.labels}",
 						"annotations": "${sourcePod.metadata.annotations}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"containers": "${sourcePod.spec.containers}",
 					},
 				}, nil, nil),
@@ -2882,28 +2888,28 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"FloatCasts", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"appName":   "string",
 						"threshold": "float",
 						"limits":    "[]float",
 					},
 					nil,
 				),
-				generator.WithResource("pod", map[string]interface{}{
+				generator.WithResource("pod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.appName}-ports",
-						"annotations": map[string]interface{}{
+						"annotations": map[string]any{
 							"threshold":   "${string(schema.spec.threshold)}",
 							"doubleValue": "${string(schema.spec.threshold * 2.0)}",
 							"firstLimit":  "${string(schema.spec.limits[0])}",
 							"limitsCount": "${string(size(schema.spec.limits))}",
 						},
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "main",
 								"image": "nginx",
 							},
@@ -2954,20 +2960,20 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"WorkerPool", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"workers": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("workerPods", map[string]interface{}{
+				generator.WithResourceCollection("workerPods", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${workerName}",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "worker",
 								"image": "nginx:latest",
 							},
@@ -2994,21 +3000,21 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"MultiRegion", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"regions": "[]string",
 						"tiers":   "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("pods", map[string]interface{}{
+				generator.WithResourceCollection("pods", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${region}-${tier}-pod",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "app",
 								"image": "nginx:latest",
 							},
@@ -3036,20 +3042,20 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"WorkerPool", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"workers": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("workerPods", map[string]interface{}{
+				generator.WithResourceCollection("workerPods", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${worker}",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "worker",
 								"image": "nginx:latest",
 							},
@@ -3063,15 +3069,15 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 				// monitorPod depends on workerPods collection
 				// Since workerPods is a collection, it's typed as list(Pod)
 				// We use size() to reference the collection and create a dependency
-				generator.WithResource("monitorPod", map[string]interface{}{
+				generator.WithResource("monitorPod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${string(size(workerPods))}-monitor",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "monitor",
 								"image": "monitor:latest",
 							},
@@ -3092,20 +3098,20 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"WorkerPool", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"workers": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("workerPods", map[string]interface{}{
+				generator.WithResourceCollection("workerPods", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "worker",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "worker",
 								"image": "nginx:latest",
 							},
@@ -3126,21 +3132,21 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"WorkerPool", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"workers": "[]string",
 						"prefix":  "string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("workerPods", map[string]interface{}{
+				generator.WithResourceCollection("workerPods", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "worker",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "worker",
 								"image": "nginx:latest",
 							},
@@ -3161,20 +3167,20 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Simple", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("pod", map[string]interface{}{
+				generator.WithResource("pod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "simple-pod",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "app",
 								"image": "nginx:latest",
 							},
@@ -3194,20 +3200,20 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"PodCollection", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"names": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("pods", map[string]interface{}{
+				generator.WithResourceCollection("pods", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${name}",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "app",
 								"image": "nginx:latest",
 							},
@@ -3229,21 +3235,21 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"PodCollection", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"names": "[]string",
 					},
 					nil,
 				),
 				// First resource: a regular Pod
-				generator.WithResource("mainPod", map[string]interface{}{
+				generator.WithResource("mainPod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "main-pod",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "main",
 								"image": "nginx:latest",
 							},
@@ -3251,15 +3257,15 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 					},
 				}, nil, nil),
 				// Second resource: collection that incorrectly references mainPod in readyWhen
-				generator.WithResourceCollection("workerPods", map[string]interface{}{
+				generator.WithResourceCollection("workerPods", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${name}",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "worker",
 								"image": "nginx:latest",
 							},
@@ -3281,20 +3287,20 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"PodCollection", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"names": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("pods", map[string]interface{}{
+				generator.WithResourceCollection("pods", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${name}",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "app",
 								"image": "nginx:latest",
 							},
@@ -3357,32 +3363,32 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"CollectionChaining", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":       "string",
 						"cidrBlocks": "[]string",
 					},
 					nil,
 				),
 				// First resource: a regular VPC
-				generator.WithResource("vpc", map[string]interface{}{
+				generator.WithResource("vpc", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-vpc",
 					},
-					"spec": map[string]interface{}{
-						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					"spec": map[string]any{
+						"cidrBlocks": []any{"10.0.0.0/16"},
 					},
 				}, nil, nil),
 				// Second resource: collection with forEach that references the first resource
 				// The expression uses a ternary that checks vpc, making it a dynamic dependency
-				generator.WithResourceCollection("chainedSubnets", map[string]interface{}{
+				generator.WithResourceCollection("chainedSubnets", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-${cidr}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "${cidr}",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
@@ -3408,20 +3414,20 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"CollectionToCollection", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":       "string",
 						"cidrBlocks": "[]string",
 					},
 					nil,
 				),
 				// First collection: creates multiple subnets
-				generator.WithResourceCollection("subnets", map[string]interface{}{
+				generator.WithResourceCollection("subnets", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-${cidr}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "${cidr}",
 						"vpcID":     "vpc-123",
 					},
@@ -3432,13 +3438,13 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 					nil, nil),
 				// Second collection: iterates over the first collection
 				// ${subnets} is typed as list(Subnet) so we can iterate over it
-				generator.WithResourceCollection("securityGroups", map[string]interface{}{
+				generator.WithResourceCollection("securityGroups", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "SecurityGroup",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-sg-${subnet.metadata.name}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"description": "${subnet.status.subnetID}",
 						"vpcID":       "vpc-123",
 					},
@@ -3483,20 +3489,20 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"FilteredCollection", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":       "string",
 						"cidrBlocks": "[]string",
 					},
 					nil,
 				),
 				// First collection: creates multiple subnets
-				generator.WithResourceCollection("subnets", map[string]interface{}{
+				generator.WithResourceCollection("subnets", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-${cidr}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "${cidr}",
 						"vpcID":     "vpc-123",
 					},
@@ -3506,13 +3512,13 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 					},
 					nil, nil),
 				// Second collection: uses filter() on the first collection
-				generator.WithResourceCollection("filteredSecurityGroups", map[string]interface{}{
+				generator.WithResourceCollection("filteredSecurityGroups", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "SecurityGroup",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-sg-${subnet.metadata.name}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"description": "${subnet.status.subnetID}",
 						"vpcID":       "vpc-123",
 					},
@@ -3578,28 +3584,28 @@ func TestGraphBuilder_IncludeWhenReferences(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"IncludeWhenDeps", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("source", map[string]interface{}{
+				generator.WithResource("source", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-source",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"enabled": "true",
 					},
 				}, nil, nil),
-				generator.WithResource("dependent", map[string]interface{}{
+				generator.WithResource("dependent", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-dependent",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"key": "value",
 					},
 				}, nil, []string{"${source.data.enabled == 'true'}"}),
@@ -3629,28 +3635,28 @@ func TestGraphBuilder_IncludeWhenReferences(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"IncludeWhenCycle", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("a", map[string]interface{}{
+				generator.WithResource("a", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-a",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"enabled": "true",
 					},
 				}, nil, []string{"${b.data.enabled == 'true'}"}),
-				generator.WithResource("b", map[string]interface{}{
+				generator.WithResource("b", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-b",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"enabled": "true",
 					},
 				}, nil, []string{"${a.data.enabled == 'true'}"}),
@@ -3663,28 +3669,28 @@ func TestGraphBuilder_IncludeWhenReferences(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"IncludeWhenTemplateCycle", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResource("a", map[string]interface{}{
+				generator.WithResource("a", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${b.metadata.name}-a",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"enabled": "true",
 					},
 				}, nil, nil),
-				generator.WithResource("b", map[string]interface{}{
+				generator.WithResource("b", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-b",
 					},
-					"data": map[string]interface{}{
+					"data": map[string]any{
 						"key": "value",
 					},
 				}, nil, []string{"${a.data.enabled == 'true'}"}),
@@ -3734,19 +3740,19 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"MultiZoneVPC", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":       "string",
 						"cidrBlocks": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("zonedSubnet", map[string]interface{}{
+				generator.WithResourceCollection("zonedSubnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-${cidr}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "${cidr}",
 						"vpcID":     "vpc-123",
 					},
@@ -3763,20 +3769,20 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"MultiRegionTierDeployment", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":       "string",
 						"cidrBlocks": "[]string",
 						"vpcIDs":     "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("regionTierSubnet", map[string]interface{}{
+				generator.WithResourceCollection("regionTierSubnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-${cidr}-${vpcID}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "${cidr}",
 						"vpcID":     "${vpcID}",
 					},
@@ -3794,18 +3800,18 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"InvalidCollection", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name": "string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("badSubnet", map[string]interface{}{
+				generator.WithResourceCollection("badSubnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-${element}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "${element}",
 						"vpcID":     "vpc-123",
 					},
@@ -3823,19 +3829,19 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"WorkerPool", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":    "string",
 						"workers": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("workerSubnet", map[string]interface{}{
+				generator.WithResourceCollection("workerSubnet", map[string]any{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-${worker}",
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"cidrBlock": "${worker}",
 						"vpcID":     "${schema.spec.name}",
 					},
@@ -3852,21 +3858,21 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"InvalidIteratorRef", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"name":  "string",
 						"items": "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("badPod", map[string]interface{}{
+				generator.WithResourceCollection("badPod", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "${schema.spec.name}-${element}-${derived}",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "main",
 								"image": "nginx",
 							},
@@ -3888,22 +3894,22 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"UnusedIterator", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"regions": "[]string",
 						"tiers":   "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("pods", map[string]interface{}{
+				generator.WithResourceCollection("pods", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						// Only uses 'region', not 'tier' - should fail
 						"name": "${region}-pod",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "app",
 								"image": "nginx:latest",
 							},
@@ -3924,22 +3930,22 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"MultiDimension", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"namespaces": "[]string",
 						"names":      "[]string",
 					},
 					nil,
 				),
-				generator.WithResourceCollection("pods", map[string]interface{}{
+				generator.WithResourceCollection("pods", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "Pod",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name":      "${name}",
 						"namespace": "${ns}",
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "app",
 								"image": "nginx:latest",
 							},
@@ -3959,16 +3965,16 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"ClusterScoped", "v1alpha1",
-					map[string]interface{}{
+					map[string]any{
 						"names": "[]string",
 					},
 					nil,
 				),
 				// CRD is cluster-scoped, so namespace field doesnt count for identity
-				generator.WithResourceCollection("crds", map[string]interface{}{
+				generator.WithResourceCollection("crds", map[string]any{
 					"apiVersion": "apiextensions.k8s.io/v1",
 					"kind":       "CustomResourceDefinition",
-					"metadata": map[string]interface{}{
+					"metadata": map[string]any{
 						"name": "static-name",
 						// Iterator in namespace field doesn't count for cluster-scoped resources
 						"namespace": "${name}",
@@ -4242,16 +4248,16 @@ func TestClusterScopedInstanceRejectsSchemaMetadataNamespace(t *testing.T) {
 	rgd := generator.NewResourceGraphDefinition("test-rgd",
 		generator.WithSchema(
 			"ClusterPolicy", "v1alpha1",
-			map[string]interface{}{
+			map[string]any{
 				"name": "string",
 			},
 			nil,
 			generator.WithScope(krov1alpha1.ResourceScopeCluster),
 		),
-		generator.WithResource("config", map[string]interface{}{
+		generator.WithResource("config", map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "${schema.spec.name}",
 				"namespace": "${schema.metadata.namespace}",
 			},
@@ -4268,7 +4274,7 @@ func TestBuildInstanceNode(t *testing.T) {
 	tests := []struct {
 		name      string
 		variables []variable.FieldDescriptor
-		template  map[string]interface{}
+		template  map[string]any
 		wantErr   string
 		wantPath  string
 		wantDeps  []string
@@ -4279,7 +4285,7 @@ func TestBuildInstanceNode(t *testing.T) {
 				Path:       "field",
 				Expression: expr("resource +"),
 			}},
-			template: map[string]interface{}{"field": "${resource +}"},
+			template: map[string]any{"field": "${resource +}"},
 			wantErr:  "failed to extract dependencies",
 		},
 		{
@@ -4288,7 +4294,7 @@ func TestBuildInstanceNode(t *testing.T) {
 				Path:       "field",
 				Expression: expr("true"),
 			}},
-			template: map[string]interface{}{"field": "${true}"},
+			template: map[string]any{"field": "${true}"},
 			wantErr:  "must refer to a resource",
 		},
 		{
@@ -4297,7 +4303,7 @@ func TestBuildInstanceNode(t *testing.T) {
 				Path:       "field",
 				Expression: expr("resource.spec.name"),
 			}},
-			template: map[string]interface{}{"field": "${resource.spec.name}"},
+			template: map[string]any{"field": "${resource.spec.name}"},
 			wantPath: "status.field",
 			wantDeps: []string{"resource"},
 		},
@@ -4850,22 +4856,22 @@ func newConditionsBuildContext(t *testing.T) (*buildContext, *cel.Env, *ast.Insp
 func TestExtractConditionExpressions(t *testing.T) {
 	tests := []struct {
 		name        string
-		input       map[string]interface{}
+		input       map[string]any
 		want        []string
 		wantErr     string
 		wantRemoved bool
 	}{
 		{
 			name:        "no conditions key",
-			input:       map[string]interface{}{"foo": "bar"},
+			input:       map[string]any{"foo": "bar"},
 			want:        nil,
 			wantRemoved: false,
 		},
 		{
 			name: "conditions present",
-			input: map[string]interface{}{
+			input: map[string]any{
 				"foo": "bar",
-				"conditions": []interface{}{
+				"conditions": []any{
 					"${runtime.newCondition({\"type\": 'X', \"status\": 'True', \"reason\": '', \"message\": ''})}",
 				},
 			},
@@ -4876,15 +4882,15 @@ func TestExtractConditionExpressions(t *testing.T) {
 		},
 		{
 			name: "conditions must be a list",
-			input: map[string]interface{}{
+			input: map[string]any{
 				"conditions": "not a list",
 			},
 			wantErr: "must be a list",
 		},
 		{
 			name: "elements must be strings",
-			input: map[string]interface{}{
-				"conditions": []interface{}{42},
+			input: map[string]any{
+				"conditions": []any{42},
 			},
 			wantErr: "must be a CEL expression string",
 		},
@@ -5001,7 +5007,7 @@ func TestBuildInstanceNodeFoldsConditionDeps(t *testing.T) {
 		metadata.GetResourceGraphDefinitionInstanceGVR("example.com", "v1alpha1", "Test"),
 		true,
 		nil,
-		map[string]interface{}{},
+		map[string]any{},
 		conditions,
 		inspector,
 	)
@@ -5071,16 +5077,16 @@ func TestGraphBuilder_RuntimeOutsideConditionsRejected(t *testing.T) {
 		restMapper:     restMapper,
 	}
 
-	configmap := func(data map[string]interface{}) generator.ResourceGraphDefinitionOption {
-		return generator.WithResource("configmap", map[string]interface{}{
+	configmap := func(data map[string]any) generator.ResourceGraphDefinitionOption {
+		return generator.WithResource("configmap", map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata":   map[string]interface{}{"name": "${schema.spec.name}"},
+			"metadata":   map[string]any{"name": "${schema.spec.name}"},
 			"data":       data,
 		}, nil, nil)
 	}
-	validData := map[string]interface{}{"foo": "${schema.spec.name}"}
-	nameSchema := map[string]interface{}{"name": "string"}
+	validData := map[string]any{"foo": "${schema.spec.name}"}
+	nameSchema := map[string]any{"name": "string"}
 
 	tests := []struct {
 		name    string
@@ -5091,7 +5097,7 @@ func TestGraphBuilder_RuntimeOutsideConditionsRejected(t *testing.T) {
 			name: "template field",
 			opts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema("Test", "v1alpha1", nameSchema, nil),
-				configmap(map[string]interface{}{
+				configmap(map[string]any{
 					"probe": `${runtime.condition(schema, 'Ready').status}`,
 				}),
 			},
@@ -5101,10 +5107,10 @@ func TestGraphBuilder_RuntimeOutsideConditionsRejected(t *testing.T) {
 			name: "forEach dimension",
 			opts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema("Test", "v1alpha1", nameSchema, nil),
-				generator.WithResourceCollection("cms", map[string]interface{}{
+				generator.WithResourceCollection("cms", map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
-					"metadata":   map[string]interface{}{"name": "${name}"},
+					"metadata":   map[string]any{"name": "${name}"},
 				}, []krov1alpha1.ForEachDimension{
 					{"name": `${[runtime.condition(schema, 'Ready').status]}`},
 				}, nil, nil),
@@ -5115,7 +5121,7 @@ func TestGraphBuilder_RuntimeOutsideConditionsRejected(t *testing.T) {
 			name: "plain status field",
 			opts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema("Test", "v1alpha1", nameSchema,
-					map[string]interface{}{
+					map[string]any{
 						"myfield": `${runtime.newCondition({type: 'X', status: 'True', reason: '', message: ''}).status}`,
 					}),
 				configmap(validData),
@@ -5126,8 +5132,8 @@ func TestGraphBuilder_RuntimeOutsideConditionsRejected(t *testing.T) {
 			name: "allowed in status.conditions",
 			opts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema("Test", "v1alpha1", nameSchema,
-					map[string]interface{}{
-						"conditions": []interface{}{
+					map[string]any{
+						"conditions": []any{
 							`${runtime.newCondition({type: 'X', status: 'True', reason: '', message: ''})}`,
 						},
 					}),
@@ -5158,10 +5164,10 @@ func TestBuildResourceNode_DirectSpec(t *testing.T) {
 
 	node, schema, err := builder.buildResourceNode(testParser, ResourceSpec{
 		ID: "cm",
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata":   map[string]interface{}{"name": "demo", "namespace": "default"},
+			"metadata":   map[string]any{"name": "demo", "namespace": "default"},
 		},
 		Order: 3,
 	}, true)
@@ -5173,8 +5179,8 @@ func TestBuildResourceNode_DirectSpec(t *testing.T) {
 	assert.Equal(t, "configmaps", node.Meta.GVR.Resource)
 }
 
-// testSource is a minimal Source implementation with no RGD type, proving a
-// non-RGD consumer can drive CompileSource.
+// testSource is a minimal source implementation with no RGD type, proving a
+// non-RGD consumer can drive compileSource.
 type testSource struct {
 	resources []ResourceSpec
 	gvr       schema.GroupVersionResource
@@ -5198,13 +5204,13 @@ func TestCompileSource_DirectConsumer(t *testing.T) {
 		"metadata": graphschema.ObjectMetaSchema,
 	})
 
-	g, statusSchema, err := builder.CompileSource(testSource{
+	g, statusSchema, err := builder.compileSource(testSource{
 		resources: []ResourceSpec{{
 			ID: "cm",
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata":   map[string]interface{}{"name": "${schema.spec.name}", "namespace": "default"},
+				"metadata":   map[string]any{"name": "${schema.spec.name}", "namespace": "default"},
 			},
 			Order: 0,
 		}},
@@ -5217,12 +5223,12 @@ func TestCompileSource_DirectConsumer(t *testing.T) {
 	require.NotNil(t, statusSchema)
 	require.Contains(t, g.Nodes, "cm")
 	assert.Equal(t, []string{"cm"}, g.TopologicalOrder)
-	assert.Nil(t, g.CRD, "CompileSource must not synthesize a CRD")
+	assert.Nil(t, g.CRD, "compileSource must not synthesize a CRD")
 }
 
 // buildRGResourceForTest mirrors the pre-Step-8 buildRGResource: project an RGD
 // resource to a ResourceSpec and build its node. Production now uses
-// rgResourceSpec + buildResourceNode separately (via CompileSource).
+// rgResourceSpec + buildResourceNode separately (via compileSource).
 func buildRGResourceForTest(b *Builder, p *parser.Parser, res *krov1alpha1.Resource, instanceNamespaced bool) (*Node, error) {
 	rs, err := b.rgResourceSpec(res, 0)
 	if err != nil {

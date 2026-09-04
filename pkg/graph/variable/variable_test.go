@@ -22,52 +22,44 @@ import (
 
 func TestResourceVariableKind(t *testing.T) {
 	tests := []struct {
-		name          string
-		kind          ResourceVariableKind
-		expectedStr   string
-		isStatic      bool
-		isDynamic     bool
-		isIncludeWhen bool
+		name        string
+		kind        ResourceVariableKind
+		expectedStr string
+		isStatic    bool
+		isDynamic   bool
+		isIteration bool
 	}{
 		{
-			name:          "Static Kind",
-			kind:          ResourceVariableKindStatic,
-			expectedStr:   "static",
-			isStatic:      true,
-			isDynamic:     false,
-			isIncludeWhen: false,
+			name:        "Static Kind",
+			kind:        ResourceVariableKindStatic,
+			expectedStr: "static",
+			isStatic:    true,
+			isDynamic:   false,
+			isIteration: false,
 		},
 		{
-			name:          "Dynamic Kind",
-			kind:          ResourceVariableKindDynamic,
-			expectedStr:   "dynamic",
-			isStatic:      false,
-			isDynamic:     true,
-			isIncludeWhen: false,
+			name:        "Dynamic Kind",
+			kind:        ResourceVariableKindDynamic,
+			expectedStr: "dynamic",
+			isStatic:    false,
+			isDynamic:   true,
+			isIteration: false,
 		},
 		{
-			name:          "ReadyWhen Kind",
-			kind:          ResourceVariableKindReadyWhen,
-			expectedStr:   "readyWhen",
-			isStatic:      false,
-			isDynamic:     false,
-			isIncludeWhen: false,
+			name:        "Iteration Kind",
+			kind:        ResourceVariableKindIteration,
+			expectedStr: "iteration",
+			isStatic:    false,
+			isDynamic:   false,
+			isIteration: true,
 		},
 		{
-			name:          "IncludeWhen Kind",
-			kind:          ResourceVariableKindIncludeWhen,
-			expectedStr:   "includeWhen",
-			isStatic:      false,
-			isDynamic:     false,
-			isIncludeWhen: true,
-		},
-		{
-			name:          "Unknown Kind",
-			kind:          ResourceVariableKind("unknown"),
-			expectedStr:   "unknown",
-			isStatic:      false,
-			isDynamic:     false,
-			isIncludeWhen: false,
+			name:        "Unknown Kind",
+			kind:        ResourceVariableKind("unknown"),
+			expectedStr: "unknown",
+			isStatic:    false,
+			isDynamic:   false,
+			isIteration: false,
 		},
 	}
 
@@ -76,7 +68,7 @@ func TestResourceVariableKind(t *testing.T) {
 			assert.Equal(t, tc.expectedStr, tc.kind.String())
 			assert.Equal(t, tc.isStatic, tc.kind.IsStatic())
 			assert.Equal(t, tc.isDynamic, tc.kind.IsDynamic())
-			assert.Equal(t, tc.isIncludeWhen, tc.kind.IsIncludeWhen())
+			assert.Equal(t, tc.isIteration, tc.kind.IsIteration())
 		})
 	}
 }

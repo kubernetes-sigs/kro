@@ -121,7 +121,7 @@ type ResourceSpec struct {
 	ID string
 	// Object is the resolved template object (unmarshalled user template, or an
 	// external ref serialized to unstructured). Expressions are still embedded.
-	Object map[string]interface{}
+	Object map[string]any
 	// ExternalRef marks a read-only external reference (parsed schemaless).
 	ExternalRef bool
 	// Collection marks a selector-based external collection.

@@ -40,12 +40,13 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/rgdadapter"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 type resourceGraphBuilder interface {
-	NewResourceGraphDefinition(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error)
+	NewResourceGraphDefinition(*v1alpha1.ResourceGraphDefinition, graph.Config) (*graph.Graph, error)
 }
 
 // Config holds tunable parameters for the RGD reconciler.
@@ -55,7 +56,13 @@ type Config struct {
 	ProgressRequeueDelay    time.Duration
 	MaxConcurrentReconciles int
 	MaxGraphRevisions       int
-	RGDConfig               graph.RGDConfig
+	ApplyConcurrency        int
+	// CELCostLimit bounds CEL evaluation cost for compiled expressions (0 =
+	// disabled). Threaded into the instance controller's status/condition
+	// projection so author conditions get the same execution bound as graph
+	// expressions rather than silently bypassing it.
+	CELCostLimit uint64
+	RGDConfig    graph.Config
 }
 
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
@@ -73,6 +80,11 @@ type ResourceGraphDefinitionReconciler struct {
 	revisionsRegistry     *revisions.Registry
 	registeredControllers sync.Map
 	cfg                   Config
+
+	// graphEngineCompiler is injected via WithGraphEngineCompiler after
+	// SetupWithManager so that the compiler shares the same REST config/HTTP
+	// client as the rest of the manager.  It drives the instance reconcile path.
+	graphEngineCompiler rgdadapter.Compiler
 
 	newEventRecorder func(string) record.EventRecorder
 }
@@ -157,6 +169,13 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 			}),
 		).
 		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
+}
+
+// WithGraphEngineCompiler injects the graph-engine compiler used by the
+// instance micro-controllers.  Call this after SetupWithManager so the
+// compiler shares the manager's REST config and HTTP client.
+func (r *ResourceGraphDefinitionReconciler) WithGraphEngineCompiler(comp rgdadapter.Compiler) {
+	r.graphEngineCompiler = comp
 }
 
 // resourceGraphDefinitionPrimaryWatchPredicate returns a predicate that decides

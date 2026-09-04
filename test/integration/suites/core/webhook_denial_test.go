@@ -103,15 +103,15 @@ var _ = Describe("Webhook Denial", func() {
 
 		rgd := generator.NewResourceGraphDefinition("test-webhook-denial",
 			generator.WithSchema("TestWebhookDenial", "v1alpha1",
-				map[string]interface{}{"name": "string"}, nil),
-			generator.WithResource("configmap", map[string]interface{}{
+				map[string]any{"name": "string"}, nil),
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":        "${schema.spec.name}",
-					"annotations": map[string]interface{}{"deny-me": "true"},
+					"annotations": map[string]any{"deny-me": "true"},
 				},
-				"data": map[string]interface{}{"key": "value"},
+				"data": map[string]any{"key": "value"},
 			}, nil, nil),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -124,11 +124,11 @@ var _ = Describe("Webhook Denial", func() {
 
 		instanceName := "test-webhook-instance"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestWebhookDenial",
-				"metadata":   map[string]interface{}{"name": instanceName, "namespace": namespace},
-				"spec":       map[string]interface{}{"name": instanceName},
+				"metadata":   map[string]any{"name": instanceName, "namespace": namespace},
+				"spec":       map[string]any{"name": instanceName},
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
@@ -145,9 +145,9 @@ var _ = Describe("Webhook Denial", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 
-			var resourcesReady map[string]interface{}
+			var resourcesReady map[string]any
 			for _, cond := range conditions {
-				if c, ok := cond.(map[string]interface{}); ok && c["type"] == "ResourcesReady" {
+				if c, ok := cond.(map[string]any); ok && c["type"] == "ResourcesReady" {
 					resourcesReady = c
 					break
 				}

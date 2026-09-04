@@ -68,19 +68,19 @@ var _ = Describe("InstanceExpressionIsolation", func() {
 		rgd := generator.NewResourceGraphDefinition("test-instance-literal-expr",
 			generator.WithSchema(
 				"TestInstanceLiteralExpr", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 					"note": "string",
 				},
 				nil,
 			),
-			generator.WithResource("cm", map[string]interface{}{
+			generator.WithResource("cm", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-cm",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"note": "${schema.spec.note}",
 				},
 			}, nil, nil),
@@ -95,7 +95,7 @@ var _ = Describe("InstanceExpressionIsolation", func() {
 		const literal = "echo ${HOME} && echo ${NOT_A_RESOURCE.field}"
 
 		name := "literal-expr"
-		instance := newInstance("TestInstanceLiteralExpr", name, namespace, map[string]interface{}{
+		instance := newInstance("TestInstanceLiteralExpr", name, namespace, map[string]any{
 			"name": name,
 			"note": literal,
 		})
@@ -120,18 +120,18 @@ var _ = Describe("InstanceExpressionIsolation", func() {
 		rgd := generator.NewResourceGraphDefinition("test-instance-annotation-expr",
 			generator.WithSchema(
 				"TestInstanceAnnotationExpr", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				nil,
 			),
-			generator.WithResource("cm", map[string]interface{}{
+			generator.WithResource("cm", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-cm",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"name": "${schema.spec.name}",
 				},
 			}, nil, nil),
@@ -143,7 +143,7 @@ var _ = Describe("InstanceExpressionIsolation", func() {
 		waitForRGDActive(ctx, rgd.Name)
 
 		name := "annotation-expr"
-		instance := newInstance("TestInstanceAnnotationExpr", name, namespace, map[string]interface{}{
+		instance := newInstance("TestInstanceAnnotationExpr", name, namespace, map[string]any{
 			"name": name,
 		})
 		Expect(unstructured.SetNestedStringMap(instance.Object, map[string]string{
@@ -171,29 +171,29 @@ var _ = Describe("InstanceExpressionIsolation", func() {
 		rgd := generator.NewResourceGraphDefinition("test-instance-scope-isolation",
 			generator.WithSchema(
 				"TestInstanceScopeIsolation", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 					"note": "string",
 				},
 				nil,
 			),
-			generator.WithResource("secretCarrier", map[string]interface{}{
+			generator.WithResource("secretCarrier", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-carrier",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"token": "carrier-token-value",
 				},
 			}, nil, nil),
-			generator.WithResource("echo", map[string]interface{}{
+			generator.WithResource("echo", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-echo",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"note": "${schema.spec.note}",
 				},
 			}, nil, nil),
@@ -207,7 +207,7 @@ var _ = Describe("InstanceExpressionIsolation", func() {
 		const literal = "${secretCarrier.data.token}"
 
 		name := "scope-isolation"
-		instance := newInstance("TestInstanceScopeIsolation", name, namespace, map[string]interface{}{
+		instance := newInstance("TestInstanceScopeIsolation", name, namespace, map[string]any{
 			"name": name,
 			"note": literal,
 		})
@@ -229,12 +229,12 @@ var _ = Describe("InstanceExpressionIsolation", func() {
 })
 
 // newInstance builds an unstructured instance of a kro-generated kind.
-func newInstance(kind, name, namespace string, spec map[string]interface{}) *unstructured.Unstructured {
+func newInstance(kind, name, namespace string, spec map[string]any) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 			"kind":       kind,
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      name,
 				"namespace": namespace,
 			},
@@ -270,7 +270,7 @@ func instanceConditions(instance *unstructured.Unstructured) string {
 	}
 	out := ""
 	for _, c := range conds {
-		cond, ok := c.(map[string]interface{})
+		cond, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}

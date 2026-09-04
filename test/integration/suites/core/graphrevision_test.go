@@ -83,14 +83,14 @@ var _ = Describe("GraphRevision Invalid Updates", func() {
 
 		instanceName := fmt.Sprintf("inst-%s", rand.String(5))
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       kind,
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"data": "hello",
 				},
 			},
@@ -167,14 +167,14 @@ var _ = Describe("GraphRevision Invalid Updates", func() {
 
 		Eventually(func(g Gomega) {
 			current := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 					"kind":       kind,
 				},
 			}
 			err := env.Client.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, current)
 			g.Expect(err).ToNot(HaveOccurred())
-			current.Object["spec"] = map[string]interface{}{"data": "world"}
+			current.Object["spec"] = map[string]any{"data": "world"}
 			err = env.Client.Update(ctx, current)
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
@@ -211,14 +211,14 @@ var _ = Describe("GraphRevision Instance Resolution", func() {
 		// Create an instance
 		instanceName := fmt.Sprintf("inst-%s", rand.String(5))
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       kind,
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"image":    "nginx:1.25",
 					"replicas": 2,
 				},
@@ -266,14 +266,14 @@ var _ = Describe("GraphRevision Instance Resolution", func() {
 		// Create instance
 		instanceName := fmt.Sprintf("inst-%s", rand.String(5))
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       kind,
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"image":    "nginx:1.25",
 					"replicas": 1,
 				},
@@ -324,7 +324,7 @@ var _ = Describe("GraphRevision Instance Resolution", func() {
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			instance.Object["spec"] = map[string]interface{}{
+			instance.Object["spec"] = map[string]any{
 				"image":    "nginx:1.26-updated",
 				"replicas": int64(1),
 			}
@@ -409,14 +409,14 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 		// Create an instance
 		instanceName := fmt.Sprintf("inst-%s", rand.String(5))
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       kind,
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"data": "v1-value",
 				},
 			},
@@ -446,14 +446,14 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 		// graph from the current revision to reconcile the change.
 		Eventually(func(g Gomega) {
 			current := &unstructured.Unstructured{
-				Object: map[string]interface{}{
+				Object: map[string]any{
 					"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 					"kind":       kind,
 				},
 			}
 			err := env.Client.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, current)
 			g.Expect(err).ToNot(HaveOccurred())
-			current.Object["spec"] = map[string]interface{}{"data": "v2-value"}
+			current.Object["spec"] = map[string]any{"data": "v2-value"}
 			g.Expect(env.Client.Update(ctx, current)).To(Succeed())
 		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
@@ -488,34 +488,34 @@ func simpleDeploymentRGD(name, kind string) *krov1alpha1.ResourceGraphDefinition
 	return generator.NewResourceGraphDefinition(name,
 		generator.WithSchema(
 			kind, "v1alpha1",
-			map[string]interface{}{
+			map[string]any{
 				"replicas": "integer | default=1",
 				"image":    "string | default=nginx:latest",
 			},
 			nil,
 		),
-		generator.WithResource("deployment", map[string]interface{}{
+		generator.WithResource("deployment", map[string]any{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": "deploy-${schema.metadata.name}",
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"replicas": "${schema.spec.replicas}",
-				"selector": map[string]interface{}{
-					"matchLabels": map[string]interface{}{
+				"selector": map[string]any{
+					"matchLabels": map[string]any{
 						"app": "test",
 					},
 				},
-				"template": map[string]interface{}{
-					"metadata": map[string]interface{}{
-						"labels": map[string]interface{}{
+				"template": map[string]any{
+					"metadata": map[string]any{
+						"labels": map[string]any{
 							"app": "test",
 						},
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "app",
 								"image": "${schema.spec.image}",
 							},
@@ -531,18 +531,18 @@ func configmapRGD(name, kind string) *krov1alpha1.ResourceGraphDefinition {
 	return generator.NewResourceGraphDefinition(name,
 		generator.WithSchema(
 			kind, "v1alpha1",
-			map[string]interface{}{
+			map[string]any{
 				"data": "string | default=hello",
 			},
 			nil,
 		),
-		generator.WithResource("configmap", map[string]interface{}{
+		generator.WithResource("configmap", map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": "cm-${schema.metadata.name}",
 			},
-			"data": map[string]interface{}{
+			"data": map[string]any{
 				"key": "${schema.spec.data}",
 			},
 		}, nil, nil),
@@ -553,28 +553,28 @@ func invalidConfigmapRGD(name, kind string) *krov1alpha1.ResourceGraphDefinition
 	return generator.NewResourceGraphDefinition(name,
 		generator.WithSchema(
 			kind, "v1alpha1",
-			map[string]interface{}{
+			map[string]any{
 				"data": "string | default=hello",
 			},
 			nil,
 		),
-		generator.WithResource("vpc", map[string]interface{}{
+		generator.WithResource("vpc", map[string]any{
 			"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 			"kind":       "VPC",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": "${subnet.status.subnetID}",
 			},
-			"spec": map[string]interface{}{
-				"cidrBlocks": []interface{}{"192.168.0.0/16"},
+			"spec": map[string]any{
+				"cidrBlocks": []any{"192.168.0.0/16"},
 			},
 		}, nil, nil),
-		generator.WithResource("subnet", map[string]interface{}{
+		generator.WithResource("subnet", map[string]any{
 			"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 			"kind":       "Subnet",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": "test-subnet",
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"vpcID":     "${vpc.status.vpcID}",
 				"cidrBlock": "192.168.1.0/24",
 			},

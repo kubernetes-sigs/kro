@@ -64,19 +64,19 @@ var _ = Describe("ReconcileErrorMetrics", func() {
 		rgd := generator.NewResourceGraphDefinition("test-reconcile-error-metric",
 			generator.WithSchema(
 				"TestReconcileErrorMetric", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				nil,
 			),
-			generator.WithResource("cm", map[string]interface{}{
+			generator.WithResource("cm", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "${schema.spec.name}-cm",
 					"namespace": "does-not-exist-" + rand.String(5),
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"managed": "yes",
 				},
 			}, nil, nil),
@@ -95,7 +95,7 @@ var _ = Describe("ReconcileErrorMetrics", func() {
 		before := testutil.ToFloat64(metrics.InstanceReconcileErrorsTotal.WithLabelValues(gvr))
 
 		name := "reconcile-error-metric"
-		instance := newInstance("TestReconcileErrorMetric", name, namespace, map[string]interface{}{
+		instance := newInstance("TestReconcileErrorMetric", name, namespace, map[string]any{
 			"name": name,
 		})
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())

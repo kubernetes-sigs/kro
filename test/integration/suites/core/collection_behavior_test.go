@@ -69,15 +69,15 @@ var _ = Describe("CollectionBehavior", func() {
 		rgd := generator.NewResourceGraphDefinition("test-collection-cap",
 			generator.WithSchema(
 				"TestCollectionCap", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configmaps", map[string]interface{}{
+			generator.WithResourceCollection("configmaps", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${string(i)}-${string(j)}",
 				},
 			},
@@ -94,7 +94,7 @@ var _ = Describe("CollectionBehavior", func() {
 		waitForRGDActive(ctx, rgd.Name)
 
 		name := "collection-cap"
-		instance := newInstance("TestCollectionCap", name, namespace, map[string]interface{}{
+		instance := newInstance("TestCollectionCap", name, namespace, map[string]any{
 			"name": name,
 		})
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
@@ -132,21 +132,21 @@ var _ = Describe("CollectionBehavior", func() {
 		rgd := generator.NewResourceGraphDefinition("test-collection-multi-ns-drift",
 			generator.WithSchema(
 				"TestCollectionMultiNsDrift", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 					"ns1":  "string",
 					"ns2":  "string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configmaps", map[string]interface{}{
+			generator.WithResourceCollection("configmaps", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "${schema.spec.name}-item-${string(i)}",
 					"namespace": "${i == 0 ? schema.spec.ns1 : schema.spec.ns2}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"managed": "expected",
 				},
 			},
@@ -162,7 +162,7 @@ var _ = Describe("CollectionBehavior", func() {
 		waitForRGDActive(ctx, rgd.Name)
 
 		name := "multi-ns-drift"
-		instance := newInstance("TestCollectionMultiNsDrift", name, namespace, map[string]interface{}{
+		instance := newInstance("TestCollectionMultiNsDrift", name, namespace, map[string]any{
 			"name": name,
 			"ns1":  namespace,
 			"ns2":  altNamespace,

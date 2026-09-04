@@ -62,7 +62,7 @@ func TestHashFNV64a(t *testing.T) {
 			prg, err := env.Program(ast)
 			require.NoError(t, err)
 
-			out, _, err := prg.Eval(map[string]interface{}{})
+			out, _, err := prg.Eval(map[string]any{})
 			require.NoError(t, err)
 
 			result := out.Value()
@@ -103,7 +103,7 @@ func TestHashSHA256(t *testing.T) {
 			prg, err := env.Program(ast)
 			require.NoError(t, err)
 
-			out, _, err := prg.Eval(map[string]interface{}{})
+			out, _, err := prg.Eval(map[string]any{})
 			require.NoError(t, err)
 
 			result := out.Value()
@@ -144,7 +144,7 @@ func TestHashMD5(t *testing.T) {
 			prg, err := env.Program(ast)
 			require.NoError(t, err)
 
-			out, _, err := prg.Eval(map[string]interface{}{})
+			out, _, err := prg.Eval(map[string]any{})
 			require.NoError(t, err)
 
 			result := out.Value()
@@ -190,7 +190,7 @@ func TestHashErrors(t *testing.T) {
 			prg, err := env.Program(ast)
 			require.NoError(t, err)
 
-			result, _, err := prg.Eval(map[string]interface{}{})
+			result, _, err := prg.Eval(map[string]any{})
 			if err == nil {
 				t.Error("Expected error, got none")
 			}
@@ -253,7 +253,7 @@ func TestHashWithBase64Encoding(t *testing.T) {
 			prg, err := env.Program(ast)
 			require.NoError(t, err)
 
-			out, _, err := prg.Eval(map[string]interface{}{})
+			out, _, err := prg.Eval(map[string]any{})
 			require.NoError(t, err)
 
 			result := out.Value()

@@ -20,8 +20,6 @@ type InstanceState string
 const (
 	// InstanceStateInProgress means reconciliation is ongoing.
 	InstanceStateInProgress InstanceState = "IN_PROGRESS"
-	// Deprecated: InstanceStateFailed is a legacy state kept for compatibility.
-	InstanceStateFailed InstanceState = "FAILED"
 	// InstanceStateActive means all nodes reached terminal success states.
 	InstanceStateActive InstanceState = "ACTIVE"
 	// InstanceStateDeleting means deletion workflow is running.

@@ -127,8 +127,8 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 		{
 			name: "Set instance finalizer on unstructured obj w/o finalizers",
 			initialObject: &unstructured.Unstructured{
-				Object: map[string]interface{}{
-					"metadata": map[string]interface{}{},
+				Object: map[string]any{
+					"metadata": map[string]any{},
 				},
 			},
 			operation: SetInstanceFinalizer,
@@ -138,9 +138,9 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 		{
 			name: "Set instance finalizer on unstructured obj w/ existing finalizers",
 			initialObject: &unstructured.Unstructured{
-				Object: map[string]interface{}{
-					"metadata": map[string]interface{}{
-						"finalizers": []interface{}{"some-other-finalizer"},
+				Object: map[string]any{
+					"metadata": map[string]any{
+						"finalizers": []any{"some-other-finalizer"},
 					},
 				},
 			},
@@ -151,9 +151,9 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 		{
 			name: "Remov instance finalizer from unstructured object that has it",
 			initialObject: &unstructured.Unstructured{
-				Object: map[string]interface{}{
-					"metadata": map[string]interface{}{
-						"finalizers": []interface{}{kroFinalizer},
+				Object: map[string]any{
+					"metadata": map[string]any{
+						"finalizers": []any{kroFinalizer},
 					},
 				},
 			},
@@ -164,9 +164,9 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 		{
 			name: "Try to remve instance finalizer when its not there)",
 			initialObject: &unstructured.Unstructured{
-				Object: map[string]interface{}{
-					"metadata": map[string]interface{}{
-						"finalizers": []interface{}{"some-other-finalizer"},
+				Object: map[string]any{
+					"metadata": map[string]any{
+						"finalizers": []any{"some-other-finalizer"},
 					},
 				},
 			},
@@ -181,6 +181,74 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 			tc.operation(tc.initialObject)
 			hasF := tc.check(tc.initialObject)
 			assert.Equal(t, tc.expected, hasF)
+		})
+	}
+}
+
+func TestGraphFinalizer(t *testing.T) {
+	cases := []struct {
+		name             string
+		initial          []string
+		op               func(obj metav1.Object)
+		wantFinalizers   []string
+		wantHasFinalizer bool
+	}{
+		{
+			name:             "Has returns false on empty list",
+			initial:          nil,
+			op:               func(metav1.Object) {},
+			wantFinalizers:   nil,
+			wantHasFinalizer: false,
+		},
+		{
+			name:             "Set adds when absent",
+			initial:          nil,
+			op:               SetGraphFinalizer,
+			wantFinalizers:   []string{GraphFinalizer},
+			wantHasFinalizer: true,
+		},
+		{
+			name:             "Set is a no-op when already present",
+			initial:          []string{GraphFinalizer},
+			op:               SetGraphFinalizer,
+			wantFinalizers:   []string{GraphFinalizer},
+			wantHasFinalizer: true,
+		},
+		{
+			name:             "Set preserves unrelated finalizers",
+			initial:          []string{"other/finalizer"},
+			op:               SetGraphFinalizer,
+			wantFinalizers:   []string{"other/finalizer", GraphFinalizer},
+			wantHasFinalizer: true,
+		},
+		{
+			name:             "Remove drops the finalizer",
+			initial:          []string{GraphFinalizer},
+			op:               RemoveGraphFinalizer,
+			wantFinalizers:   []string{},
+			wantHasFinalizer: false,
+		},
+		{
+			name:             "Remove preserves unrelated finalizers",
+			initial:          []string{"first", GraphFinalizer, "third"},
+			op:               RemoveGraphFinalizer,
+			wantFinalizers:   []string{"first", "third"},
+			wantHasFinalizer: false,
+		},
+		{
+			name:             "Remove is a no-op when absent",
+			initial:          []string{"other"},
+			op:               RemoveGraphFinalizer,
+			wantFinalizers:   []string{"other"},
+			wantHasFinalizer: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := &metav1.ObjectMeta{Finalizers: append([]string(nil), tc.initial...)}
+			tc.op(obj)
+			assert.Equal(t, tc.wantFinalizers, obj.Finalizers)
+			assert.Equal(t, tc.wantHasFinalizer, HasGraphFinalizer(obj))
 		})
 	}
 }

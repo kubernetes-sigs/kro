@@ -19,14 +19,14 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
-// Source is the schema-agnostic input to Builder.CompileSource. Any graph
-// consumer (the RGD builder today, a Graph controller later) projects its own
-// API shape into a Source so the compile pipeline never sees a concrete API type.
+// source is the schema-agnostic input to Builder.compileSource. Any graph
+// consumer projects its own API shape into a source so the compile pipeline
+// never sees a concrete API type.
 //
 // SchemaVarSchema is the value bound to the `schema` CEL variable: the instance
 // spec plus ObjectMeta, with status excluded. Callers that synthesize a CRD
 // derive it from that CRD; others build it directly.
-type Source interface {
+type source interface {
 	// Resources are the graph's resource nodes in source order.
 	Resources() []ResourceSpec
 	// InstanceGVR is the GroupVersionResource of the owning instance.

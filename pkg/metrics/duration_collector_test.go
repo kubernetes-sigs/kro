@@ -186,9 +186,7 @@ func TestDurationCollector_ScrapeIsConcurrencySafe(t *testing.T) {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		i := 0
 		for {
 			select {
@@ -200,11 +198,9 @@ func TestDurationCollector_ScrapeIsConcurrencySafe(t *testing.T) {
 				i++
 			}
 		}
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -213,7 +209,7 @@ func TestDurationCollector_ScrapeIsConcurrencySafe(t *testing.T) {
 				_ = collectorEntries(t, c)
 			}
 		}
-	}()
+	})
 
 	time.Sleep(50 * time.Millisecond)
 	close(stop)

@@ -36,6 +36,9 @@ func TestCore(t *testing.T) {
 	if err := features.FeatureGate.Set("CELOmitFunction=true"); err != nil {
 		t.Fatalf("failed to enable CELOmitFunction feature gate: %v", err)
 	}
+	if err := features.FeatureGate.Set("GraphKind=true"); err != nil {
+		t.Fatalf("failed to enable GraphKind feature gate: %v", err)
+	}
 
 	RegisterFailHandler(Fail)
 
@@ -91,7 +94,7 @@ func TestCore(t *testing.T) {
 			// Need to sleep if the first stop fails due to a bug:
 			// https://github.com/kubernetes-sigs/controller-runtime/issues/1571
 			sleepTime := 1 * time.Millisecond
-			for i := 0; i < 12; i++ { // Exponentially sleep up to ~4s
+			for range 12 { // Exponentially sleep up to ~4s
 				if err = env.Stop(); err == nil {
 					return
 				}
@@ -107,7 +110,7 @@ func TestCore(t *testing.T) {
 }
 
 // Helper function to convert map to runtime.RawExtension
-func toRawExtension(v interface{}) runtime.RawExtension {
+func toRawExtension(v any) runtime.RawExtension {
 	rawJSON, err := json.Marshal(v)
 	Expect(err).NotTo(HaveOccurred())
 	return runtime.RawExtension{Raw: rawJSON}

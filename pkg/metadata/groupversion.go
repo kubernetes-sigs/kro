@@ -33,7 +33,7 @@ const (
 // It performs early validation to fail fast and avoid unnecessary API calls:
 // - apiVersion: parsed with schema.ParseGroupVersion for proper validation
 // - kind: validated as DNS-1035 label after lowercasing
-func ExtractGVKFromUnstructured(unstructured map[string]interface{}) (schema.GroupVersionKind, error) {
+func ExtractGVKFromUnstructured(unstructured map[string]any) (schema.GroupVersionKind, error) {
 	kind, ok := unstructured["kind"].(string)
 	if !ok {
 		return schema.GroupVersionKind{}, fmt.Errorf("kind not found or not a string")

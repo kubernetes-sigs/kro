@@ -16,6 +16,7 @@ package schema
 
 import (
 	"fmt"
+	"maps"
 
 	"k8s.io/apiextensions-apiserver/pkg/generated/openapi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,7 +24,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
-// ObjectMeta holds the k8s ObjectMeta schema, populated once at startup.
+// ObjectMetaSchema holds the k8s ObjectMeta schema, populated once at startup.
 var ObjectMetaSchema spec.Schema
 
 // NamespacelessObjectMetaSchema is ObjectMeta without metadata.namespace.
@@ -89,9 +90,7 @@ func buildNamespacelessObjectMetaSchema(metaSchema spec.Schema) spec.Schema {
 	cloned := metaSchema
 	if metaSchema.Properties != nil {
 		cloned.Properties = make(map[string]spec.Schema, len(metaSchema.Properties))
-		for key, value := range metaSchema.Properties {
-			cloned.Properties[key] = value
-		}
+		maps.Copy(cloned.Properties, metaSchema.Properties)
 		delete(cloned.Properties, "namespace")
 	}
 	if metaSchema.Required != nil {

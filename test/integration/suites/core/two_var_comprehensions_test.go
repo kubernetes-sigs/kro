@@ -50,18 +50,18 @@ var _ = Describe("TwoVarComprehensions", func() {
 		rgd := generator.NewResourceGraphDefinition("test-two-var-comp",
 			generator.WithSchema(
 				"TwoVarComp", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				nil,
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					// transformMap on a map: add 10 to each value, then read key 'a'
 					"transformMapValue": "${string({'a': 1, 'b': 2}.transformMap(k, v, v + 10)['a'])}",
 					// transformMapEntry on a list: build {value: index} map, read 'x'
@@ -91,14 +91,14 @@ var _ = Describe("TwoVarComprehensions", func() {
 
 		// Create an instance of the RGD
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TwoVarComp",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "test-two-var",
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": "two-var-result",
 				},
 			},

@@ -148,6 +148,8 @@ config:
   resourceGraphDefinitionProgressRequeueDelay: 3s
   # The number of graph revision reconciles to run in parallel
   graphRevisionConcurrentReconciles: 1
+  # The number of graph reconciles to run in parallel
+  graphConcurrentReconciles: 1
   # The maximum duration to wait for the controller manager to gracefully shutdown
   gracefulShutdownTimeout: 60s
   # The number of dynamic controller reconciles to run in parallel
@@ -181,6 +183,10 @@ config:
     # The fixed delay between delayed instance requeues while waiting for cluster state to settle.
     # Set to 0 to disable delayed requeues.
     requeueInterval: 3s
+  # Maximum number of concurrent SSA writes per collection node
+  applyConcurrency: 20
+  # Cost limit for CEL expression evaluations. Set to 0 to disable cost limit.
+  celCostLimit: 0
   # Feature gates for alpha/experimental features.
   # Each key is a feature gate name, each value is a boolean.
   # Example:

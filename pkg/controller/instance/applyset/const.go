@@ -19,39 +19,26 @@ import (
 	"fmt"
 
 	"sigs.k8s.io/release-utils/version"
+
+	applysetspec "github.com/kubernetes-sigs/kro/pkg/applyset"
 )
 
 // ErrApplySetConflict is returned when a resource already belongs to a different ApplySet.
 // This indicates the resource is managed by another controller/instance and should not
 // be overwritten without explicit action.
-var ErrApplySetConflict = errors.New("resource belongs to a different ApplySet")
+//
+// It is defined in the neutral leaf package github.com/kubernetes-sigs/kro/pkg/applyset
+// and re-exported here for backwards compatibility.
+var ErrApplySetConflict = applysetspec.ErrApplySetConflict
 
 // ErrDuplicateResource is returned when multiple resource IDs target the same Kubernetes object.
 var ErrDuplicateResource = errors.New("found resources with conflicts")
 
 // ApplySetConflictError provides details about an ApplySet membership conflict.
-type ApplySetConflictError struct {
-	ResourceName      string
-	ResourceNamespace string
-	ResourceGVK       string
-	CurrentApplySetID string
-	DesiredApplySetID string
-}
-
-func (e *ApplySetConflictError) Error() string {
-	if e.ResourceNamespace != "" {
-		return fmt.Sprintf("%s: %s/%s (%s) belongs to ApplySet %q, cannot reassign to %q",
-			ErrApplySetConflict, e.ResourceNamespace, e.ResourceName, e.ResourceGVK,
-			e.CurrentApplySetID, e.DesiredApplySetID)
-	}
-	return fmt.Sprintf("%s: %s (%s) belongs to ApplySet %q, cannot reassign to %q",
-		ErrApplySetConflict, e.ResourceName, e.ResourceGVK,
-		e.CurrentApplySetID, e.DesiredApplySetID)
-}
-
-func (e *ApplySetConflictError) Unwrap() error {
-	return ErrApplySetConflict
-}
+//
+// It is defined in the neutral leaf package github.com/kubernetes-sigs/kro/pkg/applyset
+// and re-exported here for backwards compatibility.
+type ApplySetConflictError = applysetspec.ApplySetConflictError
 
 // Internal constants for ApplySet implementation.
 const (
@@ -103,5 +90,8 @@ const (
 
 	// ApplysetPartOfLabel is the key of the label which indicates that the object is a member of an ApplySet.
 	// The value of the label MUST match the value of ApplySetParentIDLabel on the parent object.
-	ApplysetPartOfLabel = "applyset.kubernetes.io/part-of"
+	//
+	// It is defined in the neutral leaf package github.com/kubernetes-sigs/kro/pkg/applyset
+	// and re-exported here for backwards compatibility.
+	ApplysetPartOfLabel = applysetspec.ApplysetPartOfLabel
 )

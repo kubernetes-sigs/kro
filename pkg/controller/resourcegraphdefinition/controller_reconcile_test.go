@@ -628,7 +628,7 @@ func TestReconcileResourceGraphDefinitionGraphStableOrder(t *testing.T) {
 
 	reconciler := &ResourceGraphDefinitionReconciler{rgBuilder: newTestBuilder()}
 
-	for i := 0; i < 25; i++ {
+	for range 25 {
 		processed, resourcesInfo, err := reconciler.buildResourceGraphDefinition(context.Background(), newTestRGD("graph-stable"))
 		require.NoError(t, err)
 		assert.Equal(t, []string{"vpc", "subnetA", "subnetB"}, processed.TopologicalOrder)

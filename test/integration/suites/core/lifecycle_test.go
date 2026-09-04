@@ -51,39 +51,39 @@ var _ = Describe("Update", func() {
 		rgd := generator.NewResourceGraphDefinition("test-update",
 			generator.WithSchema(
 				"TestInstanceUpdate", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"replicas": "integer | default=1",
 					"image":    "string | default=nginx:latest",
 					"port":     "integer | default=80",
 				},
 				nil,
 			),
-			generator.WithResource("deployment", map[string]interface{}{
+			generator.WithResource("deployment", map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "deployment-${schema.metadata.name}",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"replicas": "${schema.spec.replicas}",
-					"selector": map[string]interface{}{
-						"matchLabels": map[string]interface{}{
+					"selector": map[string]any{
+						"matchLabels": map[string]any{
 							"app": "test",
 						},
 					},
-					"template": map[string]interface{}{
-						"metadata": map[string]interface{}{
-							"labels": map[string]interface{}{
+					"template": map[string]any{
+						"metadata": map[string]any{
+							"labels": map[string]any{
 								"app": "test",
 							},
 						},
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
 									"name":  "app",
 									"image": "${schema.spec.image}",
-									"ports": []interface{}{
-										map[string]interface{}{
+									"ports": []any{
+										map[string]any{
 											"containerPort": "${schema.spec.port}",
 										},
 									},
@@ -112,14 +112,14 @@ var _ = Describe("Update", func() {
 
 		// Create initial instance
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestInstanceUpdate",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "test-instance-for-updates",
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"image":    "nginx:1.19",
 					"port":     80,
 					"replicas": 1,
@@ -155,7 +155,7 @@ var _ = Describe("Update", func() {
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			instance.Object["spec"] = map[string]interface{}{
+			instance.Object["spec"] = map[string]any{
 				"replicas": int64(3),
 				"image":    "nginx:1.20",
 				"port":     int64(443),

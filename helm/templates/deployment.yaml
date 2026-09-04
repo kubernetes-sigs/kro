@@ -77,6 +77,8 @@ spec:
               value: {{ .Values.config.resourceGraphDefinitionConcurrentReconciles | quote }}
             - name: KRO_GRAPH_REVISION_CONCURRENT_RECONCILES
               value: {{ .Values.config.graphRevisionConcurrentReconciles | quote }}
+            - name: KRO_GRAPH_CONCURRENT_RECONCILES
+              value: {{ .Values.config.graphConcurrentReconciles | quote }}
             - name: KRO_DYNAMIC_CONTROLLER_CONCURRENT_RECONCILES
               value: {{ .Values.config.dynamicControllerConcurrentReconciles | quote }}
             - name: KRO_LOG_LEVEL
@@ -119,6 +121,16 @@ spec:
               value: {{ .Values.config.leaderElectionRenewDeadline | quote }}
             - name: KRO_LEADER_ELECTION_RETRY_PERIOD
               value: {{ .Values.config.leaderElectionRetryPeriod | quote }}
+            - name: KRO_APPLY_CONCURRENCY
+              value: {{ .Values.config.applyConcurrency | default 20 | quote }}
+            - name: KRO_CEL_COST_LIMIT
+              value: {{ .Values.config.celCostLimit | default 0 | quote }}
+            - name: KRO_CONTROLLER_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: KRO_CONTROLLER_SERVICE_ACCOUNT
+              value: {{ include "kro.serviceAccountName" . | quote }}
           {{- with .Values.deployment.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -134,6 +146,8 @@ spec:
             - "$(KRO_RESOURCE_GROUP_CONCURRENT_RECONCILES)"
             - --graph-revision-concurrent-reconciles
             - "$(KRO_GRAPH_REVISION_CONCURRENT_RECONCILES)"
+            - --graph-concurrent-reconciles
+            - "$(KRO_GRAPH_CONCURRENT_RECONCILES)"
             - --dynamic-controller-concurrent-reconciles
             - "$(KRO_DYNAMIC_CONTROLLER_CONCURRENT_RECONCILES)"
             - --zap-log-level
@@ -175,6 +189,14 @@ spec:
             - "$(KRO_LEADER_ELECTION_RENEW_DEADLINE)"
             - --leader-election-retry-period
             - "$(KRO_LEADER_ELECTION_RETRY_PERIOD)"
+            - --apply-concurrency
+            - "$(KRO_APPLY_CONCURRENCY)"
+            - --cel-cost-limit
+            - "$(KRO_CEL_COST_LIMIT)"
+            - --controller-namespace
+            - "$(KRO_CONTROLLER_NAMESPACE)"
+            - --controller-service-account
+            - "$(KRO_CONTROLLER_SERVICE_ACCOUNT)"
             {{- if .Values.config.enableLeaderElection }}
             - --leader-elect
             {{- if ne .Values.config.leaderElectionNamespace "" }}

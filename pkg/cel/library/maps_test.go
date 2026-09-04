@@ -204,16 +204,16 @@ func TestDeepMergeRuntimeUnstructured(t *testing.T) {
 		"securityContext": {"runAsNonRoot": true, "fsGroup": 2000}
 	}`
 
-	podSpecVal := map[string]interface{}{
-		"containers": []interface{}{
-			map[string]interface{}{"name": "app", "image": "nginx:latest"},
+	podSpecVal := map[string]any{
+		"containers": []any{
+			map[string]any{"name": "app", "image": "nginx:latest"},
 		},
-		"securityContext": map[string]interface{}{
+		"securityContext": map[string]any{
 			"fsGroup": int64(2000),
 		},
 	}
 
-	got := evalCELWithVars(t, env, expr, map[string]interface{}{"podSpec": podSpecVal})
+	got := evalCELWithVars(t, env, expr, map[string]any{"podSpec": podSpecVal})
 	wantVal := evalCEL(t, env, want)
 	require.Equal(t, true, got.Equal(wantVal).Value(), "got=%v want=%v", got, wantVal)
 }
@@ -233,18 +233,18 @@ func TestDeepMergeOperandOrder(t *testing.T) {
 		cel.Variable("defaults", cel.DynType),
 	)
 
-	input := map[string]interface{}{
-		"podUser": map[string]interface{}{
-			"containers": []interface{}{
-				map[string]interface{}{"name": "app"},
+	input := map[string]any{
+		"podUser": map[string]any{
+			"containers": []any{
+				map[string]any{"name": "app"},
 			},
-			"securityContext": map[string]interface{}{
+			"securityContext": map[string]any{
 				"runAsNonRoot": false,
 				"fsGroup":      int64(2000),
 			},
 		},
-		"defaults": map[string]interface{}{
-			"securityContext": map[string]interface{}{
+		"defaults": map[string]any{
+			"securityContext": map[string]any{
 				"runAsNonRoot": true,
 			},
 		},

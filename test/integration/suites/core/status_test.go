@@ -61,21 +61,21 @@ var _ = Describe("Status", func() {
 		rgd := generator.NewResourceGraphDefinition("test-status-interpolation",
 			generator.WithSchema(
 				"StatusInterpolation", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				// Status with string template (multiple expressions)
-				map[string]interface{}{
+				map[string]any{
 					"configmapRef": "${configmap.metadata.name}-in-${configmap.metadata.namespace}",
 				},
 			),
-			generator.WithResource("configmap", map[string]interface{}{
+			generator.WithResource("configmap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "value",
 				},
 			}, nil, nil),
@@ -96,14 +96,14 @@ var _ = Describe("Status", func() {
 		// Create instance
 		instanceName := "test-interpolation"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "StatusInterpolation",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": "my-configmap",
 				},
 			},
@@ -145,44 +145,44 @@ var _ = Describe("Status", func() {
 		rgd := generator.NewResourceGraphDefinition("test-status-partial",
 			generator.WithSchema(
 				"StatusPartial", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"includeCm1": "boolean",
 					"includeCm2": "boolean",
 					"includeCm3": "boolean",
 				},
-				map[string]interface{}{
+				map[string]any{
 					"field1": "${cm1.data.value}",
 					"field2": "${cm1.data.value}-${cm2.data.value}",
 					"field3": "${cm1.data.value}-${cm2.data.value}-${cm3.data.value}",
 				},
 			),
-			generator.WithResource("cm1", map[string]interface{}{
+			generator.WithResource("cm1", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "cm1",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"value": "one",
 				},
 			}, nil, []string{"${schema.spec.includeCm1}"}),
-			generator.WithResource("cm2", map[string]interface{}{
+			generator.WithResource("cm2", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "cm2",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"value": "two",
 				},
 			}, nil, []string{"${schema.spec.includeCm2}"}),
-			generator.WithResource("cm3", map[string]interface{}{
+			generator.WithResource("cm3", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "cm3",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"value": "three",
 				},
 			}, nil, []string{"${schema.spec.includeCm3}"}),
@@ -203,14 +203,14 @@ var _ = Describe("Status", func() {
 		// Create instance with all ConfigMaps disabled initially
 		instanceName := "test-partial"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "StatusPartial",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"includeCm1": false,
 					"includeCm2": false,
 					"includeCm3": false,
@@ -222,7 +222,7 @@ var _ = Describe("Status", func() {
 			Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 		})
 
-		getStatus := func(g Gomega, ctx SpecContext) map[string]interface{} {
+		getStatus := func(g Gomega, ctx SpecContext) map[string]any {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      instanceName,
 				Namespace: namespace,
@@ -232,7 +232,7 @@ var _ = Describe("Status", func() {
 			return status
 		}
 
-		updateSpec := func(ctx SpecContext, mutate func(spec map[string]interface{})) {
+		updateSpec := func(ctx SpecContext, mutate func(spec map[string]any)) {
 			Expect(retry.RetryOnConflict(retry.DefaultRetry, func() error {
 				current := &unstructured.Unstructured{}
 				current.SetAPIVersion(instance.GetAPIVersion())
@@ -243,7 +243,7 @@ var _ = Describe("Status", func() {
 				}, current); err != nil {
 					return err
 				}
-				spec := current.Object["spec"].(map[string]interface{})
+				spec := current.Object["spec"].(map[string]any)
 				mutate(spec)
 				return env.Client.Update(ctx, current)
 			})).To(Succeed())
@@ -262,7 +262,7 @@ var _ = Describe("Status", func() {
 		}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// State 2: Enable cm1 only - field1 should appear
-		updateSpec(ctx, func(spec map[string]interface{}) {
+		updateSpec(ctx, func(spec map[string]any) {
 			spec["includeCm1"] = true
 		})
 
@@ -278,7 +278,7 @@ var _ = Describe("Status", func() {
 		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// State 3: Enable cm1 and cm2 - field1 and field2 should appear
-		updateSpec(ctx, func(spec map[string]interface{}) {
+		updateSpec(ctx, func(spec map[string]any) {
 			spec["includeCm2"] = true
 		})
 
@@ -295,7 +295,7 @@ var _ = Describe("Status", func() {
 		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// State 4: Enable all - all fields should appear
-		updateSpec(ctx, func(spec map[string]interface{}) {
+		updateSpec(ctx, func(spec map[string]any) {
 			spec["includeCm3"] = true
 		})
 
@@ -313,7 +313,7 @@ var _ = Describe("Status", func() {
 		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// State 5: Disable cm2 - field2 and field3 should disappear, field1 remains
-		updateSpec(ctx, func(spec map[string]interface{}) {
+		updateSpec(ctx, func(spec map[string]any) {
 			spec["includeCm2"] = false
 		})
 

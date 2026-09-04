@@ -15,6 +15,8 @@
 package metadata
 
 import (
+	"slices"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -24,39 +26,29 @@ import (
 
 const kroFinalizer = v1alpha1.KRODomainName + "/finalizer"
 
+// GraphFinalizer is the finalizer the Graph reconciler claims on each Graph
+// so cleanup can run before the API server completes deletion. It is distinct
+// from the RGD/instance finalizer (kro.run/finalizer) so the two controllers
+// never contend over the same finalizer string.
+const GraphFinalizer = v1alpha1.KRODomainName + "/graph-finalizer"
+
 // SetResourceGraphDefinitionFinalizer adds the kro finalizer to the object if it's not already present.
-func SetResourceGraphDefinitionFinalizer(obj metav1.Object) {
-	if !HasResourceGraphDefinitionFinalizer(obj) {
-		obj.SetFinalizers(append(obj.GetFinalizers(), kroFinalizer))
-	}
-}
+func SetResourceGraphDefinitionFinalizer(obj metav1.Object) { setKROFinalizer(obj) }
 
 // SetGraphRevisionFinalizer adds the kro finalizer to the object if it's not already present.
-func SetGraphRevisionFinalizer(obj metav1.Object) {
-	if !HasGraphRevisionFinalizer(obj) {
-		obj.SetFinalizers(append(obj.GetFinalizers(), kroFinalizer))
-	}
-}
+func SetGraphRevisionFinalizer(obj metav1.Object) { setKROFinalizer(obj) }
 
 // RemoveResourceGraphDefinitionFinalizer removes the kro finalizer from the object.
-func RemoveResourceGraphDefinitionFinalizer(obj metav1.Object) {
-	obj.SetFinalizers(removeString(obj.GetFinalizers(), kroFinalizer))
-}
+func RemoveResourceGraphDefinitionFinalizer(obj metav1.Object) { removeKROFinalizer(obj) }
 
 // RemoveGraphRevisionFinalizer removes the kro finalizer from the object.
-func RemoveGraphRevisionFinalizer(obj metav1.Object) {
-	obj.SetFinalizers(removeString(obj.GetFinalizers(), kroFinalizer))
-}
+func RemoveGraphRevisionFinalizer(obj metav1.Object) { removeKROFinalizer(obj) }
 
 // HasResourceGraphDefinitionFinalizer checks if the object has the kro finalizer.
-func HasResourceGraphDefinitionFinalizer(obj metav1.Object) bool {
-	return containsString(obj.GetFinalizers(), kroFinalizer)
-}
+func HasResourceGraphDefinitionFinalizer(obj metav1.Object) bool { return hasKROFinalizer(obj) }
 
 // HasGraphRevisionFinalizer checks if the object has the kro finalizer.
-func HasGraphRevisionFinalizer(obj metav1.Object) bool {
-	return containsString(obj.GetFinalizers(), kroFinalizer)
-}
+func HasGraphRevisionFinalizer(obj metav1.Object) bool { return hasKROFinalizer(obj) }
 
 // SetInstanceFinalizer adds an instance-specific finalizer to an unstructured object.
 func SetInstanceFinalizer(obj client.Object) {
@@ -75,23 +67,42 @@ func HasInstanceFinalizer(obj client.Object) bool {
 	return controllerutil.ContainsFinalizer(obj, kroFinalizer)
 }
 
-// Helper functions
-
-func containsString(slice []string, s string) bool {
-	for _, item := range slice {
-		if item == s {
-			return true
-		}
-	}
-	return false
+// HasGraphFinalizer reports whether obj already carries the Graph finalizer.
+func HasGraphFinalizer(obj metav1.Object) bool {
+	return slices.Contains(obj.GetFinalizers(), GraphFinalizer)
 }
 
-func removeString(slice []string, s string) []string {
-	result := make([]string, 0, len(slice))
-	for _, item := range slice {
-		if item != s {
-			result = append(result, item)
-		}
+// SetGraphFinalizer appends the Graph finalizer if it isn't present.
+func SetGraphFinalizer(obj metav1.Object) {
+	if !HasGraphFinalizer(obj) {
+		obj.SetFinalizers(append(obj.GetFinalizers(), GraphFinalizer))
 	}
-	return result
+}
+
+// RemoveGraphFinalizer drops the Graph finalizer if it's present.
+func RemoveGraphFinalizer(obj metav1.Object) {
+	obj.SetFinalizers(slices.DeleteFunc(obj.GetFinalizers(), func(item string) bool {
+		return item == GraphFinalizer
+	}))
+}
+
+// Helper functions
+
+// setKROFinalizer adds the kro finalizer to the object if it's not already present.
+func setKROFinalizer(obj metav1.Object) {
+	if !hasKROFinalizer(obj) {
+		obj.SetFinalizers(append(obj.GetFinalizers(), kroFinalizer))
+	}
+}
+
+// hasKROFinalizer checks if the object has the kro finalizer.
+func hasKROFinalizer(obj metav1.Object) bool {
+	return slices.Contains(obj.GetFinalizers(), kroFinalizer)
+}
+
+// removeKROFinalizer removes the kro finalizer from the object.
+func removeKROFinalizer(obj metav1.Object) {
+	obj.SetFinalizers(slices.DeleteFunc(obj.GetFinalizers(), func(item string) bool {
+		return item == kroFinalizer
+	}))
 }

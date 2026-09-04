@@ -63,49 +63,49 @@ var _ = Describe("Terminating Managed Resources", func() {
 		rgd := generator.NewResourceGraphDefinition(rgdName,
 			generator.WithSchema(
 				"TerminatingManagedResource", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":             "string",
 					"createDeployment": "boolean",
 				},
 				nil,
 			),
-			generator.WithResource("config", map[string]interface{}{
+			generator.WithResource("config", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-config",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"value": "active",
 				},
 			}, nil, nil),
 			// The Deployment depends on config data, but it is only desired after createDeployment flips to true.
-			generator.WithResource("deployment", map[string]interface{}{
+			generator.WithResource("deployment", map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"replicas": 1,
-					"selector": map[string]interface{}{
-						"matchLabels": map[string]interface{}{
+					"selector": map[string]any{
+						"matchLabels": map[string]any{
 							"app": "${schema.spec.name}",
 						},
 					},
-					"template": map[string]interface{}{
-						"metadata": map[string]interface{}{
-							"labels": map[string]interface{}{
+					"template": map[string]any{
+						"metadata": map[string]any{
+							"labels": map[string]any{
 								"app": "${schema.spec.name}",
 							},
 						},
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
 									"name":  "nginx",
 									"image": "nginx",
-									"env": []interface{}{
-										map[string]interface{}{
+									"env": []any{
+										map[string]any{
 											"name":  "CONFIG_VALUE",
 											"value": "${config.data.value}",
 										},
@@ -130,14 +130,14 @@ var _ = Describe("Terminating Managed Resources", func() {
 		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TerminatingManagedResource",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":             instanceName,
 					"createDeployment": false,
 				},
@@ -224,9 +224,9 @@ var _ = Describe("Terminating Managed Resources", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(found).To(BeTrue())
 
-			var resourcesReadyCondition map[string]interface{}
+			var resourcesReadyCondition map[string]any
 			for _, condInterface := range statusConditions {
-				if cond, ok := condInterface.(map[string]interface{}); ok && cond["type"] == ctrlinstance.ResourcesReady {
+				if cond, ok := condInterface.(map[string]any); ok && cond["type"] == ctrlinstance.ResourcesReady {
 					resourcesReadyCondition = cond
 					break
 				}

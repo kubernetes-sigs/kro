@@ -36,7 +36,7 @@ func TestOmit(t *testing.T) {
 	prg, err := env.Program(ast)
 	require.NoError(t, err)
 
-	out, _, err := prg.Eval(map[string]interface{}{})
+	out, _, err := prg.Eval(map[string]any{})
 	require.NoError(t, err)
 
 	native, err := conversion.GoNativeType(out)
@@ -51,7 +51,7 @@ func TestOmitInTernary(t *testing.T) {
 	tests := []struct {
 		name        string
 		expr        string
-		ctx         map[string]interface{}
+		ctx         map[string]any
 		wantOmit    bool
 		wantEvalErr bool
 		wantString  string
@@ -59,27 +59,27 @@ func TestOmitInTernary(t *testing.T) {
 		{
 			name:     "ternary selects omit branch",
 			expr:     `x == "" ? omit() : x`,
-			ctx:      map[string]interface{}{"x": ""},
+			ctx:      map[string]any{"x": ""},
 			wantOmit: true,
 		},
 		{
 			name:       "ternary selects value branch",
 			expr:       `x == "" ? omit() : x`,
-			ctx:        map[string]interface{}{"x": "hello"},
+			ctx:        map[string]any{"x": "hello"},
 			wantOmit:   false,
 			wantString: "hello",
 		},
 		{
 			name:       "omit in else branch, condition true",
 			expr:       `x != "" ? x : omit()`,
-			ctx:        map[string]interface{}{"x": "hello"},
+			ctx:        map[string]any{"x": "hello"},
 			wantOmit:   false,
 			wantString: "hello",
 		},
 		{
 			name:     "omit in else branch, condition false",
 			expr:     `x != "" ? x : omit()`,
-			ctx:      map[string]interface{}{"x": ""},
+			ctx:      map[string]any{"x": ""},
 			wantOmit: true,
 		},
 		{

@@ -6,23 +6,91 @@
 #
 # This is the aggregated-resource pattern from KREP-003: multiple independent
 # actors contribute to a shared resource without coordinating with each other.
+#
+# ─── Permissions ──────────────────────────────────────────────────────────────
+#
+# A Graph applies its resources while impersonating a ServiceAccount in its OWN
+# namespace: spec.serviceAccountName, or "default" when unset. The `services`
+# ref selector lists at CLUSTER scope, so reading Services needs a ClusterRole;
+# the Ingress is written into this Graph's namespace (default), so a namespaced
+# Role is enough for it.
+#
+# NOTE: the includeWhen on `ingress` is required. With no matching Service the
+# Graph would render `rules: []`, which the Ingress schema rejects
+# ("either `defaultBackend` or `rules` must be specified").
 # ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ingress-fanin
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ingress-fanin
+rules:
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ingress-fanin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ingress-fanin
+subjects:
+  - kind: ServiceAccount
+    name: ingress-fanin
+    namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ingress-fanin
+  namespace: default
+rules:
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ingress-fanin
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ingress-fanin
+subjects:
+  - kind: ServiceAccount
+    name: ingress-fanin
+    namespace: default
+---
 apiVersion: kro.run/v1alpha1
 kind: Graph
 metadata:
   name: ingress-fanin
   namespace: default
 spec:
+  serviceAccountName: ingress-fanin
   nodes:
     - id: services
-      watch:
+      ref:
         apiVersion: v1
         kind: Service
-        selector:
-          matchLabels:
-            expose: "true"
+        metadata:
+          selector:
+            matchLabels:
+              expose: "true"
 
     - id: ingress
+      includeWhen:
+        - ${size(services) > 0}
       template:
         apiVersion: networking.k8s.io/v1
         kind: Ingress

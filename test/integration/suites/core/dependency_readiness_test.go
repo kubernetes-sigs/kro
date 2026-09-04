@@ -68,13 +68,13 @@ var _ = Describe("Dependency Readiness", func() {
 		rgd := generator.NewResourceGraphDefinition("test-dependency-readiness",
 			generator.WithSchema(
 				"TestDependencyReadiness", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
-					"configA": map[string]interface{}{
+					"configA": map[string]any{
 						"data":  "string",
 						"ready": "boolean | default=false",
 					},
-					"configB": map[string]interface{}{
+					"configB": map[string]any{
 						"data":  "string",
 						"ready": "boolean | default=false",
 					},
@@ -83,60 +83,60 @@ var _ = Describe("Dependency Readiness", func() {
 				nil,
 			),
 			// ConfigMap A - no dependencies, has readyWhen
-			generator.WithResource("configmapA", map[string]interface{}{
+			generator.WithResource("configmapA", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-config-a",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"value": "${schema.spec.configA.data}",
 					"ready": "${string(schema.spec.configA.ready)}",
 				},
 			}, []string{"${configmapA.data.?ready.orValue(\"false\") == \"true\"}"}, nil),
 			// ConfigMap B - no dependencies, has readyWhen
-			generator.WithResource("configmapB", map[string]interface{}{
+			generator.WithResource("configmapB", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-config-b",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"value": "${schema.spec.configB.data}",
 					"ready": "${string(schema.spec.configB.ready)}",
 				},
 			}, []string{"${configmapB.data.?ready.orValue(\"false\") == \"true\"}"}, nil),
 			// Deployment - depends on both configmaps
-			generator.WithResource("deployment", map[string]interface{}{
+			generator.WithResource("deployment", map[string]any{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"replicas": "${schema.spec.replicas}",
-					"selector": map[string]interface{}{
-						"matchLabels": map[string]interface{}{
+					"selector": map[string]any{
+						"matchLabels": map[string]any{
 							"app": "test",
 						},
 					},
-					"template": map[string]interface{}{
-						"metadata": map[string]interface{}{
-							"labels": map[string]interface{}{
+					"template": map[string]any{
+						"metadata": map[string]any{
+							"labels": map[string]any{
 								"app": "test",
 							},
 						},
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
 									"name":  "nginx",
 									"image": "nginx",
-									"env": []interface{}{
-										map[string]interface{}{
+									"env": []any{
+										map[string]any{
 											"name":  "CONFIG_A",
 											"value": "${configmapA.data.?value.orValue(\"\")}",
 										},
-										map[string]interface{}{
+										map[string]any{
 											"name":  "CONFIG_B",
 											"value": "${configmapB.data.?value.orValue(\"\")}",
 										},
@@ -188,20 +188,20 @@ var _ = Describe("Dependency Readiness", func() {
 		instanceName := "test-dep-readiness"
 		// Create instance with both configmaps NOT ready initially
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestDependencyReadiness",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": instanceName,
-					"configA": map[string]interface{}{
+					"configA": map[string]any{
 						"data":  "valueA",
 						"ready": false,
 					},
-					"configB": map[string]interface{}{
+					"configB": map[string]any{
 						"data":  "valueB",
 						"ready": false,
 					},
@@ -342,18 +342,7 @@ var _ = Describe("Dependency Readiness", func() {
 		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Verify instance state becomes ACTIVE once all resources are synced
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      instanceName,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-
-			status, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(status).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, instanceName, instance)
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -379,25 +368,25 @@ var _ = Describe("Dependency Readiness", func() {
 		rgd := generator.NewResourceGraphDefinition("test-jobs",
 			generator.WithSchema(
 				"TestJobs", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				nil,
 			),
-			generator.WithResource("job1", map[string]interface{}{
+			generator.WithResource("job1", map[string]any{
 				"apiVersion": "batch/v1",
 				"kind":       "Job",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-job1",
 				},
-				"spec": map[string]interface{}{
-					"template": map[string]interface{}{
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
+				"spec": map[string]any{
+					"template": map[string]any{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
 									"name":    "sleeper",
 									"image":   "busybox",
-									"command": []interface{}{"sh", "-c", "echo 'Job 1 starting' && sleep 5 && echo 'Job 1 complete'"},
+									"command": []any{"sh", "-c", "echo 'Job 1 starting' && sleep 5 && echo 'Job 1 complete'"},
 								},
 							},
 							"restartPolicy": "Never",
@@ -405,23 +394,23 @@ var _ = Describe("Dependency Readiness", func() {
 					},
 				},
 			}, []string{"${job1.status.?completionTime.orValue(null) != null}"}, nil),
-			generator.WithResource("job2", map[string]interface{}{
+			generator.WithResource("job2", map[string]any{
 				"apiVersion": "batch/v1",
 				"kind":       "Job",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-job2",
-					"annotations": map[string]interface{}{
+					"annotations": map[string]any{
 						"depends-on": "${job1.metadata.name}",
 					},
 				},
-				"spec": map[string]interface{}{
-					"template": map[string]interface{}{
-						"spec": map[string]interface{}{
-							"containers": []interface{}{
-								map[string]interface{}{
+				"spec": map[string]any{
+					"template": map[string]any{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
 									"name":    "sleeper",
 									"image":   "busybox",
-									"command": []interface{}{"sh", "-c", "echo 'Job 2 starting' && sleep 1 && echo 'Job 2 complete'"},
+									"command": []any{"sh", "-c", "echo 'Job 2 starting' && sleep 1 && echo 'Job 2 complete'"},
 								},
 							},
 							"restartPolicy": "Never",
@@ -449,14 +438,14 @@ var _ = Describe("Dependency Readiness", func() {
 		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestJobs",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": "test-jobs",
 				},
 			},
@@ -527,17 +516,6 @@ var _ = Describe("Dependency Readiness", func() {
 		job2.Status.Succeeded = 1
 		Expect(env.Client.Status().Update(ctx, job2)).To(Succeed())
 
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      instanceName,
-				Namespace: namespace,
-			}, instance)
-			g.Expect(err).ToNot(HaveOccurred())
-
-			state, found, err := unstructured.NestedString(instance.Object, "status", "state")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(found).To(BeTrue())
-			g.Expect(state).To(Equal("ACTIVE"))
-		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForInstanceActive(ctx, namespace, instanceName, instance)
 	}, SpecTimeout(120*time.Second))
 })

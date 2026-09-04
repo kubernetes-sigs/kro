@@ -4,61 +4,144 @@
 # declares a resource that should exist exactly once, with priority-based
 # resolution when multiple actors claim the same target.
 #
-# This is not an RGD — there is no schema, no CRD, no instances. It is
-# two Graphs that each want to own the same ConfigMap. The Singleton
-# controller (itself a Graph) resolves which one wins based on priority.
+# This is not an RGD — there is no schema, no instances. It is a CRD plus a
+# fan-in controller Graph. Multiple Singleton CRs can each want to own the same
+# ConfigMap; the controller (itself a Graph) resolves which one wins by priority.
 #
 # When multiple Singletons target the same resource (same GVK + namespace
 # + name), the highest priority wins. Ties broken by name (lowest wins).
 # If the winner is deleted, the next-highest claimant takes over with zero
 # downtime — the resource UID never changes.
-# ---------------------------------------------------------------------------
-
-# Team A claims webapp-dashboard with priority 100
----
-apiVersion: kro.run/v1alpha1
-kind: Singleton
-metadata:
-  name: team-a-dashboard
-spec:
-  priority: 100
-  template:
-    apiVersion: v1
-    kind: ConfigMap
-    metadata:
-      name: webapp-dashboard
-      namespace: monitoring
-    data:
-      dashboard.json: '{ "title": "Team A Dashboard" }'
-
-# Team B claims the same resource with priority 200 — wins
----
-apiVersion: kro.run/v1alpha1
-kind: Singleton
-metadata:
-  name: team-b-dashboard
-spec:
-  priority: 200
-  template:
-    apiVersion: v1
-    kind: ConfigMap
-    metadata:
-      name: webapp-dashboard
-      namespace: monitoring
-    data:
-      dashboard.json: '{ "title": "Team B Dashboard" }'
-
-# Result:
-#   ConfigMap/monitoring/webapp-dashboard exists with Team B's content.
-#   If team-b-dashboard is deleted, Team A immediately becomes the winner.
-#   The ConfigMap is force-applied with Team A's template. No delete/recreate.
 #
-# Why this requires Graph (not RGD):
-#   RGD creates one Graph per instance — each Singleton would own its target
-#   independently, racing on delete. The Singleton controller is a fan-in
-#   Graph: all claimants are watched in a single Graph, which picks one
-#   winner and applies the target. Handoff is atomic.
-
+# ─── Ordering ─────────────────────────────────────────────────────────────────
+#
+# The Singleton CRD is defined FIRST in this file (a plain manifest, NOT a Graph
+# template node) for two reasons:
+#   1. A `template:` here would make the controller Graph the OWNER of the CRD,
+#      so deleting the Graph would cascade-delete every Singleton CR.
+#   2. The controller Graph's `singletons` ref node can only build once the CRD's
+#      schema is registered. Creating the CRD out-of-band breaks that bootstrap
+#      cycle. `kubectl apply -f` applies the CRD before the Graph in the same file.
+#
+# ─── Permissions ──────────────────────────────────────────────────────────────
+#
+# The controller Graph applies while impersonating spec.serviceAccountName in
+# its own namespace (kro-system). It reads Singleton CRs cluster-wide, patches
+# their status, and owns the target ConfigMaps in whatever namespace the claim
+# names — so the grants are cluster-wide (ClusterRole).
+#
+# ─── Try it ─────────────────────────────────────────────────────────────────
+#
+# After applying this file, create two competing claimants (priority 200 wins):
+#
+#   apiVersion: kro.run/v1alpha1
+#   kind: Singleton
+#   metadata: {name: team-a-dashboard, namespace: default}
+#   spec:
+#     priority: 100
+#     template:
+#       apiVersion: v1
+#       kind: ConfigMap
+#       metadata: {name: webapp-dashboard, namespace: monitoring}
+#       data: {dashboard.json: '{ "title": "Team A Dashboard" }'}
+#   ---
+#   apiVersion: kro.run/v1alpha1
+#   kind: Singleton
+#   metadata: {name: team-b-dashboard, namespace: default}
+#   spec:
+#     priority: 200
+#     template:
+#       apiVersion: v1
+#       kind: ConfigMap
+#       metadata: {name: webapp-dashboard, namespace: monitoring}
+#       data: {dashboard.json: '{ "title": "Team B Dashboard" }'}
+#
+# ConfigMap/monitoring/webapp-dashboard ends up with Team B's content. Delete
+# team-b-dashboard and Team A becomes the winner with no delete/recreate.
+# ---------------------------------------------------------------------------
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: singletons.kro.run
+spec:
+  group: kro.run
+  names:
+    plural: singletons
+    singular: singleton
+    kind: Singleton
+    listKind: SingletonList
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                priority:
+                  type: integer
+                  default: 0
+                template:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                active:
+                  type: boolean
+                claim:
+                  type: string
+      additionalPrinterColumns:
+        - name: Claim
+          type: string
+          jsonPath: .status.claim
+        - name: Priority
+          type: integer
+          jsonPath: .spec.priority
+        - name: Active
+          type: boolean
+          jsonPath: .status.active
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: singleton-controller
+  namespace: kro-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: singleton-controller
+rules:
+  - apiGroups: [kro.run]
+    resources: [singletons, singletons/status]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: singleton-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: singleton-controller
+subjects:
+  - kind: ServiceAccount
+    name: singleton-controller
+    namespace: kro-system
+---
 # ---------------------------------------------------------------------------
 # Singleton Controller — the Graph that implements the Singleton Kind.
 #
@@ -67,71 +150,21 @@ spec:
 # winner per identity by priority, and owns the target resource directly
 # via a forEach template. Status is written back to each Singleton CR.
 # ---------------------------------------------------------------------------
----
 apiVersion: kro.run/v1alpha1
 kind: Graph
 metadata:
   name: singleton
   namespace: kro-system
 spec:
+  serviceAccountName: singleton-controller
   nodes:
-    # The Singleton CRD — created by this Graph using simpleSchema.
-    - id: crd
-      template:
-        apiVersion: apiextensions.k8s.io/v1
-        kind: CustomResourceDefinition
-        metadata:
-          name: singletons.kro.run
-        spec:
-          group: kro.run
-          names:
-            plural: singletons
-            singular: singleton
-            kind: Singleton
-            listKind: SingletonList
-          scope: Namespaced
-          versions:
-            - name: v1alpha1
-              served: true
-              storage: true
-              subresources:
-                status: {}
-              schema:
-                openAPIV3Schema: >-
-                  ${simpleSchema.toOpenAPI({
-                    "apiVersion": "kro.run/v1alpha1",
-                    "kind": "Singleton",
-                    "spec": {
-                      "priority": "integer | default=0",
-                      "template": "object"
-                    },
-                    "status": {
-                      "active": "boolean",
-                      "claim": "string"
-                    }
-                  }, [])}
-              additionalPrinterColumns:
-                - name: Claim
-                  type: string
-                  jsonPath: .status.claim
-                - name: Priority
-                  type: integer
-                  jsonPath: .spec.priority
-                - name: Active
-                  type: boolean
-                  jsonPath: .status.active
-                - name: Age
-                  type: date
-                  jsonPath: .metadata.creationTimestamp
-
-    # Watch all Singleton CRs.
+    # Watch all Singleton CRs (CRD created out-of-band above).
     - id: singletons
-      includeWhen:
-        - ${has(crd.status) && has(crd.status.conditions) && crd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}
-      watch:
+      ref:
         apiVersion: kro.run/v1alpha1
         kind: Singleton
-        selector: {}
+        metadata:
+          selector: {}
 
     # Flatten each singleton into {key, name, namespace, priority, creationTimestamp, identity, template}.
     # key = namespace/name composite for cross-namespace uniqueness.
@@ -163,14 +196,24 @@ spec:
               c.key == claims.filter(x, x.identity == c.identity)
                 .sortBy(x, x.creationTimestamp)
                 .sortBy(x, -x.priority)[0].key)}
-      lifecycle:
-        apply: Force
-      template: "${c.template}"
+      template:
+        apiVersion: ${c.template.apiVersion}
+        kind: ${c.template.kind}
+        metadata:
+          name: ${c.template.metadata.name}
+          namespace: ${c.template.metadata.namespace}
+        data: ${c.template.data}
 
-    # Status writeback — patch each Singleton CR with active + claim.
-    - id: status
+    # Status writeback — fan out to EVERY claimant via a forEach patch. Each
+    # Singleton CR receives its own status: active=true only for the winner of
+    # its target identity, claim=<the contested identity>. An empty claim list
+    # renders zero patches (guarded by includeWhen). The patch targets each
+    # claimant's own CR by name, so drift re-enqueues via the `singletons` ref.
+    - id: singletonStatus
       forEach:
         - c: ${claims}
+      includeWhen:
+        - ${size(claims) > 0}
       patch:
         apiVersion: kro.run/v1alpha1
         kind: Singleton

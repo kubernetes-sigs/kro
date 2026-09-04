@@ -15,8 +15,8 @@
 package resolver
 
 import (
+	"fmt"
 	"net/http"
-	"time"
 
 	"k8s.io/apiextensions-apiserver/pkg/generated/openapi"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
@@ -27,33 +27,36 @@ import (
 
 // NewCombinedResolver creates a new schema resolver that can resolve both core and client types.
 func NewCombinedResolver(clientConfig *rest.Config, httpClient *http.Client) (resolver.SchemaResolver, error) {
-	// Create a regular discovery client first
+	combined, _, err := NewCombinedResolverWithCache(clientConfig, httpClient)
+	return combined, err
+}
+
+// NewCombinedResolverWithCache uses the same two-tier wiring as
+// NewCombinedResolver, but the discovery-backed tier is a push-invalidated LRU
+// (CachedSchemaResolver) instead of a TTL cache. The live cache is returned so
+// a schema watcher can call InvalidateGroupKind.
+func NewCombinedResolverWithCache(clientConfig *rest.Config, httpClient *http.Client) (resolver.SchemaResolver, *CachedSchemaResolver, error) {
 	discoveryClient, err := discovery.NewDiscoveryClientForConfigAndClient(clientConfig, httpClient)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("create discovery client: %w", err)
 	}
 
-	// ClientResolver is a resolver that uses the discovery client to resolve
-	// client types. It is used to resolve types that are not known at compile
-	// time a.k.a present in:
-	// https://github.com/kubernetes/apiextensions-apiserver/blob/master/pkg/generated/openapi/zz_generated.openapi.go
 	clientResolver := &resolver.ClientDiscoveryResolver{
 		Discovery: discoveryClient,
 	}
 
-	cachedResolver := NewTTLCachedSchemaResolver(
-		clientResolver,
-		500,           // maxSize: enough for 200 CRDs × 2-3 versions
-		5*time.Minute, // TTL: balance between freshness and performance
-	)
+	// 500 entries comfortably covers ~200 CRDs × 2-3 versions, with
+	// LRU eviction handling installations with more.
+	cached, err := NewCachedSchemaResolver(clientResolver, 500)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create cached schema resolver: %w", err)
+	}
 
-	// CoreResolver is a resolver that uses the OpenAPI definitions to resolve
-	// core types. It is used to resolve types that are known at compile time.
 	coreResolver := resolver.NewDefinitionsSchemaResolver(
 		openapi.GetOpenAPIDefinitions,
 		scheme.Scheme,
 	)
 
-	combinedResolver := coreResolver.Combine(cachedResolver)
-	return combinedResolver, nil
+	combined := coreResolver.Combine(cached)
+	return combined, cached, nil
 }

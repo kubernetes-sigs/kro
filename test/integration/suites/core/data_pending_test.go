@@ -71,58 +71,58 @@ var _ = Describe("Data Pending", func() {
 		rgd := generator.NewResourceGraphDefinition("test-data-pending",
 			generator.WithSchema(
 				"TestDataPending", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
-				map[string]interface{}{
+				map[string]any{
 					"vpcID":    "${vpc.status.vpcID}",
 					"subnetID": "${subnet.status.subnetID}",
 				},
 			),
 			// VPC - no dependencies
-			generator.WithResource("vpc", map[string]interface{}{
+			generator.WithResource("vpc", map[string]any{
 				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 				"kind":       "VPC",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-vpc",
 				},
-				"spec": map[string]interface{}{
-					"cidrBlocks": []interface{}{
+				"spec": map[string]any{
+					"cidrBlocks": []any{
 						"10.0.0.0/16",
 					},
 				},
 			}, nil, nil),
 			// InternetGateway - depends on vpc.status.vpcID
-			generator.WithResource("igw", map[string]interface{}{
+			generator.WithResource("igw", map[string]any{
 				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 				"kind":       "InternetGateway",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-igw",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"vpc": "${vpc.status.vpcID}",
 				},
 			}, nil, nil),
 			// Subnet - depends on vpc.status.vpcID
-			generator.WithResource("subnet", map[string]interface{}{
+			generator.WithResource("subnet", map[string]any{
 				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 				"kind":       "Subnet",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-subnet",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"vpcID":     "${vpc.status.vpcID}",
 					"cidrBlock": "10.0.1.0/24",
 				},
 			}, nil, nil),
 			// NATGateway - depends on subnet.status.subnetID (chain dependency)
-			generator.WithResource("natgw", map[string]interface{}{
+			generator.WithResource("natgw", map[string]any{
 				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 				"kind":       "NATGateway",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-natgw",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"subnetID": "${subnet.status.subnetID}",
 				},
 			}, nil, nil),
@@ -157,14 +157,14 @@ var _ = Describe("Data Pending", func() {
 		// Create instance
 		instanceName := "test-data-pending"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestDataPending",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": instanceName,
 				},
 			},
@@ -204,9 +204,9 @@ var _ = Describe("Data Pending", func() {
 			statusConditions, found, _ := unstructured.NestedSlice(instance.Object, "status", "conditions")
 			g.Expect(found).To(BeTrue())
 
-			var resourcesReadyCondition map[string]interface{}
+			var resourcesReadyCondition map[string]any
 			for _, condInterface := range statusConditions {
-				if cond, ok := condInterface.(map[string]interface{}); ok {
+				if cond, ok := condInterface.(map[string]any); ok {
 					if cond["type"] == ctrlinstance.ResourcesReady {
 						resourcesReadyCondition = cond
 						break
@@ -336,53 +336,53 @@ var _ = Describe("Data Pending", func() {
 		rgd := generator.NewResourceGraphDefinition("test-parallel-pending",
 			generator.WithSchema(
 				"TestParallelPending", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name": "string",
 				},
 				nil,
 			),
 			// vpcA - independent, no dependencies
-			generator.WithResource("vpcA", map[string]interface{}{
+			generator.WithResource("vpcA", map[string]any{
 				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 				"kind":       "VPC",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-vpc-a",
 				},
-				"spec": map[string]interface{}{
-					"cidrBlocks": []interface{}{"10.0.0.0/16"},
+				"spec": map[string]any{
+					"cidrBlocks": []any{"10.0.0.0/16"},
 				},
 			}, nil, nil),
 			// vpcB - independent, no dependencies
-			generator.WithResource("vpcB", map[string]interface{}{
+			generator.WithResource("vpcB", map[string]any{
 				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 				"kind":       "VPC",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-vpc-b",
 				},
-				"spec": map[string]interface{}{
-					"cidrBlocks": []interface{}{"10.1.0.0/16"},
+				"spec": map[string]any{
+					"cidrBlocks": []any{"10.1.0.0/16"},
 				},
 			}, nil, nil),
 			// subnetA - depends on vpcA.status.vpcID
-			generator.WithResource("subnetA", map[string]interface{}{
+			generator.WithResource("subnetA", map[string]any{
 				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 				"kind":       "Subnet",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-subnet-a",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"vpcID":     "${vpcA.status.vpcID}",
 					"cidrBlock": "10.0.1.0/24",
 				},
 			}, nil, nil),
 			// subnetB - depends on vpcB.status.vpcID
-			generator.WithResource("subnetB", map[string]interface{}{
+			generator.WithResource("subnetB", map[string]any{
 				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 				"kind":       "Subnet",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-subnet-b",
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"vpcID":     "${vpcB.status.vpcID}",
 					"cidrBlock": "10.1.1.0/24",
 				},
@@ -404,14 +404,14 @@ var _ = Describe("Data Pending", func() {
 		// Create instance
 		instanceName := "test-parallel"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestParallelPending",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      instanceName,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name": instanceName,
 				},
 			},

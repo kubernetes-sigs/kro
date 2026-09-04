@@ -33,13 +33,13 @@ func newListsEnv(t *testing.T) *cel.Env {
 
 // evalList compiles and evaluates a CEL expression, returning the result as
 // a []interface{} for uniform element comparison.
-func evalList(t *testing.T, env *cel.Env, expr string) []interface{} {
+func evalList(t *testing.T, env *cel.Env, expr string) []any {
 	t.Helper()
 	ast, issues := env.Compile(expr)
 	require.NoError(t, issues.Err(), "compile %q", expr)
 	prg, err := env.Program(ast)
 	require.NoError(t, err)
-	out, _, err := prg.Eval(map[string]interface{}{})
+	out, _, err := prg.Eval(map[string]any{})
 	require.NoError(t, err)
 	return toIfaceSlice(t, out.Value())
 }
@@ -54,33 +54,33 @@ func evalErr(t *testing.T, env *cel.Env, expr string) string {
 	}
 	prg, err := env.Program(ast)
 	require.NoError(t, err)
-	_, _, err = prg.Eval(map[string]interface{}{})
+	_, _, err = prg.Eval(map[string]any{})
 	require.Error(t, err, "expected runtime error for %q", expr)
 	return err.Error()
 }
 
-func toIfaceSlice(t *testing.T, v interface{}) []interface{} {
+func toIfaceSlice(t *testing.T, v any) []any {
 	t.Helper()
 	switch s := v.(type) {
 	case []int64:
-		out := make([]interface{}, len(s))
+		out := make([]any, len(s))
 		for i, e := range s {
 			out[i] = e
 		}
 		return out
 	case []string:
-		out := make([]interface{}, len(s))
+		out := make([]any, len(s))
 		for i, e := range s {
 			out[i] = e
 		}
 		return out
 	case []ref.Val:
-		out := make([]interface{}, len(s))
+		out := make([]any, len(s))
 		for i, e := range s {
 			out[i] = e.Value()
 		}
 		return out
-	case []interface{}:
+	case []any:
 		return s
 	default:
 		t.Fatalf("toIfaceSlice: unhandled type %T", v)
@@ -95,38 +95,38 @@ func TestListsSetAtIndex(t *testing.T) {
 	tests := []struct {
 		name    string
 		expr    string
-		want    []interface{}
+		want    []any
 		wantErr string
 	}{
 		{
 			name: "replace middle int",
 			expr: "lists.setAtIndex([1, 2, 3], 1, 99)",
-			want: []interface{}{int64(1), int64(99), int64(3)},
+			want: []any{int64(1), int64(99), int64(3)},
 		},
 		{
 			name: "replace first int",
 			expr: "lists.setAtIndex([1, 2, 3], 0, 0)",
-			want: []interface{}{int64(0), int64(2), int64(3)},
+			want: []any{int64(0), int64(2), int64(3)},
 		},
 		{
 			name: "replace last int",
 			expr: "lists.setAtIndex([1, 2, 3], 2, 7)",
-			want: []interface{}{int64(1), int64(2), int64(7)},
+			want: []any{int64(1), int64(2), int64(7)},
 		},
 		{
 			name: "replace string element",
 			expr: `lists.setAtIndex(["a", "b", "c"], 1, "z")`,
-			want: []interface{}{"a", "z", "c"},
+			want: []any{"a", "z", "c"},
 		},
 		{
 			name: "replace first string",
 			expr: `lists.setAtIndex(["x", "y"], 0, "replaced")`,
-			want: []interface{}{"replaced", "y"},
+			want: []any{"replaced", "y"},
 		},
 		{
 			name: "single-element list",
 			expr: "lists.setAtIndex([42], 0, 0)",
-			want: []interface{}{int64(0)},
+			want: []any{int64(0)},
 		},
 		{
 			name:    "index out of bounds high",
@@ -162,38 +162,38 @@ func TestListsInsertAtIndex(t *testing.T) {
 	tests := []struct {
 		name    string
 		expr    string
-		want    []interface{}
+		want    []any
 		wantErr string
 	}{
 		{
 			name: "insert in middle",
 			expr: "lists.insertAtIndex([1, 2, 3], 1, 99)",
-			want: []interface{}{int64(1), int64(99), int64(2), int64(3)},
+			want: []any{int64(1), int64(99), int64(2), int64(3)},
 		},
 		{
 			name: "insert at front",
 			expr: "lists.insertAtIndex([1, 2, 3], 0, 99)",
-			want: []interface{}{int64(99), int64(1), int64(2), int64(3)},
+			want: []any{int64(99), int64(1), int64(2), int64(3)},
 		},
 		{
 			name: "insert at end (append)",
 			expr: "lists.insertAtIndex([1, 2, 3], 3, 99)",
-			want: []interface{}{int64(1), int64(2), int64(3), int64(99)},
+			want: []any{int64(1), int64(2), int64(3), int64(99)},
 		},
 		{
 			name: "insert into empty list",
 			expr: "lists.insertAtIndex([], 0, 42)",
-			want: []interface{}{int64(42)},
+			want: []any{int64(42)},
 		},
 		{
 			name: "insert string element",
 			expr: `lists.insertAtIndex(["a", "c"], 1, "b")`,
-			want: []interface{}{"a", "b", "c"},
+			want: []any{"a", "b", "c"},
 		},
 		{
 			name: "insert into single-element list at front",
 			expr: "lists.insertAtIndex([2], 0, 1)",
-			want: []interface{}{int64(1), int64(2)},
+			want: []any{int64(1), int64(2)},
 		},
 		{
 			name:    "index out of bounds high",
@@ -224,38 +224,38 @@ func TestListsRemoveAtIndex(t *testing.T) {
 	tests := []struct {
 		name    string
 		expr    string
-		want    []interface{}
+		want    []any
 		wantErr string
 	}{
 		{
 			name: "remove middle element",
 			expr: "lists.removeAtIndex([1, 2, 3], 1)",
-			want: []interface{}{int64(1), int64(3)},
+			want: []any{int64(1), int64(3)},
 		},
 		{
 			name: "remove first element",
 			expr: "lists.removeAtIndex([1, 2, 3], 0)",
-			want: []interface{}{int64(2), int64(3)},
+			want: []any{int64(2), int64(3)},
 		},
 		{
 			name: "remove last element",
 			expr: "lists.removeAtIndex([1, 2, 3], 2)",
-			want: []interface{}{int64(1), int64(2)},
+			want: []any{int64(1), int64(2)},
 		},
 		{
 			name: "remove from two-element list",
 			expr: "lists.removeAtIndex([10, 20], 0)",
-			want: []interface{}{int64(20)},
+			want: []any{int64(20)},
 		},
 		{
 			name: "remove only element yields empty list",
 			expr: "lists.removeAtIndex([42], 0)",
-			want: []interface{}{},
+			want: []any{},
 		},
 		{
 			name: "remove string element",
 			expr: `lists.removeAtIndex(["a", "b", "c"], 1)`,
-			want: []interface{}{"a", "c"},
+			want: []any{"a", "c"},
 		},
 		{
 			name:    "index out of bounds high",
@@ -296,27 +296,27 @@ func TestListsComposition(t *testing.T) {
 	tests := []struct {
 		name string
 		expr string
-		want []interface{}
+		want []any
 	}{
 		{
 			name: "insertAtIndex then removeAtIndex round-trips",
 			expr: "lists.removeAtIndex(lists.insertAtIndex([1, 2, 3], 1, 99), 1)",
-			want: []interface{}{int64(1), int64(2), int64(3)},
+			want: []any{int64(1), int64(2), int64(3)},
 		},
 		{
 			name: "setAtIndex then setAtIndex",
 			expr: "lists.setAtIndex(lists.setAtIndex([1, 2, 3], 0, 9), 2, 7)",
-			want: []interface{}{int64(9), int64(2), int64(7)},
+			want: []any{int64(9), int64(2), int64(7)},
 		},
 		{
 			name: "chain insertAtIndex twice builds ordered list",
 			expr: "lists.insertAtIndex(lists.insertAtIndex([2, 3], 0, 1), 3, 4)",
-			want: []interface{}{int64(1), int64(2), int64(3), int64(4)},
+			want: []any{int64(1), int64(2), int64(3), int64(4)},
 		},
 		{
 			name: "removeAtIndex front then setAtIndex",
 			expr: "lists.setAtIndex(lists.removeAtIndex([0, 1, 2, 3], 0), 0, 99)",
-			want: []interface{}{int64(99), int64(2), int64(3)},
+			want: []any{int64(99), int64(2), int64(3)},
 		},
 	}
 	for _, tt := range tests {

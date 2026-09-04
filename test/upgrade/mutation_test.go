@@ -86,18 +86,18 @@ var _ = ginkgo.Describe("Post-Upgrade RGD Mutation", ginkgo.Ordered, func() {
 				continue
 			}
 
-			var template map[string]interface{}
+			var template map[string]any
 			gomega.Expect(json.Unmarshal(res.Template.Raw, &template)).To(gomega.Succeed())
 
 			// Add annotation to the deployment metadata
-			metadata, ok := template["metadata"].(map[string]interface{})
+			metadata, ok := template["metadata"].(map[string]any)
 			if !ok {
-				metadata = map[string]interface{}{}
+				metadata = map[string]any{}
 				template["metadata"] = metadata
 			}
-			annotations, ok := metadata["annotations"].(map[string]interface{})
+			annotations, ok := metadata["annotations"].(map[string]any)
 			if !ok {
-				annotations = map[string]interface{}{}
+				annotations = map[string]any{}
 				metadata["annotations"] = annotations
 			}
 			annotations[mutationAnnotationKey] = mutationAnnotationValue
@@ -236,8 +236,8 @@ var _ = ginkgo.Describe("Post-Upgrade RGD Mutation", ginkgo.Ordered, func() {
 			ginkgo.GinkgoLogr.Info("No pre-upgrade snapshot available, checking relative counts only")
 
 			for rgdName, count := range grCountPerRGD {
-				if rgdName == mutationRGDName {
-					continue // we already verified this one got +1
+				if rgdName == mutationRGDName || rgdName == shrinkRGDName {
+					continue // deliberately mutated by a post-upgrade suite
 				}
 				// For pre-GR upgrades, each RGD should have exactly 1 GR.
 				// For GR-aware upgrades, we don't know the exact count without
@@ -256,8 +256,9 @@ var _ = ginkgo.Describe("Post-Upgrade RGD Mutation", ginkgo.Ordered, func() {
 		//   - mutationRGDName: mutated by this suite (expected +1 GR)
 		//   - retentionRGDName: mutated by the rapid-mutations suite (GC'd to maxGraphRevisions)
 		//   - legacySelectorRGDName: mutated by the legacy-selector compatibility suite
+		//   - shrinkRGDName: mutated by the template-shrink suite (expected +1 GR)
 		for rgdName, currentCount := range grCountPerRGD {
-			if rgdName == mutationRGDName || rgdName == retentionRGDName || rgdName == legacySelectorRGDName {
+			if rgdName == mutationRGDName || rgdName == retentionRGDName || rgdName == legacySelectorRGDName || rgdName == shrinkRGDName {
 				continue
 			}
 			preCount := snapshot.GRCountPerRGD[rgdName]

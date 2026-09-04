@@ -49,19 +49,19 @@ var _ = Describe("Metadata Fields Access", func() {
 		rgd := generator.NewResourceGraphDefinition("metadata-field-tester",
 			generator.WithSchema(
 				"MetadataTest", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"dummy": "string",
 				},
-				map[string]interface{}{},
+				map[string]any{},
 			),
-			generator.WithResource("testConfigMap", map[string]interface{}{
+			generator.WithResource("testConfigMap", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "${schema.metadata.name}-${schema.metadata.namespace}-metadata-test",
 					"namespace": "${schema.metadata.namespace}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"instance-name":            "${schema.metadata.name}",
 					"instance-namespace":       "${schema.metadata.namespace}",
 					"instance-uid":             "${schema.metadata.uid}",
@@ -89,20 +89,20 @@ var _ = Describe("Metadata Fields Access", func() {
 
 		// Create instance
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": "kro.run/v1alpha1",
 				"kind":       "MetadataTest",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      "test-instance",
 					"namespace": namespace,
-					"labels": map[string]interface{}{
+					"labels": map[string]any{
 						"test-label": "test-value",
 					},
-					"annotations": map[string]interface{}{
+					"annotations": map[string]any{
 						"test-annotation": "test-value",
 					},
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"dummy": "value",
 				},
 			},

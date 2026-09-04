@@ -32,7 +32,7 @@ type omitVal struct{}
 var omitInstance = &omitVal{}
 
 func (v *omitVal) ConvertToNative(typeDesc reflect.Type) (any, error) {
-	if typeDesc == reflect.TypeOf(sentinels.Omit{}) {
+	if typeDesc == reflect.TypeFor[sentinels.Omit]() {
 		return sentinels.Omit{}, nil
 	}
 	if typeDesc.Kind() == reflect.Interface {

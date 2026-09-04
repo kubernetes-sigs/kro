@@ -6,21 +6,62 @@
 #
 # Add or remove the label on a namespace and the policy appears or disappears.
 # Delete the Graph and all managed NetworkPolicies are cleaned up.
+#
+# ─── Permissions ──────────────────────────────────────────────────────────────
+#
+# A Graph applies its resources while impersonating a ServiceAccount in its OWN
+# namespace: spec.serviceAccountName, or the namespace's "default" ServiceAccount
+# when unset. The default SA has no RBAC, so this example ships the identity it
+# needs. Namespaces are cluster-scoped and NetworkPolicies are created in every
+# matched namespace, so the grants are cluster-wide (ClusterRole).
 # ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: namespace-decorator
+  namespace: kro-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: namespace-decorator
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: namespace-decorator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: namespace-decorator
+subjects:
+  - kind: ServiceAccount
+    name: namespace-decorator
+    namespace: kro-system
+---
 apiVersion: kro.run/v1alpha1
 kind: Graph
 metadata:
   name: namespace-decorator
   namespace: kro-system
 spec:
+  serviceAccountName: namespace-decorator
   nodes:
     - id: namespaces
-      watch:
+      ref:
         apiVersion: v1
         kind: Namespace
-        selector:
-          matchLabels:
-            policy: enforced
+        metadata:
+          selector:
+            matchLabels:
+              policy: enforced
 
     - id: policies
       forEach:

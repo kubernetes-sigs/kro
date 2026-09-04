@@ -134,7 +134,7 @@ func (l *hashLibrary) ProgramOptions() []cel.ProgramOption {
 }
 
 func fnv64aHash(value ref.Val) ref.Val {
-	native, err := value.ConvertToNative(reflect.TypeOf(""))
+	native, err := value.ConvertToNative(reflect.TypeFor[string]())
 	if err != nil {
 		return types.NewErr("hash.fnv64a argument must be a string")
 	}
@@ -150,7 +150,7 @@ func fnv64aHash(value ref.Val) ref.Val {
 }
 
 func sha256Hash(value ref.Val) ref.Val {
-	native, err := value.ConvertToNative(reflect.TypeOf(""))
+	native, err := value.ConvertToNative(reflect.TypeFor[string]())
 	if err != nil {
 		return types.NewErr("hash.sha256 argument must be a string")
 	}
@@ -165,7 +165,7 @@ func sha256Hash(value ref.Val) ref.Val {
 }
 
 func md5Hash(value ref.Val) ref.Val {
-	native, err := value.ConvertToNative(reflect.TypeOf(""))
+	native, err := value.ConvertToNative(reflect.TypeFor[string]())
 	if err != nil {
 		return types.NewErr("hash.md5 argument must be a string")
 	}

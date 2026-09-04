@@ -15,6 +15,7 @@
 package library
 
 import (
+	"maps"
 	"strings"
 	"testing"
 
@@ -49,9 +50,7 @@ func evalRuntime(t *testing.T, env *cel.Env, expr string, extra map[string]any) 
 	require.NoError(t, err)
 
 	ctx := map[string]any{RuntimeVarName: RuntimeSingleton}
-	for k, v := range extra {
-		ctx[k] = v
-	}
+	maps.Copy(ctx, extra)
 
 	val, _, err := prog.Eval(ctx)
 	return val, err

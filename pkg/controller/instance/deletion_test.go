@@ -35,8 +35,10 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	controllergraph "github.com/kubernetes-sigs/kro/pkg/controller/graph"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
@@ -47,7 +49,7 @@ func addDeletionScope(instance *unstructured.Unstructured, gvk schema.GroupVersi
 		annotations = map[string]string{}
 	}
 	gks := map[string]struct{}{}
-	for _, value := range strings.Split(annotations[applyset.ApplySetGKsAnnotation], ",") {
+	for value := range strings.SplitSeq(annotations[applyset.ApplySetGKsAnnotation], ",") {
 		if value != "" {
 			gks[value] = struct{}{}
 		}
@@ -289,7 +291,7 @@ func TestReconcileDeletionDeletesAllAndRequeues(t *testing.T) {
 	err := controller.reconcileDeletion(rcx)
 	var retryAfter *requeue.RequeueNeededAfter
 	require.ErrorAs(t, err, &retryAfter)
-	assert.Equal(t, v1alpha1.InstanceStateDeleting, rcx.StateManager.State)
+	assert.Equal(t, v1alpha1.InstanceStateDeleting, rcx.State)
 	_, getErr := raw.Tracker().Get(controllerTestDeployGVR, "default", "demo")
 	require.Error(t, getErr)
 }
@@ -692,18 +694,18 @@ func TestSetUnmanagedRetriesOnConflict(t *testing.T) {
 
 	raw.PrependReactor("patch", "webapps", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
 		patchAction := action.(k8stesting.PatchAction)
-		var patchPayload map[string]interface{}
+		var patchPayload map[string]any
 		err := json.Unmarshal(patchAction.GetPatch(), &patchPayload)
 		require.NoError(t, err)
 
-		patchMeta, ok := patchPayload["metadata"].(map[string]interface{})
+		patchMeta, ok := patchPayload["metadata"].(map[string]any)
 		require.True(t, ok, "patch must include metadata")
 		_, hasResourceVersion := patchMeta["resourceVersion"]
 		require.True(t, hasResourceVersion, "patch must include resourceVersion")
 
-		finalizers, ok := patchMeta["finalizers"].([]interface{})
+		finalizers, ok := patchMeta["finalizers"].([]any)
 		require.True(t, ok, "patch must include finalizers array")
-		require.Equal(t, []interface{}{"other.io/finalizer"}, finalizers, "only kro finalizer should be removed")
+		require.Equal(t, []any{"other.io/finalizer"}, finalizers, "only kro finalizer should be removed")
 
 		attempt := attempts.Load()
 		if attempt == 1 {
@@ -740,98 +742,98 @@ func TestRemoveFinalizerMarksInstanceNotManagedOnError(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, rcx.Instance, InstanceManaged).Status)
 }
 
-// TestReconcileDeletionLeavesExternalRefUntouched verifies that when a managed
-// resource depends on an external ref, deletion removes the managed resource
-// without observing or deleting the external ref.
-func TestReconcileDeletionLeavesExternalRefUntouched(t *testing.T) {
+func TestReconcileDeletion_ReleaseFailure_RetainsFinalizer(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
-
-	externalNode := &graph.Node{
-		Meta: graph.NodeMeta{
-			ID:         "external",
-			Type:       graph.NodeTypeExternal,
-			GVR:        controllerTestCMGVR,
-			Namespaced: true,
+	metadata.SetInstanceFinalizer(instance)
+	addEmptyDeletionScope(instance)
+	contribs := []executor.Contribution{
+		{
+			APIVersion:   "v1",
+			Kind:         "ConfigMap",
+			Namespace:    "default",
+			Name:         "target-cm",
+			FieldManager: executor.PatchFieldManager("graph-uid", "patch-node"),
 		},
-		Template: newConfigMapObject("source-configmap", "default"),
 	}
-	managedNode := &graph.Node{
-		Meta: graph.NodeMeta{
-			ID:           "deploy",
-			Type:         graph.NodeTypeResource,
-			GVR:          controllerTestDeployGVR,
-			Namespaced:   true,
-			Dependencies: []string{"external"},
-		},
-		Template: newDeploymentObject("managed-deploy", "default"),
+	rawJSON, err := controllergraph.MarshalContributions(contribs)
+	require.NoError(t, err)
+	anns := instance.GetAnnotations()
+	anns[metadata.PatchContributionsAnnotation] = rawJSON
+	instance.SetAnnotations(anns)
+
+	fakeRuntimeCl := &errorClient{
+		Client: newFakeRuntimeClient(t, &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "target-cm",
+				"namespace": "default",
+			},
+		}}),
+		// The release target EXISTS (seeded above) so Release's GET-first guard
+		// passes and the SSA patch is attempted — which fails here, exercising the
+		// release-failure path the test asserts. (With an absent target, a
+		// patchErr would now be a tolerated already-released no-op, not a failure.)
+		patchErr: errors.New("SSA patch failure"),
 	}
 
-	sourceCM := newConfigMapObject("source-configmap", "default")
-	managed := newManagedObject(newDeploymentObject("managed-deploy", "default"), instance, "deploy", 1)
+	controller, dcx, _ := newControllerAndDeletionContext(t, instance, newTestGraph())
+	controller.graphEngineExecutor = executor.NewSimple(fakeRuntimeCl)
 
-	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(externalNode, managedNode), sourceCM, managed)
-
-	err := controller.reconcileDeletion(rcx)
-	var retryAfter *requeue.RequeueNeededAfter
-	require.ErrorAs(t, err, &retryAfter)
-
-	_, getErr := raw.Tracker().Get(controllerTestDeployGVR, "default", "managed-deploy")
-	require.Error(t, getErr, "managed resource must be selected for deletion, not treated as already deleted")
-	_, getErr = raw.Tracker().Get(controllerTestCMGVR, "default", "source-configmap")
-	require.NoError(t, getErr, "external ref must remain untouched")
+	err = controller.reconcileDeletion(dcx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "executor release")
+	assert.True(t, metadata.HasInstanceFinalizer(dcx.Instance), "finalizer must be retained when release fails")
 }
 
-// TestReconcileDeletionLeavesExternalCollectionUntouched verifies the same
-// invariant for an external collection root: items matching the selector are
-// never deletion candidates, while the managed dependent is removed.
-func TestReconcileDeletionLeavesExternalCollectionUntouched(t *testing.T) {
+// TestReconcileDeletion_RefusesForgedNonKroFieldManager pins the deletion.go
+// forgery guard: the patch-contribution inventory is a client-editable
+// annotation, so a principal with patch rights on the instance could forge an
+// entry naming a NON-kro field manager (here "kubectl") on a target, trying to
+// weaponize kro's privileged finalizer to strip that manager's fields. The
+// finalizer must refuse to release any non-kro patch manager. Here the SSA
+// client is wired to FAIL every patch: if the guard were absent the forged
+// release would be attempted and error out; because it IS refused, Release is
+// never called, so deletion proceeds cleanly and the finalizer is removed.
+func TestReconcileDeletion_RefusesForgedNonKroFieldManager(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
-
-	externalColNode := &graph.Node{
-		Meta: graph.NodeMeta{
-			ID:         "external",
-			Type:       graph.NodeTypeExternalCollection,
-			GVR:        controllerTestCMGVR,
-			Namespaced: true,
+	metadata.SetInstanceFinalizer(instance)
+	addEmptyDeletionScope(instance)
+	contribs := []executor.Contribution{
+		{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+			Namespace:  "default",
+			Name:       "victim-cm",
+			// A forged, non-kro field manager. Only kro-graphengine.patch.* managers
+			// are ever legitimately recorded; this must be refused, not released.
+			FieldManager: "kubectl",
 		},
-		Template: &unstructured.Unstructured{
-			Object: map[string]interface{}{
-				"apiVersion": controllerTestCMGVK.GroupVersion().String(),
-				"kind":       controllerTestCMGVK.Kind,
-				"metadata": map[string]interface{}{
-					"namespace": "default",
-					"selector":  map[string]interface{}{"matchLabels": map[string]interface{}{"app": "source"}},
-				},
+	}
+	rawJSON, err := controllergraph.MarshalContributions(contribs)
+	require.NoError(t, err)
+	anns := instance.GetAnnotations()
+	anns[metadata.PatchContributionsAnnotation] = rawJSON
+	instance.SetAnnotations(anns)
+
+	// Every patch fails: if the guard let the forged entry through, Release would
+	// be attempted and this would surface an "executor release" error.
+	fakeRuntimeCl := &errorClient{
+		Client: newFakeRuntimeClient(t, &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "victim-cm",
+				"namespace": "default",
 			},
-		},
-	}
-	managedNode := &graph.Node{
-		Meta: graph.NodeMeta{
-			ID:           "deploy",
-			Type:         graph.NodeTypeResource,
-			GVR:          controllerTestDeployGVR,
-			Namespaced:   true,
-			Dependencies: []string{"external"},
-		},
-		Template: newDeploymentObject("managed-deploy", "default"),
+		}}),
+		patchErr: errors.New("SSA patch failure"),
 	}
 
-	cm1 := newConfigMapObject("source-1", "default")
-	cm1.SetLabels(map[string]string{"app": "source"})
-	cm2 := newConfigMapObject("source-2", "default")
-	cm2.SetLabels(map[string]string{"app": "source"})
-	managed := newManagedObject(newDeploymentObject("managed-deploy", "default"), instance, "deploy", 1)
+	controller, dcx, _ := newControllerAndDeletionContext(t, instance, newTestGraph())
+	controller.graphEngineExecutor = executor.NewSimple(fakeRuntimeCl)
 
-	controller, rcx, raw := newControllerAndDeletionContext(t, instance, newTestGraph(externalColNode, managedNode), cm1, cm2, managed)
-
-	err := controller.reconcileDeletion(rcx)
-	var retryAfter *requeue.RequeueNeededAfter
-	require.ErrorAs(t, err, &retryAfter)
-
-	_, getErr := raw.Tracker().Get(controllerTestDeployGVR, "default", "managed-deploy")
-	require.Error(t, getErr, "managed resource must be selected for deletion")
-	for _, name := range []string{"source-1", "source-2"} {
-		_, getErr = raw.Tracker().Get(controllerTestCMGVR, "default", name)
-		require.NoError(t, getErr, "external collection item %q must remain untouched", name)
-	}
+	err = controller.reconcileDeletion(dcx)
+	require.NoError(t, err, "a forged non-kro field manager must be refused, not released — so deletion proceeds without a release error")
+	assert.False(t, metadata.HasInstanceFinalizer(dcx.Instance), "finalizer is removed once the (refused) release is skipped")
 }

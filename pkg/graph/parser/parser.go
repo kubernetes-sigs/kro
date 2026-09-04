@@ -66,7 +66,7 @@ func New(schemas SchemaLookup) *Parser {
 // expressions are found, they are extracted and returned with the schema
 // of the field. The caller is responsible for converting schemas to CEL types
 // with appropriate type naming.
-func (p *Parser) ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema) ([]variable.FieldDescriptor, error) {
+func (p *Parser) ParseResource(resource map[string]any, resourceSchema *spec.Schema) ([]variable.FieldDescriptor, error) {
 	return p.parseResource(resource, resourceSchema, "")
 }
 
@@ -82,7 +82,7 @@ func (p *Parser) ParseResourceAtPath(resource map[string]interface{}, resourceSc
 // from a resource. It uses a depth first search to traverse the resource and
 // extract expressions from string fields.
 // The path parameter includes array indices for error reporting (e.g., "spec.containers[0]").
-func (p *Parser) parseResource(resource interface{}, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
+func (p *Parser) parseResource(resource any, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
 	if err := validateSchema(schema, path); err != nil {
 		return nil, err
 	}
@@ -93,9 +93,9 @@ func (p *Parser) parseResource(resource interface{}, schema *spec.Schema, path s
 	}
 
 	switch field := resource.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		return p.parseObject(field, schema, path, expectedTypes)
-	case []interface{}:
+	case []any:
 		return p.parseArray(field, schema, path, expectedTypes)
 	case string:
 		return parseString(field, path, expectedTypes)
@@ -214,7 +214,7 @@ func validateSchema(schema *spec.Schema, path string) error {
 	return nil
 }
 
-func (p *Parser) parseObject(field map[string]interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
+func (p *Parser) parseObject(field map[string]any, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
 	// Look for vendor schema extensions first
 	if len(schema.Extensions) > 0 {
 		// If the schema has the x-kubernetes-preserve-unknown-fields extension, we need to parse
@@ -251,7 +251,7 @@ func (p *Parser) parseObject(field map[string]interface{}, schema *spec.Schema, 
 	return expressionsFields, nil
 }
 
-func (p *Parser) parseArray(field []interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
+func (p *Parser) parseArray(field []any, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
 	// Look for vendor schema extensions first
 	if len(schema.Extensions) > 0 {
 		// If the schema has the x-kubernetes-preserve-unknown-fields extension, we need to parse
@@ -290,16 +290,14 @@ func (p *Parser) parseArray(field []interface{}, schema *spec.Schema, path strin
 }
 
 func parseString(field string, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
-	ok, err := IsStandaloneExpression(field)
+	matches, err := extractExpressions(field)
 	if err != nil {
 		return nil, err
 	}
 
-	if ok {
-		expr := strings.TrimPrefix(field, "${")
-		expr = strings.TrimSuffix(expr, "}")
+	if len(matches) == 1 && matches[0].start == 0 && matches[0].end == len(field) {
 		return []variable.FieldDescriptor{{
-			Expression: &krocel.Expression{Original: expr},
+			Expression: &krocel.Expression{Original: matches[0].expr},
 			Path:       path,
 		}}, nil
 	}
@@ -308,12 +306,8 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 		return nil, fmt.Errorf("expected %s type for path %s, got string", strings.Join(expectedTypes, " or "), path)
 	}
 
-	expressions, err := extractExpressions(field)
-	if err != nil {
-		return nil, err
-	}
-	if len(expressions) > 0 {
-		celExpr := buildStringTemplate(field, expressions)
+	if len(matches) > 0 {
+		celExpr := buildStringTemplate(field, matches)
 		return []variable.FieldDescriptor{{
 			Expression: &krocel.Expression{Original: celExpr, OriginalTemplate: field},
 			Path:       path,
@@ -341,7 +335,7 @@ func buildStringTemplate(original string, matches []exprMatch) string {
 	return strings.Join(parts, " + ")
 }
 
-func parseScalarTypes(field interface{}, _ *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
+func parseScalarTypes(field any, _ *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
 	// If "any" type is expected, skip validation
 	if slices.Contains(expectedTypes, "any") {
 		return nil, nil
@@ -371,7 +365,7 @@ func parseScalarTypes(field interface{}, _ *spec.Schema, path string, expectedTy
 }
 
 // getSchemaTypeName converts a Go type to its OpenAPI schema type name
-func getSchemaTypeName(v interface{}) string {
+func getSchemaTypeName(v any) string {
 	switch v.(type) {
 	case bool:
 		return "boolean"
@@ -410,11 +404,11 @@ func getArrayItemSchema(schema *spec.Schema, path string) (*spec.Schema, error) 
 	return nil, fmt.Errorf("invalid array schema for path %s: neither Items.Schema nor Properties are defined", path)
 }
 
-func isNumber(v interface{}) bool {
+func isNumber(v any) bool {
 	return isInteger(v) || isFloat(v)
 }
 
-func isFloat(v interface{}) bool {
+func isFloat(v any) bool {
 	switch v.(type) {
 	case float32, float64:
 		return true
@@ -423,7 +417,7 @@ func isFloat(v interface{}) bool {
 	}
 }
 
-func isInteger(v interface{}) bool {
+func isInteger(v any) bool {
 	switch v.(type) {
 	case int, int8, int32, int64:
 		return true

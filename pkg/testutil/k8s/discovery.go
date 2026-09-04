@@ -16,6 +16,7 @@ package k8s
 
 import (
 	"fmt"
+	"maps"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -792,11 +793,7 @@ func metadataSchema() spec.Schema {
 // Helper to merge two schema maps
 func mergeSchemas(a, b map[string]spec.Schema) map[string]spec.Schema {
 	merged := make(map[string]spec.Schema)
-	for k, v := range a {
-		merged[k] = v
-	}
-	for k, v := range b {
-		merged[k] = v
-	}
+	maps.Copy(merged, a)
+	maps.Copy(merged, b)
 	return merged
 }

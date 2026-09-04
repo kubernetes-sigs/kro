@@ -32,12 +32,12 @@ func eksCluster(
 	resourcegraphdefinition := generator.NewResourceGraphDefinition(name,
 		generator.WithSchema(
 			"EKSCluster", "v1alpha1",
-			map[string]interface{}{
+			map[string]any{
 				"name":    "string",
 				"version": "string",
 			},
-			map[string]interface{}{
-				"networkingInfo": map[string]interface{}{
+			map[string]any{
+				"networkingInfo": map[string]any{
 					"vpcID":     "${clusterVPC.status.vpcID}",
 					"subnetAZA": "${clusterSubnetA.status.subnetID}",
 					"subnetAZB": "${clusterSubnetB.status.subnetID}",
@@ -67,14 +67,14 @@ func eksCluster(
 
 	instanceGenerator := func(namespace, name, version string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "EKSCluster",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":    name,
 					"version": version,
 				},
@@ -84,16 +84,16 @@ func eksCluster(
 	return resourcegraphdefinition, instanceGenerator
 }
 
-func eksVPCDef(namespace string) map[string]interface{} {
-	return map[string]interface{}{
+func eksVPCDef(namespace string) map[string]any {
+	return map[string]any{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "VPC",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "kro-cluster-vpc",
 			"namespace": namespace,
 		},
-		"spec": map[string]interface{}{
-			"cidrBlocks": []interface{}{
+		"spec": map[string]any{
+			"cidrBlocks": []any{
 				"192.168.0.0/16",
 			},
 			"enableDNSSupport":   true,
@@ -102,44 +102,44 @@ func eksVPCDef(namespace string) map[string]interface{} {
 	}
 }
 
-func eipDef(namespace string) map[string]interface{} {
-	return map[string]interface{}{
+func eipDef(namespace string) map[string]any {
+	return map[string]any{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "ElasticIPAddress",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "kro-cluster-eip",
 			"namespace": namespace,
 		},
-		"spec": map[string]interface{}{},
+		"spec": map[string]any{},
 	}
 }
 
-func igwDef(namespace string) map[string]interface{} {
-	return map[string]interface{}{
+func igwDef(namespace string) map[string]any {
+	return map[string]any{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "InternetGateway",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "kro-cluster-igw",
 			"namespace": namespace,
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"vpc": "${clusterVPC.status.vpcID}",
 		},
 	}
 }
 
-func routeTableDef(namespace string) map[string]interface{} {
-	return map[string]interface{}{
+func routeTableDef(namespace string) map[string]any {
+	return map[string]any{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "RouteTable",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "kro-cluster-public-route-table",
 			"namespace": namespace,
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"vpcID": "${clusterVPC.status.vpcID}",
-			"routes": []interface{}{
-				map[string]interface{}{
+			"routes": []any{
+				map[string]any{
 					"destinationCIDRBlock": "0.0.0.0/0",
 					"gatewayID":            "${clusterInternetGateway.status.internetGatewayID}",
 				},
@@ -148,51 +148,51 @@ func routeTableDef(namespace string) map[string]interface{} {
 	}
 }
 
-func eksSubnetDef(namespace, name, az, cidr string) map[string]interface{} {
-	return map[string]interface{}{
+func eksSubnetDef(namespace, name, az, cidr string) map[string]any {
+	return map[string]any{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "Subnet",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      name,
 			"namespace": namespace,
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"availabilityZone":    az,
 			"cidrBlock":           cidr,
 			"vpcID":               "${clusterVPC.status.vpcID}",
-			"routeTables":         []interface{}{"${clusterRouteTable.status.routeTableID}"},
+			"routeTables":         []any{"${clusterRouteTable.status.routeTableID}"},
 			"mapPublicIPOnLaunch": true,
 		},
 	}
 }
 
-func natGatewayDef(namespace string) map[string]interface{} {
-	return map[string]interface{}{
+func natGatewayDef(namespace string) map[string]any {
+	return map[string]any{
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "NATGateway",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "kro-cluster-natgateway1",
 			"namespace": namespace,
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"subnetID":     "${clusterSubnetB.status.subnetID}",
 			"allocationID": "${clusterElasticIPAddress.status.allocationID}",
 		},
 	}
 }
 
-func clusterRoleDef(namespace string) map[string]interface{} {
-	return map[string]interface{}{
+func clusterRoleDef(namespace string) map[string]any {
+	return map[string]any{
 		"apiVersion": "iam.services.k8s.aws/v1alpha1",
 		"kind":       "Role",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "kro-cluster-role",
 			"namespace": namespace,
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"name":        "kro-cluster-role",
 			"description": "kro created cluster cluster role",
-			"policies": []interface{}{
+			"policies": []any{
 				"arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
 			},
 			"assumeRolePolicyDocument": `{
@@ -211,18 +211,18 @@ func clusterRoleDef(namespace string) map[string]interface{} {
 	}
 }
 
-func nodeRoleDef(namespace string) map[string]interface{} {
-	return map[string]interface{}{
+func nodeRoleDef(namespace string) map[string]any {
+	return map[string]any{
 		"apiVersion": "iam.services.k8s.aws/v1alpha1",
 		"kind":       "Role",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "kro-cluster-node-role",
 			"namespace": namespace,
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"name":        "kro-cluster-node-role",
 			"description": "kro created cluster node role",
-			"policies": []interface{}{
+			"policies": []any{
 				"arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
 				"arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
 				"arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
@@ -243,18 +243,18 @@ func nodeRoleDef(namespace string) map[string]interface{} {
 	}
 }
 
-func adminRoleDef(namespace string) map[string]interface{} {
-	return map[string]interface{}{
+func adminRoleDef(namespace string) map[string]any {
+	return map[string]any{
 		"apiVersion": "iam.services.k8s.aws/v1alpha1",
 		"kind":       "Role",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "kro-cluster-pia-role",
 			"namespace": namespace,
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"name":        "kro-cluster-pia-role",
 			"description": "kro created cluster admin pia role",
-			"policies": []interface{}{
+			"policies": []any{
 				"arn:aws:iam::aws:policy/AdministratorAccess",
 			},
 			"assumeRolePolicyDocument": `{
@@ -277,25 +277,25 @@ func adminRoleDef(namespace string) map[string]interface{} {
 	}
 }
 
-func clusterDef(namespace string) map[string]interface{} {
-	return map[string]interface{}{
+func clusterDef(namespace string) map[string]any {
+	return map[string]any{
 		"apiVersion": "eks.services.k8s.aws/v1alpha1",
 		"kind":       "Cluster",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "${schema.spec.name}",
 			"namespace": namespace,
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"name": "${schema.spec.name}",
-			"accessConfig": map[string]interface{}{
+			"accessConfig": map[string]any{
 				"authenticationMode": "API_AND_CONFIG_MAP",
 			},
 			"roleARN": "${clusterRole.status.ackResourceMetadata.arn}",
 			"version": "${schema.spec.version}",
-			"resourcesVPCConfig": map[string]interface{}{
+			"resourcesVPCConfig": map[string]any{
 				"endpointPrivateAccess": false,
 				"endpointPublicAccess":  true,
-				"subnetIDs": []interface{}{
+				"subnetIDs": []any{
 					"${clusterSubnetA.status.subnetID}",
 					"${clusterSubnetB.status.subnetID}",
 				},
@@ -304,27 +304,27 @@ func clusterDef(namespace string) map[string]interface{} {
 	}
 }
 
-func nodeGroupDef(namespace string) map[string]interface{} {
-	return map[string]interface{}{
+func nodeGroupDef(namespace string) map[string]any {
+	return map[string]any{
 		"apiVersion": "eks.services.k8s.aws/v1alpha1",
 		"kind":       "Nodegroup",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "kro-cluster-nodegroup",
 			"namespace": namespace,
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"name":        "kro-cluster-ng",
 			"diskSize":    100,
 			"clusterName": "${cluster.spec.name}",
-			"subnets": []interface{}{
+			"subnets": []any{
 				"${clusterSubnetA.status.subnetID}",
 				"${clusterSubnetB.status.subnetID}",
 			},
 			"nodeRole": "${clusterNodeRole.status.ackResourceMetadata.arn}",
-			"updateConfig": map[string]interface{}{
+			"updateConfig": map[string]any{
 				"maxUnavailable": 1,
 			},
-			"scalingConfig": map[string]interface{}{
+			"scalingConfig": map[string]any{
 				"minSize":     1,
 				"maxSize":     1,
 				"desiredSize": 1,

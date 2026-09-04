@@ -73,14 +73,14 @@ func areEqualSlices(slice1, slice2 []string) bool {
 func TestParseSchemalessResource(t *testing.T) {
 	tests := []struct {
 		name                string
-		resource            map[string]interface{}
+		resource            map[string]any
 		expressionsWant     []variable.FieldDescriptor
 		plainFieldPathsWant []string
 		wantErr             bool
 	}{
 		{
 			name: "Simple string field",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field":        "${resource.value}",
 				"anotherField": "value",
 			},
@@ -95,8 +95,8 @@ func TestParseSchemalessResource(t *testing.T) {
 		},
 		{
 			name: "Nested map",
-			resource: map[string]interface{}{
-				"outer": map[string]interface{}{
+			resource: map[string]any{
+				"outer": map[string]any{
 					"inner":        "${nested.value}",
 					"anotherInner": "nestedValue",
 				},
@@ -112,8 +112,8 @@ func TestParseSchemalessResource(t *testing.T) {
 		},
 		{
 			name: "array field",
-			resource: map[string]interface{}{
-				"array": []interface{}{
+			resource: map[string]any{
+				"array": []any{
 					"${array[0]}",
 					"${array[1]}",
 				},
@@ -132,7 +132,7 @@ func TestParseSchemalessResource(t *testing.T) {
 		},
 		{
 			name: "Multiple expressions in string",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field": "Start ${expr1} middle ${expr2} end",
 			},
 			expressionsWant: []variable.FieldDescriptor{
@@ -145,12 +145,12 @@ func TestParseSchemalessResource(t *testing.T) {
 		},
 		{
 			name: "Mixed types",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"string": "${string.value}",
 				"number": 42,
 				"bool":   true,
-				"nested": map[string]interface{}{
-					"array": []interface{}{
+				"nested": map[string]any{
+					"array": []any{
 						"${array.value}",
 						123,
 					},
@@ -171,13 +171,13 @@ func TestParseSchemalessResource(t *testing.T) {
 		},
 		{
 			name:            "Empty resource",
-			resource:        map[string]interface{}{},
+			resource:        map[string]any{},
 			expressionsWant: []variable.FieldDescriptor{},
 			wantErr:         false,
 		},
 		{
 			name: "Nested expression (should error)",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"field": "${outer(${inner})}",
 			},
 			expressionsWant: nil,
@@ -205,17 +205,17 @@ func TestParseSchemalessResource(t *testing.T) {
 func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 	tests := []struct {
 		name                string
-		resource            map[string]interface{}
+		resource            map[string]any
 		expressionsWant     []variable.FieldDescriptor
 		plainFieldPathsWant []string
 		wantErr             bool
 	}{
 		{
 			name: "Deeply nested structure",
-			resource: map[string]interface{}{
-				"level1": map[string]interface{}{
-					"level2": map[string]interface{}{
-						"level3": map[string]interface{}{
+			resource: map[string]any{
+				"level1": map[string]any{
+					"level2": map[string]any{
+						"level3": map[string]any{
 							"level4": "${deeply.nested.value}",
 						},
 					},
@@ -231,12 +231,12 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 		},
 		{
 			name: "Array with mixed types",
-			resource: map[string]interface{}{
-				"array": []interface{}{
+			resource: map[string]any{
+				"array": []any{
 					"${expr1}",
 					42,
 					true,
-					map[string]interface{}{
+					map[string]any{
 						"nested": "${expr2}",
 					},
 				},
@@ -256,7 +256,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 		},
 		{
 			name: "Empty string expressions",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"empty1": "${}",
 				"empty2": "${    }",
 			},
@@ -274,34 +274,65 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 		},
 		{
 			name: "Incomplete expressions",
-			resource: map[string]interface{}{
+			resource: map[string]any{
 				"incomplete1": "${incomplete",
 				"incomplete2": "incomplete}",
 				"incomplete3": "$not_an_expression",
 			},
-			expressionsWant:     []variable.FieldDescriptor{},
-			plainFieldPathsWant: []string{"incomplete1", "incomplete2", "incomplete3"},
-			wantErr:             false,
+			// An unterminated "${" is now a parser error rather than being
+			// silently treated as literal data.
+			expressionsWant:     nil,
+			plainFieldPathsWant: nil,
+			wantErr:             true,
 		},
 		{
-			name: "Complex structure with various expressions combinations",
-			resource: map[string]interface{}{
+			name: "Complex structure with an unterminated expression is rejected",
+			resource: map[string]any{
 				"string": "${string.value}",
 				"number": 42,
 				"bool":   true,
-				"nested": map[string]interface{}{
-					"array": []interface{}{
+				"nested": map[string]any{
+					"array": []any{
 						"${array.value}",
 						123,
 					},
 				},
-				"complex": map[string]interface{}{
+				"complex": map[string]any{
 					"field": "Start ${expr1} middle ${expr2} end",
-					"nested": map[string]interface{}{
+					"nested": map[string]any{
 						"inner": "${nested.value}",
 					},
-					"array": []interface{}{
+					"array": []any{
 						"${expr3-incmplete",
+						"${expr4}",
+						"${expr5}",
+					},
+				},
+			},
+			// The "${expr3-incmplete" entry never closes: the whole parse now
+			// fails rather than silently discarding it.
+			expressionsWant:     nil,
+			plainFieldPathsWant: nil,
+			wantErr:             true,
+		},
+		{
+			name: "Complex structure with various expressions combinations",
+			resource: map[string]any{
+				"string": "${string.value}",
+				"number": 42,
+				"bool":   true,
+				"nested": map[string]any{
+					"array": []any{
+						"${array.value}",
+						123,
+					},
+				},
+				"complex": map[string]any{
+					"field": "Start ${expr1} middle ${expr2} end",
+					"nested": map[string]any{
+						"inner": "${nested.value}",
+					},
+					"array": []any{
 						"${expr4}",
 						"${expr5}",
 					},
@@ -326,14 +357,14 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				},
 				{
 					Expression: krocel.NewUncompiled("expr4"),
-					Path:       "complex.array[1]",
+					Path:       "complex.array[0]",
 				},
 				{
 					Expression: krocel.NewUncompiled("expr5"),
-					Path:       "complex.array[2]",
+					Path:       "complex.array[1]",
 				},
 			},
-			plainFieldPathsWant: []string{"number", "bool", "nested.array[1]", "complex.array[0]"},
+			plainFieldPathsWant: []string{"number", "bool", "nested.array[1]"},
 		},
 	}
 

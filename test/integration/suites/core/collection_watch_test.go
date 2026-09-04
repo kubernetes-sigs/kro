@@ -56,19 +56,19 @@ var _ = Describe("Collection Watch", func() {
 		rgd := generator.NewResourceGraphDefinition("test-collection-watch",
 			generator.WithSchema(
 				"CollWatchTest", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"values": "[]string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configmaps", map[string]interface{}{
+			generator.WithResourceCollection("configmaps", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${value}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "${value}",
 				},
 			},
@@ -90,16 +90,16 @@ var _ = Describe("Collection Watch", func() {
 		// Create an instance with 3 values -> 3 ConfigMaps.
 		name := "test-coll-watch"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "CollWatchTest",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"values": []interface{}{"alpha", "beta", "gamma"},
+					"values": []any{"alpha", "beta", "gamma"},
 				},
 			},
 		}
@@ -186,19 +186,19 @@ var _ = Describe("Collection Watch", func() {
 		rgd := generator.NewResourceGraphDefinition("test-collection-shrink-watch",
 			generator.WithSchema(
 				"CollShrinkTest", "v1alpha1",
-				map[string]interface{}{
+				map[string]any{
 					"name":   "string",
 					"values": "[]string",
 				},
 				nil,
 			),
-			generator.WithResourceCollection("configmaps", map[string]interface{}{
+			generator.WithResourceCollection("configmaps", map[string]any{
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name": "${schema.spec.name}-${value}",
 				},
-				"data": map[string]interface{}{
+				"data": map[string]any{
 					"key": "${value}",
 				},
 			},
@@ -219,16 +219,16 @@ var _ = Describe("Collection Watch", func() {
 		// Create instance with 3 items.
 		name := "test-coll-shrink"
 		instance := &unstructured.Unstructured{
-			Object: map[string]interface{}{
+			Object: map[string]any{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "CollShrinkTest",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": namespace,
 				},
-				"spec": map[string]interface{}{
+				"spec": map[string]any{
 					"name":   name,
-					"values": []interface{}{"alpha", "beta", "gamma"},
+					"values": []any{"alpha", "beta", "gamma"},
 				},
 			},
 		}
@@ -261,9 +261,9 @@ var _ = Describe("Collection Watch", func() {
 			Name:      name,
 			Namespace: namespace,
 		}, instance)).To(Succeed())
-		instance.Object["spec"] = map[string]interface{}{
+		instance.Object["spec"] = map[string]any{
 			"name":   name,
-			"values": []interface{}{"alpha", "beta"},
+			"values": []any{"alpha", "beta"},
 		}
 		Expect(env.Client.Update(ctx, instance)).To(Succeed())
 

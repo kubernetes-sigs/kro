@@ -26,6 +26,7 @@ import (
 	apiextensionsfake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -61,6 +62,19 @@ func TestEnsureClearsCRDNames(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got.Spec.Names.ShortNames)
 	assert.Empty(t, got.Spec.Names.Categories)
+}
+
+func TestEnsureBreakingChangeErrorMentionsAnnotation(t *testing.T) {
+	existing := testCRD()
+	desired := existing.DeepCopy()
+	desired.Spec.Versions[0].Served = false
+
+	wrapper := newTestCRDWrapper(existing)
+
+	err := wrapper.Ensure(context.Background(), *desired, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), v1alpha1.AllowBreakingChangesAnnotation)
+	assert.Contains(t, err.Error(), "breaking changes detected")
 }
 
 func TestCRDMergePatchClearsEmptyNames(t *testing.T) {

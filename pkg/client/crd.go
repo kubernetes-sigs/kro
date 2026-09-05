@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	logr "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	crdcompat "github.com/kubernetes-sigs/kro/pkg/graph/crd/compat"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
@@ -171,7 +172,12 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 		if !report.IsCompatible() {
 			log.Info("Breaking changes detected in CRD update", "name", desired.Name, "breakingChanges", len(report.BreakingChanges), "summary", report)
 			if !allowBreakingChanges {
-				return fmt.Errorf("cannot update CRD %s: breaking changes detected: %s", desired.Name, report)
+				return fmt.Errorf(
+					"cannot update CRD %s: breaking changes detected: %s. "+
+						"Set the %s annotation to \"true\" on the ResourceGraphDefinition "+
+						"to apply it; this can invalidate existing instances that violate the new schema",
+					desired.Name, report, v1alpha1.AllowBreakingChangesAnnotation,
+				)
 			}
 			log.Info("Allowing breaking changes", "name", desired.Name)
 		}

@@ -24,9 +24,11 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -87,6 +89,8 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 		mark.ResourceGraphInvalid(err.Error())
 		return ctrl.Result{}, nil, nil, err
 	}
+
+	r.warnOnEncodedResourceIDs(rgd)
 
 	graphRevisions, hasTerminating, orphanIndices, err := r.listGraphRevisions(ctx, rgd)
 	if err != nil {
@@ -318,6 +322,27 @@ func (r *ResourceGraphDefinitionReconciler) buildResourceGraphDefinition(_ conte
 	}
 
 	return processedRGD, resourcesInfoFromGraph(processedRGD), nil
+}
+
+// warnOnEncodedResourceIDs emits an event for each resource ID too long to be
+// stored verbatim in the kro.run/node-id label. Without it a hashed label is
+// silent: selectors written against the authored ID simply stop matching.
+// Called every reconcile, not just when a revision is issued, so the event does
+// not age out of the apiserver's event-ttl while the label is still hashed.
+func (r *ResourceGraphDefinitionReconciler) warnOnEncodedResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) {
+	if r.recorder == nil {
+		return
+	}
+	for _, res := range rgd.Spec.Resources {
+		if !metadata.NodeIDTokenIsHashed(res.ID) {
+			continue
+		}
+		r.recorder.Eventf(rgd, corev1.EventTypeWarning, "NodeIDEncoded",
+			"resource id %q exceeds the %d character label value limit; %s is set to %q on its managed resources, "+
+				"and selectors must use that value; the full id is preserved in the %s annotation",
+			res.ID, validation.LabelValueMaxLength, metadata.NodeIDLabel,
+			metadata.NodeIDToken(res.ID), metadata.NodePathAnnotation)
+	}
 }
 
 // buildResourceInfo creates a ResourceInformation struct from name and dependencies

@@ -809,6 +809,15 @@ identifies each collection item. These labels are managed by kro - do not
 modify them manually.
 :::
 
+:::warning
+A node ID longer than 63 characters does not fit in a label value. kro stores a
+stable `h-`-prefixed hash in the `kro.run/node-id` label instead, so
+`-l kro.run/node-id=<your long id>` will not match. The full ID is always
+available in the `internal.kro.run/node-path` annotation, and kro emits a
+`NodeIDEncoded` warning event on the RGD naming the value any selector needs.
+See [Long resource IDs](../../15-instances.md#long-resource-ids).
+:::
+
 See [Constraints & Gotchas](#constraints--gotchas) for label management notes.
 
 ## Next Steps

@@ -33,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -1117,28 +1116,9 @@ func (s *Simple) qualifiedPath(id string) string {
 
 // nodeIDToken returns a bounded, label-safe rendering of a node's qualified
 // path for the kro.run/node-id label value and the collection watch selector.
-//
-// Node IDs are strictly alphanumeric (^[A-Za-z][A-Za-z0-9]*$), so '.' is an
-// unambiguous, reversible frame separator: the '.'-joined path (e.g.
-// "subA.res") is a valid label value and round-trips to the '/'-form. At the
-// root the token is just the bare node ID, preserving the documented
-// `kubectl get -l kro.run/node-id=<id>` query for top-level nodes.
-//
-// When the '.'-joined path would exceed the 63-char label-value limit (deep or
-// long-named nesting) it is replaced by a stable, collision-resistant hash so
-// the label stays valid at any depth. The full readable path is always
-// preserved in the node-path annotation regardless, so a hashed label never
-// costs debuggability. The selector is built from this same function, so it
-// matches the stamped label by construction.
+// See metadata.NodeIDToken for the encoding and its guarantees.
 func (s *Simple) nodeIDToken(id string) string {
-	dotted := strings.ReplaceAll(s.qualifiedPath(id), "/", ".")
-	if len(dotted) <= validation.LabelValueMaxLength {
-		return dotted
-	}
-	// Fallback: "h-<40 hex>" of the '/'-form. The leading letter keeps the
-	// value a valid label (must start alphanumeric) and marks it as hashed.
-	sum := sha256.Sum256([]byte(s.qualifiedPath(id)))
-	return "h-" + hex.EncodeToString(sum[:20])
+	return metadata.NodeIDToken(s.qualifiedPath(id))
 }
 
 // stampKROMeta stamps the identity metadata kro relies on: the

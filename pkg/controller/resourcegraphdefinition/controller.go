@@ -87,6 +87,7 @@ type ResourceGraphDefinitionReconciler struct {
 	graphEngineCompiler rgdadapter.Compiler
 
 	newEventRecorder func(string) record.EventRecorder
+	recorder         record.EventRecorder
 }
 
 func NewResourceGraphDefinitionReconciler(
@@ -118,6 +119,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 	r.clientSet.SetRESTMapper(mgr.GetRESTMapper())
 	r.instanceLogger = mgr.GetLogger()
 	r.newEventRecorder = mgr.GetEventRecorderFor
+	r.recorder = mgr.GetEventRecorderFor("kro/resourcegraphdefinition-controller")
 
 	logConstructor := func(req *reconcile.Request) logr.Logger {
 		log := mgr.GetLogger().WithName("rgd-controller").WithValues(

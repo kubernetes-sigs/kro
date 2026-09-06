@@ -26,6 +26,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -96,6 +97,11 @@ type Reconciler struct {
 	// impersonation disabled), in which case the guard is a no-op. Any OTHER
 	// privileged SA reachable in a namespace is the operator's RBAC concern.
 	ControllerServiceAccount string
+
+	// Recorder emits Graph-scoped events. Defaulted from the manager in
+	// SetupWithManager. `nil` when a Reconciler is constructed directly (tests),
+	// in which case event emission is skipped.
+	Recorder record.EventRecorder
 
 	// backoff tracks per-Graph consecutive not-ready attempts so the soft
 	// ErrNotReady requeue delay grows (capped) instead of polling a
@@ -319,6 +325,7 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 	if cached {
 		log.FromContext(ctx).V(1).Info("compile cache hit", "nodes", len(prog.Nodes))
 	}
+	r.warnOnEncodedNodeIDs(g, prog)
 	marker.GraphCompiled(len(prog.Nodes))
 
 	var rtOpts []krotruntime.Option
@@ -778,6 +785,9 @@ func (r *Reconciler) persistManagedResources(ctx context.Context, g *expv1alpha1
 // spec updates. Same applies to the SchemaWatcher — CRD content
 // changes feed Graph re-reconciles through a second raw source.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorderFor("kro/graph-controller")
+	}
 	b := ctrl.NewControllerManagedBy(mgr).For(&expv1alpha1.Graph{})
 	if r.MaxConcurrentReconciles > 0 {
 		b = b.WithOptions(ctrlrtcontroller.Options{

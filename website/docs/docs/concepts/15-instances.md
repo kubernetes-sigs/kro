@@ -102,18 +102,18 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 
 **Labels:**
 
-| Label | Description |
-|-------|-------------|
-| `kro.run/owned` | Set to `"true"` to indicate kro manages this resource |
-| `kro.run/kro-version` | Version of kro managing the resource |
-| `kro.run/instance-id` | UID of the instance that created this resource |
-| `kro.run/instance-name` | Name of the instance |
-| `kro.run/instance-namespace` | Namespace of the instance (only for namespaced instances) |
-| `kro.run/instance-group` | API group of the instance |
-| `kro.run/instance-version` | API version of the instance |
-| `kro.run/instance-kind` | Kind of the instance |
-| `app.kubernetes.io/managed-by` | Set to `"kro"` |
-| `kro.run/node-id` | Resource ID from the RGD |
+| Label                            | Description                                                                                    |
+|----------------------------------|------------------------------------------------------------------------------------------------|
+| `kro.run/owned`                  | Set to `"true"` to indicate kro manages this resource                                          |
+| `kro.run/kro-version`            | Version of kro managing the resource                                                           |
+| `kro.run/instance-id`            | UID of the instance that created this resource                                                 |
+| `kro.run/instance-name`          | Name of the instance                                                                           |
+| `kro.run/instance-namespace`     | Namespace of the instance (only for namespaced instances)                                      |
+| `kro.run/instance-group`         | API group of the instance                                                                      |
+| `kro.run/instance-version`       | API version of the instance                                                                    |
+| `kro.run/instance-kind`          | Kind of the instance                                                                           |
+| `app.kubernetes.io/managed-by`   | Set to `"kro"`                                                                                 |
+| `kro.run/node-id`                | Label-safe token for the resource ID from the RGD (see [long resource IDs](#long-resource-ids))|
 | `applyset.kubernetes.io/part-of` | Links the resource to its parent instance (matches the instance's `applyset.kubernetes.io/id`) |
 
 **Collection-specific labels** (only on resources created via `forEach`):
@@ -123,10 +123,47 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 | `kro.run/collection-index` | Position in the collection (0-indexed) |
 | `kro.run/collection-size` | Total number of items in the collection |
 
+**Annotations:**
+
+| Annotation                    | Description                                                             |
+|-------------------------------|-------------------------------------------------------------------------|
+| `internal.kro.run/node-path`  | Full, human-readable resource ID from the RGD, never truncated or hashed |
+
 These labels allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster. For collection resources, see [Collection Labels](./rgd/02-resource-definitions/04-collections.md#collection-labels) for more details.
 
 </TabItem>
 </Tabs>
+
+### Long resource IDs
+
+A Kubernetes label value is capped at 63 characters. The `kro.run/node-id`
+label therefore carries a *token* rather than the raw resource ID.
+
+For every resource in an RGD the token is the ID exactly as you wrote it, so
+the documented query keeps working:
+
+```bash
+kubectl get pods -l kro.run/node-id=frontend
+```
+
+The only exception is a resource ID longer than 63 characters. kro then
+replaces the token with a stable SHA-256 hash prefixed with `h-`, for example
+`h-9c1185a5c5e9fc54612808977ee8f548b2258d31`. The hash is deterministic for a
+given ID, so selectors built from it keep matching across reconciles.
+
+The full, readable path is always available in the
+`internal.kro.run/node-path` annotation, whether or not the label was hashed:
+
+```bash
+kubectl get pod <name> -o jsonpath='{.metadata.annotations.internal\.kro\.run/node-path}'
+```
+
+When kro hashes a resource ID it also emits a `NodeIDEncoded` warning event on
+the `ResourceGraphDefinition`, naming the value any selector needs:
+
+```bash
+kubectl describe rgd <name>
+```
 
 :::info ApplySet Specification
 kro uses the [Kubernetes ApplySet specification](https://git.k8s.io/enhancements/keps/sig-cli/3659-kubectl-apply-prune) for tracking and pruning managed resources. This enables kro to automatically prune resources that are no longer part of the instance's resource graph and prevents other tools from accidentally modifying kro-managed resources.

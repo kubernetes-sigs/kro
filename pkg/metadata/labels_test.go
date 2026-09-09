@@ -15,6 +15,7 @@
 package metadata
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
 )
 
@@ -301,6 +303,41 @@ func TestNewInstanceLabeler(t *testing.T) {
 			InstanceKindLabel:    kind,
 		}, labeler)
 	})
+}
+
+func TestNewInstanceLabeler_LongIdentity(t *testing.T) {
+	longName := "instance-" + strings.Repeat("x", 60)
+	longGroup := strings.Repeat("sub.", 20) + "example.com"
+
+	obj := &unstructured.Unstructured{}
+	obj.SetName(longName)
+	obj.SetUID(types.UID("instance-uid"))
+	obj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   longGroup,
+		Version: "v1",
+		Kind:    "MyApp",
+	})
+
+	labeler := NewInstanceLabeler(obj, false)
+
+	assert.Equal(t, LabelValueToken(longName), labeler[InstanceLabel])
+	assert.Equal(t, LabelValueToken(longGroup), labeler[InstanceGroupLabel])
+	for k, v := range labeler {
+		assert.Empty(t, validation.IsValidLabelValue(v), "label %s", k)
+	}
+
+	assert.Equal(t, map[string]string{
+		InstanceNameAnnotation:  longName,
+		InstanceGroupAnnotation: longGroup,
+	}, InstanceIdentityAnnotations(obj))
+}
+
+func TestInstanceIdentityAnnotations_NilWhenEverythingFits(t *testing.T) {
+	obj := &unstructured.Unstructured{}
+	obj.SetName("instance-name")
+	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "apps.example.com", Version: "v1", Kind: "MyApp"})
+
+	assert.Nil(t, InstanceIdentityAnnotations(obj))
 }
 
 func TestNewKROMetaLabeler(t *testing.T) {

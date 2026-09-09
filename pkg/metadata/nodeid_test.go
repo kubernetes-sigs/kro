@@ -45,7 +45,7 @@ func TestNodeIDToken_HashesPathsThatOverflow(t *testing.T) {
 
 	assert.True(t, NodeIDTokenIsHashed(id))
 	assert.NotEqual(t, id, got)
-	assert.True(t, strings.HasPrefix(got, NodeIDHashPrefix))
+	assert.True(t, strings.HasPrefix(got, HashedValuePrefix))
 	assert.LessOrEqual(t, len(got), validation.LabelValueMaxLength)
 	assert.Empty(t, validation.IsValidLabelValue(got))
 }

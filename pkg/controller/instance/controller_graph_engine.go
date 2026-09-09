@@ -183,10 +183,13 @@ func (c *Controller) reconcileViaGraphEngine(
 	// Build a per-reconcile child labeler: instance labels + applyset part-of
 	// + struct-level KRO-meta labels are composed inside ApplyWithLabeler.
 	instanceLabeler := metadata.NewInstanceLabeler(inst, c.namespaced)
+	instanceAnnotations := metadata.InstanceIdentityAnnotations(inst)
+	c.warnOnEncodedInstanceLabels(inst, instanceAnnotations)
 	nodeLabeler := metadata.NewNodeLabeler()
 	applysetPartOf := applyset.ID(inst)
 	extraLabel := func(obj *unstructured.Unstructured) {
 		instanceLabeler.ApplyLabels(obj)
+		applyInstanceIdentityAnnotations(obj, instanceAnnotations)
 		// app.kubernetes.io/managed-by=kro.
 		nodeLabeler.ApplyLabels(obj)
 		l := obj.GetLabels()

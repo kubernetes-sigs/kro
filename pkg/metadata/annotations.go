@@ -36,4 +36,11 @@ const (
 	// when it fits, otherwise a hash) while this annotation always preserves
 	// the full readable path for display, debugging, and reverse lookup.
 	NodePathAnnotation = InternalKROPrefix + "node-path"
+	// InstanceNameAnnotation and InstanceGroupAnnotation preserve the full
+	// instance name and API group on a managed resource when the matching
+	// kro.run/instance-name or kro.run/instance-group label had to be hashed
+	// to fit a label value. Only stamped in that case: when the label already
+	// holds the exact value there is nothing to preserve.
+	InstanceNameAnnotation  = InternalKROPrefix + "instance-name"
+	InstanceGroupAnnotation = InternalKROPrefix + "instance-group"
 )

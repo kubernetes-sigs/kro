@@ -15,16 +15,8 @@
 package metadata
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"strings"
-
-	"k8s.io/apimachinery/pkg/util/validation"
 )
-
-// NodeIDHashPrefix marks a NodeIDToken that had to fall back to a hash. The
-// leading letter also keeps the value a valid label value.
-const NodeIDHashPrefix = "h-"
 
 // NodeIDToken returns a bounded, label-safe rendering of a node's qualified
 // path for the NodeIDLabel value and the collection watch selector.
@@ -45,14 +37,14 @@ func NodeIDToken(qualifiedPath string) string {
 	if !NodeIDTokenIsHashed(qualifiedPath) {
 		return dottedNodePath(qualifiedPath)
 	}
-	sum := sha256.Sum256([]byte(qualifiedPath))
-	return NodeIDHashPrefix + hex.EncodeToString(sum[:20])
+	// Hash the '/'-form, not the dotted one, so "a/b" and "a.b" stay distinct.
+	return hashedLabelValue(qualifiedPath)
 }
 
 // NodeIDTokenIsHashed reports whether NodeIDToken has to hash this qualified
 // path because its label-safe rendering does not fit in a label value.
 func NodeIDTokenIsHashed(qualifiedPath string) bool {
-	return len(dottedNodePath(qualifiedPath)) > validation.LabelValueMaxLength
+	return LabelValueIsHashed(dottedNodePath(qualifiedPath))
 }
 
 func dottedNodePath(qualifiedPath string) string {

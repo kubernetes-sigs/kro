@@ -107,9 +107,9 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 | `kro.run/owned`                  | Set to `"true"` to indicate kro manages this resource                                          |
 | `kro.run/kro-version`            | Version of kro managing the resource                                                           |
 | `kro.run/instance-id`            | UID of the instance that created this resource                                                 |
-| `kro.run/instance-name`          | Name of the instance                                                                           |
+| `kro.run/instance-name`          | Name of the instance (see [long instance names](#long-instance-names))                         |
 | `kro.run/instance-namespace`     | Namespace of the instance (only for namespaced instances)                                      |
-| `kro.run/instance-group`         | API group of the instance                                                                      |
+| `kro.run/instance-group`         | API group of the instance (see [long instance names](#long-instance-names))                    |
 | `kro.run/instance-version`       | API version of the instance                                                                    |
 | `kro.run/instance-kind`          | Kind of the instance                                                                           |
 | `app.kubernetes.io/managed-by`   | Set to `"kro"`                                                                                 |
@@ -125,9 +125,11 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 
 **Annotations:**
 
-| Annotation                    | Description                                                             |
-|-------------------------------|-------------------------------------------------------------------------|
-| `internal.kro.run/node-path`  | Full, human-readable resource ID from the RGD, never truncated or hashed |
+| Annotation                        | Description                                                                    |
+|-----------------------------------|--------------------------------------------------------------------------------|
+| `internal.kro.run/node-path`      | Full, human-readable resource ID from the RGD, never truncated or hashed        |
+| `internal.kro.run/instance-name`  | Full instance name, stamped only when `kro.run/instance-name` had to be hashed  |
+| `internal.kro.run/instance-group` | Full API group, stamped only when `kro.run/instance-group` had to be hashed     |
 
 These labels allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster. For collection resources, see [Collection Labels](./rgd/02-resource-definitions/04-collections.md#collection-labels) for more details.
 
@@ -164,6 +166,34 @@ the `ResourceGraphDefinition`, naming the value any selector needs:
 ```bash
 kubectl describe rgd <name>
 ```
+
+### Long instance names
+
+The same 63 character limit applies to the instance identity kro copies onto
+every managed resource. Kubernetes names and API groups are DNS subdomains and
+may be up to 253 characters, so an instance named beyond 63 characters would
+otherwise produce an invalid `kro.run/instance-name` label.
+
+kro applies the same encoding: `kro.run/instance-name` and
+`kro.run/instance-group` hold the value verbatim when under 63, and an
+`h-`-prefixed hash when it does not. Full value is preserved in an annotation:
+
+```bash
+kubectl get deployment <name> -o jsonpath='{.metadata.annotations.internal\.kro\.run/instance-name}'
+```
+
+kro emits an `InstanceLabelEncoded` warning event on the instance naming the
+value any selector needs.
+
+:::tip
+`kro.run/instance-id` holds the instance UID, which always fits in a label
+value and is never hashed. Prefer it when you need a selector that identifies
+one specific instance:
+
+```bash
+kubectl get all -l kro.run/instance-id=<uid>
+```
+:::
 
 :::info ApplySet Specification
 kro uses the [Kubernetes ApplySet specification](https://git.k8s.io/enhancements/keps/sig-cli/3659-kubectl-apply-prune) for tracking and pruning managed resources. This enables kro to automatically prune resources that are no longer part of the instance's resource graph and prevents other tools from accidentally modifying kro-managed resources.

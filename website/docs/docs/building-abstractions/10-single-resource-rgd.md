@@ -53,13 +53,13 @@ spec:
       port: integer | default=8080
       scheme: string | default="internet-facing"
     status:
-      published: ${service.status.?loadBalancer.?ingress.size() > 0}
+      published: ${service.status.?loadBalancer.?ingress.orValue([]).size() > 0}
       dnsName: ${service.status.?loadBalancer.?ingress[0].?hostname.orValue("")}
 
   resources:
     - id: service
       readyWhen:
-        - ${service.status.?loadBalancer.?ingress.size() > 0}
+        - ${service.status.?loadBalancer.?ingress.orValue([]).size() > 0}
       template:
         apiVersion: v1
         kind: Service
@@ -234,11 +234,12 @@ resources:
         name: ${schema.spec.name}
       spec:
         # other required fields omitted for brevity
-        tags: ${schema.spec.tags.merge({
-          "managed-by": "kro",
-          "tenant": schema.metadata.?labels["tenant"].orValue("shared"),
-          "namespace": schema.metadata.namespace
-        })}
+        tags: >-
+          ${schema.spec.tags.merge({
+            "managed-by": "kro",
+            "tenant": schema.metadata.?labels["tenant"].orValue("shared"),
+            "namespace": schema.metadata.namespace
+          })}
 ```
 
 Passing the platform tags as the argument to `merge()` makes them the second

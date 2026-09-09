@@ -12,6 +12,7 @@ Reference documentation for kro's APIs and specifications.
 Custom Resource Definitions (CRDs) that extend Kubernetes with kro's functionality.
 
 - **[ResourceGraphDefinition](crds/resourcegraphdefinition.md)** - The core API for defining custom Kubernetes resources that orchestrate multiple underlying resources. Define your resource schemas, specify resource dependencies, and create reusable infrastructure patterns.
+- **[Graph](crds/graph.md)** - A namespaced set of resources composed with CEL expressions and reconciled directly, without generating a new API. Alpha, behind the `GraphKind` feature gate.
 - **[GraphRevision](crds/graphrevision.md)** - An immutable snapshot of a ResourceGraphDefinition spec, used internally by kro to track revisions and enable safe rollouts.
 
 ## Specifications

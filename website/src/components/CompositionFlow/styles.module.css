@@ -1,0 +1,115 @@
+.container {
+  margin: 2rem 0 2.5rem;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.container.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.svg {
+  display: block;
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.step {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.visible .step {
+  opacity: 1;
+}
+
+.visible .d0 { transition-delay: 0.05s; }
+.visible .d1 { transition-delay: 0.15s; }
+.visible .d2 { transition-delay: 0.25s; }
+.visible .d3 { transition-delay: 0.35s; }
+.visible .d4 { transition-delay: 0.45s; }
+
+/* ── Authoring API boxes ── */
+
+.apiBox {
+  fill: var(--ifm-background-color);
+  stroke: var(--ifm-color-emphasis-300);
+  stroke-width: 1.5;
+}
+
+.apiTitle {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ifm-color-emphasis-800);
+}
+
+.apiSub {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 10px;
+  fill: var(--ifm-color-emphasis-600);
+}
+
+/* ── Kubernetes objects ── */
+
+.objBox {
+  fill: var(--ifm-background-color);
+  stroke: var(--ifm-color-emphasis-400);
+  stroke-width: 1.2;
+}
+
+.objBoxDim {
+  fill: var(--ifm-background-color);
+  stroke: var(--ifm-color-emphasis-300);
+  stroke-width: 1;
+  opacity: 0.6;
+}
+
+.objLabel {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--ifm-color-emphasis-700);
+}
+
+.edgeLabel {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 9px;
+  fill: var(--ifm-color-emphasis-500);
+}
+
+/* ── Engine ── */
+
+.engineBox {
+  fill: #e8eef8;
+  stroke: var(--ifm-color-primary);
+  stroke-width: 1.5;
+}
+
+[data-theme='dark'] .engineBox {
+  fill: #2a3554;
+}
+
+.engineTitle {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 13px;
+  font-weight: 800;
+  fill: var(--ifm-color-primary);
+}
+
+.engineSub {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 9.5px;
+  font-weight: 600;
+  fill: var(--ifm-color-primary);
+  opacity: 0.85;
+}
+
+@media (max-width: 768px) {
+  .svg {
+    max-width: 100%;
+  }
+}

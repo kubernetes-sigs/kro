@@ -5,9 +5,9 @@ sidebar_position: 0
 # Examples
 
 This section provides a collection of examples demonstrating how to define and
-use ResourceGraphDefinitions in **kro** for various scenarios. Each example showcases a
-specific use case and includes a detailed explanation along with the
-corresponding YAML definitions.
+use ResourceGraphDefinitions and Graphs in **kro** for various scenarios. Each
+example showcases a specific use case and includes a detailed explanation along
+with the corresponding YAML definitions.
 
 ## Basic Examples
 
@@ -32,3 +32,21 @@ corresponding YAML definitions.
   how to create a multi-tenant SaaS application using Kro ResourceGraphDefinitions.
   It creates isolated tenant environments with dedicated applications,
   following a hierarchical structure of ResourceGraphDefinitions.
+
+## Graph Examples
+
+The [Graph](../docs/concepts/graph/01-overview.md) API is alpha and disabled by
+default. These examples show the patterns it enables.
+
+- [Namespace Decorator](./graph/namespace-decorator.md) Watch labeled Namespaces
+  and create a default-deny NetworkPolicy in each one, with no CRD or instance.
+
+- [Ingress Fan-In](./graph/ingress-fanin.md) Aggregate every labeled Service into
+  a single Ingress with one rule per Service.
+
+- [CoreDNS Bundle](./graph/coredns.md) Install CoreDNS as one dependency-ordered,
+  health-checked object.
+
+- [Singleton Controller](./graph/singleton.md) A small controller written as a
+  Graph: priority-based ownership of a shared resource, with status written back
+  to every claimant.

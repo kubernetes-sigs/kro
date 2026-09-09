@@ -173,8 +173,6 @@ spec:
           port: 53
           protocol: TCP
           targetPort: 53
-        selector:
-         k8s-app: kube-dns
         sessionAffinity: None
   - id: serviceAccount
     template:

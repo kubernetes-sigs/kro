@@ -171,6 +171,26 @@ describe('tokenize - kro keywords', () => {
     expect(getTokensByType(tokens, 'kro-keyword')).toEqual(['externalRef']);
   });
 
+  it('highlights Graph node kinds as kro keywords', () => {
+    const code = [
+      'spec:',
+      '  serviceAccountName: applier',
+      '  nodes:',
+      '    - id: config',
+      '      ref:',
+      '    - id: naming',
+      '      def:',
+      '    - id: status',
+      '      patch:',
+      '    - id: child',
+      '      graph:',
+    ].join('\n');
+    const tokens = tokenize(code, true);
+    expect(getTokensByType(tokens, 'kro-keyword')).toEqual([
+      'serviceAccountName', 'nodes', 'id', 'ref', 'id', 'def', 'id', 'patch', 'id', 'graph',
+    ]);
+  });
+
   it('does not highlight kro keywords when isKro is false', () => {
     const code = '  - id: deployment';
     const tokens = tokenize(code, false);

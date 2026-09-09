@@ -1,10 +1,10 @@
 ---
-sidebar_position: 4
+sidebar_position: 3
 ---
 
-# Graph Inference
+# Dependencies & Ordering
 
-kro automatically infers dependencies from CEL expressions. You don't specify the order - you describe relationships, and kro figures out the rest.
+kro automatically infers dependencies from CEL expressions. You don't specify the order - you describe relationships, and kro figures out the rest. This applies equally to the `resources` of a ResourceGraphDefinition and the `nodes` of a [Graph](../graph/01-overview.md).
 
 ## How It Works
 
@@ -37,10 +37,16 @@ The expression `${configmap.data.DATABASE_URL}` creates a dependency: `deploymen
 ## Dependency Graph (DAG)
 
 kro builds a Directed Acyclic Graph (DAG) where:
-- **Nodes** are resources
+- **Nodes** are resources (or, in a Graph, nodes of any kind)
 - **Edges** are dependencies (created by CEL references)
 - **Directed** means dependencies have direction (A depends on B)
 - **Acyclic** means no circular dependencies
+
+Every field reference creates a dependency, including references that use the
+[optional operator](./01-cel-expressions.md#the-optional-operator-) (`?.`).
+Writing `${deployment.?status.?readyReplicas}` still makes the resource depend
+on `deployment`; the operator only changes what happens when the field is
+missing, not whether the dependency exists.
 
 ### Common Patterns
 
@@ -202,7 +208,7 @@ kro computes a topological order - the sequence resources can be processed such 
 **Creation:** Resources created in topological order
 **Deletion:** Resources deleted in reverse order
 
-View the computed order:
+For an RGD, view the computed order:
 ```bash
 kubectl get rgd my-app -o jsonpath='{.status.topologicalOrder}'
 ```
@@ -215,6 +221,10 @@ status:
     - deployment
     - service
 ```
+
+A Graph does not publish a topological order in its status. The apply order of
+each managed resource is recorded on the resource itself in the
+`internal.kro.run/apply-order` annotation.
 
 ## Circular Dependencies
 
@@ -234,7 +244,7 @@ resources:
         targetPort: ${serviceA.spec.port}  # B → A (circular!)
 ```
 
-**Fix:** Break the cycle by using `schema.spec` instead:
+**Fix:** Break the cycle by taking one side of the loop from the input (in an RGD, `schema.spec`; in a Graph, a `def` node or a literal) instead:
 ```kro
 resources:
   - id: serviceA
@@ -250,9 +260,9 @@ resources:
 
 ## What Happens at Runtime
 
-When kro reconciles an instance:
+When kro reconciles an instance or a Graph:
 
-1. **Evaluate static expressions** - Expressions referencing only `schema.spec` are evaluated once
+1. **Evaluate static expressions** - Expressions that reference no other resource are evaluated once
 2. **Process in topological order** - For each resource:
    - Wait for all dependency expressions to be resolvable
    - Create or update the resource
@@ -261,8 +271,13 @@ When kro reconciles an instance:
 
 kro waits for CEL expressions to be **resolvable** before proceeding. This means the referenced resource exists and has the field being accessed.
 
+Whether a dependent also waits for its dependencies to be **ready** (their
+`readyWhen` conditions) differs between the two APIs. See
+[Readiness](../reconciliation/02-readiness.md#dependencies-and-readiness).
+
 ## Next Steps
 
-- **[Readiness](./02-resource-definitions/03-readiness.md)** - Control when resources are considered ready with `readyWhen`
-- **[CEL Expressions](./03-cel-expressions.md)** - Learn more about writing expressions
-- **[Resource Basics](./02-resource-definitions/01-resource-basics.md)** - Learn about resource templates
+- **[Readiness](../reconciliation/02-readiness.md)** - Control when resources are considered ready with `readyWhen`
+- **[CEL Expressions](./01-cel-expressions.md)** - Learn more about writing expressions
+- **[Resource Basics](../rgd/03-resource-basics.md)** - Learn about resource templates
+- **[Scopes and Nesting](../graph/04-scopes-and-nesting.md)** - How dependencies work across nested Graphs

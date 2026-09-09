@@ -20,14 +20,20 @@ validates that definition before it ever reconciles an instance, catching
 schema errors, invalid expressions, and broken references before they become
 runtime failures.
 
+When you want the same composition without a new API, a
+[**Graph**](./concepts/graph/01-overview.md) describes a set of resources
+directly, with the same expressions, ordering, and lifecycle. Graphs are an alpha
+feature; see [Composition in kro](./concepts/00-overview.md) for how the two
+relate.
+
 <ControllerFlow />
 
 ## How it works
 
-A ResourceGraphDefinition has two parts: a [**schema**](./concepts/rgd/01-schema.md) that defines your API
-surface (the fields users fill in), and [**resource templates**](./concepts/rgd/02-resource-definitions/01-resource-basics.md) that reference
-those fields with [CEL expressions](./concepts/rgd/03-cel-expressions.md). kro parses the expressions, infers the
-[dependency graph](./concepts/rgd/04-dependencies-ordering.md), generates a CRD, and stands up a controller - all at runtime.
+A ResourceGraphDefinition has two parts: a [**schema**](./concepts/rgd/02-schema.md) that defines your API
+surface (the fields users fill in), and [**resource templates**](./concepts/rgd/03-resource-basics.md) that reference
+those fields with [CEL expressions](./concepts/expressions/01-cel-expressions.md). kro parses the expressions, infers the
+[dependency graph](./concepts/expressions/03-dependencies-ordering.md), generates a CRD, and stands up a controller - all at runtime.
 
 <IntroFlow />
 
@@ -71,7 +77,7 @@ object.
 
 ### The definition behind it
 
-A **ResourceGraphDefinition** defines the API under `spec.schema` (see [Simple Schema](./concepts/rgd/01-schema.md)) and the
+A **ResourceGraphDefinition** defines the API under `spec.schema` (see [Simple Schema](./concepts/rgd/02-schema.md)) and the
 backing resources under `spec.resources`. CEL expressions (`${}`) are what tie
 those two parts together (this example uses S3 via
 [ACK](https://aws-controllers-k8s.github.io/docs/), but kro works with any
@@ -158,7 +164,16 @@ it before reconciling `deployment`, and it knows `service` comes after
 Once the graph is defined, kro takes care of the mechanics that usually end up
 in custom controller code.
 
-<EngineCapabilities />
+<EngineCapabilities
+  links={{
+    schema: '/docs/concepts/rgd/schema',
+    celExpressions: '/docs/concepts/expressions/cel-expressions',
+    dependencyOrdering: '/docs/concepts/expressions/dependencies-ordering',
+    conditionalResources: '/docs/concepts/reconciliation/conditional-creation',
+    collections: '/docs/concepts/reconciliation/collections',
+    typeChecking: '/docs/concepts/rgd/static-type-checking',
+  }}
+/>
 
 ## Get started
 

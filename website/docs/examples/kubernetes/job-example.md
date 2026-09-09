@@ -2,7 +2,11 @@
 sidebar_position: 708
 ---
 
+# Job with Deployment
 
+A `JobDeployment` runs a one-off Job alongside a Deployment. The Job sleeps for
+`delayInSeconds`, and its `readyWhen` keeps the instance from reporting ready
+until the Job has completed.
 
 <details>
   <summary>ResourceGraphDefinition</summary>

@@ -1,12 +1,12 @@
 ---
-sidebar_position: 5
+sidebar_position: 4
 ---
 
 # External References
 
-Sometimes you need to reference resources that already exist in your cluster - like shared configuration, pre-provisioned infrastructure, or cluster-wide resources. External references let you read existing resources and use their data in your ResourceGraphDefinition without kro managing their lifecycle.
+Sometimes you need to reference resources that already exist in your cluster - like shared configuration, pre-provisioned infrastructure, or cluster-wide resources. External references let you read existing resources during reconciliation and use their data without kro managing their lifecycle.
 
-kro provides the `externalRef` field to reference existing resources. When you add `externalRef`, kro reads the resource from the cluster but never creates, updates, or deletes it.
+In a ResourceGraphDefinition this is the `externalRef` field on a resource. In a Graph it is the `ref` node kind. Both read the resource from the cluster but never create, update, or delete it, and both support the single-resource and collection forms described on this page. The examples use RGD syntax; see [`ref` Nodes in a Graph](#ref-nodes-in-a-graph) for the Graph form.
 
 ## Basic Example
 
@@ -55,7 +55,7 @@ This allows multiple instances to share the same configuration without duplicati
 - **kro never creates, updates, or deletes** the external resource
 - **The resource must exist** for reconciliation to succeed - kro waits for it to be present
 - **External resources participate in the dependency graph** just like managed resources
-- **If namespace is omitted** on a scalar ref, kro looks for the resource in the instance's namespace
+- **If namespace is omitted** on a scalar ref, kro looks for the resource in the instance's namespace (in a Graph, the Graph's namespace)
 - **If namespace is omitted** on a collection ref, kro lists resources across all namespaces
 
 ## What You Can Reference
@@ -95,7 +95,7 @@ You can reference any Kubernetes resource:
 
 ## The Optional Operator (?)
 
-Use the optional operator `?` when accessing fields with unknown or unstructured schemas. kro can't validate the structure at build time, so `?` safely returns `null` if the field doesn't exist.
+Use the optional operator `?` when accessing fields with unknown or unstructured schemas. kro can't validate the structure at build time, so `?` produces an optional value instead of an error when the field doesn't exist. Used as a whole field value, a missing optional renders as `null`; in comparisons and arithmetic, unwrap it with `.orValue()`.
 
 Common examples include:
 - **ConfigMaps and Secrets**: The `data` field has no predefined keys
@@ -103,7 +103,7 @@ Common examples include:
 - **Any resource with dynamic fields**: Fields whose structure isn't known at RGD creation time
 
 ```kro
-# ✓ Safe: returns null if platformUrl doesn't exist
+# ✓ Safe: renders null if platformUrl doesn't exist
 value: ${config.data.?platformUrl}
 
 # ✗ Unsafe: fails validation because kro can't verify the field exists
@@ -124,7 +124,7 @@ env:
 ```
 
 :::warning
-When you use `?`, kro cannot validate the field exists at build time. If the resource doesn't have the expected field, the expression evaluates to `null`. Document the expected structure and use `.orValue()` to provide sensible defaults.
+When you use `?`, kro cannot validate the field exists at build time. If the resource doesn't have the expected field, a whole-field expression evaluates to `null`, and a comparison such as `${config.data.?x == "y"}` is rejected at build time because an optional cannot be compared directly. Document the expected structure and use `.orValue()` to provide sensible defaults.
 :::
 
 ## Dependencies
@@ -211,10 +211,10 @@ configCount: ${string(size(teamConfigs))}
 names: ${teamConfigs.map(c, c.metadata.name).join(",")}
 
 # Filter by a data field
-critical: ${teamConfigs.filter(c, c.data.?priority == "critical")}
+critical: ${teamConfigs.filter(c, c.data.?priority.orValue("") == "critical").map(c, c.metadata.name)}
 
 # Check if any match a condition
-hasCritical: ${teamConfigs.exists(c, c.data.?priority == "critical")}
+hasCritical: ${teamConfigs.exists(c, c.data.?priority.orValue("") == "critical")}
 ```
 
 You can also use collections in status expressions:
@@ -225,7 +225,7 @@ status:
   allNames: ${teamConfigs.map(c, c.metadata.name).join(",")}
 ```
 
-For more on collections and iteration patterns, see **[Collections](./04-collections.md)**.
+For more on collections and iteration patterns, see **[Collections](./03-collections.md)**.
 
 ### CEL Expressions in Selectors
 
@@ -303,7 +303,7 @@ External references — both scalar and collection — are watched via Kubernete
 ### How It Works
 
 - kro sets up an **informer watch** for each external ref's GVK (GroupVersionKind)
-- **No configuration required** — watches are set up automatically when the RGD becomes active
+- **No configuration required** — watches are set up automatically when the RGD becomes active (or, for a Graph, when it compiles)
 
 ### Practical Scenario
 
@@ -339,8 +339,53 @@ For collection external refs, watches also detect:
 
 This means collection-based status expressions (like `size(configs)`) stay current as the cluster state evolves.
 
+## `ref` Nodes in a Graph
+
+A Graph expresses an external reference as a node whose single type field is
+`ref`. The payload is the same `apiVersion`, `kind`, and `metadata` block, and
+`metadata` takes either `name` (one resource) or `selector` (a collection),
+never both.
+
+```kro
+nodes:
+  # Single resource, looked up in the Graph's namespace
+  - id: config
+    ref:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: app-config
+
+  # Collection: every Pod matching the selector, as a list
+  - id: allPods
+    ref:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        selector:
+          matchLabels:
+            app: my-app
+
+  - id: summary
+    def:
+      running: ${allPods.filter(p, p.status.phase == 'Running').size()}
+```
+
+Two capabilities are specific to Graph `ref` nodes:
+
+- **Dynamic types.** `apiVersion` and `kind` may themselves be CEL expressions,
+  so a Graph can read a kind whose type is only known from another node. See
+  [Dynamic Types](../graph/02-nodes.md#dynamic-types).
+- **Missing targets are not errors.** A `ref` whose target does not exist yet
+  leaves the Graph's `ResourcesConverged` condition `False` and kro retries
+  with backoff. It does not fail the Graph.
+
+`ref` nodes accept `includeWhen` and `readyWhen` and reject `forEach`; use a
+`selector` to read many objects. See [Graph Nodes](../graph/02-nodes.md).
+
 ## Next Steps
 
-- **[Collections](./04-collections.md)** - Learn about forEach iteration and collection patterns
-- **[CEL Expressions](../03-cel-expressions.md)** - Learn more about the `?` operator and list functions
-- **[Dependencies & Ordering](../04-dependencies-ordering.md)** - Understand how external refs affect dependency graphs
+- **[Collections](./03-collections.md)** - Learn about forEach iteration and collection patterns
+- **[CEL Expressions](../expressions/01-cel-expressions.md)** - Learn more about the `?` operator and list functions
+- **[Dependencies & Ordering](../expressions/03-dependencies-ordering.md)** - Understand how external refs affect dependency graphs
+- **[Graph Nodes](../graph/02-nodes.md)** - The `ref` node kind and its siblings

@@ -1,5 +1,5 @@
 ---
-sidebar_position: 1
+sidebar_position: 3
 ---
 
 import Tabs from '@theme/Tabs';
@@ -53,7 +53,18 @@ Resource IDs must be in **lowerCamelCase** format because they're used as identi
 **Invalid IDs:**
 - `web-server` (dash would be treated as subtraction)
 - `WebServer` (should start with lowercase)
-- `postgres_database` (underscores discouraged, use camelCase)
+- `postgres_database` (underscores are not allowed)
+
+A few identifiers are reserved and cannot be used as IDs: `apiVersion`,
+`context`, `dependency`, `dependencies`, `each`, `externalRef`,
+`externalReference`, `externalRefs`, `externalReferences`, `graph`,
+`graphengine`, `instance`, `item`, `items`, `kind`, `kro`, `metadata`,
+`namespace`, `object`, `resource`, `resourcegraphdefinition`,
+`resourceGraphDefinition`, `resources`, `root`, `runtime`, `schema`, `self`,
+`serviceAccountName`, `spec`, `status`, `this`, `variables`, `vars`,
+`version`, and the CEL keywords (`true`, `false`, `null`, `in`, `as`, `break`,
+`const`, `continue`, `else`, `for`, `function`, `if`, `import`, `let`, `loop`,
+`package`, `return`, `var`, `void`, `while`).
 :::
 
 ## Resource Templates with CEL
@@ -90,10 +101,10 @@ CEL expressions in resource templates can reference three things:
 3. **Other resources** - Any field from other resources in your RGD, including their `spec`, `metadata`, and `status`
 
 :::important
-When you reference another resource in a CEL expression, it automatically creates a dependency. This is an implicit way of declaring that one resource depends on another. kro uses these references to determine the correct creation order - ensuring the referenced resource exists before the one referencing it. Learn more about [Dependencies and Ordering](../04-dependencies-ordering.md).
+When you reference another resource in a CEL expression, it automatically creates a dependency. This is an implicit way of declaring that one resource depends on another. kro uses these references to determine the correct creation order - ensuring the referenced resource exists before the one referencing it. Learn more about [Dependencies and Ordering](../expressions/03-dependencies-ordering.md).
 :::
 :::important
-If a resource references a field, like `schema.spec.myfield` or `resourceid.spec.field`, or `resourceid.status.field`, it creates a hard dependency on the field being present in the instance. You are declaring that the field must exist. Any instance that does not specify that field will fail reconciliation. However, fields that have schema defaults can be safely omitted. Alternatively, you can declare a soft dependency by using the `?` operator, or using the `.orValue("value")` expression. Some examples would be `${resour.status.?vpcID}` or `${vpc.status.?vpcID.orValue("fallback")}`. For more information, see [The Optional Operator](./03-readiness.md#the-optional-operator-)
+If a resource references a field, like `schema.spec.myfield` or `resourceid.spec.field`, or `resourceid.status.field`, it creates a hard dependency on the field being present in the instance. You are declaring that the field must exist. Any instance that does not specify that field will fail reconciliation. However, fields that have schema defaults can be safely omitted. Alternatively, you can declare a soft dependency by using the `?` operator, or using the `.orValue("value")` expression. Some examples would be `${resour.status.?vpcID}` or `${vpc.status.?vpcID.orValue("fallback")}`. For more information, see [The Optional Operator](../reconciliation/02-readiness.md#the-optional-operator-)
 :::
 
 ## Reference Examples
@@ -151,7 +162,7 @@ In this example:
 - `deployment` references `schema.spec` (name, replicas, image), `schema.metadata.namespace`, `database.metadata.annotations`, `database.spec.version`, and `database.status.endpoint`
 
 :::important
-kro automatically determines that `database` must be created before `deployment`. The deployment waits for the database's endpoint to be available before it can be created. Learn more about [Dependencies and Ordering](../04-dependencies-ordering.md).
+kro automatically determines that `database` must be created before `deployment`. The deployment waits for the database's endpoint to be available before it can be created. Learn more about [Dependencies and Ordering](../expressions/03-dependencies-ordering.md).
 :::
 
 ## CEL Property Verification
@@ -307,7 +318,7 @@ resources:
 </Tabs>
 </div>
 
-For more details, see [Static Type Checking](../05-static-type-checking.md).
+For more details, see [Static Type Checking](./05-static-type-checking.md).
 
 ## How kro Processes Templates
 
@@ -325,7 +336,7 @@ When a user creates an instance, kro processes resources in topological order:
 
 1. **Evaluate CEL expressions** - Substitute `schema.spec` values and any available resource references. If an expression references a field that doesn't exist yet (like `${database.status.endpoint}`), kro requeues and waits for the value to become available.
 2. **Create the resource** - Apply the evaluated template to Kubernetes
-3. **Wait for readiness** - If the resource has [`readyWhen`](./03-readiness.md) conditions, wait for them to be satisfied
+3. **Wait for readiness** - If the resource has [`readyWhen`](../reconciliation/02-readiness.md) conditions, wait for them to be satisfied
 4. **Move to the next resource** - Repeat for each resource in dependency order
 
 ### 3. Update Phase (Instance Updates)
@@ -412,7 +423,7 @@ resources:
 </Tabs>
 </div>
 
-For more details, see [Static Type Checking](../05-static-type-checking.md).
+For more details, see [Static Type Checking](./05-static-type-checking.md).
 
 ## Validation Errors
 
@@ -510,10 +521,10 @@ status:
       message: "type mismatch in resource \"deployment\" at path \"spec.replicas\": expression \"schema.spec.name\" returns type \"string\" but expected \"integer\""
 ```
 
-For more information about validation errors and type checking, see [Static Type Checking](../05-static-type-checking.md).
+For more information about validation errors and type checking, see [Static Type Checking](./05-static-type-checking.md).
 
 ## Next Steps
 
-- **[CEL Expressions](../03-cel-expressions.md)** - Master CEL syntax and functions
-- **[Dependencies & Ordering](../04-dependencies-ordering.md)** - How templates create dependencies
-- **[SimpleSchema](../../../../api/specifications/simple-schema.md)** - Define your API schema
+- **[CEL Expressions](../expressions/01-cel-expressions.md)** - Master CEL syntax and functions
+- **[Dependencies & Ordering](../expressions/03-dependencies-ordering.md)** - How templates create dependencies
+- **[SimpleSchema](../../../api/specifications/simple-schema.md)** - Define your API schema

@@ -2,16 +2,16 @@ import React, { useEffect, useRef, useState } from 'react';
 import styles from './styles.module.css';
 
 // Lane x-positions in the 600-wide viewBox
-const USER = 100;
-const API  = 300;
-const KRO  = 500;
+export const USER = 100;
+export const API  = 300;
+export const KRO  = 500;
 
 // Vertical spacing
 const HEADER_BOTTOM = 60;
 const STEP_START = 90;
 const STEP_GAP = 45;
 
-interface Step {
+export interface Step {
   num: number;
   label: string;
   from: number;  // x of source lane
@@ -20,7 +20,7 @@ interface Step {
   self?: boolean;
 }
 
-const steps: Step[] = [
+const rgdSteps: Step[] = [
   { num: 1, label: 'Apply RGD',          from: USER, to: API },
   { num: 2, label: 'Watch RGDs',         from: KRO,  to: API,  kro: true },
   { num: 3, label: 'Validate',           from: KRO,  to: KRO,  kro: true, self: true },
@@ -31,9 +31,12 @@ const steps: Step[] = [
   { num: 8, label: 'Create resources',   from: KRO,  to: API,  kro: true },
 ];
 
-const TOTAL_HEIGHT = STEP_START + steps.length * STEP_GAP + 20;
-
-export default function RGDProcessFlow(): JSX.Element {
+/**
+ * Swimlane sequence diagram shared by the RGD and Graph overview pages. The
+ * default export renders the RGD flow; other pages pass their own `steps`.
+ */
+export function ProcessFlow({ steps }: { steps: Step[] }): JSX.Element {
+  const TOTAL_HEIGHT = STEP_START + steps.length * STEP_GAP + 20;
   const ref = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
 
@@ -145,4 +148,8 @@ export default function RGDProcessFlow(): JSX.Element {
       </svg>
     </div>
   );
+}
+
+export default function RGDProcessFlow(): JSX.Element {
+  return <ProcessFlow steps={rgdSteps} />;
 }

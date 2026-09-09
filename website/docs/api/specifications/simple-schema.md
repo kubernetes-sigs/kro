@@ -50,6 +50,9 @@ spec:
       # Status fields with auto-inferred types
       availableReplicas: ${deployment.status.availableReplicas}
       serviceEndpoint: ${service.status.loadBalancer.ingress[0].hostname}
+
+  # resources: the deployment and service the status fields read from
+  # (omitted here; see the ResourceGraphDefinition docs)
 ```
 
 ## Type Definitions
@@ -254,8 +257,9 @@ mode: string | enum="debug,info,warn,error" default="info"
 - `maxItems=number`: Maximum number of items in arrays
 - `listType=atomic|set|map`: Specifies how Kubernetes should treat the array for merge operations
 - `listMapKey=fieldName`: Specifies which field(s) to use as keys when `listType=map` (can be repeated for composite keys)
+- `validation="<CEL rule>"`: A [CEL validation rule](https://kubernetes.io/docs/reference/using-api/cel/) evaluated by the API server against the field's value, available as `self`. For example `validation="self <= 10 || self % 2 == 0"`
 
-Multiple markers can be combined using the `|` separator.
+Markers follow the type after a single `|` and are separated by spaces, as in the examples above.
 
 ### String Validation Markers
 

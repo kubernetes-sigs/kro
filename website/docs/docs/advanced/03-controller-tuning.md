@@ -1,10 +1,10 @@
 ---
-sidebar_position: 5
+sidebar_position: 3
 ---
 
 # Controller Tuning
 
-kro has two main reconciliation loops: the RGD reconciler that processes ResourceGraphDefinitions, and the dynamic controller that manages instances. This page explains both and their tuning options.
+kro has three reconciliation loops: the RGD reconciler that processes ResourceGraphDefinitions, the dynamic controller that manages instances, and the Graph controller that reconciles [Graphs](../concepts/graph/01-overview.md). This page explains them and their tuning options, along with settings shared by the composition engine underneath.
 
 ## RGD Reconciler
 
@@ -93,9 +93,16 @@ The resync period triggers reconciliation for all resources periodically, even w
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `config.instance.requeueInterval` | `3s` | Fixed delay for delayed instance requeues when kro is waiting for resources, readiness, or deletion to settle. Set to `0` to disable delayed requeues |
+| `config.instance.requeueInterval` | `3s` | Initial delay for delayed instance requeues when kro is waiting for resources, readiness, or deletion to settle. Set to `0` to disable delayed requeues |
 
 This setting is also available as the `--instance-requeue-interval` flag.
+
+When an instance is waiting on cluster state that is not ready yet (an external
+reference that does not exist, a `readyWhen` that is still false), consecutive
+requeues back off exponentially from this interval, doubling each time up to a
+cap of five minutes. The backoff resets as soon as a reconcile makes progress.
+Changes to the resources the instance manages or reads still trigger an
+immediate reconcile through kro's watches.
 
 ### Rate Limiting
 
@@ -104,14 +111,55 @@ The queue uses a combined rate limiter with two strategies:
 1. **Exponential backoff** - Failed items are requeued with increasing delays
 2. **Bucket rate limiter** - Limits overall event processing rate
 
-These settings are only available via command-line flags:
+| Setting | Flag | Default | Description |
+|---------|------|---------|-------------|
+| `config.dynamicControllerRateLimiterMinDelay` | `--dynamic-controller-rate-limiter-min-delay` | 200ms | Initial retry delay |
+| `config.dynamicControllerRateLimiterMaxDelay` | `--dynamic-controller-rate-limiter-max-delay` | 1000s | Maximum retry delay |
+| `config.dynamicControllerRateLimiterRateLimit` | `--dynamic-controller-rate-limiter-rate-limit` | 10 | Events per second |
+| `config.dynamicControllerRateLimiterBurstLimit` | `--dynamic-controller-rate-limiter-burst-limit` | 100 | Burst capacity |
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--dynamic-controller-rate-limiter-min-delay` | 200ms | Initial retry delay |
-| `--dynamic-controller-rate-limiter-max-delay` | 1000s | Maximum retry delay |
-| `--dynamic-controller-rate-limiter-rate-limit` | 10 | Events per second |
-| `--dynamic-controller-rate-limiter-burst-limit` | 100 | Burst capacity |
+## Graph Controller
+
+The Graph controller reconciles `Graph` resources. It runs only when the
+`GraphKind` [feature gate](./02-feature-gates.md#graphkind) is enabled.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `config.graphConcurrentReconciles` | 1 | Parallel Graph reconciles |
+
+Also available as the `--graph-concurrent-reconciles` flag. Within one Graph,
+nodes are applied serially in dependency order; this setting controls how many
+distinct Graphs reconcile at once.
+
+Two flags have no Helm value and are set by the chart automatically:
+
+| Flag | Description |
+|------|-------------|
+| `--controller-namespace` | The namespace the kro controller runs in |
+| `--controller-service-account` | The kro controller's own ServiceAccount name |
+
+Together they let the Graph controller refuse a Graph that would impersonate
+kro's own identity. When `GraphKind` is enabled and either is unset, the
+controller exits at startup. If you deploy kro without the chart, pass both.
+
+## Composition Engine
+
+These settings apply to both instance reconciliation and Graph reconciliation.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `config.applyConcurrency` | 20 | Maximum concurrent server-side apply writes for the items of a single `forEach` collection |
+| `config.rgd.maxCollectionSize` | 1000 | Maximum items a `forEach` expansion may produce |
+| `config.rgd.maxCollectionDimensionSize` | 10 | Maximum `forEach` dimensions on one resource |
+| `config.celCostLimit` | 0 | Cost budget for evaluating a single CEL expression. `0` disables the limit |
+
+The flag equivalents are `--apply-concurrency`, `--rgd-max-collection-size`,
+`--rgd-max-collection-dimension-size`, and `--cel-cost-limit`.
+
+`celCostLimit` bounds the work one expression may do, using CEL's cost model.
+When set, an expression that exceeds the budget fails evaluation. Leave it at
+`0` unless you need a hard ceiling on the evaluation time of any single
+expression.
 
 ## API Server Communication
 

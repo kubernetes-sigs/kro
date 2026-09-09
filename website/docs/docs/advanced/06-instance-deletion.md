@@ -26,6 +26,15 @@ does not need to evaluate the current graph or CEL expressions during deletion.
 Cleanup can therefore continue when an external reference is gone or desired
 state can no longer be resolved.
 
+## Status Fields
+
+When an RGD declares `status` fields, kro writes them onto the instance with
+server-side apply under a dedicated field manager and records that contribution
+in the `internal.kro.run/patch-contributions` annotation on the instance. During
+deletion, after the managed children are gone, kro releases that contribution
+before removing the finalizer. This is bookkeeping for the instance object
+itself, which is about to be deleted; it does not touch any other resource.
+
 ## Troubleshooting
 
 While deletion is in progress, the instance has a `ResourcesReady` condition

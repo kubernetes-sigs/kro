@@ -1,68 +1,98 @@
 import React, { useEffect, useRef, useState } from 'react';
+import Link from '@docusaurus/Link';
+import { useActiveVersion } from '@docusaurus/plugin-content-docs/client';
 import styles from './styles.module.css';
 
+/**
+ * Stable keys for each capability card. The page that renders this component
+ * supplies the doc path for each key via the `links` prop, so a docs
+ * reorganization only needs to update the MDX that imports the component and
+ * never this file. Paths are relative to the docs version root (for example
+ * `/docs/concepts/rgd/schema`) and are prefixed with the active version path
+ * at render time.
+ */
+export type CapabilityKey =
+  | 'schema'
+  | 'celExpressions'
+  | 'dependencyOrdering'
+  | 'conditionalResources'
+  | 'collections'
+  | 'typeChecking';
+
+export type CapabilityLinks = Partial<Record<CapabilityKey, string>>;
+
 interface Capability {
+  key: CapabilityKey;
   title: string;
   description: string;
   viz: React.ReactNode;
-  link?: string;
   linkLabel?: string;
 }
 
 const capabilities: Capability[] = [
   {
+    key: 'schema',
     title: 'SimpleSchema',
     description:
       'Define your API schema inline — types, defaults, constraints, and validation in a single readable line. No OpenAPI boilerplate.',
     viz: <SimpleSchemaViz />,
-    link: '/docs/concepts/rgd/schema',
     linkLabel: 'Schema docs',
   },
   {
+    key: 'celExpressions',
     title: 'Wires data that doesn\'t exist yet',
     description:
       'Reference status fields from resources that haven\'t been created. kro waits for the data to exist, then wires it into dependent resources.',
     viz: <FutureWireViz />,
-    link: '/docs/concepts/rgd/cel-expressions',
     linkLabel: 'CEL expressions',
   },
   {
+    key: 'dependencyOrdering',
     title: 'Infers ordering from expressions',
     description:
       'You never declare resource order. kro reads your CEL expressions and builds the dependency graph automatically.',
     viz: <AutoOrderViz />,
-    link: '/docs/concepts/rgd/dependencies-ordering',
     linkLabel: 'Dependency ordering',
   },
   {
+    key: 'conditionalResources',
     title: 'Conditional resources',
     description:
       'Include or exclude entire subgraphs based on any CEL expression. When a condition is false, the resource and everything that depends on it are skipped.',
     viz: <ConditionalViz />,
-    link: '/docs/concepts/rgd/resource-definitions/conditional-creation',
     linkLabel: 'Conditional resources',
   },
   {
+    key: 'collections',
     title: 'One template, many resources',
     description:
       'forEach expands a single resource template into multiple resources from a list or range. Define once, create N.',
     viz: <FanOutViz />,
-    link: '/docs/concepts/rgd/resource-definitions/collections',
     linkLabel: 'Collections',
   },
   {
+    key: 'typeChecking',
     title: 'Non-Turing complete by design',
     description:
       'CEL always terminates, has no side effects, and is type-checked at apply time. You can prove what your definitions do.',
     viz: <SafetyViz />,
-    link: '/docs/concepts/rgd/static-type-checking',
     linkLabel: 'Type checking',
   },
 ];
 
-export default function EngineCapabilities(): JSX.Element {
+interface EngineCapabilitiesProps {
+  /** Doc paths per capability, relative to the docs version root. */
+  links: CapabilityLinks;
+}
+
+export default function EngineCapabilities({ links }: EngineCapabilitiesProps): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
+  // Resolve links against the version the reader is currently viewing so a
+  // card on /next/docs/overview stays on /next, and a card on an older
+  // version stays on that version.
+  const activeVersion = useActiveVersion(undefined);
+  const versionPrefix = (activeVersion?.path ?? '').replace(/\/$/, '');
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -91,10 +121,10 @@ export default function EngineCapabilities(): JSX.Element {
             <div className={styles.cardText}>
               <h3 className={styles.cardTitle}>{cap.title}</h3>
               <p className={styles.cardDesc}>{cap.description}</p>
-              {cap.link && (
-                <a href={cap.link} className={styles.cardLink}>
+              {links[cap.key] && (
+                <Link to={`${versionPrefix}${links[cap.key]}`} className={styles.cardLink}>
                   {cap.linkLabel || 'Learn more'} &rarr;
-                </a>
+                </Link>
               )}
             </div>
           </div>

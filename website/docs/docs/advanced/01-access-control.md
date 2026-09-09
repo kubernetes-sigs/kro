@@ -44,7 +44,9 @@ define.
 If you want to create a `ResourceGraphDefinition` that specifies a new resource
 type with `kind: Foo`, and where the graph includes an `apps/v1/Deployment` and
 a `v1/ConfigMap`, you will need to create the following `ClusterRole` to ensure
-**kro** has enough access to reconcile your resources:
+**kro** has enough access to reconcile your resources. Include the `/status`
+subresource of the generated kind: kro writes instance status through it, and a
+grant on `foos` alone does not cover `foos/status`.
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -58,6 +60,7 @@ rules:
       - kro.run
     resources:
       - foos
+      - foos/status
     verbs:
       - "*"
   - apiGroups:
@@ -83,6 +86,10 @@ allowed to impersonate**. Read this section before enabling `Graph` in a
 multi-tenant or shared cluster.
 :::
 
+This section applies when the `GraphKind` [feature gate](./02-feature-gates.md#graphkind)
+is enabled. For what a Graph is and how to enable it, see the
+[Graph overview](../concepts/graph/01-overview.md).
+
 Unlike a cluster-scoped `ResourceGraphDefinition`, a `Graph` is a **namespaced,
 user-creatable** kind that directly describes cluster resources. To keep that
 power from running as kro's own (broad) controller identity, kro applies a
@@ -94,9 +101,12 @@ Graph's resources while **impersonating a ServiceAccount**:
 - `spec.serviceAccountName` selects which ServiceAccount in that namespace to
   use. When it is unset, kro impersonates the namespace's `default`
   ServiceAccount.
-- Every apply, patch, and delete the Graph performs is authorized against that
-  ServiceAccount's RBAC. A Graph can therefore never do more than a
-  ServiceAccount in its namespace is already granted.
+- Every read and write the Graph performs on its resources is authorized
+  against that ServiceAccount's RBAC. A Graph can therefore never do more than
+  a ServiceAccount in its namespace is already granted.
+- The kro controller itself also needs cluster-wide `list` and `watch` on the
+  resource types a Graph manages, so it can watch them for changes. See
+  [What the kro controller itself needs](#what-the-kro-controller-itself-needs).
 
 ### This is the same trust model as `create pod`
 
@@ -116,8 +126,11 @@ Graph tears its resources down under the same impersonated identity.
 ### Restricting which ServiceAccounts kro may impersonate
 
 Impersonation only works for ServiceAccounts kro itself is permitted to
-impersonate. You control that with kro's **own** RBAC — grant the `impersonate`
-verb narrowly instead of cluster-wide:
+impersonate. You control that with kro's **own** RBAC. In `unrestricted` mode
+kro already holds every verb on every resource. In `aggregation` mode the chart
+grants `impersonate` on all ServiceAccounts cluster-wide when `GraphKind` is
+enabled; to narrow it, remove that grant and bind the verb per namespace
+instead:
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -139,6 +152,36 @@ Graph, so a Graph naming it fails to apply rather than escalating. If kro has no
 `impersonate` permission for a namespace at all, Graphs there cannot apply
 anything.
 
+### What the kro controller itself needs
+
+Impersonation covers the reads and writes of a Graph's resources, but not the
+watches kro uses to notice when those resources change. Those run under the
+controller's own identity and are cluster-wide, so besides `impersonate` the
+controller needs `list` and `watch` on every resource type any Graph creates,
+reads, or patches. In `unrestricted` mode it already has them. In `aggregation`
+mode, add them to a ClusterRole labeled for aggregation:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    rbac.kro.run/aggregate-to-controller: "true"
+  name: kro:controller:graph-watches
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "services"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["list", "watch"]
+```
+
+Only `list` and `watch` are needed. The controller does not need `create`,
+`patch`, or `delete` on the resource types a Graph manages. Those verbs belong
+on the applier ServiceAccount, which also needs `get`, `list`, and `watch` on
+the same resource types.
+
 ### The controller's own identity is refused
 
 The one identity namespace confinement does not naturally protect is kro's own
@@ -148,6 +191,25 @@ SA) would otherwise run under kro's broad identity. kro **refuses** such a Graph
 marking it `Accepted=False` (reason `InvalidGraph`) before it applies anything.
 Any _other_ privileged ServiceAccount reachable in a namespace remains yours to
 scope via the `impersonate` RBAC above.
+
+### Granting users access to `Graph`
+
+The chart does not add `graphs` to the built-in `edit`, `admin`, or `view`
+ClusterRoles, precisely because of the trust model above. Grant it explicitly
+to the users or groups who should author Graphs, scoped to a namespace where
+possible:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: graph-author
+  namespace: team-payments
+rules:
+  - apiGroups: ["kro.run"]
+    resources: ["graphs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+```
 
 ### Recommendations
 

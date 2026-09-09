@@ -83,9 +83,9 @@ metadata:
 spec:
   schema:
     apiVersion: v1alpha1
-    kind: test
+    kind: SecretTransformation
     spec:
-      name: string     
+      name: string
   resources:
     - id: test
       externalRef:
@@ -93,7 +93,6 @@ spec:
         kind: Secret
         metadata:
           name: test
-          namespace: ""
     - id: secret
       template:
         apiVersion: v1

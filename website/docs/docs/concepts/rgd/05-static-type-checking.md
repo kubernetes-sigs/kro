@@ -1,5 +1,5 @@
 ---
-sidebar_position: 7
+sidebar_position: 5
 ---
 
 # Static Analysis
@@ -345,6 +345,6 @@ But it cannot validate:
 
 ## Next Steps
 
-- **[Resource Basics](./02-resource-definitions/01-resource-basics.md)** - See how templates are validated
-- **[CEL Expressions](./03-cel-expressions.md)** - Learn CEL type system
+- **[Resource Basics](./03-resource-basics.md)** - See how templates are validated
+- **[CEL Expressions](../expressions/01-cel-expressions.md)** - Learn CEL type system
 - **[SimpleSchema](../../../api/specifications/simple-schema.md)** - Define typed schemas

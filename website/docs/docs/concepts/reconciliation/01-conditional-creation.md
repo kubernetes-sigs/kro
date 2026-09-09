@@ -1,12 +1,12 @@
 ---
-sidebar_position: 2
+sidebar_position: 1
 ---
 
 # Conditionals
 
-Not all resources in a ResourceGraphDefinition need to be created for every instance. Sometimes you want to create resources conditionally based on user configuration - like enabling monitoring, backups, or TLS only when requested.
+Not all resources in a ResourceGraphDefinition or Graph need to be created every time. Sometimes you want to create resources conditionally based on user configuration or observed cluster state - like enabling monitoring, backups, or TLS only when requested.
 
-kro provides the `includeWhen` field to make resources optional. When you add `includeWhen` to a resource, kro evaluates the conditions during reconciliation and only includes the resource if all conditions are true.
+kro provides the `includeWhen` field to make resources optional. When you add `includeWhen` to a resource, kro evaluates the conditions during reconciliation and only includes the resource if all conditions are true. The examples on this page use RGD `resources`; the same field, with the same semantics, applies to Graph `nodes`.
 
 ## Basic Example
 
@@ -28,7 +28,7 @@ resources:
 When a user creates an instance:
 
 ```kro
-apiVersion: example.com/v1
+apiVersion: kro.run/v1alpha1
 kind: Application
 metadata:
   name: my-app
@@ -48,7 +48,7 @@ If `ingress.enabled` is `false`, the Ingress resource is skipped entirely. If th
 - If **any** expression evaluates to `false`, the resource is skipped
 - Conditions are re-evaluated on later reconciliations; if a previously included resource starts evaluating to `false`, kro prunes it
 - Each expression must evaluate to a **boolean** value (`true` or `false`)
-- For [collections](./04-collections.md), `includeWhen` applies to the entire collection
+- For [collections](./03-collections.md), `includeWhen` applies to the entire collection
 
 ## What You Can Reference
 
@@ -75,7 +75,34 @@ includeWhen:
   - ${schema.spec.appName}  # returns string, not boolean
 ```
 
-kro validates `includeWhen` expressions when you create the ResourceGraphDefinition, ensuring they reference valid fields and return boolean values.
+kro validates `includeWhen` expressions when you create the ResourceGraphDefinition or Graph, ensuring they reference valid fields and return boolean values.
+
+In a [Graph](../graph/01-overview.md) there is no `schema` variable, so
+conditions reference other nodes. A common pattern is to guard a node on a
+collection read by a `ref` node being non-empty:
+
+```kro
+nodes:
+  - id: services
+    ref:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        selector:
+          matchLabels:
+            expose: "true"
+
+  - id: ingress
+    includeWhen:
+      - ${size(services) > 0}
+    template:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      # ...
+```
+
+`includeWhen` is accepted on `template`, `ref`, `def`, and `patch` nodes. It is
+rejected on `graph` nodes; see [Modifiers](../graph/03-modifiers.md).
 
 :::note
 When `includeWhen` references other resources, kro treats them as dependencies.
@@ -188,5 +215,6 @@ includeWhen:
 
 ## Next Steps
 
-- **[Readiness](./03-readiness.md)** - Control when resources are considered ready
-- **[Resource Basics](./01-resource-basics.md)** - Learn about resource template structure
+- **[Readiness](./02-readiness.md)** - Control when resources are considered ready
+- **[Resource Basics](../rgd/03-resource-basics.md)** - Learn about resource template structure
+- **[Graph Modifiers](../graph/03-modifiers.md)** - Which Graph node kinds accept `includeWhen`

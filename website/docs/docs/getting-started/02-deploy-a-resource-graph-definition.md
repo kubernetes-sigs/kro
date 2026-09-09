@@ -42,7 +42,7 @@ metadata:
   name: kro:controller:my-application
 rules:
   - apiGroups: ["kro.run"]
-    resources: ["applications"]
+    resources: ["applications", "applications/status"]
     verbs: ["*"]
   - apiGroups: ["apps"]
     resources: ["deployments"]

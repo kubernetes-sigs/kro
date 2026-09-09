@@ -55,6 +55,18 @@ type Schema struct {
 	// +kubebuilder:validation:Pattern=`^[A-Z][a-zA-Z0-9]{0,62}$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="kind is immutable"
 	Kind string `json:"kind,omitempty"`
+	// Plural is the plural form of Kind used as the resource name in the generated
+	// CRD, forming its name as "<plural>.<group>". If omitted, it is derived by
+	// pluralizing the lowercased kind, which follows English rules and is not always
+	// what you would expect or might even not be correct. (For example: "PodInfo" becomes "podinfoes").
+	// Set this explicitly to override the generated value.
+	// This field is immutable after creation! It cannot be changed again.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="plural is immutable"
+	Plural string `json:"plural,omitempty"`
 	// APIVersion is the version identifier for the generated CRD.
 	// Must follow Kubernetes versioning conventions (v1, v1alpha1, v1beta1, etc.).
 	// This field is immutable after creation.

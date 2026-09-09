@@ -4312,7 +4312,7 @@ func TestBuildInstanceNode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			node, err := buildInstanceNode(
-				metadata.GetResourceGraphDefinitionInstanceGVR("example.com", "v1alpha1", "Test"),
+				metadata.GetResourceGraphDefinitionInstanceGVR(&krov1alpha1.Schema{Group: "example.com", APIVersion: "v1alpha1", Kind: "Test"}),
 				true, // namespaced (default)
 				tt.variables,
 				tt.template,
@@ -5004,7 +5004,7 @@ func TestBuildInstanceNodeFoldsConditionDeps(t *testing.T) {
 	require.Len(t, conditions, 1)
 
 	node, err := buildInstanceNode(
-		metadata.GetResourceGraphDefinitionInstanceGVR("example.com", "v1alpha1", "Test"),
+		metadata.GetResourceGraphDefinitionInstanceGVR(&krov1alpha1.Schema{Group: "example.com", APIVersion: "v1alpha1", Kind: "Test"}),
 		true,
 		nil,
 		map[string]any{},

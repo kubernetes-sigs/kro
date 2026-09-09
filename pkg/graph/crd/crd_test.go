@@ -42,6 +42,8 @@ func TestSynthesizeCRD(t *testing.T) {
 		expectedAnnotations  map[string]string
 		expectedShortNames   []string
 		expectedCategories   []string
+		expectedPlural       string
+		expectedSingular     string
 	}{
 		{
 			name:                 "standard group and kind - namespaced",
@@ -152,6 +154,38 @@ func TestSynthesizeCRD(t *testing.T) {
 			expectedShortNames: []string{"wa"},
 			expectedCategories: []string{"platform"},
 		},
+		{
+			name:                 "declared plural overrides the derived one",
+			group:                "kro.com",
+			apiVersion:           "v1",
+			kind:                 "PodInfo",
+			spec:                 extv1.JSONSchemaProps{Type: "object"},
+			status:               extv1.JSONSchemaProps{Type: "object"},
+			statusFieldsOverride: true,
+			schema:               &v1alpha1.Schema{Plural: "podinfos"},
+			scope:                extv1.NamespaceScoped,
+			expectedName:         "podinfos.kro.com",
+			expectedGroup:        "kro.com",
+			expectedScope:        extv1.NamespaceScoped,
+			expectedPlural:       "podinfos",
+			expectedSingular:     "podinfo",
+		},
+		{
+			name:                 "derived plural is used when none is declared",
+			group:                "kro.com",
+			apiVersion:           "v1",
+			kind:                 "PodInfo",
+			spec:                 extv1.JSONSchemaProps{Type: "object"},
+			status:               extv1.JSONSchemaProps{Type: "object"},
+			statusFieldsOverride: true,
+			schema:               &v1alpha1.Schema{},
+			scope:                extv1.NamespaceScoped,
+			expectedName:         "podinfoes.kro.com",
+			expectedGroup:        "kro.com",
+			expectedScope:        extv1.NamespaceScoped,
+			expectedPlural:       "podinfoes",
+			expectedSingular:     "podinfo",
+		},
 	}
 
 	for _, tt := range tests {
@@ -164,6 +198,10 @@ func TestSynthesizeCRD(t *testing.T) {
 			assert.Equal(t, tt.kind+"List", crd.Spec.Names.ListKind)
 			assert.Equal(t, tt.expectedShortNames, crd.Spec.Names.ShortNames)
 			assert.Equal(t, tt.expectedCategories, crd.Spec.Names.Categories)
+			if tt.expectedPlural != "" {
+				assert.Equal(t, tt.expectedPlural, crd.Spec.Names.Plural)
+				assert.Equal(t, tt.expectedSingular, crd.Spec.Names.Singular)
+			}
 
 			require.Len(t, crd.Spec.Versions, 1)
 			version := crd.Spec.Versions[0]

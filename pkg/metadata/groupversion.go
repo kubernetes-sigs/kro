@@ -65,11 +65,26 @@ func ExtractGVKFromUnstructured(unstructured map[string]any) (schema.GroupVersio
 	}, nil
 }
 
-func GetResourceGraphDefinitionInstanceGVR(group, apiVersion, kind string) schema.GroupVersionResource {
-	pluralKind := flect.Pluralize(strings.ToLower(kind))
+// ResolvePlural returns the resource name for the CRD generated from the given
+// kind: the declared plural when set, otherwise an English pluralization of
+// the lowercased kind.
+func ResolvePlural(kind, plural string) string {
+	if plural != "" {
+		return plural
+	}
+	return flect.Pluralize(strings.ToLower(kind))
+}
+
+// GetResourceGraphDefinitionInstanceGVR returns the GVR of the instances served
+// by the CRD generated from the given schema. We use this to make sure that whatever
+// the plural form was when the schema was created, it stays the same, always.
+func GetResourceGraphDefinitionInstanceGVR(s *v1alpha1.Schema) schema.GroupVersionResource {
+	if s == nil {
+		return schema.GroupVersionResource{}
+	}
 	return schema.GroupVersionResource{
-		Group:    group,
-		Version:  apiVersion,
-		Resource: pluralKind,
+		Group:    s.Group,
+		Version:  s.APIVersion,
+		Resource: ResolvePlural(s.Kind, s.Plural),
 	}
 }

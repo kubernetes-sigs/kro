@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 func TestExtractGVKFromUnstructured(t *testing.T) {
@@ -130,4 +132,52 @@ func TestExtractGVKFromUnstructured(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolvePlural(t *testing.T) {
+	cases := []struct {
+		name   string
+		kind   string
+		plural string
+		want   string
+	}{
+		{
+			name: "derives from kind when no plural is declared",
+			kind: "WebApplication",
+			want: "webapplications",
+		},
+		{
+			name: "english pluralization is wrong for -o kinds",
+			kind: "PodInfo",
+			want: "podinfoes",
+		},
+		{
+			name:   "declared plural wins",
+			kind:   "PodInfo",
+			plural: "podinfos",
+			want:   "podinfos",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, ResolvePlural(tc.kind, tc.plural))
+		})
+	}
+}
+
+func TestGetResourceGraphDefinitionInstanceGVR(t *testing.T) {
+	gvr := GetResourceGraphDefinitionInstanceGVR(&v1alpha1.Schema{
+		Group:      "example.io",
+		APIVersion: "v1alpha1",
+		Kind:       "PodInfo",
+		Plural:     "podinfos",
+	})
+	assert.Equal(t, schema.GroupVersionResource{
+		Group:    "example.io",
+		Version:  "v1alpha1",
+		Resource: "podinfos",
+	}, gvr)
+
+	assert.Equal(t, schema.GroupVersionResource{}, GetResourceGraphDefinitionInstanceGVR(nil))
 }

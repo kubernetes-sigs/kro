@@ -107,6 +107,33 @@ resources:
 The `scope` field is immutable after creation.
 :::
 
+### Plural
+
+The generated CRD is named `<plural>.<group>`. kro derives it by pluralizing the lowercased `kind` using English rules,
+which is wrong for some words: `PodInfo` becomes `podinfoes`.
+
+Set `plural` to override it as needed:
+
+```yaml
+schema:
+  apiVersion: v1alpha1
+  kind: PodInfo
+  plural: podinfos
+```
+
+```yaml
+- apiGroups:
+    - kro.run
+  resources:
+    - podinfos
+```
+
+Must be a valid [RFC 1035 label name](https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#rfc-1035-label-names).
+
+:::note
+The `plural` field is immutable after creation, because it is part of the generated CRD's name.
+:::
+
 ### Short Names and Categories
 
 `shortNames` adds kubectl aliases for the generated CRD, and `categories` makes instances show up when users list a category.

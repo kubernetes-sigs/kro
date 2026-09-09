@@ -18,11 +18,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gobuffalo/flect"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
@@ -33,7 +33,6 @@ func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchema
 }
 
 func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope extv1.ResourceScope, rgSchema *v1alpha1.Schema) *extv1.CustomResourceDefinition {
-	pluralKind := flect.Pluralize(strings.ToLower(kind))
 	if scope == "" {
 		scope = extv1.NamespaceScoped
 	}
@@ -42,6 +41,8 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope
 	if rgSchema == nil {
 		rgSchema = &emptySchema
 	}
+
+	pluralKind := metadata.ResolvePlural(kind, rgSchema.Plural)
 
 	objectMeta := metav1.ObjectMeta{
 		Name:            fmt.Sprintf("%s.%s", pluralKind, group),

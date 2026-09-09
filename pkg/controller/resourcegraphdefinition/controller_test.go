@@ -352,7 +352,7 @@ func newProcessedGraph() *graph.Graph {
 	return &graph.Graph{
 		Instance: &graph.Node{
 			Meta: graph.NodeMeta{
-				GVR: metadata.GetResourceGraphDefinitionInstanceGVR("example.io", "v1alpha1", "Network"),
+				GVR: metadata.GetResourceGraphDefinitionInstanceGVR(&v1alpha1.Schema{Group: "example.io", APIVersion: "v1alpha1", Kind: "Network"}),
 			},
 		},
 		Nodes:            nodes,
@@ -850,11 +850,11 @@ func TestReconcile(t *testing.T) {
 
 				c := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy())
 				dc := newRunningDynamicController(t)
-				gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+				gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema)
 				require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
 
 				// Set up CRD with ownership label
-				crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)
+				crdName := extractCRDName(rgd.Spec.Schema)
 				crd := &extv1.CustomResourceDefinition{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: crdName,
@@ -883,7 +883,7 @@ func TestReconcile(t *testing.T) {
 				err = c.Get(context.Background(), client.ObjectKey{Name: rgd.Name}, stored)
 				require.Error(t, err)
 				assert.True(t, apierrors.IsNotFound(err))
-				assert.Equal(t, []string{extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)}, manager.deleted)
+				assert.Equal(t, []string{extractCRDName(rgd.Spec.Schema)}, manager.deleted)
 			},
 		},
 		{
@@ -895,7 +895,7 @@ func TestReconcile(t *testing.T) {
 
 				c := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy())
 				// Set up CRD with ownership label
-				crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)
+				crdName := extractCRDName(rgd.Spec.Schema)
 				crd := &extv1.CustomResourceDefinition{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: crdName,
@@ -940,7 +940,7 @@ func TestReconcile(t *testing.T) {
 				}, rgd.DeepCopy())
 
 				dc := newRunningDynamicController(t)
-				gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+				gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema)
 				require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
 
 				reconciler := &ResourceGraphDefinitionReconciler{

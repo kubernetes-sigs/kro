@@ -160,8 +160,8 @@ func gvrFromUnstructured(obj *unstructured.Unstructured) schema.GroupVersionReso
 		return gvr
 	}
 
-	// For generated CRD instances, derive resource name using flect
-	// (same pluralization kro uses internally).
+	// For generated CRD instances, derive resource name using flect. Fixtures
+	// here never declare schema.plural, so this matches kro's default.
 	resource := flect.Pluralize(strings.ToLower(gvk.Kind))
 	return schema.GroupVersionResource{
 		Group:    gvk.Group,

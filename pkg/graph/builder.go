@@ -167,7 +167,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 
 	g, statusSchema, err := b.compileSource(rgdSource{
 		resources:       resourceSpecs,
-		instanceGVR:     metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind),
+		instanceGVR:     metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema),
 		namespaced:      crdScope == extv1.NamespaceScoped,
 		schemaVarSchema: schemaWithoutStatus,
 		statusRaw:       rgd.Spec.Schema.Status.Raw,

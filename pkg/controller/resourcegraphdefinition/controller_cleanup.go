@@ -17,9 +17,7 @@ package resourcegraphdefinition
 import (
 	"context"
 	"fmt"
-	"strings"
 
-	"github.com/gobuffalo/flect"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -37,7 +35,7 @@ import (
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
 	ctrl.LoggerFrom(ctx).V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
 
-	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema)
 
 	// Check in-memory map to avoid stale status data
 	if _, registered := r.registeredControllers.Load(rgd.UID); registered {
@@ -68,7 +66,7 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 	// in the registry and be re-adopted by a recreated RGD with the same name.
 
 	// cleanup CRD
-	crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)
+	crdName := extractCRDName(rgd.Spec.Schema)
 	if err := r.cleanupResourceGraphDefinitionCRD(ctx, rgd.Name, crdName); err != nil {
 		return fmt.Errorf("failed to cleanup CRD %s: %w", crdName, err)
 	}
@@ -119,10 +117,8 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ct
 	return nil
 }
 
-// extractCRDName generates the CRD name from a given kind by converting it to plural form
-// and appending the kro domain name.
-func extractCRDName(group, kind string) string {
-	return fmt.Sprintf("%s.%s",
-		flect.Pluralize(strings.ToLower(kind)),
-		group)
+// extractCRDName generates the CRD name from a given schema by resolving its
+// plural form and appending the API group.
+func extractCRDName(s *v1alpha1.Schema) string {
+	return fmt.Sprintf("%s.%s", metadata.ResolvePlural(s.Kind, s.Plural), s.Group)
 }

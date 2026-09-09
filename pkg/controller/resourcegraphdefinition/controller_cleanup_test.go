@@ -25,16 +25,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 func TestExtractCRDName(t *testing.T) {
 	tests := []struct {
-		name  string
-		group string
-		kind  string
-		want  string
+		name   string
+		group  string
+		kind   string
+		plural string
+		want   string
 	}{
 		{
 			name:  "pluralizes compound kinds",
@@ -48,11 +50,28 @@ func TestExtractCRDName(t *testing.T) {
 			kind:  "Network",
 			want:  "networks.example.io",
 		},
+		{
+			name:  "english pluralization is wrong for -o kinds",
+			group: "example.io",
+			kind:  "PodInfo",
+			want:  "podinfoes.example.io",
+		},
+		{
+			name:   "declared plural overrides the derived one",
+			group:  "example.io",
+			kind:   "PodInfo",
+			plural: "podinfos",
+			want:   "podinfos.example.io",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractCRDName(tt.group, tt.kind))
+			assert.Equal(t, tt.want, extractCRDName(&v1alpha1.Schema{
+				Group:  tt.group,
+				Kind:   tt.kind,
+				Plural: tt.plural,
+			}))
 		})
 	}
 }
@@ -74,7 +93,7 @@ func TestShutdownResourceGraphDefinitionMicroController(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := newTestRGD("shutdown")
-			gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+			gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema)
 			dc := newRunningDynamicController(t)
 			if tt.register {
 				require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
@@ -114,7 +133,7 @@ func TestCleanupResourceGraphDefinition(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := newTestRGD("cleanup")
-			gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+			gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema)
 			dc := newRunningDynamicController(t)
 			require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
 
@@ -166,7 +185,7 @@ func TestCleanupSkipsDeregisterWhenNeverRegistered(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := newTestRGD("skip-cleanup")
-			gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+			gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema)
 			dc := newRunningDynamicController(t)
 
 			reconciler := &ResourceGraphDefinitionReconciler{
@@ -187,7 +206,7 @@ func TestCleanupSkipsDeregisterWhenNeverRegistered(t *testing.T) {
 
 func TestCleanupPreservesRegistryEntries(t *testing.T) {
 	rgd := newTestRGD("evict")
-	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema)
 	dc := newRunningDynamicController(t)
 	require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
 
@@ -279,7 +298,7 @@ func TestCleanupResourceGraphDefinitionCRD(t *testing.T) {
 }
 
 func newTestCRD(group, kind, ownerRGD string) *extv1.CustomResourceDefinition {
-	crdName := extractCRDName(group, kind)
+	crdName := extractCRDName(&v1alpha1.Schema{Group: group, Kind: kind})
 	return &extv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: crdName,

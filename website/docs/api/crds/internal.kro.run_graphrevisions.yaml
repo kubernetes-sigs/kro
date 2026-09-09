@@ -328,6 +328,20 @@ spec:
                                 description: Labels to apply to the generated CRD
                                 type: object
                             type: object
+                          plural:
+                            description: |-
+                              Plural is the plural form of Kind used as the resource name in the generated
+                              CRD, forming its name as "<plural>.<group>". If omitted, it is derived by
+                              pluralizing the lowercased kind, which follows English rules and is not always
+                              what you would expect or might even not be correct. (For example: "PodInfo" becomes "podinfoes").
+                              Set this explicitly to override the generated value.
+                              This field is immutable after creation! It cannot be changed again.
+                            maxLength: 63
+                            pattern: ^[a-z]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: plural is immutable
+                              rule: self == oldSelf
                           scope:
                             default: Namespaced
                             description: |-

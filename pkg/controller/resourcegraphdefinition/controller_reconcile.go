@@ -327,14 +327,17 @@ func (r *ResourceGraphDefinitionReconciler) buildResourceGraphDefinition(_ conte
 // warnOnEncodedResourceIDs emits an event for each resource ID too long to be
 // stored verbatim in the kro.run/node-id label. Without it a hashed label is
 // silent: selectors written against the authored ID simply stop matching.
-// Called every reconcile, not just when a revision is issued, so the event does
-// not age out of the apiserver's event-ttl while the label is still hashed.
+// Called on every reconcile, not just when a revision is issued, so a re-emitted
+// event refreshes what an operator sees in `kubectl describe`. Reconciles are
+// event-driven, so a quiet RGD can still let the event age out of the
+// apiserver's event-ttl while the label stays hashed.
 func (r *ResourceGraphDefinitionReconciler) warnOnEncodedResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) {
 	if r.recorder == nil {
 		return
 	}
 	for _, res := range rgd.Spec.Resources {
-		if !metadata.NodeIDTokenIsHashed(res.ID) {
+		// externalRef resources are never applied, so nothing carries the label.
+		if res.ExternalRef != nil || !metadata.NodeIDTokenIsHashed(res.ID) {
 			continue
 		}
 		r.recorder.Eventf(rgd, corev1.EventTypeWarning, "NodeIDEncoded",

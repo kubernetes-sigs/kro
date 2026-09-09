@@ -68,3 +68,19 @@ func TestWarnOnEncodedResourceIDs_NoRecorder(t *testing.T) {
 		r.warnOnEncodedResourceIDs(rgdWithResourceIDs(strings.Repeat("a", 100)))
 	})
 }
+
+func TestWarnOnEncodedResourceIDs_SkipsExternalRefs(t *testing.T) {
+	t.Parallel()
+
+	longID := "my" + strings.Repeat("Long", 20) + "ExternalRef"
+	require.True(t, metadata.NodeIDTokenIsHashed(longID))
+
+	rgd := rgdWithResourceIDs(longID)
+	rgd.Spec.Resources[0].ExternalRef = &v1alpha1.ExternalRef{}
+
+	recorder := record.NewFakeRecorder(10)
+	r := &ResourceGraphDefinitionReconciler{recorder: recorder}
+	r.warnOnEncodedResourceIDs(rgd)
+
+	assert.Empty(t, recorder.Events, "externalRef resources carry no node-id label")
+}

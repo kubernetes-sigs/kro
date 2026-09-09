@@ -16,7 +16,7 @@ package graph
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/validate/content"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 
@@ -25,9 +25,11 @@ import (
 )
 
 // warnOnEncodedNodeIDs emits one event per template node whose qualified path
-// is too long for kro.run/node-id label. Called every reconcile, not just on a
-// fresh compile, so the event does not age out of the apiserver's event-ttl
-// while the label is still hashed.
+// is too long for kro.run/node-id label. Called on every reconcile, not just on
+// a fresh compile, so a re-emitted event refreshes what an operator sees in
+// `kubectl describe`. Reconciles are event-driven, so a quiet Graph can still
+// let the event age out of the apiserver's event-ttl while the label stays
+// hashed.
 func (r *Reconciler) warnOnEncodedNodeIDs(g *expv1alpha1.Graph, prog *compiler.Program) {
 	if r.Recorder == nil {
 		return
@@ -37,7 +39,7 @@ func (r *Reconciler) warnOnEncodedNodeIDs(g *expv1alpha1.Graph, prog *compiler.P
 			"node %q exceeds the %d character label value limit once qualified; %s is set to %q "+
 				"on its managed resources, and selectors must use that value; the full path is "+
 				"preserved in the %s annotation",
-			path, content.LabelValueMaxLength, metadata.NodeIDLabel,
+			path, validation.LabelValueMaxLength, metadata.NodeIDLabel,
 			metadata.NodeIDToken(path), metadata.NodePathAnnotation)
 	}
 }

@@ -26,7 +26,7 @@ spec:
         iamRole:
           maxSessionDuration: integer | default=3600
           oidcProvider: string | required=true
-          roleDescription: string | default=IRSA role for ACK EKS controller deployment on EKS cluster using kro Resource group
+          roleDescription: string | default="IRSA role for ACK EKS controller deployment on EKS cluster using kro ResourceGraphDefinition"
         iamPolicy:
           # would prefer to add a policyDocument here, need to support multiline string here
           description: string | default="policy for eks controller"
@@ -145,7 +145,7 @@ spec:
               args:
               - --aws-region
               - ${schema.spec.values.aws.region}
-              - --enable-development-logging=${schema.spec.values.log.enabled}
+              - --enable-development-logging=${string(schema.spec.values.log.enabled)}
               - --log-level
               - ${schema.spec.values.log.level}
               - --deletion-policy
@@ -173,8 +173,6 @@ spec:
                 value: ${schema.spec.values.image.deletePolicy}
               - name: ACK_LOG_LEVEL
                 value: ${schema.spec.values.log.level}
-              ports:
-              - containerPort: 80
   - id: clusterRoleBinding
     template:
       apiVersion: rbac.authorization.k8s.io/v1

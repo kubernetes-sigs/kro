@@ -12,6 +12,10 @@ and whether each change compiled successfully. If a new spec breaks, you see
 exactly which revision failed and why - instances stop progressing until you
 push a valid spec.
 
+GraphRevisions exist only for ResourceGraphDefinitions. Despite the name, they
+are unrelated to the [`Graph`](../concepts/graph/01-overview.md) API, which is
+compiled from its current spec on every change and keeps no revision history.
+
 <RevisionFlow />
 
 :::warning Internal API
@@ -86,7 +90,13 @@ my-webapp-r00003  my-webapp  3          a1b2c3d4e5f6...   True    5m
 To filter revisions for a specific RGD:
 
 ```bash
-kubectl get gr -l internal.kro.run/resource-graph-definition-name=my-webapp
+kubectl get gr -l kro.run/resource-graph-definition-name=my-webapp
+```
+
+or, using the selectable `spec.snapshot.name` field:
+
+```bash
+kubectl get gr --field-selector spec.snapshot.name=my-webapp
 ```
 
 You can also filter by spec hash using the `kro.run/graph-revision-hash` label:
@@ -118,7 +128,7 @@ kubectl get gr -l kro.run/graph-revision-hash=a1b2c3d4e5f6
 
 | Label                                                  | Description                                |
 | ------------------------------------------------------ | ------------------------------------------ |
-| `internal.kro.run/resource-graph-definition-name`      | Source RGD name (selectable field)          |
+| `kro.run/resource-graph-definition-name`               | Source RGD name (also exposed as the `spec.snapshot.name` field selector) |
 | `kro.run/graph-revision-hash`                          | Spec hash for dedup and filtering           |
 
 ## Debugging

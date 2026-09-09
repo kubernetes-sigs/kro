@@ -1,5 +1,5 @@
 ---
-sidebar_position: 1
+sidebar_position: 2
 ---
 
 # Schema Definition
@@ -38,7 +38,42 @@ spec:
     status:                      # Runtime fields from resources
       availableReplicas: ${deployment.status.availableReplicas}
       endpoint: ${service.status.loadBalancer.ingress[0].hostname}
+
+  resources:                     # The resources the status fields read from
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.spec.name}
+            spec:
+              containers:
+                - name: app
+                  image: ${schema.spec.image}
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          type: LoadBalancer
+          selector: ${deployment.spec.selector.matchLabels}
+          ports:
+            - port: 80
 ```
+
+This page covers `spec.schema`. The `resources` section is covered in
+[Resource Basics](./03-resource-basics.md).
 
 ## API Identification
 
@@ -290,7 +325,7 @@ status:
   isHealthy: ${deployment.status.availableReplicas >= deployment.spec.replicas}
 
   # Complex expressions
-  healthStatus: ${deployment.status.availableReplicas >= deployment.spec.replicas ? "healthy" : "degraded"}
+  healthStatus: '${deployment.status.availableReplicas >= deployment.spec.replicas ? "healthy" : "degraded"}'
 
   # Combining multiple operations
   activePodCount: ${pods.items.filter(p, p.status.phase == "Running").size()}
@@ -331,7 +366,7 @@ status:
 ```
 
 You can define your own `conditions` to publish domain-specific conditions
-instead of kro's built-ins. See [Custom Status Conditions](./06-status-conditions.md).
+instead of kro's built-ins. See [Custom Status Conditions](./04-status-conditions.md).
 
 :::warning
 `state` is a reserved field. kro will override it if you define it in your schema.
@@ -352,13 +387,15 @@ schema:
     name: string | required=true
 ```
 
-kro generates:
+kro generates a CRD named `applications.kro.run` whose `v1alpha1` schema
+contains (excerpt):
 ```yaml
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: applications.v1alpha1
+  name: applications.kro.run
 spec:
+  group: kro.run
   versions:
     - name: v1alpha1
       schema:
@@ -369,6 +406,7 @@ spec:
                 name:
                   type: string
               required: [name]
+  # ...
 ```
 #### Adding Labels and Annotations to CRDs
 
@@ -404,7 +442,7 @@ kro continuously evaluates status expressions and updates instance status as res
 
 ### 4. Schema Updates
 
-When you update an RGD's schema, kro checks whether the changes are compatible with existing instances. Changes like removing fields, changing types, or adding required fields without defaults are considered breaking and will be blocked by default. See [Breaking Changes](./00-overview.md#breaking-changes) for how to allow breaking changes when needed.
+When you update an RGD's schema, kro checks whether the changes are compatible with existing instances. Changes like removing fields, changing types, or adding required fields without defaults are considered breaking and will be blocked by default. See [Breaking Changes](./01-overview.md#breaking-changes) for how to allow breaking changes when needed.
 
 ## Custom Types
 
@@ -530,13 +568,35 @@ spec:
       template:
         apiVersion: apps/v1
         kind: Deployment
-        # ... deployment configuration using ${schema.spec.*} ...
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.spec.name}
+            spec:
+              containers:
+                - name: app
+                  image: ${schema.spec.image}
+                  ports:
+                    - containerPort: ${schema.spec.ports[0]}
 
     - id: service
       template:
         apiVersion: v1
         kind: Service
-        # ... service configuration ...
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          selector: ${deployment.spec.selector.matchLabels}
+          ports:
+            - port: 80
+              targetPort: ${schema.spec.ports[0]}
 
     - id: ingress
       includeWhen:
@@ -544,11 +604,24 @@ spec:
       template:
         apiVersion: networking.k8s.io/v1
         kind: Ingress
-        # ... ingress configuration ...
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          rules:
+            - host: ${schema.spec.ingress.host}
+              http:
+                paths:
+                  - path: ${schema.spec.ingress.path}
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: ${service.metadata.name}
+                        port:
+                          number: 80
 ```
 
 ## Next Steps
 
 - **[SimpleSchema Reference](../../../api/specifications/simple-schema.md)** - Complete syntax and validation rules
-- **[Resource Definitions](./02-resource-definitions/01-resource-basics.md)** - Learn how to use schema values in resource templates
-- **[CEL Expressions](./03-cel-expressions.md)** - Master expression syntax for status fields
+- **[Resource Definitions](./03-resource-basics.md)** - Learn how to use schema values in resource templates
+- **[CEL Expressions](../expressions/01-cel-expressions.md)** - Master expression syntax for status fields

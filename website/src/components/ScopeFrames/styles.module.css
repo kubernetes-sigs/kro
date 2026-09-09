@@ -1,0 +1,130 @@
+.container {
+  margin: 1.5rem 0 2rem;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.container.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.svg {
+  display: block;
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.step {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.visible .step {
+  opacity: 1;
+}
+
+.visible .d0 { transition-delay: 0.05s; }
+.visible .d1 { transition-delay: 0.15s; }
+.visible .d2 { transition-delay: 0.3s; }
+
+/* ── Frames ── */
+
+.parentFrame {
+  fill: var(--ifm-background-color);
+  stroke: var(--ifm-color-emphasis-300);
+  stroke-width: 1.5;
+}
+
+.childFrame {
+  fill: rgba(91, 127, 201, 0.04);
+  stroke: var(--ifm-color-primary);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+[data-theme='dark'] .childFrame {
+  fill: rgba(143, 168, 212, 0.06);
+}
+
+.frameTitle {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 13px;
+  font-weight: 800;
+  fill: var(--ifm-color-emphasis-800);
+}
+
+.frameTitleChild {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 13px;
+  font-weight: 800;
+  fill: var(--ifm-color-primary);
+}
+
+.frameSub {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 9.5px;
+  fill: var(--ifm-color-emphasis-500);
+}
+
+/* ── Nodes ── */
+
+.node {
+  fill: var(--ifm-background-color);
+  stroke: var(--ifm-color-emphasis-500);
+  stroke-width: 1.3;
+}
+
+[data-theme='dark'] .node {
+  fill: var(--ifm-background-surface-color);
+}
+
+.nodeLabel {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 12px;
+  font-weight: 700;
+  fill: var(--ifm-color-emphasis-800);
+}
+
+/* ── Edges ── */
+
+.edge {
+  fill: none;
+  stroke: var(--ifm-color-primary);
+  stroke-width: 1.5;
+}
+
+.edgeDim {
+  fill: none;
+  stroke: var(--ifm-color-emphasis-500);
+  stroke-width: 1.3;
+}
+
+.edgeLabel {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 9.5px;
+  font-weight: 600;
+  fill: var(--ifm-color-primary);
+}
+
+.edgeLabelDim {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 9.5px;
+  font-weight: 600;
+  fill: var(--ifm-color-emphasis-600);
+}
+
+.edgeNote {
+  font-family: var(--ifm-font-family-base);
+  font-size: 9px;
+  font-style: italic;
+  fill: var(--ifm-color-emphasis-600);
+}
+
+@media (max-width: 768px) {
+  .svg {
+    max-width: 100%;
+  }
+}

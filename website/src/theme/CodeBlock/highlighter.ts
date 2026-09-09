@@ -4,17 +4,21 @@
 // Go locations:
 //   - MARKER_KEYWORDS: pkg/simpleschema/parser/markers.go
 //   - KRO_KEYWORDS: pkg/graph/parser/parser.go (resource fields like id, template, etc.)
+//                   api/v1alpha1/graph_types.go (Graph node kinds: nodes, patch, ref, def, graph)
 
 // Marker keywords for SimpleSchema validation
 export const MARKER_KEYWORDS = new Set([
   'required', 'default', 'optional', 'description', 'enum',
   'minimum', 'maximum', 'immutable', 'pattern',
-  'minLength', 'maxLength', 'uniqueItems', 'minItems', 'maxItems'
+  'minLength', 'maxLength', 'uniqueItems', 'minItems', 'maxItems',
+  'listType', 'listMapKey', 'validation'
 ]);
 
-// kro-specific keywords
+// kro-specific keywords (shared RGD/Graph modifiers, RGD resource fields, and
+// Graph node kinds)
 export const KRO_KEYWORDS = new Set([
-  'id', 'template', 'readyWhen', 'includeWhen', 'externalRef', 'forEach'
+  'id', 'template', 'readyWhen', 'includeWhen', 'externalRef', 'forEach',
+  'nodes', 'patch', 'ref', 'def', 'graph', 'serviceAccountName'
 ]);
 
 // CEL expression regex: matches ${...} with nested braces support (multi-line)

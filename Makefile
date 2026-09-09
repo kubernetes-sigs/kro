@@ -105,6 +105,7 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 	@mkdir -p website/docs/api/crds
 	@cp helm/crds/kro.run_resourcegraphdefinitions.yaml website/docs/api/crds/kro.run_resourcegraphdefinitions.yaml
 	@cp helm/crds/internal.kro.run_graphrevisions.yaml website/docs/api/crds/internal.kro.run_graphrevisions.yaml
+	@cp helm/crds/kro.run_graphs.yaml website/docs/api/crds/kro.run_graphs.yaml
 	@echo "CRDs copied successfully"
 
 .PHONY: generate

@@ -1,0 +1,45 @@
+name: Website presubmit
+
+# The docs site is configured with `onBrokenLinks: "throw"`, so a broken
+# internal link fails `npm run build`. Without this job that failure is only
+# discovered after merge, when deploy-docs.yaml runs on main.
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - "website/**"
+      - ".github/workflows/website-presubmit.yaml"
+
+jobs:
+  build:
+    name: Build Docusaurus
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./website
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # The roadmap page reads an optional generated JSON file produced by
+      # tools/krep-crawl on deploy; it degrades to an empty roadmap when the
+      # file is absent, so the presubmit does not need the Go step.
+      - name: Build website
+        run: npm run build

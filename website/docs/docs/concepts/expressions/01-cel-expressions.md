@@ -1,10 +1,10 @@
 ---
-sidebar_position: 2
+sidebar_position: 1
 ---
 
 # CEL Expressions
 
-CEL (Common Expression Language) is the language you use in kro to reference data between resources, compute values, and define conditions. Understanding CEL is essential for creating ResourceGraphDefinitions.
+CEL (Common Expression Language) is the language you use in kro to reference data between resources, compute values, and define conditions. Understanding CEL is essential for creating ResourceGraphDefinitions and Graphs.
 
 ## What is CEL?
 
@@ -23,7 +23,7 @@ CEL was designed specifically to be safe for executing user code. Unlike scripti
 
 CEL is optimized for **compile-once, evaluate-many** workflows:
 
-1. **Parse and check** expressions once at configuration time (when you create an RGD)
+1. **Parse and check** expressions once at configuration time (when you create an RGD or Graph)
 2. **Store** the checked AST (Abstract Syntax Tree)
 3. **Evaluate** the stored AST repeatedly at runtime against different inputs
 
@@ -95,7 +95,7 @@ All expressions in a string template **must return strings**, and the result is 
 name: "app-${schema.spec.name}"
 
 # Multiple expressions
-connectionString: "host=${database.status.endpoint}:${database.status.port}"
+connectionString: "host=${database.status.endpoint}:${string(database.status.port)}"
 
 # With literal text
 message: "Application ${schema.spec.name} is running version ${schema.spec.version}"
@@ -228,7 +228,42 @@ resources:
           app: ${deployment.spec.template.metadata.labels.app}
 ```
 
-This **automatically creates a dependency**: the service depends on the deployment. kro will create the deployment first. See [Dependencies & Ordering](./04-dependencies-ordering.md) for details.
+This **automatically creates a dependency**: the service depends on the deployment. kro will create the deployment first. See [Dependencies & Ordering](./03-dependencies-ordering.md) for details.
+
+### Variables in a Graph
+
+A [Graph](../graph/01-overview.md) has no generated API and therefore no
+`schema` variable. Every node in a Graph is referenced by its `id`, exactly like
+a resource in an RGD:
+
+```kro
+nodes:
+  - id: deployment
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: my-app
+      # ...
+
+  - id: service
+    template:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${deployment.metadata.name}-svc
+      spec:
+        selector: ${deployment.spec.selector.matchLabels}
+```
+
+Two additional rules apply in a Graph:
+
+- A `patch` node does not publish a value, so it cannot be referenced from any
+  expression.
+- A single expression may reference nodes from only one scope. When a Graph
+  nests another Graph, an expression can reference either the nested Graph's
+  nodes or the enclosing Graph's nodes, but not both. See
+  [Scopes and Nesting](../graph/04-scopes-and-nesting.md).
 
 ### Field Paths
 
@@ -259,7 +294,7 @@ ${service.spec.ports[1].port}
 
 ## The Optional Operator (`?`)
 
-The `?` operator makes a field access optional. If the field doesn't exist, the expression returns `null` instead of failing.
+The `?` operator makes a field access optional. If the field doesn't exist, the access produces an empty optional value instead of failing. As a whole field value that renders as `null`; to compare it or do arithmetic with it, unwrap it with `.orValue(<default>)`.
 
 ### When to Use `?`
 
@@ -276,7 +311,7 @@ Place `?` before the field that might not exist:
 ${configmap.data.?DATABASE_URL}
 ```
 
-If `data.DATABASE_URL` doesn't exist, this returns `null` instead of erroring.
+If `data.DATABASE_URL` doesn't exist, this renders `null` instead of erroring.
 
 ### Examples
 
@@ -303,7 +338,7 @@ resources:
 **Optional status fields:**
 ```kro
 # Some resources might not have this status field immediately
-ready: ${deployment.status.?readyReplicas > 0}
+ready: ${deployment.status.?readyReplicas.orValue(0) > 0}
 ```
 
 **Chaining optional accessors:**
@@ -318,7 +353,7 @@ The `?` operator prevents kro from validating the field's existence at build tim
 
 ## Available CEL Libraries
 
-kro ships with a rich set of CEL function libraries from kro itself, [cel-go](https://github.com/google/cel-go), and [Kubernetes](https://kubernetes.io/docs/reference/using-api/cel/). See the **[CEL Libraries](./04-cel-libraries.md)** page for the full reference with function signatures, examples, and links to upstream documentation.
+kro ships with a rich set of CEL function libraries from kro itself, [cel-go](https://github.com/google/cel-go), and [Kubernetes](https://kubernetes.io/docs/reference/using-api/cel/). See the **[CEL Libraries](./02-cel-libraries.md)** page for the full reference with function signatures, examples, and links to upstream documentation.
 
 ## Type Checking and Validation
 
@@ -381,11 +416,11 @@ spec:
     spec:
       # ✓ Valid: subset of expected fields
       containers:
-        - ${{"name": "app", "image": schema.spec.image}}
+        - '${{"name": "app", "image": schema.spec.image}}'
 
       # ✗ Invalid: "foo" is not a valid container field
       containers:
-        - ${{"name": "app", "image": schema.spec.image, "foo": "bar"}}
+        - '${{"name": "app", "image": schema.spec.image, "foo": "bar"}}'
 ```
 
 **List and Map recursive checking**:
@@ -401,7 +436,7 @@ Use ternary operator for conditional values:
 
 ```kro
 # If-then-else
-image: ${schema.spec.env == "prod" ? "nginx:stable" : "nginx:latest"}
+image: '${schema.spec.env == "prod" ? "nginx:stable" : "nginx:latest"}'
 
 # With optional
 replicas: ${schema.spec.?replicas.orValue(3)}
@@ -422,7 +457,7 @@ env:
 Or use CEL to construct them:
 
 ```kro
-labels: ${{"app": schema.spec.name, "env": schema.spec.environment}}
+labels: '${{"app": schema.spec.name, "env": schema.spec.environment}}'
 ```
 
 ### String Formatting
@@ -431,7 +466,7 @@ Build connection strings and URLs:
 
 ```kro
 # Connection string
-connectionString: "postgresql://${db.status.endpoint}:${db.status.port}/${schema.spec.dbName}"
+connectionString: "postgresql://${db.status.endpoint}:${string(db.status.port)}/${schema.spec.dbName}"
 
 # ARN format
 roleArn: ${"arn:aws:iam::%s:role/%s".format([schema.spec.accountId, schema.spec.roleName])}
@@ -466,7 +501,7 @@ Applies an expression to each value while preserving the original keys (or indic
 
 ```kro
 # Double each value in a map
-scaled: ${{ "cpu": 2, "memory": 4 }.transformMap(k, v, v * 2)}
+scaled: '${{ "cpu": 2, "memory": 4 }.transformMap(k, v, v * 2)}'
 # → {"cpu": 4, "memory": 8}
 
 # Convert a list to a map of {index: transformed_value}
@@ -478,7 +513,7 @@ With an optional filter predicate (four-argument form), only entries where the p
 
 ```kro
 # Keep only entries with value > 1
-filtered: ${{ "a": 1, "b": 5, "c": 3 }.transformMap(k, v, v > 1, v * 10)}
+filtered: '${{ "a": 1, "b": 5, "c": 3 }.transformMap(k, v, v > 1, v * 10)}'
 # → {"b": 50, "c": 30}
 ```
 
@@ -488,11 +523,11 @@ Each iteration must return a single-entry map `{key: value}`. The results are me
 
 ```kro
 # Swap keys and values
-swapped: ${{ "us-east-1": "primary", "eu-west-1": "secondary" }.transformMapEntry(k, v, {v: k})}
+swapped: '${{ "us-east-1": "primary", "eu-west-1": "secondary" }.transformMapEntry(k, v, {v: k})}'
 # → {"primary": "us-east-1", "secondary": "eu-west-1"}
 
 # Convert a list of names into a map of {name: index}
-nameIndex: ${schema.spec.items.transformMapEntry(i, v, {v: string(i)})}
+nameIndex: '${schema.spec.items.transformMapEntry(i, v, {v: string(i)})}'
 # ["app", "db"] → {"app": "0", "db": "1"}
 ```
 
@@ -502,15 +537,15 @@ Converts a map to a list by evaluating an expression for each entry:
 
 ```kro
 # Extract all keys
-keys: ${{ "app": "nginx", "version": "1.19" }.transformList(k, v, k)}
+keys: '${{ "app": "nginx", "version": "1.19" }.transformList(k, v, k)}'
 # → ["app", "version"]
 
 # Extract all values
-values: ${{ "app": "nginx", "version": "1.19" }.transformList(k, v, v)}
+values: '${{ "app": "nginx", "version": "1.19" }.transformList(k, v, v)}'
 # → ["nginx", "1.19"]
 
 # Build formatted strings from key-value pairs
-envVars: ${{ "APP": "nginx", "PORT": "8080" }.transformList(k, v, k + "=" + v)}
+envVars: '${{ "APP": "nginx", "PORT": "8080" }.transformList(k, v, k + "=" + v)}'
 # → ["APP=nginx", "PORT=8080"]
 ```
 
@@ -519,7 +554,7 @@ A list extracted from a map has non-deterministic element order, since map
 iteration order is not guaranteed. If the list feeds a template field, sort it
 (for example `.sort()` on the keys) so the rendered desired state stays stable
 across reconciles. See
-[Sort lists built from maps](./04-cel-libraries.md#lists-cel-go) for details.
+[Sort lists built from maps](./02-cel-libraries.md#lists-cel-go) for details.
 :::
 
 ### Aggregating Status
@@ -540,8 +575,8 @@ status:
 
 ## Next Steps
 
-- **[CEL Libraries](./04-cel-libraries.md)** - Full reference for all available CEL functions
-- **[Dependencies & Ordering](./04-dependencies-ordering.md)** - Learn how CEL expressions create dependencies
-- **[Conditional Creation](./02-resource-definitions/02-conditional-creation.md)** - Use CEL for `includeWhen` conditions
-- **[Readiness](./02-resource-definitions/03-readiness.md)** - Use CEL for `readyWhen` conditions
-- **[External References](./02-resource-definitions/05-external-references.md)** - Reference external resources with CEL
+- **[CEL Libraries](./02-cel-libraries.md)** - Full reference for all available CEL functions
+- **[Dependencies & Ordering](./03-dependencies-ordering.md)** - Learn how CEL expressions create dependencies
+- **[Conditional Creation](../reconciliation/01-conditional-creation.md)** - Use CEL for `includeWhen` conditions
+- **[Readiness](../reconciliation/02-readiness.md)** - Use CEL for `readyWhen` conditions
+- **[External References](../reconciliation/04-external-references.md)** - Reference external resources with CEL

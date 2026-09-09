@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 2
 ---
 
 # CEL Libraries
@@ -72,7 +72,7 @@ config: ${json.unmarshal(schema.spec.jsonConfig)}
 dbHost: ${json.unmarshal(configmap.data.settings).database.host}
 
 # Serialize structured data into a JSON string (e.g. for an annotation or env var)
-configJson: ${json.marshal({"name": schema.spec.name, "replicas": schema.spec.replicas})}
+configJson: '${json.marshal({"name": schema.spec.name, "replicas": schema.spec.replicas})}'
 ```
 
 ### Random
@@ -107,14 +107,14 @@ Map manipulation functions.
 
 ```kro
 # Merge user labels with default labels
-labels: ${{"app": schema.spec.name, "managed-by": "kro"}.merge(schema.spec.extraLabels)}
+labels: '${{"app": schema.spec.name, "managed-by": "kro"}.merge(schema.spec.extraLabels)}'
 
 # Layer overrides on top of defaults
-config: ${{"timeout": "30s", "retries": "3"}.merge(schema.spec.overrides)}
+config: '${{"timeout": "30s", "retries": "3"}.merge(schema.spec.overrides)}'
 
 # Layer nested defaults under a user-supplied object.
 # Preserves securityContext.fsGroup from podSpec and adds runAsNonRoot.
-spec: ${{"securityContext": {"runAsNonRoot": true}}.deepMerge(schema.spec.podSpec)}
+spec: '${{"securityContext": {"runAsNonRoot": true}}.deepMerge(schema.spec.podSpec)}'
 ```
 
 ### Index Mutation
@@ -155,7 +155,7 @@ The `omit()` sentinel tells kro to remove a field from the rendered resource. Th
 
 ```kro
 # Conditionally include a field
-nodeSelector: ${schema.spec.pinToNode ? {"kubernetes.io/hostname": schema.spec.nodeName} : omit()}
+nodeSelector: '${schema.spec.pinToNode ? {"kubernetes.io/hostname": schema.spec.nodeName} : omit()}'
 ```
 
 :::note
@@ -165,9 +165,10 @@ nodeSelector: ${schema.spec.pinToNode ? {"kubernetes.io/hostname": schema.spec.n
 ### Runtime
 
 The `runtime` variable builds and reads instance status conditions. It is only
-available in the schema's `status.conditions` block; expressions elsewhere
+available in an RGD schema's `status.conditions` block; expressions elsewhere
 (resource templates, `readyWhen`, `includeWhen`, `forEach`, plain status
-fields) are rejected when the RGD is created.
+fields) are rejected when the RGD is created. It is not available in a
+[Graph](../graph/01-overview.md), which has no instance status of its own.
 
 | Function | Returns | Description |
 | --- | --- | --- |
@@ -178,13 +179,13 @@ fields) are rejected when the RGD is created.
 
 ```kro
 # Publish an application-level condition
-- ${runtime.newCondition({type: 'AppReady', status: deployment.status.readyReplicas > 0 ? 'True' : 'False', reason: 'ReplicaCount', message: ''})}
+- "${runtime.newCondition({type: 'AppReady', status: deployment.status.readyReplicas > 0 ? 'True' : 'False', reason: 'ReplicaCount', message: ''})}"
 
 # Compose kro's lifecycle signal with a domain check
-- ${runtime.newCondition({type: 'Ready', status: runtime.condition(schema, 'ResourcesReady').status == 'True' && deployment.status.readyReplicas > 0 ? 'True' : 'False', reason: 'Health', message: ''})}
+- "${runtime.newCondition({type: 'Ready', status: runtime.condition(schema, 'ResourcesReady').status == 'True' && deployment.status.readyReplicas > 0 ? 'True' : 'False', reason: 'Health', message: ''})}"
 ```
 
-See [Custom Status Conditions](./06-status-conditions.md) for details.
+See [Custom Status Conditions](../rgd/04-status-conditions.md) for details.
 
 ## cel-go Libraries
 
@@ -294,10 +295,10 @@ of objects (for example `[{key, value}]`) rather than a map, so converting a
 
 ```kro
 # Unstable: element order comes from map iteration
-tags: ${schema.spec.tags.map(k, {"key": k, "value": schema.spec.tags[k]})}
+tags: '${schema.spec.tags.map(k, {"key": k, "value": schema.spec.tags[k]})}'
 
 # Stable: sort the keys before building the list
-tags: ${schema.spec.tags.map(k, k).sort().map(k, {"key": k, "value": schema.spec.tags[k]})}
+tags: '${schema.spec.tags.map(k, k).sort().map(k, {"key": k, "value": schema.spec.tags[k]})}'
 ```
 :::
 
@@ -343,27 +344,27 @@ Two-variable versions of list/map comprehension macros from [cel-go/ext](https:/
 
 ```kro
 # Extract keys from a map
-keys: ${{ "app": "nginx", "version": "1.19" }.transformList(k, v, k)}
+keys: '${{ "app": "nginx", "version": "1.19" }.transformList(k, v, k)}'
 # -> ["app", "version"]
 
 # Transform map values
-scaled: ${{ "cpu": 2, "memory": 4 }.transformMap(k, v, v * 2)}
+scaled: '${{ "cpu": 2, "memory": 4 }.transformMap(k, v, v * 2)}'
 # -> {"cpu": 4, "memory": 8}
 
 # Filter and transform
-filtered: ${{ "a": 1, "b": 5, "c": 3 }.transformMap(k, v, v > 1, v * 10)}
+filtered: '${{ "a": 1, "b": 5, "c": 3 }.transformMap(k, v, v > 1, v * 10)}'
 # -> {"b": 50, "c": 30}
 
 # Swap keys and values
-swapped: ${{ "us-east-1": "primary", "eu-west-1": "secondary" }.transformMapEntry(k, v, {v: k})}
+swapped: '${{ "us-east-1": "primary", "eu-west-1": "secondary" }.transformMapEntry(k, v, {v: k})}'
 # -> {"primary": "us-east-1", "secondary": "eu-west-1"}
 
 # Build formatted strings from key-value pairs
-envVars: ${{ "APP": "nginx", "PORT": "8080" }.transformList(k, v, k + "=" + v)}
+envVars: '${{ "APP": "nginx", "PORT": "8080" }.transformList(k, v, k + "=" + v)}'
 # -> ["APP=nginx", "PORT=8080"]
 
 # Two-variable all/exists on a map
-allDifferent: ${{ "hello": "world", "taco": "bell" }.all(k, v, k != v)}
+allDifferent: '${{ "hello": "world", "taco": "bell" }.all(k, v, k != v)}'
 ```
 
 ## Kubernetes Libraries

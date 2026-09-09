@@ -1,5 +1,5 @@
 ---
-sidebar_position: 6
+sidebar_position: 4
 ---
 
 # Custom Status Conditions
@@ -32,7 +32,8 @@ schema:
     replicas: integer
   status:
     conditions:
-      - ${runtime.newCondition({
+      - |-
+        ${runtime.newCondition({
           type: 'AppReady',
           status: deployment.status.readyReplicas > 0 ? 'True' : 'False',
           reason: 'ReplicaCount',
@@ -68,7 +69,8 @@ domain check:
 ```kro
 status:
   conditions:
-    - ${runtime.newCondition({
+    - |-
+      ${runtime.newCondition({
         type: 'Ready',
         status: runtime.condition(schema, 'ResourcesReady').status == 'True'
           && deployment.status.readyReplicas > 0 ? 'True' : 'False',
@@ -104,7 +106,8 @@ schema:
     cidrBlocks: "[]string"
   status:
     conditions:
-      - ${subnets.map(s, runtime.newCondition({
+      - |-
+        ${subnets.map(s, runtime.newCondition({
           type: 'Subnet-' + s.metadata.name + '-Ready',
           status: s.status.state == 'available' ? 'True' : 'False',
           reason: 'SubnetState',

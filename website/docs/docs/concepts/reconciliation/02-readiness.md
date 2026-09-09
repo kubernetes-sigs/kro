@@ -1,12 +1,12 @@
 ---
-sidebar_position: 3
+sidebar_position: 2
 ---
 
 # Readiness
 
 Not all resources are ready immediately after creation. A Deployment might exist but have zero available replicas, or a LoadBalancer Service might not have an external IP yet. If dependent resources try to use values that don't exist yet, they'll fail or get invalid data.
 
-kro provides the `readyWhen` field to define when a resource is considered ready. When you add `readyWhen` to a resource, kro waits for all conditions to be true before proceeding with dependent resources.
+kro provides the `readyWhen` field to define when a resource is considered ready. In a ResourceGraphDefinition, kro waits for all conditions to be true before proceeding with dependent resources. In a Graph, `readyWhen` reports health without gating dependents; see [Dependencies and Readiness](#dependencies-and-readiness) below.
 
 ## Basic Example
 
@@ -24,7 +24,7 @@ resources:
         version: "15"
     readyWhen:
       - ${database.status.conditions.exists(c, c.type == "Ready" && c.status == "True")}
-      - ${database.status.?endpoint != ""}
+      - ${database.status.?endpoint.orValue("") != ""}
 
   - id: app
     template:
@@ -59,8 +59,8 @@ This ensures `${database.status.endpoint}` has a valid value when the app is cre
 - If **all** expressions evaluate to `true`, the resource is marked ready
 - If **any** expression evaluates to `false`, the resource continues waiting
 - Each expression must evaluate to a **boolean** value (`true` or `false`)
-- **Dependent resources wait** until all their dependencies are ready
-- For [collections](./04-collections.md), `readyWhen` applies to the entire collection
+- **In an RGD, dependent resources wait** until all their dependencies are ready
+- For [collections](./03-collections.md), `readyWhen` applies to the entire collection
 
 ## What You Can Reference
 
@@ -105,6 +105,20 @@ kro validates `readyWhen` expressions when you create the ResourceGraphDefinitio
 
 ## Dependencies and Readiness
 
+This is the one place where ResourceGraphDefinitions and Graphs behave
+differently. In both, `app` references `${database.status.endpoint}` and
+`database` has a `readyWhen` that becomes true some time after the endpoint is
+published. The difference is when `app` is applied:
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import ReadinessGating from '@site/src/components/ReadinessGating';
+
+<ReadinessGating />
+
+<Tabs>
+<TabItem value="rgd" label="ResourceGraphDefinition" default>
+
 When a resource has a `readyWhen` condition, **all resources that depend on it must wait** until it's ready.
 
 kro processes resources in the correct order based on references. If a resource references another resource's status field, kro:
@@ -114,6 +128,30 @@ kro processes resources in the correct order based on references. If a resource 
 
 This ensures your resources always have valid data and prevents race conditions.
 
+</TabItem>
+<TabItem value="graph" label="Graph">
+
+A node is evaluated **as soon as the fields it references exist** in the
+upstream node's observed state. It does not wait for the upstream node's
+`readyWhen` conditions.
+
+`readyWhen` on a Graph node therefore contributes only to the Graph's own
+status: the Graph's `ResourcesConverged` and `Ready` conditions stay `False`
+(reason `WaitingForReadiness`) until every node's conditions hold, but
+downstream nodes are not held back.
+
+If a dependent must not be created until an upstream resource is healthy,
+reference a field that only exists once it is healthy. For example, a node that
+reads `${database.status.endpoint}` will not be applied until the database
+publishes an endpoint, because the expression is not resolvable before then.
+
+`readyWhen` is accepted on `template`, `ref`, and `def` nodes and is rejected
+on `patch` and `graph` nodes. See [Graph Modifiers](../graph/03-modifiers.md) and
+[Status and Lifecycle](../graph/05-status-and-lifecycle.md).
+
+</TabItem>
+</Tabs>
+
 ## The Optional Operator (?)
 
 Use the optional operator `?` when accessing fields that are truly optional or have unknown structure:
@@ -121,20 +159,25 @@ Use the optional operator `?` when accessing fields that are truly optional or h
 ```kro
 readyWhen:
   # Use ? for optional fields that might never exist
-  - ${service.status.?loadBalancer.?ingress.size() > 0}
+  - ${service.status.?loadBalancer.?ingress.orValue([]).size() > 0}
 
   # Use ? for fields with unknown structure (like ConfigMap data)
-  - ${config.data.?endpoint != ""}
+  - ${config.data.?endpoint.orValue("") != ""}
 
   # No ? needed for fields that will eventually exist
   - ${database.status.endpoint != ""}
 ```
 
-The `?` operator returns `null` if the field doesn't exist. This is useful when a field is optional or its structure is unknown at validation time. For fields that will eventually exist, kro simply waits for them to become available.
+The `?` operator produces an *optional* value instead of failing when the field
+is missing. An optional cannot be compared or used in arithmetic directly, so
+pair it with `.orValue(<default>)` to unwrap it, as above, or test it with
+`.hasValue()`. For fields that will eventually exist, kro simply waits for them
+to become available.
 
 ## Next Steps
 
-- **[Dependencies & Ordering](../04-dependencies-ordering.md)** - Understand how kro determines resource creation order
-- **[Conditional Resources](./02-conditional-creation.md)** - Control whether resources are created
-- **[Collections](./04-collections.md)** - Use aggregate readiness conditions with `forEach`
-- **[CEL Expressions](../03-cel-expressions.md)** - Master expression syntax for readiness conditions
+- **[Dependencies & Ordering](../expressions/03-dependencies-ordering.md)** - Understand how kro determines resource creation order
+- **[Conditional Resources](./01-conditional-creation.md)** - Control whether resources are created
+- **[Collections](./03-collections.md)** - Use aggregate readiness conditions with `forEach`
+- **[CEL Expressions](../expressions/01-cel-expressions.md)** - Master expression syntax for readiness conditions
+- **[Graph Status and Lifecycle](../graph/05-status-and-lifecycle.md)** - How readiness is reported on a Graph

@@ -63,7 +63,22 @@ sidebar_position: 100
 
    kro's API is currently at `v1alpha1`. As kro evolves, we may introduce breaking changes to improve the API. We are committed to providing clear migration paths, deprecation notices, and comprehensive support to help users adapt to any breaking changes. Our goal is to ensure smooth transitions as the project continues to improve.
 
-6. **How do I use kro resources with ArgoCD?**
+6. **What is the difference between a Graph and a ResourceGraphDefinition?**
+
+   A ResourceGraphDefinition creates a new Kubernetes API. You define a schema,
+   kro generates a CRD, and users create instances of that CRD; each instance
+   produces its own set of resources. A `Graph` skips the API: it is a namespaced
+   object whose `nodes` are the resources themselves, reconciled directly. Both
+   use the same CEL expressions, dependency ordering, `includeWhen`, `readyWhen`,
+   and `forEach`, and both run on the same engine.
+
+   Use an RGD when the same composition is created many times with different
+   inputs, or should be exposed as a Kubernetes API. Use a Graph to install a
+   bundle of resources, react to existing resources, or aggregate many resources
+   into one, without defining a new kind. The Graph API is alpha and disabled by
+   default. See [Composition in kro](./concepts/00-overview.md).
+
+7. **How do I use kro resources with ArgoCD?**
 
    To use kro resources with ArgoCD, you need to add a specific tracking annotation
    to all templated resources in your ResourceGraphDefinition.
@@ -87,7 +102,7 @@ sidebar_position: 100
    created by kro instances.
 
    :::warning
-   Owner references have limitations - see [Owner References](./concepts/15-instances.md#owner-references) for details on risks and constraints.
+   Owner references have limitations - see [Owner References](./concepts/rgd/06-instances.md#owner-references) for details on risks and constraints.
    :::
 
    ![ArgoCD RGD tracked Instance](/img/KRO-ArgoCD-Tracking.png)

@@ -7,7 +7,7 @@ import RGDProcessFlow from '@site/src/components/RGDProcessFlow';
 
 # Overview
 
-A **ResourceGraphDefinition** (RGD) lets you create a custom Kubernetes API that deploys multiple resources together as a single unit. It's the only API you need to configure kro - you define the schema for your new API, the resources it should create, and how data flows between them using CEL expressions.
+A **ResourceGraphDefinition** (RGD) lets you create a custom Kubernetes API that deploys multiple resources together as a single unit. You define the schema for your new API, the resources it should create, and how data flows between them using CEL expressions. If you want to compose resources without defining a new API, see [Graphs](../graph/01-overview.md).
 
 When you apply an RGD, kro configures itself to serve your new API. It generates a CRD, registers it with the Kubernetes API server, and starts watching for instances. When users create instances of your API, kro creates the underlying resources in the correct order, wires values between them, and manages their full lifecycle.
 
@@ -63,7 +63,7 @@ spec:
 Users can now create applications:
 
 ```yaml
-apiVersion: v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: Application
 metadata:
   name: my-app
@@ -115,11 +115,11 @@ kro validates your RGD **before any instances are created**. When you create a R
 
 1. **Schema validation** - Ensures your schema follows the [SimpleSchema](../../../api/specifications/simple-schema.md) format
 2. **CRD verification** - Validates that all referenced resource types (Deployments, Services, etc.) exist in your cluster
-3. **CEL type checking** - Parses and validates all [CEL expressions](./03-cel-expressions.md), checking that:
+3. **CEL type checking** - Parses and validates all [CEL expressions](../expressions/01-cel-expressions.md), checking that:
    - Referenced fields exist in the actual resource schemas
    - Expression output types match their target field types
    - All expressions are syntactically correct
-4. **Dependency inference** - Automatically analyzes CEL expressions to [infer resource dependencies](./04-dependencies-ordering.md) and compute the creation order
+4. **Dependency inference** - Automatically analyzes CEL expressions to [infer resource dependencies](../expressions/03-dependencies-ordering.md) and compute the creation order
 
 This validation happens at RGD creation time, catching errors early before any user creates an instance. For a deep dive into how this works, see [Static Analysis](./05-static-type-checking.md).
 
@@ -132,7 +132,7 @@ kro analyzes your CEL expressions to automatically infer dependencies between re
 - **Detect circular dependencies** - kro rejects RGDs with circular dependencies
 - **Show the order** - The computed order appears in `status.topologicalOrder`
 
-See [Dependencies & Ordering](./04-dependencies-ordering.md) for details on how this works.
+See [Dependencies & Ordering](../expressions/03-dependencies-ordering.md) for details on how this works.
 
 ### Generated CRDs and Controllers
 
@@ -239,13 +239,14 @@ For the full details on naming, lifecycle, retention, and debugging, see
 
 Explore the details of ResourceGraphDefinitions:
 
-- **[Schema](./01-schema.md)** - Define your custom API structure
-- **[Resource Basics](./02-resource-definitions/01-resource-basics.md)** - Define resources with CEL expressions
-- **[Conditional Creation](./02-resource-definitions/02-conditional-creation.md)** - Create resources conditionally with `includeWhen`
-- **[Readiness](./02-resource-definitions/03-readiness.md)** - Control when resources are considered ready
-- **[Collections](./02-resource-definitions/04-collections.md)** - Create multiple resources with `forEach`
-- **[External References](./02-resource-definitions/05-external-references.md)** - Reference resources outside your RGD
-- **[CEL Expressions](./03-cel-expressions.md)** - Reference data between resources
-- **[Dependencies & Ordering](./04-dependencies-ordering.md)** - How kro infers dependencies and determines creation order
+- **[Schema](./02-schema.md)** - Define your custom API structure
+- **[Resource Basics](./03-resource-basics.md)** - Define resources with CEL expressions
+- **[Conditional Creation](../reconciliation/01-conditional-creation.md)** - Create resources conditionally with `includeWhen`
+- **[Readiness](../reconciliation/02-readiness.md)** - Control when resources are considered ready
+- **[Collections](../reconciliation/03-collections.md)** - Create multiple resources with `forEach`
+- **[External References](../reconciliation/04-external-references.md)** - Reference resources outside your RGD
+- **[CEL Expressions](../expressions/01-cel-expressions.md)** - Reference data between resources
+- **[Dependencies & Ordering](../expressions/03-dependencies-ordering.md)** - How kro infers dependencies and determines creation order
 - **[Static Type Checking](./05-static-type-checking.md)** - How kro validates RGDs before instances are created
 - **[Graph Revisions](../../advanced/05-graph-revisions.md)** - How kro snapshots and compiles RGD spec changes
+- **[Instances](./06-instances.md)** - Creating and managing instances of the generated API

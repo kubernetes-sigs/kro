@@ -1,5 +1,5 @@
 ---
-sidebar_position: 15
+sidebar_position: 6
 ---
 
 # Instances
@@ -46,7 +46,7 @@ This continuous loop ensures your resources stay in sync with your desired state
 - Rich status tracking
 
 :::tip
-To suspend active reconciliation of an instance for debugging purposes, apply an annotation with the key `kro.run/reconcile` and the value `suspended`. See [Debugging Specific Labels](./15-instances.md#labels-and-ownership) for more details
+To suspend active reconciliation of an instance for debugging purposes, apply an annotation with the key `kro.run/reconcile` and the value `suspended`. See [Debugging Specific Labels](./06-instances.md#labels-and-ownership) for more details
 :::
 
 ### Reactive Reconciliation
@@ -131,7 +131,7 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 | `internal.kro.run/instance-name` | Full instance name, only when `kro.run/instance-name` was hashed |
 | `internal.kro.run/instance-group` | Full API group, only when `kro.run/instance-group` was hashed |
 
-These labels allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster. For collection resources, see [Collection Labels](./rgd/02-resource-definitions/04-collections.md#collection-labels) for more details.
+These labels allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster. For collection resources, see [Collection Labels](../reconciliation/03-collections.md#collection-labels) for more details.
 
 </TabItem>
 </Tabs>
@@ -231,8 +231,8 @@ kro provides rich status information for every instance:
 
 ```bash
 $ kubectl get webapplication my-app
-NAME     STATUS    READY   AGE
-my-app   ACTIVE    true    30s
+NAME     STATE    READY   AGE
+my-app   ACTIVE   True    30s
 ```
 
 For detailed status, check the instance's YAML:
@@ -278,13 +278,12 @@ High-level status showing what the instance is doing:
 
 - `ACTIVE` - Instance is successfully running and active
 - `IN_PROGRESS` - Instance is currently being processed or reconciled
-- `FAILED` - Instance failed to reconcile properly
 - `DELETING` - Instance is being deleted
 - `ERROR` - An error occurred during processing
 
 ### 2. Conditions
 
-Detailed status information structured hierarchically. kro provides a top-level `Ready` condition that reflects overall instance health, supported by four sub-conditions that track different phases:
+Detailed status information structured hierarchically. kro provides a top-level `Ready` condition that reflects overall instance health, supported by three sub-conditions that track different phases:
 
 - **`InstanceManaged`** - Instance finalizers and labels are properly set
   - Ensures the instance is under kro's management
@@ -388,4 +387,4 @@ spec:
 
 The `Optional` instance here *must* specify `str` in the Instance, otherwise reconciliation will fail.
 
-For truly optional fields you need to use optional field access: `${schema.spec.?<FIELD>.orValue("fallback")}`. For more information, see [The Optional Operator](./rgd/02-resource-definitions/03-readiness.md#the-optional-operator-)
+For truly optional fields you need to use optional field access: `${schema.spec.?<FIELD>.orValue("fallback")}`. For more information, see [The Optional Operator](../reconciliation/02-readiness.md#the-optional-operator-)

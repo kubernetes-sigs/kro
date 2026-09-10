@@ -40,6 +40,7 @@ func TestValidateNodeID(t *testing.T) {
 		{name: "starts with digit", id: "1vpc", wantErr: "must match"},
 		{name: "hyphen rejected", id: "vpc-1", wantErr: "must match"},
 		{name: "underscore rejected", id: "vpc_1", wantErr: "must match"},
+		{name: "dot rejected", id: "sub.res", wantErr: "must match"},
 		{name: "reserved metadata", id: "metadata", wantErr: "reserved"},
 		{name: "reserved cel keyword true", id: "true", wantErr: "reserved"},
 		{name: "reserved cel keyword as", id: "as", wantErr: "reserved"},

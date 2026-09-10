@@ -184,7 +184,6 @@ func (c *Controller) reconcileViaGraphEngine(
 	// + struct-level KRO-meta labels are composed inside ApplyWithLabeler.
 	instanceLabeler := metadata.NewInstanceLabeler(inst, c.namespaced)
 	instanceAnnotations := metadata.InstanceIdentityAnnotations(inst)
-	c.warnOnEncodedInstanceLabels(inst, instanceAnnotations)
 	nodeLabeler := metadata.NewNodeLabeler()
 	applysetPartOf := applyset.ID(inst)
 	extraLabel := func(obj *unstructured.Unstructured) {
@@ -933,4 +932,19 @@ func isResourceDeleting(err error) bool {
 	// (*ResourceDeletingError).Is reports ErrResourceDeleting, so errors.Is
 	// matches the typed error anywhere in the chain — no separate errors.As.
 	return errors.Is(err, executor.ErrResourceDeleting)
+}
+
+// applyInstanceIdentityAnnotations stamps the preserved identity values onto a
+// managed resource. A nil map (nothing was hashed) leaves obj untouched.
+func applyInstanceIdentityAnnotations(obj *unstructured.Unstructured, annotations map[string]string) {
+	if len(annotations) == 0 {
+		return
+	}
+	existing := obj.GetAnnotations()
+	if existing == nil {
+		existing = make(map[string]string, len(annotations))
+	}
+	maps.Copy(existing, annotations)
+
+	obj.SetAnnotations(existing)
 }

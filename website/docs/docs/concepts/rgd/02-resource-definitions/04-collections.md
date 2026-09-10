@@ -810,12 +810,11 @@ modify them manually.
 :::
 
 :::warning
-A node ID longer than 63 characters does not fit in a label value. kro stores a
-stable `h-`-prefixed hash in the `kro.run/node-id` label instead, so
-`-l kro.run/node-id=<your long id>` will not match. The full ID is always
-available in the `internal.kro.run/node-path` annotation, and kro emits a
-`NodeIDEncoded` warning event on the RGD naming the value any selector needs.
-See [Long resource IDs](../../15-instances.md#long-resource-ids).
+`kro.run/node-id` is capped at 63 characters. A longer node ID (or qualified
+subgraph path) is replaced by a stable `h-`-prefixed hash, so
+`-l kro.run/node-id=<your long id>` will not match. The full ID is always in
+the `internal.kro.run/node-path` annotation. See
+[The node-id label](../../15-instances.md#the-node-id-label).
 :::
 
 See [Constraints & Gotchas](#constraints--gotchas) for label management notes.

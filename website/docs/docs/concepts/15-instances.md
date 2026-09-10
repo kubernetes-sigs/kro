@@ -102,18 +102,18 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 
 **Labels:**
 
-| Label                            | Description                                                                                    |
-|----------------------------------|------------------------------------------------------------------------------------------------|
-| `kro.run/owned`                  | Set to `"true"` to indicate kro manages this resource                                          |
-| `kro.run/kro-version`            | Version of kro managing the resource                                                           |
-| `kro.run/instance-id`            | UID of the instance that created this resource                                                 |
-| `kro.run/instance-name`          | Name of the instance (see [long instance names](#long-instance-names))                         |
-| `kro.run/instance-namespace`     | Namespace of the instance (only for namespaced instances)                                      |
-| `kro.run/instance-group`         | API group of the instance (see [long instance names](#long-instance-names))                    |
-| `kro.run/instance-version`       | API version of the instance                                                                    |
-| `kro.run/instance-kind`          | Kind of the instance                                                                           |
-| `app.kubernetes.io/managed-by`   | Set to `"kro"`                                                                                 |
-| `kro.run/node-id`                | Label-safe token for the resource ID from the RGD (see [long resource IDs](#long-resource-ids))|
+| Label | Description |
+|-------|-------------|
+| `kro.run/owned` | Set to `"true"` to indicate kro manages this resource |
+| `kro.run/kro-version` | Version of kro managing the resource |
+| `kro.run/instance-id` | UID of the instance that created this resource |
+| `kro.run/instance-name` | Name of the instance (see [Long instance names](#long-instance-names)) |
+| `kro.run/instance-namespace` | Namespace of the instance (only for namespaced instances) |
+| `kro.run/instance-group` | API group of the instance (see [Long instance names](#long-instance-names)) |
+| `kro.run/instance-version` | API version of the instance |
+| `kro.run/instance-kind` | Kind of the instance |
+| `app.kubernetes.io/managed-by` | Set to `"kro"` |
+| `kro.run/node-id` | Label-safe token for the resource ID from the RGD (see [The node-id label](#the-node-id-label)) |
 | `applyset.kubernetes.io/part-of` | Links the resource to its parent instance (matches the instance's `applyset.kubernetes.io/id`) |
 
 **Collection-specific labels** (only on resources created via `forEach`):
@@ -125,73 +125,63 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 
 **Annotations:**
 
-| Annotation                        | Description                                                                    |
-|-----------------------------------|--------------------------------------------------------------------------------|
-| `internal.kro.run/node-path`      | Full, human-readable resource ID from the RGD, never truncated or hashed        |
-| `internal.kro.run/instance-name`  | Full instance name, stamped only when `kro.run/instance-name` had to be hashed  |
-| `internal.kro.run/instance-group` | Full API group, stamped only when `kro.run/instance-group` had to be hashed     |
+| Annotation | Description |
+|------------|-------------|
+| `internal.kro.run/node-path` | Full resource ID from the RGD, never truncated or hashed |
+| `internal.kro.run/instance-name` | Full instance name, only when `kro.run/instance-name` was hashed |
+| `internal.kro.run/instance-group` | Full API group, only when `kro.run/instance-group` was hashed |
 
 These labels allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster. For collection resources, see [Collection Labels](./rgd/02-resource-definitions/04-collections.md#collection-labels) for more details.
 
 </TabItem>
 </Tabs>
 
-### Long resource IDs
+### The node-id label
 
-A Kubernetes label value is capped at 63 characters. The `kro.run/node-id`
-label therefore carries a *token* rather than the raw resource ID.
-
-For every resource in an RGD the token is the ID exactly as you wrote it, so
-the documented query keeps working:
+`kro.run/node-id` identifies which resource in the RGD produced a managed
+resource. For a top-level resource it has the resource ID as authored:
 
 ```bash
 kubectl get pods -l kro.run/node-id=frontend
 ```
 
-The only exception is a resource ID longer than 63 characters. kro then
-replaces the token with a stable SHA-256 hash prefixed with `h-`, for example
-`h-9c1185a5c5e9fc54612808977ee8f548b2258d31`. The hash is deterministic for a
-given ID, so selectors built from it keep matching across reconciles.
+For a resource inside a subgraph it has the qualified path with `.`
+separators, so resource `res` in subgraph `subA` is `subA.res`:
 
-The full, readable path is always available in the
-`internal.kro.run/node-path` annotation, whether or not the label was hashed:
+```bash
+kubectl get pods -l kro.run/node-id=subA.res
+```
+
+A label value is limited at 63 characters. When that rendering is longer, kro
+substitutes a stable SHA-256 hash of the path prefixed with `h-`, for example
+`h-9c1185a5c5e9fc54612808977ee8f548b2258d31`. The hash is deterministic, so a
+selector built from it keeps matching across reconciles.
+
+The full path value, `/`-separated and never hashed, is always in the
+`internal.kro.run/node-path` annotation:
 
 ```bash
 kubectl get pod <name> -o jsonpath='{.metadata.annotations.internal\.kro\.run/node-path}'
 ```
 
-When kro hashes a resource ID it also emits a `NodeIDEncoded` warning event on
-the `ResourceGraphDefinition`, naming the value any selector needs:
-
-```bash
-kubectl describe rgd <name>
-```
-
 ### Long instance names
 
-The same 63 character limit applies to the instance identity kro copies onto
-every managed resource. Kubernetes names and API groups are DNS subdomains and
-may be up to 253 characters, so an instance named beyond 63 characters would
-otherwise produce an invalid `kro.run/instance-name` label.
-
-kro applies the same encoding: `kro.run/instance-name` and
-`kro.run/instance-group` hold the value verbatim when under 63, and an
-`h-`-prefixed hash when it does not. Full value is preserved in an annotation:
+The same 63 character cap applies to the instance identity kro copies onto
+every managed resource. Names and API groups are DNS subdomains and may run to
+253 characters, so `kro.run/instance-name` and `kro.run/instance-group` hold
+the value verbatim at 63 characters or fewer, and an `h-`-prefixed hash beyond
+that. The full value is available on the same named annotation:
 
 ```bash
 kubectl get deployment <name> -o jsonpath='{.metadata.annotations.internal\.kro\.run/instance-name}'
 ```
 
-kro emits an `InstanceLabelEncoded` warning event on the instance naming the
-value any selector needs.
-
 :::tip
 `kro.run/instance-id` holds the instance UID, which always fits in a label
-value and is never hashed. Prefer it when you need a selector that identifies
-one specific instance:
+value and is never hashed. Prefer it to select one specific instance:
 
 ```bash
-kubectl get all -l kro.run/instance-id=<uid>
+kubectl get <resource> -l kro.run/instance-id=<uid>
 ```
 :::
 

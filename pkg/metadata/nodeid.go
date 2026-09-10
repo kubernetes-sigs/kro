@@ -34,19 +34,10 @@ import (
 // costs debuggability. Selectors are built from this same function, so they
 // match the stamped label by construction.
 func NodeIDToken(qualifiedPath string) string {
-	if !NodeIDTokenIsHashed(qualifiedPath) {
-		return dottedNodePath(qualifiedPath)
+	dotted := strings.ReplaceAll(qualifiedPath, "/", ".")
+	if !LabelValueNeedsHashing(dotted) {
+		return dotted
 	}
 	// Hash the '/'-form, not the dotted one, so "a/b" and "a.b" stay distinct.
 	return hashedLabelValue(qualifiedPath)
-}
-
-// NodeIDTokenIsHashed reports whether NodeIDToken has to hash this qualified
-// path because its label-safe rendering does not fit in a label value.
-func NodeIDTokenIsHashed(qualifiedPath string) bool {
-	return LabelValueIsHashed(dottedNodePath(qualifiedPath))
-}
-
-func dottedNodePath(qualifiedPath string) string {
-	return strings.ReplaceAll(qualifiedPath, "/", ".")
 }

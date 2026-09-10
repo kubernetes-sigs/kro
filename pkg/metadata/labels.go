@@ -160,8 +160,9 @@ func NewGraphRevisionHashLabeler(specHash string) GenericLabeler {
 // and name of the instance that was reconciled to create the resource.
 // It also includes the instance's GVK to allow child
 // resource handlers to filter events by parent instance type.
-// Note: Values that exceed the 63 are hashed away. The original can be found
-// under the annotation InstanceIdentityAnnotations.
+// Name and group are DNS subdomains and may exceed the 63 character label
+// value limit; those are hashed, and InstanceIdentityAnnotations returns the
+// annotations preserving the originals.
 func NewInstanceLabeler(instance *unstructured.Unstructured, namespaced bool) GenericLabeler {
 	gvk := instance.GroupVersionKind()
 	labels := map[string]string{
@@ -183,7 +184,7 @@ func NewInstanceLabeler(instance *unstructured.Unstructured, namespaced bool) Ge
 func InstanceIdentityAnnotations(instance *unstructured.Unstructured) map[string]string {
 	var annotations map[string]string
 	set := func(k, v string) {
-		if !LabelValueIsHashed(v) {
+		if !LabelValueNeedsHashing(v) {
 			return
 		}
 		if annotations == nil {

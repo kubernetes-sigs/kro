@@ -19,11 +19,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
 )
 
@@ -323,7 +323,7 @@ func TestNewInstanceLabeler_LongIdentity(t *testing.T) {
 	assert.Equal(t, LabelValueToken(longName), labeler[InstanceLabel])
 	assert.Equal(t, LabelValueToken(longGroup), labeler[InstanceGroupLabel])
 	for k, v := range labeler {
-		assert.Empty(t, validation.IsValidLabelValue(v), "label %s", k)
+		assert.Empty(t, content.IsLabelValue(v), "label %s", k)
 	}
 
 	assert.Equal(t, map[string]string{

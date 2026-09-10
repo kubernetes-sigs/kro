@@ -19,7 +19,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 )
 
 func TestNodeIDToken_PassesThroughPathsThatFit(t *testing.T) {
@@ -30,9 +30,8 @@ func TestNodeIDToken_PassesThroughPathsThatFit(t *testing.T) {
 		"myBucket":                 "myBucket",
 		"subA/res":                 "subA.res",
 		"outer/inner/deeplyNested": "outer.inner.deeplyNested",
-		strings.Repeat("a", validation.LabelValueMaxLength): strings.Repeat("a", validation.LabelValueMaxLength),
+		strings.Repeat("a", content.LabelValueMaxLength): strings.Repeat("a", content.LabelValueMaxLength),
 	} {
-		assert.False(t, NodeIDTokenIsHashed(path))
 		assert.Equal(t, want, NodeIDToken(path))
 	}
 }
@@ -40,14 +39,13 @@ func TestNodeIDToken_PassesThroughPathsThatFit(t *testing.T) {
 func TestNodeIDToken_HashesPathsThatOverflow(t *testing.T) {
 	t.Parallel()
 
-	id := strings.Repeat("a", validation.LabelValueMaxLength+1)
+	id := strings.Repeat("a", content.LabelValueMaxLength+1)
 	got := NodeIDToken(id)
 
-	assert.True(t, NodeIDTokenIsHashed(id))
 	assert.NotEqual(t, id, got)
 	assert.True(t, strings.HasPrefix(got, HashedValuePrefix))
-	assert.LessOrEqual(t, len(got), validation.LabelValueMaxLength)
-	assert.Empty(t, validation.IsValidLabelValue(got))
+	assert.LessOrEqual(t, len(got), content.LabelValueMaxLength)
+	assert.Empty(t, content.IsLabelValue(got))
 }
 
 func TestNodeIDToken_CountsSeparatorsTowardsTheBudget(t *testing.T) {
@@ -56,8 +54,8 @@ func TestNodeIDToken_CountsSeparatorsTowardsTheBudget(t *testing.T) {
 	seg := strings.Repeat("a", 21)
 	path := strings.Join([]string{seg, seg, seg}, "/")
 
-	assert.Len(t, path, validation.LabelValueMaxLength+2)
-	assert.True(t, NodeIDTokenIsHashed(path))
+	assert.Len(t, path, content.LabelValueMaxLength+2)
+	assert.True(t, strings.HasPrefix(NodeIDToken(path), HashedValuePrefix))
 }
 
 func TestNodeIDToken_IsDeterministic(t *testing.T) {
@@ -70,7 +68,7 @@ func TestNodeIDToken_IsDeterministic(t *testing.T) {
 func TestNodeIDToken_DistinguishesSharedPrefixes(t *testing.T) {
 	t.Parallel()
 
-	prefix := strings.Repeat("a", validation.LabelValueMaxLength*2)
+	prefix := strings.Repeat("a", content.LabelValueMaxLength*2)
 	assert.NotEqual(t, NodeIDToken(prefix+"one"), NodeIDToken(prefix+"two"))
 }
 

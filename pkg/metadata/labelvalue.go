@@ -28,17 +28,22 @@ const HashedValuePrefix = "h-"
 // LabelValueToken returns v when it fits in a label value, and a stable,
 // collision-resistant hash of v when it does not. Kubernetes caps a label
 // value at 63 characters while names and API groups are DNS subdomains (253),
-// so any identity kro copies into a label has to be bounded here or the
-// apiserver rejects the apply.
+// so any value kro copies into a label has to be bounded here or the apiserver
+// rejects the apply.
+//
+// This is designed to be called as is so every kro label encodes the same way.
+// NodeIDToken is an exception because it measures the '.'-joined path
+// but hashes the '/'-form so distinct frames cannot collide.
 func LabelValueToken(v string) string {
-	if !LabelValueIsHashed(v) {
+	if !LabelValueNeedsHashing(v) {
 		return v
 	}
 	return hashedLabelValue(v)
 }
 
-// LabelValueIsHashed reports whether LabelValueToken has to hash v.
-func LabelValueIsHashed(v string) bool {
+// LabelValueNeedsHashing reports whether LabelValueToken will hash v rather
+// than return it unchanged.
+func LabelValueNeedsHashing(v string) bool {
 	return len(v) > content.LabelValueMaxLength
 }
 

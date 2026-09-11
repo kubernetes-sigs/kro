@@ -440,6 +440,7 @@ func NewFakeResolver() (*FakeResolver, *fake.FakeDiscovery) {
 					"apiVersion": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
 					"kind":       {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
 					"metadata":   metadataSchema(),
+					"immutable":  {SchemaProps: spec.SchemaProps{Type: []string{"boolean"}}},
 					"data": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"object"},

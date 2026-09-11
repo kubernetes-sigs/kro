@@ -162,6 +162,147 @@ func TestSimple_GateReadinessDoesNotReportWithheldAsApplied(t *testing.T) {
 	}
 }
 
+func TestSimple_GateReadinessBeforeIncludeWhen(t *testing.T) {
+	t.Parallel()
+	const resourcePredicate = `${db.data.phase == "Running"}`
+	const schemaPredicate = `${settings.enabled}`
+	cases := []struct {
+		name           string
+		gate           bool
+		phase          string
+		includeWhen    string
+		wantUnresolved bool
+		wantApp        bool
+	}{
+		{
+			name: "unready resource input is withheld", gate: true,
+			phase: "Starting", includeWhen: resourcePredicate, wantUnresolved: true,
+		},
+		{
+			name:  "Graph default decides false against the interim value",
+			phase: "Starting", includeWhen: resourcePredicate,
+		},
+		{
+			name: "schema-disabled node waits for its template dependency", gate: true,
+			phase: "Starting", includeWhen: schemaPredicate, wantUnresolved: true,
+		},
+		{
+			name: "schema-disabled node is ignored once its template dependency is ready", gate: true,
+			phase: "Running", includeWhen: schemaPredicate,
+		},
+		{
+			name: "ready resource input can decide false", gate: true,
+			phase: "Stopped", includeWhen: resourcePredicate,
+		},
+		{
+			name: "ready resource input can include the child", gate: true,
+			phase: "Running", includeWhen: resourcePredicate, wantApp: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g := generator.NewGraph("g",
+				generator.WithNamespace("default"),
+				generator.WithDef("settings", map[string]any{"enabled": false}),
+				generator.WithTemplate("db", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "db"},
+					"data":     map[string]any{"phase": tc.phase},
+				}),
+				generator.WithReadyWhen(`${db.data.phase != "Starting"}`),
+				generator.WithTemplate("app", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "app"},
+					"data":     map[string]any{"from": "${db.data.phase}"},
+				}),
+				generator.WithIncludeWhen(tc.includeWhen),
+			)
+			cl := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+			ex := NewSimple(cl)
+			if tc.gate {
+				ex.GateReadiness = true
+			}
+			res, err := ex.Apply(context.Background(), compileAndBuild(t, g), watchrouter.NoopWatcher{})
+			if tc.phase == "Starting" {
+				require.ErrorIs(t, err, ErrNotReady)
+			} else {
+				require.NoError(t, err)
+			}
+			if tc.wantUnresolved {
+				assert.Equal(t, []string{"app"}, res.Unresolved,
+					"withhold instead of deciding false, so the caller retains the existing child")
+			} else {
+				assert.Empty(t, res.Unresolved)
+			}
+			wantApplied := []string{"db"}
+			if tc.wantApp {
+				wantApplied = append(wantApplied, "app")
+			}
+			var appliedIDs []string
+			for _, applied := range res.Applied {
+				appliedIDs = append(appliedIDs, applied.NodeID)
+			}
+			assert.ElementsMatch(t, wantApplied, appliedIDs)
+			assert.True(t, cmExists(t, cl, "db"))
+			assert.Equal(t, tc.wantApp, cmExists(t, cl, "app"))
+		})
+	}
+}
+
+func TestSimple_GateReadinessWithIgnoredDependency(t *testing.T) {
+	t.Parallel()
+	for _, phase := range []string{"", "Running", "Starting"} {
+		t.Run("other dependency phase="+phase, func(t *testing.T) {
+			t.Parallel()
+			opts := []generator.GraphOption{
+				generator.WithNamespace("default"),
+				generator.WithTemplate("disabled", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "disabled"},
+					"data":     map[string]any{"k": "v"},
+				}),
+				generator.WithIncludeWhen("${false}"),
+			}
+			data := map[string]any{"from": "${disabled.data.k}"}
+			if phase != "" {
+				opts = append(opts,
+					generator.WithTemplate("other", map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						"metadata": map[string]any{"name": "other"},
+						"data":     map[string]any{"phase": phase},
+					}),
+					generator.WithReadyWhen(`${other.data.phase == "Running"}`),
+				)
+				data["other"] = "${other.data.phase}"
+			}
+			opts = append(opts, generator.WithTemplate("app", map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "app"},
+				"data":     data,
+			}))
+			cl := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+			ex := NewSimple(cl)
+			ex.GateReadiness = true
+			res, err := ex.Apply(context.Background(),
+				compileAndBuild(t, generator.NewGraph("g", opts...)), watchrouter.NoopWatcher{})
+			if phase == "Starting" {
+				require.ErrorIs(t, err, ErrNotReady)
+				assert.Equal(t, []string{"app"}, res.Unresolved,
+					"an unready template dependency withholds even a contagiously ignored node")
+			} else {
+				require.NoError(t, err)
+				assert.Empty(t, res.Unresolved, "an ignored dependency is terminal-ready")
+			}
+			for _, applied := range res.Applied {
+				assert.Equal(t, "other", applied.NodeID)
+			}
+			assert.False(t, cmExists(t, cl, "disabled"))
+			assert.False(t, cmExists(t, cl, "app"))
+		})
+	}
+}
+
 // ApplyWithLabeler is the only path the instance controller calls
 // (controller_graph_engine.go). It composes a per-call labeler over the
 // struct-level one and runs the walk on a copy of the executor so concurrent

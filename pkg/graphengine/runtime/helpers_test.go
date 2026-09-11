@@ -378,22 +378,35 @@ func TestIsIgnored_Memoized(t *testing.T) {
 // across instances is rejected rather than handed to SSA.
 func TestResolve_DuplicateIdentities(t *testing.T) {
 	t.Parallel()
-	g := generator.NewGraph("g",
-		// Two identical iterator values render the same metadata.name, so
-		// the rendered objects share an identity.
-		generator.WithDef("src", map[string]any{"names": []any{"dup", "dup"}}),
-		generator.WithTemplate("p", map[string]any{
-			"apiVersion": "v1", "kind": "ConfigMap",
-			"metadata": map[string]any{"name": "${'cm-' + n}"},
-			"data":     map[string]any{"k": "v"},
-		}, generator.ForEachDim("n", "${src.names}")),
-	)
-	prog := compileGraph(t, g)
-	rt := New(prog, g)
-	setFirst(rt, "src")
+	manifest := map[string]any{
+		"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]any{"name": "${'cm-' + n}"},
+		"data":     map[string]any{"k": "v"},
+	}
+	for _, tc := range []struct {
+		name string
+		node generator.GraphOption
+	}{
+		{"template", generator.WithTemplate("p", manifest)},
+		{"patch", generator.WithPatchManifest("p", manifest)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g := generator.NewGraph("g",
+				// Two identical iterator values render the same metadata.name.
+				generator.WithDef("src", map[string]any{"names": []any{"dup", "dup"}}),
+				tc.node,
+			)
+			g.Spec.Nodes[1].ForEach = append(g.Spec.Nodes[1].ForEach, generator.ForEachDim("n", "${src.names}"))
+			prog := compileGraph(t, g)
+			rt := New(prog, g)
+			setFirst(rt, "src")
 
-	_, err := rt.Node("p").Resolve()
-	assert.ErrorContains(t, err, "duplicate identity")
+			objects, err := rt.Node("p").Resolve()
+			assert.ErrorContains(t, err, "duplicate identity")
+			assert.Empty(t, objects, "a rejected collection must not return partial results")
+		})
+	}
 }
 
 // TestComputeIgnored_DepErrorPropagates pins the contagious-error branch:

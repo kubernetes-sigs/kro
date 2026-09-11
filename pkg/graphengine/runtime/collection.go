@@ -33,7 +33,8 @@ const DefaultMaxCollectionDimensions = 10
 
 // identityKey returns the GVK + namespace + name string used to dedup
 // rendered objects and to align observed-to-desired in collections.
-// Caller must guarantee namespace and name are set.
+// It uses the supplied namespace and API version without defaulting or
+// alias normalization.
 func identityKey(obj *unstructured.Unstructured) string {
 	if obj == nil {
 		return ""
@@ -43,10 +44,8 @@ func identityKey(obj *unstructured.Unstructured) string {
 }
 
 // validateUniqueIdentities returns an error if any two objects in objs
-// share the same identityKey. Called after forEach expansion to catch
-// the case where the user's identity-field expressions don't actually
-// produce distinct names — otherwise SSA would reject the duplicates
-// with a confusing field-manager error.
+// share the same rendered identityKey. Called after template or patch
+// forEach expansion so duplicates are rejected before applying any item.
 func validateUniqueIdentities(objs []*unstructured.Unstructured) error {
 	seen := make(map[string]struct{}, len(objs))
 	for _, obj := range objs {

@@ -96,9 +96,9 @@ func validateFrameNodes(nodes []expv1alpha1.Node) error {
 // templates — they read existing state. graph (subgraph) nodes
 // don't render or read; the per-node modifiers have no defined semantics on
 // them yet, so they're rejected explicitly rather than silently ignored.
-// patch nodes MAY carry forEach — the contribution fans out across every
-// rendered target (each must be nameable and resolve to a distinct name) —
-// and includeWhen, but not readyWhen (a patch publishes nothing into scope).
+// patch nodes MAY carry forEach — the contribution fans out across targets
+// with distinct rendered identities — and includeWhen, but not readyWhen
+// (a patch publishes nothing into scope).
 func validateKindCompatibility(n *expv1alpha1.Node) error {
 	if n.Graph != nil {
 		switch {
@@ -121,8 +121,9 @@ func validateKindCompatibility(n *expv1alpha1.Node) error {
 		// fans the same contribution out across every rendered target (e.g. a
 		// status writeback to each claimant CR). Name-required and endpoint
 		// derivation are enforced later against the unmarshalled payload
-		// (derivePatchEndpoint); iterator→identity coverage (each rendered patch
-		// must resolve to a distinct name) is enforced in analyzeVariables.
+		// (derivePatchEndpoint); iterator→identity coverage is checked structurally
+		// in analyzeVariables. The runtime rejects duplicate rendered identities
+		// after forEach expansion.
 		return nil
 	}
 	if len(n.ForEach) == 0 {

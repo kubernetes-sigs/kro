@@ -267,6 +267,12 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 		return nil, nil, fmt.Errorf("resolve schema for %s: %w", gvk, err)
 	}
 	mapping, err := ctx.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	// Memory-cached discovery can still report Fresh after a new CRD appears.
+	// Refresh a missing kind once rather than reusing that discovery snapshot.
+	if meta.IsNoMatchError(err) {
+		meta.MaybeResetRESTMapper(ctx.restMapper)
+		mapping, err = ctx.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("rest mapping for %s: %w", gvk, err)
 	}

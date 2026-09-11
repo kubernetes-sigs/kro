@@ -125,7 +125,7 @@ func (c *Compiler) rootContext() *CompilationContext {
 //
 // It also resets the REST mapping / discovery caches. The mapper is a
 // DeferredDiscoveryRESTMapper whose delegate caches every GVR->scope/plural
-// mapping; that cache only self-heals on a NoMatch, so recreating a CRD with
+// mapping. Compilation retries NoMatch errors, but recreating a CRD with
 // the same GroupKind+version but a new scope (Namespaced<->Cluster) or plural
 // would otherwise keep routing to the stale endpoint until restart. The mapper
 // has no per-GroupKind eviction, so we do a full Reset() (invalidates the

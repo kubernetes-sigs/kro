@@ -15,9 +15,11 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -33,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -1608,8 +1611,9 @@ func (s *Simple) ssaApply(ctx context.Context, obj *unstructured.Unstructured, f
 // (ErrNotReady) so dependents gate and the reconcile retries once the target
 // appears. The contribution is server-side applied under a per-node field
 // manager without ForceOwnership, so it claims only the fields it sets; a
-// status-subresource patch is routed through the status endpoint. Returns the
-// recorded Contribution so the reconciler can release it on prune.
+// status-subresource patch uses the status endpoint (or replacement Update for
+// an explicitly selected StatusReplace node). Returns the recorded Contribution
+// so the reconciler can release it on prune.
 func (s *Simple) applyPatch(ctx context.Context, rt *runtime.Runtime, w watchrouter.Watcher, n *runtime.Node, desired []*unstructured.Unstructured) ([]Contribution, error) {
 	// A patch node may be a singleton (one target) or a forEach collection (the
 	// same contribution fanned out across every rendered target, e.g. a status
@@ -1704,7 +1708,12 @@ func (s *Simple) applyPatchOne(ctx context.Context, rt *runtime.Runtime, w watch
 
 	fieldManager := patchFieldManager(rt.Graph().GetUID(), s.qualifiedPath(n.ID()))
 	subresource := n.Subresource()
-	if err := s.contributeApply(ctx, obj, fieldManager, subresource); err != nil {
+	if n.StatusReplace() && subresource == "status" {
+		err = s.replaceStatus(ctx, obj, current)
+	} else {
+		err = s.contributeApply(ctx, obj, fieldManager, subresource)
+	}
+	if err != nil {
 		if apierrors.IsConflict(err) {
 			// Soft either way; an ownership conflict additionally carries
 			// ErrFieldManagerConflict so the controllers can report it distinctly.
@@ -1718,6 +1727,8 @@ func (s *Simple) applyPatchOne(ctx context.Context, rt *runtime.Runtime, w watch
 		return Contribution{}, err
 	}
 
+	// Keep the SSA contribution identity even after replacement or a no-write
+	// result, so ledger diffing cannot Release unchanged SSA-owned author fields.
 	gvk := obj.GroupVersionKind()
 	return Contribution{
 		APIVersion:   gvk.GroupVersion().String(),
@@ -1763,6 +1774,64 @@ func (s *Simple) contributeApply(ctx context.Context, obj *unstructured.Unstruct
 		return s.ssaApply(ctx, obj, fieldManager, true)
 	}
 	return err
+}
+
+// Continue the Update identity used by released controllers' kro user agent.
+const legacyStatusFieldManager = "kro"
+
+// replaceStatus persists the resolved author projection plus live conditions/state.
+// Unlike SSA omission, replacement removes fields even when legacy or intermediate
+// managers still own them. Unchanged fields retain their existing ownership.
+func (s *Simple) replaceStatus(ctx context.Context, obj, current *unstructured.Unstructured) error {
+	rendered, _ := obj.Object["status"].(map[string]any)
+	live := current
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if live == nil {
+			fresh, err := s.getLive(ctx, obj)
+			if err != nil {
+				return err
+			}
+			if fresh == nil {
+				return fmt.Errorf("status replace target %s %q not found: %w",
+					obj.GetKind(), client.ObjectKeyFromObject(obj), ErrNotReady)
+			}
+			live = fresh
+		}
+		liveStatus, _ := live.Object["status"].(map[string]any)
+		next := make(map[string]any, len(rendered)+2)
+		for k, v := range rendered {
+			next[k] = v
+		}
+		for _, key := range []string{"conditions", "state"} {
+			if v, ok := liveStatus[key]; ok {
+				next[key] = v
+			}
+		}
+		if statusJSONEqual(liveStatus, next) {
+			return nil
+		}
+		updated := live.DeepCopy()
+		updated.Object["status"] = next
+		err := s.Client.Status().Update(ctx, updated, client.FieldOwner(legacyStatusFieldManager))
+		if apierrors.IsConflict(err) {
+			live = nil // Reread and preserve the concurrent writer's controller fields.
+		}
+		return err
+	})
+}
+
+// statusJSONEqual treats nil/empty status and JSON-equivalent numbers alike:
+// the API can return int64 where CEL rendered float64. Invalid JSON is not equal.
+func statusJSONEqual(a, b map[string]any) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	aJSON, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	bJSON, err := json.Marshal(b)
+	return err == nil && bytes.Equal(aJSON, bJSON)
 }
 
 // Release relinquishes the fields each contribution's field manager owns by

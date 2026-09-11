@@ -561,16 +561,11 @@ func TestPatch_StatusSubresourceRouting(t *testing.T) {
 	assert.Equal(t, "Running", phase)
 }
 
-// TestPatch_StatusSubresourceLegacyUpdateConflictResolution verifies that when a status field
-// was previously owned by a legacy manager via an Update operation (e.g. v0.9.3 UpdateStatus),
-// a subsequent status-subresource SSA patch successfully reclaims ownership with ForceOwnership
-// without returning a 409 Conflict.
-func TestPatch_StatusSubresourceLegacyUpdateConflictResolution(t *testing.T) {
-	cl := patchEnvClient(t)
-	ns := "default"
+var widgetGVK = schema.GroupVersionKind{Group: "test.kro.run", Version: "v1", Kind: "Widget"}
 
-	// 1. Create a custom CRD with a status subresource so SSA and Update conflict tracking
-	// matches real-world custom resources and kro instance CRDs.
+func ensureWidgetCRD(t *testing.T, cl client.Client) {
+	t.Helper()
+	// Share a custom status subresource for real API ownership tests.
 	crd := &apiextensionsv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "widgets.test.kro.run",
@@ -609,7 +604,9 @@ func TestPatch_StatusSubresourceLegacyUpdateConflictResolution(t *testing.T) {
 			}},
 		},
 	}
-	_ = cl.Create(context.Background(), crd)
+	if err := cl.Create(context.Background(), crd); !apierrors.IsAlreadyExists(err) {
+		require.NoError(t, err)
+	}
 
 	// Wait for CRD to be established
 	require.NoError(t, wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
@@ -625,42 +622,35 @@ func TestPatch_StatusSubresourceLegacyUpdateConflictResolution(t *testing.T) {
 		return false, nil
 	}))
 
-	widgetGVK := schema.GroupVersionKind{Group: "test.kro.run", Version: "v1", Kind: "Widget"}
+}
 
-	// Create the target Widget instance
-	widget := &unstructured.Unstructured{}
-	widget.SetGroupVersionKind(widgetGVK)
-	widget.SetNamespace(ns)
-	widget.SetName("target-widget")
-	widget.Object["spec"] = map[string]any{"field": "val"}
-	require.NoError(t, cl.Create(context.Background(), widget))
+// Unmarked status patches reclaim changed fields via forced SSA while leaving
+// omitted foreign-owned fields alone, with either executor conflict-check mode.
+func TestPatch_StatusSubresourceLegacyUpdateConflictResolution(t *testing.T) {
+	cl := patchEnvClient(t)
+	ensureWidgetCRD(t, cl)
+	for _, mode := range []string{"default", "conflict-detection"} {
+		t.Run(mode, func(t *testing.T) {
+			name := "ssa-widget-" + mode
+			widget := createWidget(t, cl, name)
+			widget.Object["status"] = map[string]any{"phase": "Pending", "message": "legacy-value"}
+			require.NoError(t, cl.Status().Update(t.Context(), widget, client.FieldOwner("kro")))
 
-	// 2. Write status under a legacy field manager via client-go Update (operation=Update, simulating v0.9.3).
-	widget.Object["status"] = map[string]any{"phase": "Pending", "message": "v0.9.3-state"}
-	require.NoError(t, cl.Status().Update(context.Background(), widget, client.FieldOwner("kro-v0.9.3-legacy-manager")))
-
-	// 3. Apply a status change through a patch node (contributeApply path) under kro's SSA manager.
-	g := generator.NewGraph("g",
-		generator.WithNamespace(ns),
-		generator.WithPatch("p", "test.kro.run/v1", "Widget", "target-widget", map[string]any{
-			"status": map[string]any{"phase": "Running"},
-		}),
-	)
-	g.SetUID("uid-status-upgrade")
-
-	rt := compileAndBuildEnv(t, patchEnvCfg, g)
-	res, err := NewSimple(cl).Apply(context.Background(), rt, watchrouter.NoopWatcher{})
-
-	// 4. Assert it SUCCEEDS (no conflict error) and value is updated to Running.
-	require.NoError(t, err)
-	require.Len(t, res.Contributions, 1)
-
-	got := &unstructured.Unstructured{}
-	got.SetGroupVersionKind(widgetGVK)
-	require.NoError(t, cl.Get(context.Background(),
-		types.NamespacedName{Namespace: ns, Name: "target-widget"}, got))
-	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
-	assert.Equal(t, "Running", phase)
+			g := widgetStatusGraph(name, map[string]any{"phase": "Running"})
+			exec := NewSimple(cl)
+			if mode == "conflict-detection" {
+				exec.ConflictDetection = true
+			}
+			res, err := exec.Apply(t.Context(), compileAndBuildEnv(t, patchEnvCfg, g), watchrouter.NoopWatcher{})
+			require.NoError(t, err)
+			require.Len(t, res.Contributions, 1)
+			got := getWidget(t, cl, name)
+			status, _, _ := unstructured.NestedMap(got.Object, "status")
+			assert.Equal(t, map[string]any{"phase": "Running", "message": "legacy-value"}, status)
+			assert.Equal(t, []string{patchFieldManager(g.GetUID(), "p") + "/Apply"}, statusFieldOwners(t, got, "phase"))
+			assert.Equal(t, []string{"kro/Update"}, statusFieldOwners(t, got, "message"))
+		})
+	}
 }
 
 // TestPatch_FieldManagerConflictSoftRequeue verifies that when a patch node encounters
@@ -788,13 +778,13 @@ func TestPatch_NonConflictErrorIsHardButWalkContinues(t *testing.T) {
 	assert.Equal(t, "v", data["k"])
 }
 
-func compileAndBuildEnv(t *testing.T, cfg *rest.Config, g *expv1alpha1.Graph) *krotruntime.Runtime {
+func compileAndBuildEnv(t *testing.T, cfg *rest.Config, g *expv1alpha1.Graph, opts ...compiler.CompileOption) *krotruntime.Runtime {
 	t.Helper()
 	httpClient, err := rest.HTTPClientFor(cfg)
 	require.NoError(t, err)
 	cmp, err := compiler.NewCompiler(cfg, httpClient)
 	require.NoError(t, err)
-	p, err := cmp.Compile(g)
+	p, err := cmp.CompileWithOptions(g, opts...)
 	require.NoError(t, err)
 	return krotruntime.New(p, g)
 }

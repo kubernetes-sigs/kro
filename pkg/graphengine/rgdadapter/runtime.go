@@ -290,7 +290,9 @@ func schemaCompileOpts(rgd *v1alpha1.ResourceGraphDefinition, g *v1alpha1.Graph)
 				// subresource; a drift watch on it would re-enqueue the instance
 				// on its own status write (not generation-guarded on the drift
 				// path). The instance's parent informer already drives reconcile.
-				compiler.WithSelfWatchExempt(StatusPatchNodeID))
+				compiler.WithSelfWatchExempt(StatusPatchNodeID),
+				// Author status is a complete projection, including field removal.
+				compiler.WithStatusReplace(StatusPatchNodeID))
 			break
 		}
 	}

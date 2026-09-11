@@ -104,6 +104,9 @@ func (n *Node) Subresource() string { return n.spec.Subresource }
 // self-retrigger the instance's reconcile.
 func (n *Node) SelfWatchExempt() bool { return n.spec.SelfWatchExempt }
 
+// StatusReplace reports whether this status patch uses replacement Update.
+func (n *Node) StatusReplace() bool { return n.spec.StatusReplace }
+
 // IsCollection reports whether the node expands into a collection,
 // delegating to compiler.Node.IsCollection.
 func (n *Node) IsCollection() bool { return n.spec.IsCollection() }

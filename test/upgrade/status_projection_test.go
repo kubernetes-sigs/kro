@@ -15,10 +15,14 @@
 package upgrade_test
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 var _ = ginkgo.Describe("Post-Upgrade Status Projection", func() {
@@ -28,11 +32,10 @@ var _ = ginkgo.Describe("Post-Upgrade Status Projection", func() {
 		}
 	})
 
-	ginkgo.It("should project availableReplicas from deployment to instance status", func() {
+	ginkgo.It("should remove and restore projected status when a child field disappears", func() {
 		// The simple-deployment RGD projects: availableReplicas: ${deployment.status.availableReplicas}
-		obj, err := dynamicClient.Resource(kroGVR("upgradesimpleapps")).
-			Namespace("upgrade-test").
-			Get(ctx, "test-simple", metav1.GetOptions{})
+		instances := dynamicClient.Resource(kroGVR("upgradesimpleapps")).Namespace("upgrade-test")
+		obj, err := instances.Get(ctx, "test-simple", metav1.GetOptions{})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 		// Instance should be ACTIVE
@@ -48,6 +51,64 @@ var _ = ginkgo.Describe("Post-Upgrade Status Projection", func() {
 		gomega.Expect(availableReplicas).NotTo(gomega.BeNil())
 
 		ginkgo.GinkgoLogr.Info("Status projection verified",
-			"availableReplicas", availableReplicas)
+			"availableReplicas", availableReplicas, "uid", obj.GetUID(), "managedFields", obj.GetManagedFields())
+
+		replicas, found, err := unstructured.NestedInt64(obj.Object, "spec", "replicas")
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(found).To(gomega.BeTrue())
+		gomega.Expect(replicas).To(gomega.BeNumerically(">", 0))
+		gomega.Expect(availableReplicas).To(gomega.BeNumerically("==", replicas))
+		setReplicas := func(count int64) {
+			_, err := instances.Patch(ctx, "test-simple", types.MergePatchType,
+				[]byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, count)), metav1.PatchOptions{})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		}
+		// This fixture is shared: cleanup both tests restoration and leaves it
+		// healthy for subsequent upgrade checks, including when removal fails.
+		ginkgo.DeferCleanup(func() {
+			setReplicas(replicas)
+			gomega.Eventually(func(g gomega.Gomega) {
+				got, err := instances.Get(ctx, "test-simple", metav1.GetOptions{})
+				g.Expect(err).NotTo(gomega.HaveOccurred())
+				g.Expect(got.GetUID()).To(gomega.Equal(obj.GetUID()))
+				value, found, err := unstructured.NestedInt64(got.Object, "status", "availableReplicas")
+				g.Expect(err).NotTo(gomega.HaveOccurred())
+				g.Expect(found).To(gomega.BeTrue())
+				g.Expect(value).To(gomega.Equal(replicas))
+				state, _, _ := unstructured.NestedString(got.Object, "status", "state")
+				g.Expect(state).To(gomega.Equal("ACTIVE"))
+				conditions, _, _ := unstructured.NestedSlice(got.Object, "status", "conditions")
+				g.Expect(conditions).NotTo(gomega.BeEmpty())
+				for _, condition := range conditions {
+					c := condition.(map[string]any)
+					g.Expect(c["status"]).To(gomega.Equal("True"))
+					g.Expect(c["observedGeneration"]).To(gomega.Equal(got.GetGeneration()))
+				}
+			}, 2*time.Minute, 2*time.Second).Should(gomega.Succeed())
+		})
+
+		setReplicas(0)
+		gomega.Eventually(func(g gomega.Gomega) {
+			deployment, err := dynamicClient.Resource(gvrAppsDeployments).Namespace("upgrade-test").
+				Get(ctx, "test-simple-deployment", metav1.GetOptions{})
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			desired, _, _ := unstructured.NestedInt64(deployment.Object, "spec", "replicas")
+			g.Expect(desired).To(gomega.BeZero())
+			observed, _, _ := unstructured.NestedInt64(deployment.Object, "status", "observedGeneration")
+			g.Expect(observed).To(gomega.BeNumerically(">=", deployment.GetGeneration()))
+			_, found, err := unstructured.NestedFieldNoCopy(deployment.Object, "status", "availableReplicas")
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			g.Expect(found).To(gomega.BeFalse(), "the child field must actually disappear")
+		}, 2*time.Minute, 2*time.Second).Should(gomega.Succeed())
+		gomega.Eventually(func(g gomega.Gomega) {
+			got, err := instances.Get(ctx, "test-simple", metav1.GetOptions{})
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			g.Expect(got.GetUID()).To(gomega.Equal(obj.GetUID()))
+			status, _, _ := unstructured.NestedMap(got.Object, "status")
+			g.Expect(status).NotTo(gomega.HaveKey("availableReplicas"), "an unresolved projection must not stay stale")
+			g.Expect(status["conditions"]).NotTo(gomega.BeEmpty())
+			g.Expect(status["state"]).NotTo(gomega.BeEmpty())
+			// readyWhen also reads the missing field, so ACTIVE is not required here.
+		}, 2*time.Minute, 2*time.Second).Should(gomega.Succeed())
 	})
 })

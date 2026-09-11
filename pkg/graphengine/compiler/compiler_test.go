@@ -1408,6 +1408,43 @@ func TestCompile_WithSelfWatchExempt(t *testing.T) {
 	assert.False(t, prog.Nodes["cm"].SelfWatchExempt, "other nodes must not be exempted")
 }
 
+func TestCompile_WithStatusReplace(t *testing.T) {
+	t.Parallel()
+	statusPatch := generator.WithPatch("writeback", "v1", "Pod", "target", map[string]any{
+		"status": map[string]any{"phase": "Running"},
+	})
+	g := generator.NewGraph("g",
+		generator.WithTemplate("pod", map[string]any{
+			"apiVersion": "v1", "kind": "Pod",
+			"metadata": map[string]any{"name": "target"},
+		}),
+		statusPatch,
+		generator.WithPatch("other", "v1", "Pod", "target", map[string]any{
+			"status": map[string]any{"hostIP": "10.0.0.1"},
+		}),
+		generator.WithPatch("main", "v1", "ConfigMap", "target", map[string]any{
+			"data": map[string]any{"key": "value"},
+		}),
+		generator.WithSubgraph("sub", generator.NewGraph("child", statusPatch)),
+	)
+	c := newTestCompiler(t)
+	prog, err := c.CompileWithOptions(g, WithStatusReplace("writeback"),
+		WithStatusReplace("pod"), WithStatusReplace("main"), WithStatusReplace("missing"))
+	require.NoError(t, err)
+	for id, node := range prog.Nodes {
+		assert.Equal(t, id == "writeback", node.StatusReplace, "root node %s", id)
+	}
+	assert.False(t, prog.Nodes["sub"].SubProgram.Nodes["writeback"].StatusReplace,
+		"selecting a root node must not select a same-named child")
+
+	plain, err := c.Compile(g)
+	require.NoError(t, err)
+	for id, node := range plain.Nodes {
+		assert.False(t, node.StatusReplace, "plain compile: %s", id)
+	}
+	assert.False(t, plain.Nodes["sub"].SubProgram.Nodes["writeback"].StatusReplace)
+}
+
 func TestCompile_WithCostLimit(t *testing.T) {
 	t.Parallel()
 

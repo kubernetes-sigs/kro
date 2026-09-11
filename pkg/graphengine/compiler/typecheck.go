@@ -24,6 +24,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/cel/conversion"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -322,11 +323,8 @@ func validateAndCompileNode(bc *buildContext, n *Node, payloadSchema *spec.Schem
 	return nil
 }
 
-// validateAndCompileConditions compiles each bool-returning condition
-// expression against bc.env. Verifies the output is assignable to bool —
-// concretely-typed bools pass; dyn passes (def-sourced expressions can't
-// be statically narrowed to bool); anything else (string, int, list, etc.)
-// is almost always a user mistake.
+// validateAndCompileConditions accepts bool and optional<bool> conditions;
+// empty optionals evaluate as false. Dynamic results are checked at runtime.
 func validateAndCompileConditions(bc *buildContext, env *cel.Env, exprs []*krocel.Expression, nodeID, kind string) error {
 	for i, expr := range exprs {
 		checked, err := bc.compile(env, expr)
@@ -334,33 +332,12 @@ func validateAndCompileConditions(bc *buildContext, env *cel.Env, exprs []*kroce
 			return fmt.Errorf("node %q: %s[%d] (%q): %w", nodeID, kind, i, expr.UserExpression(), err)
 		}
 		out := checked.OutputType()
-		// Accept bool or dyn. dyn covers def-sourced expressions (the static
-		// type can't be narrowed). An optional<bool> is rejected: an empty
-		// optional (optional.none()) has no boolean value, which becomes a
-		// runtime error where a condition must decide include/ready. Reject it
-		// at compile time and tell the author to collapse it to a concrete
-		// bool. Anything else (string, int, list, struct) is a user mistake.
-		if isOptionalBool(out) {
-			return fmt.Errorf("node %q: %s[%d] (%q) returns optional<bool>, which becomes a runtime error when empty; "+
-				"make it a concrete bool (e.g. append .orValue(false))",
-				nodeID, kind, i, expr.UserExpression())
-		}
-		if !cel.BoolType.IsAssignableType(out) && out != cel.DynType {
+		if !conversion.IsBoolOrOptionalBool(out) && out != cel.DynType {
 			return fmt.Errorf("node %q: %s[%d] (%q) must return bool, got %s",
 				nodeID, kind, i, expr.UserExpression(), out.String())
 		}
 	}
 	return nil
-}
-
-// isOptionalBool reports whether t is optional<bool> (as opposed to a plain
-// bool or dyn). Used to reject optional-typed condition expressions, whose
-// empty case has no boolean value.
-func isOptionalBool(t *cel.Type) bool {
-	if cel.BoolType.IsAssignableType(t) {
-		return false // a plain bool, not an optional
-	}
-	return cel.OptionalType(cel.BoolType).IsAssignableType(t)
 }
 
 // validateAndCompileForEach compiles each forEach axis, requires it to

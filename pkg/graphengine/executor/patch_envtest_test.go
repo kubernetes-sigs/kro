@@ -283,6 +283,39 @@ func TestPatch_ForEachFansOutToEveryTarget(t *testing.T) {
 	}
 }
 
+func TestPatch_ForEachDuplicateIdentitiesRejectsBeforeWrite(t *testing.T) {
+	cl := patchEnvClient(t)
+	ns := "default"
+	mustCreateConfigMap(t, cl, ns, "duplicate-claim", map[string]any{"orig": "kept"})
+	before := getConfigMap(t, cl, ns, "duplicate-claim")
+
+	g := generator.NewGraph("g",
+		generator.WithNamespace(ns),
+		generator.WithDef("src", map[string]any{"entries": []any{
+			map[string]any{"name": "duplicate-claim", "value": "first"},
+			map[string]any{"name": "duplicate-claim", "value": "second"},
+		}}),
+		generator.WithPatchManifest("p", map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]any{"namespace": ns, "name": "${entry.name}"},
+			"data":       map[string]any{"patched": "${entry.value}"},
+		}),
+	)
+	g.Spec.Nodes[1].ForEach = []expv1alpha1.ForEachDimension{{"entry": "${src.entries}"}}
+	g.SetUID("uid-foreach-duplicate")
+
+	rt := compileAndBuild(t, g)
+	res, err := NewSimple(cl).Apply(context.Background(), rt, watchrouter.NoopWatcher{})
+
+	after := getConfigMap(t, cl, ns, "duplicate-claim")
+	assert.Equal(t, before.Object, after.Object,
+		"duplicate patch identities must leave the target's data, resourceVersion and managedFields untouched")
+	assert.ErrorContains(t, err, "duplicate identity")
+	assert.Empty(t, res.Applied)
+	assert.Empty(t, res.Contributions, "a rejected collection must not record partial contributions")
+}
+
 // TestPatch_ForEachEmptyListIsNoOp verifies a forEach patch over an empty list
 // applies nothing and does not error — the reviewer's empty-claim-list case.
 func TestPatch_ForEachEmptyListIsNoOp(t *testing.T) {

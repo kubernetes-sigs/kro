@@ -201,33 +201,25 @@ func TestSimple_ApplyTemplate_WatchRegistrationFailureIsSoftFail(t *testing.T) {
 	})
 }
 
-// Collection per-item apply tolerance. The two failure shapes are treated
-// differently on purpose, and the distinction is what keeps a collection from
-// wedging on one bad member.
+// Validation rejections are tolerated only on existing items; other failures
+// must retry without losing live identities.
 func TestSimple_ApplyTemplate_CollectionApplyTolerance(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a rejected update conflict on an existing object records the live identity", func(t *testing.T) {
+	t.Run("an update conflict retains live identities and retries", func(t *testing.T) {
 		t.Parallel()
-		// Both members already exist, so every SSA is an update. A rejected
-		// update due to field-manager conflict must not block the node forever:
-		// the objects are in the cluster, so their identities are recorded and
-		// the node converges.
+		// This is an ordinary optimistic-concurrency 409, not an SSA ownership conflict.
 		base := fake.NewClientBuilder().WithScheme(newScheme(t)).
 			WithObjects(liveCM("cm-alpha"), liveCM("cm-beta")).Build()
-		cl := &patchFailClient{Client: base, err: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "cm-alpha", errors.New("field manager conflict"))}
+		cl := &patchFailClient{Client: base, err: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "cm-alpha", errors.New("resource version changed"))}
 
 		res, err := NewSimple(cl).Apply(context.Background(),
 			compileAndBuild(t, collectionCMGraph()), watchrouter.NoopWatcher{})
 
-		require.NoError(t, err,
-			"a tolerated update conflict on objects that exist must not hold the node not-ready")
-		// The per-item error is dropped by design (see recordUpdateRejected): a
-		// tolerated update-rejection is silent — the object is present, so the
-		// node converges and the underlying conflict is NOT surfaced as any
-		// returned error. (This pins the corrected comment: the rejection is not
-		// escalated to a hard error, and — the RGD path having no per-node
-		// condition message for a converged node — it is not surfaced at all.)
+		require.ErrorIs(t, err, ErrNotReady)
+		assert.NotErrorIs(t, err, ErrFieldManagerConflict)
+		assert.ErrorContains(t, err, "resource version changed")
+		assert.Contains(t, res.Unresolved, "cm")
 		names := make([]string, 0, len(res.Applied))
 		for _, a := range res.Applied {
 			names = append(names, a.Name)
@@ -238,10 +230,7 @@ func TestSimple_ApplyTemplate_CollectionApplyTolerance(t *testing.T) {
 
 	t.Run("a permanent update rejection on an existing object is tolerated", func(t *testing.T) {
 		t.Parallel()
-		// A permanent update rejection on an object that ALREADY exists (e.g. a
-		// Kubernetes immutable-field update: `Invalid`/`Forbidden`) is tolerated
-		// by design: the object is present in the cluster, so its identity is
-		// recorded and the collection continues rather than blocking the node forever.
+		// Invalid updates on existing objects remain tolerated, including immutable fields.
 		base := fake.NewClientBuilder().WithScheme(newScheme(t)).
 			WithObjects(liveCM("cm-alpha"), liveCM("cm-beta")).Build()
 		cl := &patchFailClient{Client: base, err: apierrors.NewInvalid(schema.GroupKind{Kind: "ConfigMap"}, "cm-alpha", nil)}
@@ -302,14 +291,7 @@ func TestSimple_ApplyTemplate_CollectionApplyTolerance(t *testing.T) {
 	})
 }
 
-// TestCollectionApplyState_UpdateRejectedIsSilent pins the corrected contract
-// behind the FINDING-1 comment fix: recordUpdateRejected records the live
-// identity (so the item lands in Applied) but records NO item failure and NO
-// hard error — the tolerated update-rejection is intentionally silent and is
-// NOT surfaced as any returned error. The old comment claimed the per-item
-// error was "surfaced in the node's condition message", which was false; this
-// test guards against that false claim creeping back in as behavior (e.g. a
-// well-meaning change that starts returning the dropped error).
+// A tolerated validation rejection publishes the live value without an error.
 func TestCollectionApplyState_UpdateRejectedIsSilent(t *testing.T) {
 	t.Parallel()
 
@@ -502,7 +484,7 @@ func TestSimple_ApplyTemplate_LargeCollectionTolerance(t *testing.T) {
 	t.Parallel()
 
 	const count = 60
-	// 00..09: pre-existing, fail on update (tolerated, live recorded)
+	// 00..09: pre-existing, fail on update (soft ErrNotReady, live recorded)
 	// 10..19: absent, fail on create (tolerated, recorded in itemFailures, soft ErrNotReady)
 	// 20..59: absent, succeed on create (applied)
 
@@ -517,7 +499,7 @@ func TestSimple_ApplyTemplate_LargeCollectionTolerance(t *testing.T) {
 		patchFunc: func(ctx context.Context, obj client.Object) error {
 			name := obj.GetName()
 			if strings.HasPrefix(name, "cm-item-0") {
-				return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, name, errors.New("field manager conflict"))
+				return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, name, errors.New("resource version changed"))
 			}
 			if strings.HasPrefix(name, "cm-item-1") {
 				return errors.New("quota exceeded")
@@ -531,9 +513,11 @@ func TestSimple_ApplyTemplate_LargeCollectionTolerance(t *testing.T) {
 		compileAndBuild(t, largeCollectionGraph(count)), watchrouter.NoopWatcher{})
 
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrNotReady), "failing creates must produce soft ErrNotReady")
-	assert.Contains(t, err.Error(), "10 item(s) failed to apply")
+	assert.True(t, errors.Is(err, ErrNotReady), "failing creates and transient updates must produce soft ErrNotReady")
+	assert.Contains(t, err.Error(), "20 item(s) failed to apply")
+	assert.Contains(t, err.Error(), "resource version changed")
 	assert.Contains(t, err.Error(), "quota exceeded")
+	assert.Contains(t, res.Unresolved, "cm")
 
 	// 10 existing + 40 newly created = 50 items tracked in Applied
 	assert.Len(t, res.Applied, 50)
@@ -615,7 +599,7 @@ func TestSimple_ApplyTemplate_CollectionHardErrors(t *testing.T) {
 		assert.False(t, errors.Is(err, ErrNotReady))
 	})
 
-	t.Run("permanent update rejections on existing collection items are tolerated as soft errors", func(t *testing.T) {
+	t.Run("Invalid updates are tolerated but Forbidden updates retry", func(t *testing.T) {
 		t.Parallel()
 		g := generator.NewGraph("g",
 			generator.WithNamespace("default"),
@@ -627,10 +611,8 @@ func TestSimple_ApplyTemplate_CollectionHardErrors(t *testing.T) {
 			}, generator.ForEachDim("n", "${src.names}")),
 		)
 
-		// All three items already exist; two of their updates are permanently
-		// rejected (Invalid / Forbidden immutable-field updates). By design these
-		// are tolerated on existing objects: the live identities are recorded and
-		// the collection converges rather than aborting the walk.
+		// All three items already exist. Invalid is tolerated, Forbidden holds
+		// the node not-ready, and the healthy sibling still applies.
 		base := fake.NewClientBuilder().WithScheme(newScheme(t)).
 			WithObjects(liveCM("cm-0"), liveCM("cm-1"), liveCM("cm-2")).Build()
 		cl := &concurrencyTrackingClient{
@@ -650,8 +632,11 @@ func TestSimple_ApplyTemplate_CollectionHardErrors(t *testing.T) {
 		res, err := NewSimple(cl).Apply(context.Background(),
 			compileAndBuild(t, g), watchrouter.NoopWatcher{})
 
-		require.NoError(t, err,
-			"permanent update rejections on existing items must be tolerated so the node converges")
+		require.ErrorIs(t, err, ErrNotReady)
+		assert.ErrorContains(t, err, "1 item(s) failed to apply")
+		assert.ErrorContains(t, err, "item default/cm-2")
+		assert.ErrorContains(t, err, "forbidden mutation")
+		assert.Contains(t, res.Unresolved, "cm")
 		names := make([]string, 0, len(res.Applied))
 		for _, a := range res.Applied {
 			names = append(names, a.Name)

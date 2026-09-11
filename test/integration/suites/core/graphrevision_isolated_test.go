@@ -36,7 +36,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	graphhash "github.com/kubernetes-sigs/kro/pkg/graph/hash"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/environment"
 )
 
 const isolatedGraphRevisionRetentionLimit = 5

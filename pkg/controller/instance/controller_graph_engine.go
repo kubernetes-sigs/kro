@@ -239,25 +239,15 @@ func (c *Controller) reconcileViaGraphEngine(
 		mark.ResourcesNotReady("resource reconciliation failed: %v", applyErr)
 	}
 
-	// 2. Post-apply ApplySet prune & exact-batch shrink.
-	// Only when the desired set is fully resolved and apply had no hard error do we prune
-	// resources that left the desired set, then shrink the inventory to the exact current set.
-	//
-	// The veto set is narrowed to nodes that actually OWN managed resources
-	// (see ownedUnresolved): an ownerless node (synthesized status patch, any
-	// patch, ref, or def node) must never block pruning of resources owned by
-	// other nodes, or it would indefinitely veto a legitimate deletion.
+	// 2. Prune completed templates even when another owner is unresolved.
+	// Hard errors veto pruning; only full owned resolution permits inventory shrink.
 	owningUnresolved := ownedUnresolved(rt, applyResult.Unresolved)
-	fullyResolved := pruneGate(hardErr, owningUnresolved)
-	if invErr := c.reconcileApplySetInventory(ctx, log, inst, applier, applyResult.Applied, supersetMeta, fullyResolved); invErr != nil {
+	fullyResolved, completed := pruneGate(rt, hardErr, owningUnresolved)
+	if invErr := c.reconcileApplySetInventory(ctx, log, inst, applier, applyResult.Applied, supersetMeta, fullyResolved, completed); invErr != nil {
 		log.Error(invErr, "graph-engine: ApplySet inventory/prune failed")
-		if applyErr == nil {
-			// Apply itself was clean (ResourcesReady set above), but a
-			// resource the spec no longer wants could not be pruned (e.g.
-			// the impersonated ServiceAccount lacks delete RBAC on the
-			// target). The instance has NOT converged — flip the condition
-			// so the failure surfaces in status instead of reporting Ready
-			// with the error only in the log.
+		if shouldReportInventoryError(applyErr, invErr, hardErr) {
+			// Hard inventory/prune failures take precedence over soft apply errors.
+			// A UID-conflict retry preserves an existing soft apply message.
 			mark.ResourcesNotReady("prune of retired resources failed: %v", invErr)
 			applyErr = invErr
 		}
@@ -332,22 +322,36 @@ func (c *Controller) delayedRequeue(err error) error {
 	return requeue.NeededAfter(err, c.reconcileConfig.DefaultRequeueDuration)
 }
 
-// pruneGate decides whether the ApplySet prune step may run this cycle. Pruning
-// is permitted only when apply had no HARD error (soft ErrNotReady/data-pending
-// is fine) AND every node resolved — an unresolved node means some still-wanted
-// member may merely be absent from Applied this cycle, so pruning would delete
-// it. This combines both signals in one place so the wiring is unit-testable
-// (removing either clause is caught by TestPruneGate).
-func pruneGate(hardErr bool, unresolved []string) bool {
-	return !hardErr && len(unresolved) == 0
+func shouldReportInventoryError(applyErr, invErr error, hardApplyErr bool) bool {
+	return applyErr == nil || (!hardApplyErr && !errors.Is(invErr, executor.ErrNotReady))
+}
+
+// pruneGate permits unrestricted pruning and inventory shrink only when fully
+// resolved. Partial cycles may prune completed root templates; an observed empty
+// collection counts, but skipped or unresolved templates do not. Hard errors veto both.
+func pruneGate(rt *geruntime.Runtime, hardErr bool, unresolved []string) (fullyResolved bool, completed sets.Set[string]) {
+	if hardErr {
+		return false, nil
+	}
+	if len(unresolved) == 0 {
+		return true, nil
+	}
+	completed = sets.New[string]()
+	for _, n := range rt.Nodes() {
+		if n.Kind() == compiler.NodeKindTemplate && n.Observed() != nil {
+			completed.Insert(n.ID())
+		}
+	}
+	completed.Delete(unresolved...)
+	return false, completed
 }
 
 // ownedUnresolved narrows an ApplyResult.Unresolved list to the nodes that OWN
 // managed resources — template nodes (renders land in Applied) and subgraph
 // nodes (aggregate their children's Applied entries). Patch nodes (incl. the
 // synthesized status writeback), ref nodes, and def nodes own nothing, so their
-// being Unresolved must not veto pruning of other nodes' resources. This is the
-// veto set fed to pruneGate. A NodeID that can't be resolved back to a node
+// being Unresolved must not restrict pruning or inventory shrink. This is the
+// unresolved set fed to pruneGate. A NodeID that can't be resolved back to a node
 // (e.g. a prefixed subgraph child ID) is conservatively treated as OWNING.
 func ownedUnresolved(rt *geruntime.Runtime, unresolved []string) []string {
 	if len(unresolved) == 0 {
@@ -357,8 +361,8 @@ func ownedUnresolved(rt *geruntime.Runtime, unresolved []string) []string {
 	for _, id := range unresolved {
 		n := rt.Node(id)
 		if n == nil {
-			// Unclassifiable (e.g. a subgraph-prefixed child ID): keep it in
-			// the veto set rather than risk pruning a still-wanted resource.
+			// Unclassifiable (e.g. a subgraph-prefixed child ID): keep the
+			// cycle partial rather than risk pruning a still-wanted resource.
 			owning = append(owning, id)
 			continue
 		}
@@ -395,11 +399,9 @@ func (c *Controller) requeueUntilRGDSpecPopulated(ctx context.Context, inst *uns
 // is what keeps the deletion path from finding zero managed resources and
 // orphaning children when a dependent is transiently withheld.
 //
-// Pruning is gated on fullyResolved (!hardErr && no Unresolved nodes):
-// we must never prune while anything is unresolved, or we would delete
-// still-wanted members that were merely omitted from Applied this cycle.  Only
-// after a conflict-free prune that actually removed orphans do we shrink the
-// inventory to the exact current set.
+// Partial cycles prune only attributable members of completed templates and
+// keep the superset inventory. Hard errors supply no completed templates.
+// Only full owned resolution and conflict-free pruning permit exact-batch shrink.
 func (c *Controller) reconcileApplySetInventory(
 	ctx context.Context,
 	log logr.Logger,
@@ -408,6 +410,7 @@ func (c *Controller) reconcileApplySetInventory(
 	applied []v1alpha1.ManagedResource,
 	supersetMeta applyset.Metadata,
 	fullyResolved bool,
+	completed sets.Set[string],
 ) error {
 	if valErr := validateAppliedIdentities(applied); valErr != nil {
 		return valErr
@@ -433,11 +436,7 @@ func (c *Controller) reconcileApplySetInventory(
 		}
 	}
 
-	// Pruning is gated on fullyResolved (!hardErr && no Unresolved nodes):
-	// we must never prune while anything is unresolved, or we would delete
-	// still-wanted members that were merely omitted from Applied this cycle.
-	//
-	// But even when we cannot prune, we MUST durably record the inventory scope
+	// Even when we cannot shrink, we MUST durably record the inventory scope
 	// of what actually landed this cycle. A child whose namespace is computed
 	// from a CEL reference can be applied into (say) target-ns while a SIBLING
 	// node is still unresolved. Pre-apply projection only captured that
@@ -448,7 +447,7 @@ func (c *Controller) reconcileApplySetInventory(
 	// persisted metadata (PruneScope), so without this grow-only write the child
 	// is orphaned: teardown never searches target-ns and falls back to the
 	// parent namespace. Union the applied batch into the persisted inventory
-	// (grow-only, never prunes) so the applied namespace/GroupKind survive to
+	// (grow-only) so the applied namespace/GroupKind survive to
 	// the delete path, then defer the exact-batch shrink until fully resolved.
 	if !fullyResolved {
 		grownMeta, unionErr := applier.Union(applySetMetadataFromApplied(inst, applied))
@@ -460,10 +459,12 @@ func (c *Controller) reconcileApplySetInventory(
 			log.V(1).Info("graph-engine: failed to grow inventory for partially-resolved apply", "error", err)
 			return fmt.Errorf("grow inventory for partially-resolved apply: %w", err)
 		}
-		return nil
+		if len(completed) == 0 {
+			return nil
+		}
 	}
 
-	_, conflictFree, err := c.pruneGraphEngineOrphans(ctx, log, applier, applied, supersetMeta)
+	_, conflictFree, err := c.pruneGraphEngineOrphans(ctx, log, applier, applied, supersetMeta, completed)
 	if err != nil {
 		return err
 	}
@@ -690,12 +691,14 @@ func applySetMetadataFromApplied(inst *unstructured.Unstructured, applied []v1al
 // free of UID conflicts.  NotFound and UID-conflict deletes are tolerated by
 // DeleteOrphan; a conflict leaves the object in place and is reported so the
 // caller keeps the superset inventory for a later retry.
+// A non-nil completed set restricts deletion to those current root templates.
 func (c *Controller) pruneGraphEngineOrphans(
 	ctx context.Context,
 	log logr.Logger,
 	applier *applyset.ApplySet,
 	applied []v1alpha1.ManagedResource,
 	supersetMeta applyset.Metadata,
+	completed sets.Set[string],
 ) (pruned bool, conflictFree bool, err error) {
 	keepUIDs := sets.New[types.UID]()
 	for _, r := range applied {
@@ -725,6 +728,16 @@ func (c *Controller) pruneGraphEngineOrphans(
 
 	conflicts := 0
 	for _, candidate := range candidates {
+		if completed != nil {
+			id := candidate.Object.GetAnnotations()[metadata.NodePathAnnotation]
+			if id == "" {
+				// Pre-node-path objects carry the bare root ID in their label.
+				id = candidate.Object.GetLabels()[metadata.NodeIDLabel]
+			}
+			if !completed.Has(id) {
+				continue
+			}
+		}
 		res, derr := applier.DeleteOrphan(ctx, candidate)
 		if derr != nil {
 			return pruned, false, fmt.Errorf("delete orphan: %w", derr)

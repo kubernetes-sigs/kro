@@ -110,3 +110,34 @@ func TestProjectInstanceConditions_DataPendingIsIncompleteNotAnError(t *testing.
 	assert.True(t, incomplete, "the caller needs to know a condition was skipped")
 	assert.Empty(t, conditions)
 }
+
+// A failing author expression degrades projection without suppressing later
+// valid conditions.
+func TestProjectInstanceConditions_FatalErrorInOneExpressionSkippedNotAborted(t *testing.T) {
+	const good = "${runtime.newCondition({type: 'Good', status: 'True'})}"
+	tests := []struct {
+		name string
+		bad  string
+	}{
+		{name: "evaluation error", bad: "${1 / 0}"},
+		{name: "invalid scalar", bad: "${'not a condition'}"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Put the bad expression first to require continuation past the error.
+			rgd := buildRGDWithStatus(map[string]any{
+				"conditions": []any{tt.bad, good},
+			})
+			rt := compileAndSeedRuntime(t, rgd, projectionInstance(), nil)
+
+			conditions, incomplete, err := ProjectInstanceConditions(rt, rgd, nil, 0)
+			require.ErrorIs(t, err, ErrConditionProjectionDegraded)
+			assert.Contains(t, err.Error(), tt.bad, "the error must identify the offending expression")
+			assert.True(t, incomplete)
+			require.Len(t, conditions, 1, "the later valid condition must survive")
+			assert.Equal(t, "Good", conditions[0].ConditionType)
+			assert.Equal(t, "True", conditions[0].Status)
+		})
+	}
+}

@@ -151,6 +151,7 @@ type compileOptions struct {
 	softDepNodes        map[string]struct{}
 	dataPendingTolerant map[string]struct{}
 	selfWatchExempt     map[string]struct{}
+	statusReplace       map[string]struct{}
 }
 
 // WithLiteralNode marks a node (such as a Def node) as pure literal data,
@@ -226,6 +227,17 @@ func WithSelfWatchExempt(nodeID string) CompileOption {
 	}
 }
 
+// WithStatusReplace selects a root status patch for replacement via Update.
+// Used by the RGD adapter for author status; same-named child nodes are unaffected.
+func WithStatusReplace(nodeID string) CompileOption {
+	return func(o *compileOptions) {
+		if o.statusReplace == nil {
+			o.statusReplace = make(map[string]struct{})
+		}
+		o.statusReplace[nodeID] = struct{}{}
+	}
+}
+
 // Compile validates the Graph, parses every node's CEL expressions against
 // the target schemas, builds the dependency DAG, and returns the compiled
 // Program. Nested subgraphs are compiled recursively, each in its own lexical
@@ -253,6 +265,11 @@ func (c *Compiler) CompileWithOptions(g *expv1alpha1.Graph, opts ...CompileOptio
 	prog, _, err := ctx.compileFrame(graph.Spec.Nodes, true)
 	if err != nil {
 		return nil, err
+	}
+	for id := range co.statusReplace {
+		if n := prog.Nodes[id]; n != nil && n.Kind == NodeKindPatch && n.Subresource == "status" {
+			n.StatusReplace = true
+		}
 	}
 	return prog, nil
 }

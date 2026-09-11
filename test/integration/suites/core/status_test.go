@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
@@ -327,5 +328,81 @@ var _ = Describe("Status", func() {
 			g.Expect(hasField2).To(BeFalse(), "field2 should disappear when cm2 is disabled")
 			g.Expect(hasField3).To(BeFalse(), "field3 should disappear when cm2 is disabled")
 		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+	})
+
+	It("removes and restores an author status field held by a co-owner", func(ctx SpecContext) {
+		rgd := generator.NewResourceGraphDefinition("test-status-co-owner",
+			generator.WithSchema("StatusCoOwner", "v1alpha1",
+				map[string]any{"includeCm": "boolean"},
+				map[string]any{"value": "${cm.data.value}"}),
+			generator.WithResource("cm", map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": "status-source"},
+				"data":     map[string]any{"value": "one"},
+			}, nil, []string{"${schema.spec.includeCm}"}),
+		)
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+		waitForRGDActive(ctx, rgd.Name)
+
+		instance := newInstance("StatusCoOwner", "test-co-owner", namespace, map[string]any{"includeCm": true})
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+		})
+		getInstance := func(g Gomega) *unstructured.Unstructured {
+			got := &unstructured.Unstructured{}
+			got.SetGroupVersionKind(instance.GroupVersionKind())
+			g.Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(instance), got)).To(Succeed())
+			return got
+		}
+		setIncludeCm := func(include bool) {
+			Expect(retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				current := instance.DeepCopy()
+				if err := env.Client.Get(ctx, client.ObjectKeyFromObject(instance), current); err != nil {
+					return err
+				}
+				current.Object["spec"].(map[string]any)["includeCm"] = include
+				return env.Client.Update(ctx, current)
+			})).To(Succeed())
+		}
+		Eventually(func(g Gomega) {
+			status, _, _ := unstructured.NestedMap(getInstance(g).Object, "status")
+			g.Expect(status).To(HaveKeyWithValue("value", "one"))
+			g.Expect(status).To(HaveKeyWithValue("state", "ACTIVE"))
+		}, 30*time.Second, 250*time.Millisecond).Should(Succeed())
+
+		// An identical SSA value adds an owner that will never omit the field,
+		// reproducing the removal obstacle left by a pre-upgrade status writer.
+		coOwner := &unstructured.Unstructured{}
+		coOwner.SetGroupVersionKind(instance.GroupVersionKind())
+		coOwner.SetNamespace(namespace)
+		coOwner.SetName(instance.GetName())
+		coOwner.Object["status"] = map[string]any{"value": "one"}
+		Expect(env.Client.Status().Patch(ctx, coOwner, client.Apply,
+			client.FieldOwner("status-co-owner"), client.ForceOwnership)).To(Succeed())
+		Expect(getInstance(Default).GetManagedFields()).To(ContainElement(SatisfyAll(
+			HaveField("Manager", "status-co-owner"),
+			HaveField("Operation", metav1.ManagedFieldsOperationApply),
+			HaveField("Subresource", "status"),
+		)))
+
+		setIncludeCm(false)
+		Eventually(func(g Gomega) {
+			status, _, _ := unstructured.NestedMap(getInstance(g).Object, "status")
+			g.Expect(status).NotTo(HaveKey("value"), "unresolved author field must disappear despite its co-owner")
+			g.Expect(status["conditions"]).NotTo(BeEmpty())
+			g.Expect(status).To(HaveKeyWithValue("state", "ACTIVE"))
+		}, 30*time.Second, 250*time.Millisecond).Should(Succeed())
+
+		setIncludeCm(true)
+		Eventually(func(g Gomega) {
+			status, _, _ := unstructured.NestedMap(getInstance(g).Object, "status")
+			g.Expect(status).To(HaveKeyWithValue("value", "one"))
+			g.Expect(status["conditions"]).NotTo(BeEmpty())
+			g.Expect(status).To(HaveKeyWithValue("state", "ACTIVE"))
+		}, 30*time.Second, 250*time.Millisecond).Should(Succeed())
 	})
 })

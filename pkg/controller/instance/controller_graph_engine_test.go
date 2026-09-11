@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1252,6 +1253,227 @@ func TestReconcileViaGraphEngine_HardErrorsAndInventory(t *testing.T) {
 	})
 }
 
+func TestReconcileViaGraphEngine_PartialPruningBoundaries(t *testing.T) {
+	for _, priorID := range []string{"entries", "renamedAway"} {
+		t.Run(priorID, func(t *testing.T) {
+			inst := newInstanceObject("demo", "default")
+			inst.Object["spec"] = map[string]any{"ready": "false", "values": []any{"a1"}, "retiredValues": []any{}}
+			gate := newManagedObject(newConfigMapObject("gate-new", "default"), inst, "gate", 1)
+			oldGate := newManagedObject(newConfigMapObject("gate-old", "default"), inst, "gate", 1)
+			retired := newManagedObject(newConfigMapObject("retired", "default"), inst, "cms", 1)
+			entry1 := newManagedObject(newConfigMapObject("entry-a1", "default"), inst, priorID, 2)
+			entry2 := newManagedObject(newConfigMapObject("entry-a2", "default"), inst, priorID, 2)
+			skipped := newManagedObject(newConfigMapObject("skipped", "retained-ns"), inst, "skipped", 1)
+			defMember := newManagedObject(newConfigMapObject("def-member", "default"), inst, "schema", 1)
+			refMember := newManagedObject(newConfigMapObject("ref-member", "default"), inst, "existing", 1)
+			addDeletionScope(inst, controllerTestDeployGVK, "default")
+			for _, obj := range []*unstructured.Unstructured{gate, oldGate, retired, entry1, entry2, skipped, defMember, refMember} {
+				obj.SetUID(types.UID(obj.GetName() + "-uid"))
+			}
+			raw := newControllerTestDynamicClient(t, inst.DeepCopy(), gate, oldGate, retired, entry1, entry2, skipped, defMember, refMember)
+			runtimeClient := newFakeRuntimeClient(t, gate, entry1, entry2)
+			spec := testEmptyRGDSpec()
+			spec.Schema.Spec.Raw = []byte(`{"ready":"string","values":"[]string","retiredValues":"[]string"}`)
+			spec.Resources = []*v1alpha1.Resource{
+				{
+					ID: "gate", ReadyWhen: []string{"${gate.data.ready == 'true'}"},
+					Template: apimachineryruntime.RawExtension{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"gate-new","namespace":"default"},"data":{"ready":"${schema.spec.ready}"}}`)},
+				},
+				{
+					ID: "entries", ForEach: []v1alpha1.ForEachDimension{{"v": "${schema.spec.values}"}},
+					Template: apimachineryruntime.RawExtension{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"entry-${v}","namespace":"default"},"data":{"ready":"${gate.data.ready}"}}`)},
+				},
+				{
+					ID: "cms", ForEach: []v1alpha1.ForEachDimension{{"v": "${schema.spec.retiredValues}"}},
+					Template: apimachineryruntime.RawExtension{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"retired-${v}","namespace":"default"}}`)},
+				},
+				{
+					ID: "skipped", IncludeWhen: []string{"${false}"},
+					Template: apimachineryruntime.RawExtension{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"skipped","namespace":"retained-ns"}}`)},
+				},
+				{
+					ID:          "existing",
+					ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap", Metadata: v1alpha1.ExternalRefMetadata{Name: "gate-new", Namespace: "default"}},
+				},
+			}
+			c, _ := newGraphEngineControllerUnderTest(t, raw, spec, revisions.RevisionStateActive, newTestRealCompiler(t), runtimeClient)
+
+			// Repeat the partial cycle: the second pass has only retained candidates.
+			for range 2 {
+				err := c.reconcileViaGraphEngine(t.Context(), inst, &fakeInstanceWatcher{})
+				require.ErrorIs(t, err, executor.ErrNotReady)
+				for _, name := range []string{"retired", "gate-old"} {
+					_, err := raw.Tracker().Get(controllerTestCMGVR, "default", name)
+					assert.True(t, apierrors.IsNotFound(err), "completed empty and nonempty templates may prune: %s: %v", name, err)
+				}
+				for _, obj := range []*unstructured.Unstructured{gate, entry1, entry2, skipped, defMember, refMember} {
+					stored, err := raw.Tracker().Get(controllerTestCMGVR, obj.GetNamespace(), obj.GetName())
+					require.NoError(t, err)
+					assert.Equal(t, obj.GetUID(), stored.(*unstructured.Unstructured).GetUID())
+				}
+				inst = getStoredParentObject(t, raw)
+				require.NoError(t, applyset.ValidateParentInventory(inst))
+				assert.Equal(t, "ConfigMap,Deployment.apps", inst.GetAnnotations()[applyset.ApplySetGKsAnnotation])
+				assert.Equal(t, "retained-ns", inst.GetAnnotations()[applyset.ApplySetAdditionalNamespacesAnnotation])
+			}
+
+			// Once the dependency is ready, the requested reduction and skipped-node
+			// retirement take effect. A renamed node reuses the surviving member's UID.
+			require.NoError(t, unstructured.SetNestedField(inst.Object, "true", "spec", "ready"))
+			require.NoError(t, raw.Tracker().Update(controllerTestParentGVR, inst.DeepCopy(), "default"))
+			require.NoError(t, c.reconcileViaGraphEngine(t.Context(), inst, &fakeInstanceWatcher{}))
+			kept, err := raw.Tracker().Get(controllerTestCMGVR, "default", "entry-a1")
+			require.NoError(t, err)
+			assert.Equal(t, entry1.GetUID(), kept.(*unstructured.Unstructured).GetUID())
+			_, err = raw.Tracker().Get(controllerTestCMGVR, "default", "entry-a2")
+			assert.True(t, apierrors.IsNotFound(err))
+			_, err = raw.Tracker().Get(controllerTestCMGVR, "retained-ns", "skipped")
+			assert.True(t, apierrors.IsNotFound(err))
+			stored := getStoredParentObject(t, raw)
+			assert.Equal(t, "ConfigMap", stored.GetAnnotations()[applyset.ApplySetGKsAnnotation])
+			assert.Empty(t, stored.GetAnnotations()[applyset.ApplySetAdditionalNamespacesAnnotation])
+			require.NoError(t, applyset.ValidateParentInventory(stored))
+		})
+	}
+}
+
+func TestReconcileViaGraphEngine_PartialPruneErrors(t *testing.T) {
+	spec := testEmptyRGDSpec()
+	spec.Schema.Spec.Raw = []byte(`{"values":"[]string"}`)
+	spec.Resources = []*v1alpha1.Resource{
+		{
+			ID: "cms", ForEach: []v1alpha1.ForEachDimension{{"v": "${schema.spec.values}"}},
+			Template: apimachineryruntime.RawExtension{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"cp-${v}","namespace":"default"}}`)},
+		},
+		{
+			ID:       "summary",
+			Template: apimachineryruntime.RawExtension{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"summary","namespace":"default"},"data":{"first":"${cms[0].metadata.name}"}}`)},
+		},
+	}
+	for _, tc := range []struct {
+		name, verb, wantMessage string
+		pruneErr                error
+		soft                    bool
+	}{
+		{name: "hard delete failure overrides soft apply", verb: "delete", wantMessage: "delete denied by policy", pruneErr: apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, "retired", errors.New("delete denied by policy"))},
+		{name: "hard list failure overrides soft apply", verb: "list", wantMessage: "list denied by policy", pruneErr: errors.New("list denied by policy")},
+		{name: "UID conflict preserves soft apply message", verb: "delete", wantMessage: "summary", pruneErr: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "retired", errors.New("UID mismatch")), soft: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inst := newInstanceObject("demo", "default")
+			inst.SetGeneration(7)
+			inst.Object["spec"] = map[string]any{"values": []any{}}
+			retired := newManagedObject(newConfigMapObject("retired", "default"), inst, "cms", 1)
+			summary := newManagedObject(newConfigMapObject("summary", "default"), inst, "summary", 2)
+			addDeletionScope(inst, controllerTestDeployGVK, "retained-ns")
+			raw := newControllerTestDynamicClient(t, inst.DeepCopy(), retired, summary)
+			raw.PrependReactor(tc.verb, "configmaps", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+				if action.GetVerb() == "delete" {
+					deletion := action.(k8stesting.DeleteAction)
+					assert.Equal(t, "retired", deletion.GetName(), "unresolved summary must never be targeted")
+					require.NotNil(t, deletion.GetDeleteOptions().Preconditions)
+					assert.Equal(t, new(retired.GetUID()), deletion.GetDeleteOptions().Preconditions.UID)
+				}
+				return true, nil, tc.pruneErr
+			})
+			c, _ := newGraphEngineControllerUnderTest(t, raw, spec, revisions.RevisionStateActive, newTestRealCompiler(t), newFakeRuntimeClient(t))
+			err := c.reconcileViaGraphEngine(t.Context(), inst, &fakeInstanceWatcher{})
+			require.Error(t, err)
+			assert.True(t, requeue.IsRequeueError(err))
+			assert.Equal(t, tc.soft, errors.Is(err, executor.ErrNotReady))
+			assert.Contains(t, err.Error(), tc.wantMessage)
+			attempted := false
+			for _, action := range raw.Actions() {
+				attempted = attempted || action.Matches(tc.verb, "configmaps")
+			}
+			assert.True(t, attempted, "prune failure must be exercised")
+			stored := getStoredParentObject(t, raw)
+			condition := conditionByType(t, stored, ResourcesReady)
+			assert.Equal(t, metav1.ConditionFalse, condition.Status)
+			assert.Equal(t, inst.GetGeneration(), condition.ObservedGeneration)
+			require.NotNil(t, condition.Message)
+			assert.Contains(t, *condition.Message, tc.wantMessage)
+			if tc.soft {
+				assert.NotContains(t, *condition.Message, "prune of retired resources failed")
+			} else {
+				assert.Contains(t, *condition.Message, "prune of retired resources failed")
+			}
+			assert.Equal(t, string(v1alpha1.InstanceStateInProgress), stored.Object["status"].(map[string]any)["state"])
+			assert.Equal(t, "ConfigMap,Deployment.apps", stored.GetAnnotations()[applyset.ApplySetGKsAnnotation])
+			assert.Equal(t, "retained-ns", stored.GetAnnotations()[applyset.ApplySetAdditionalNamespacesAnnotation])
+			require.NoError(t, applyset.ValidateParentInventory(stored))
+			for _, obj := range []*unstructured.Unstructured{retired, summary} {
+				live, err := raw.Tracker().Get(controllerTestCMGVR, "default", obj.GetName())
+				require.NoError(t, err)
+				assert.Equal(t, obj.GetUID(), live.(*unstructured.Unstructured).GetUID())
+			}
+		})
+	}
+}
+
+func TestReconcileViaGraphEngine_InventoryErrorPrecedence(t *testing.T) {
+	for _, hardApply := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hardApply=%v", hardApply), func(t *testing.T) {
+			inst := newInstanceObject("demo", "default")
+			retired := newManagedObject(newConfigMapObject("retired", "default"), inst, "late", 1)
+			input := newConfigMapObject("input", "default")
+			input.Object["data"] = map[string]any{"namespace": "late-ns"}
+			spec := testEmptyRGDSpec()
+			spec.Resources = []*v1alpha1.Resource{
+				{
+					ID:          "input",
+					ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap", Metadata: v1alpha1.ExternalRefMetadata{Name: "input", Namespace: "default"}},
+				},
+				{
+					ID:       "late",
+					Template: apimachineryruntime.RawExtension{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"late","namespace":"${input.data.namespace}"}}`)},
+				},
+				{
+					ID:       "blocked",
+					Template: apimachineryruntime.RawExtension{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"blocked","namespace":"default"},"data":{"value":"${input.data.absent}"}}`)},
+				},
+			}
+			wantMessage := "inventory growth denied"
+			wantState := v1alpha1.InstanceStateInProgress
+			if hardApply {
+				duplicate := spec.Resources[1].DeepCopy()
+				duplicate.ID = "duplicate"
+				spec.Resources = append(spec.Resources, duplicate)
+				wantMessage = "duplicate resource identity across nodes"
+				wantState = v1alpha1.InstanceStateError
+			}
+			raw := newControllerTestDynamicClient(t, inst.DeepCopy(), retired)
+			growAttempted := false
+			raw.PrependReactor("patch", "webapps", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+				patch := &unstructured.Unstructured{}
+				require.NoError(t, patch.UnmarshalJSON(action.(k8stesting.PatchAction).GetPatch()))
+				if strings.Contains(patch.GetAnnotations()[applyset.ApplySetAdditionalNamespacesAnnotation], "late-ns") {
+					growAttempted = true
+					return true, nil, errors.New("inventory growth denied")
+				}
+				return false, nil, nil
+			})
+			c, _ := newGraphEngineControllerUnderTest(t, raw, spec, revisions.RevisionStateActive, newTestRealCompiler(t), newFakeRuntimeClient(t, input))
+			err := c.reconcileViaGraphEngine(t.Context(), inst, &fakeInstanceWatcher{})
+			require.ErrorContains(t, err, wantMessage)
+			assert.NotErrorIs(t, err, executor.ErrNotReady)
+			assert.True(t, growAttempted, "ref-derived namespace must reach post-apply inventory growth")
+			for _, action := range raw.Actions() {
+				assert.NotEqual(t, "delete", action.GetVerb(), "inventory failure must veto deletion")
+			}
+			stored := getStoredParentObject(t, raw)
+			condition := conditionByType(t, stored, ResourcesReady)
+			require.NotNil(t, condition.Message)
+			assert.Contains(t, *condition.Message, wantMessage)
+			assert.Equal(t, string(wantState), stored.Object["status"].(map[string]any)["state"])
+			assert.Equal(t, "ConfigMap", stored.GetAnnotations()[applyset.ApplySetGKsAnnotation])
+			live, err := raw.Tracker().Get(controllerTestCMGVR, "default", "retired")
+			require.NoError(t, err)
+			assert.Equal(t, retired.GetUID(), live.(*unstructured.Unstructured).GetUID())
+		})
+	}
+}
+
 // -----------------------------------------------------------------------------
 // 12. Helper Functions Unit Tests
 // -----------------------------------------------------------------------------
@@ -1473,6 +1695,75 @@ func TestPatchInstanceApplySetMetadata(t *testing.T) {
 func TestReconcileApplySetInventory_Direct(t *testing.T) {
 	comp := newTestRealCompiler(t)
 
+	t.Run("partial cycles grow before pruning and never shrink", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			candidates bool
+			completed  sets.Set[string]
+			failGrow   bool
+			wantPruned bool
+		}{
+			{name: "prune after growth", candidates: true, completed: sets.New("cms"), wantPruned: true},
+			{name: "no candidates", completed: sets.New("cms")},
+			{name: "all candidates retained", candidates: true, completed: sets.New("other")},
+			{name: "no eligible templates", candidates: true},
+			{name: "growth failure", candidates: true, completed: sets.New("cms"), failGrow: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				inst := newInstanceObject("demo", "default")
+				retired := newManagedObject(newDeploymentObject("retired", "default"), inst, "cms", 1)
+				retained := newManagedObject(newDeploymentObject("retained", "retained-ns"), inst, "summary", 2)
+				objects := []apimachineryruntime.Object{inst.DeepCopy()}
+				if tc.candidates {
+					objects = append(objects, retired, retained)
+				}
+				raw := newControllerTestDynamicClient(t, objects...)
+				c, clientSet := newGraphEngineControllerUnderTest(t, raw, testEmptyRGDSpec(), revisions.RevisionStateActive, comp, nil)
+				applier := applyset.New(applyset.Config{Client: raw, RESTMapper: clientSet.RESTMapper(), ParentNamespace: "default", Log: c.log}, inst)
+				superset, err := applier.Union(applyset.Metadata{})
+				require.NoError(t, err)
+				applied := []v1alpha1.ManagedResource{{NodeID: "late", APIVersion: "v1", Kind: "ConfigMap", Namespace: "late-ns", Name: "late", UID: "late-uid"}}
+				deletes := 0
+				raw.PrependReactor("delete", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+					deletes++
+					parent, err := raw.Tracker().Get(controllerTestParentGVR, "default", "demo")
+					require.NoError(t, err)
+					annotations := parent.(*unstructured.Unstructured).GetAnnotations()
+					assert.Equal(t, "ConfigMap,Deployment.apps", annotations[applyset.ApplySetGKsAnnotation], "growth must be durable before DELETE")
+					assert.Equal(t, "late-ns,retained-ns", annotations[applyset.ApplySetAdditionalNamespacesAnnotation])
+					return false, nil, nil
+				})
+				if tc.failGrow {
+					raw.PrependReactor("patch", "webapps", func(k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+						return true, nil, errors.New("inventory growth denied")
+					})
+				}
+				err = c.reconcileApplySetInventory(t.Context(), c.log, inst, applier, applied, superset, false, tc.completed)
+				if tc.failGrow {
+					require.ErrorContains(t, err, "inventory growth denied")
+				} else {
+					require.NoError(t, err)
+					stored := getStoredParentObject(t, raw)
+					require.NoError(t, applyset.ValidateParentInventory(stored))
+					assert.Equal(t, "ConfigMap,Deployment.apps", stored.GetAnnotations()[applyset.ApplySetGKsAnnotation])
+					assert.Equal(t, "late-ns,retained-ns", stored.GetAnnotations()[applyset.ApplySetAdditionalNamespacesAnnotation])
+				}
+				if tc.wantPruned {
+					assert.Equal(t, 1, deletes)
+					_, err := raw.Tracker().Get(controllerTestDeployGVR, "default", "retired")
+					assert.True(t, apierrors.IsNotFound(err))
+				} else {
+					assert.Zero(t, deletes)
+				}
+				if tc.candidates {
+					live, err := raw.Tracker().Get(controllerTestDeployGVR, "retained-ns", "retained")
+					require.NoError(t, err)
+					assert.Equal(t, retained.GetUID(), live.(*unstructured.Unstructured).GetUID())
+				}
+			})
+		}
+	})
+
 	t.Run("Union error propagates as error", func(t *testing.T) {
 		inst := newInstanceObject("demo", "default")
 		inst.SetAnnotations(map[string]string{
@@ -1490,7 +1781,7 @@ func TestReconcileApplySetInventory_Direct(t *testing.T) {
 			},
 		}
 
-		err := c.reconcileApplySetInventory(context.Background(), c.log, inst, nil, applied, applyset.Metadata{}, true)
+		err := c.reconcileApplySetInventory(context.Background(), c.log, inst, nil, applied, applyset.Metadata{}, true, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "applyset union:")
 	})
@@ -1547,7 +1838,7 @@ func TestReconcileApplySetInventory_Direct(t *testing.T) {
 		})
 
 		c, _ := newGraphEngineControllerUnderTest(t, raw, testEmptyRGDSpec(), revisions.RevisionStateActive, comp, nil)
-		err := c.reconcileApplySetInventory(context.Background(), c.log, inst, nil, nil, applyset.Metadata{}, true)
+		err := c.reconcileApplySetInventory(context.Background(), c.log, inst, nil, nil, applyset.Metadata{}, true, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "align inventory after apply/prune: shrink patch failed")
 	})
@@ -1575,7 +1866,7 @@ func TestReconcileApplySetInventory_Direct(t *testing.T) {
 			},
 		}
 
-		err := c.reconcileApplySetInventory(context.Background(), c.log, inst, nil, applied, applyset.Metadata{}, true)
+		err := c.reconcileApplySetInventory(context.Background(), c.log, inst, nil, applied, applyset.Metadata{}, true, nil)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, applyset.ErrDuplicateResource))
 	})
@@ -1583,6 +1874,72 @@ func TestReconcileApplySetInventory_Direct(t *testing.T) {
 
 func TestPruneGraphEngineOrphans_Direct(t *testing.T) {
 	comp := newTestRealCompiler(t)
+
+	t.Run("partial attribution uses canonical root paths with legacy fallback", func(t *testing.T) {
+		longID := strings.Repeat("long", 17)
+		inst := newInstanceObject("demo", "default")
+		raw := newControllerTestDynamicClient(t, inst.DeepCopy())
+		runtimeClient := newFakeRuntimeClient(t)
+		longSpec := testRGDSpecWithConfigMap("annotated-long", "")
+		longSpec.Resources[0].ID = longID
+		c, _ := newGraphEngineControllerUnderTest(t, raw, longSpec, revisions.RevisionStateActive, comp, runtimeClient)
+		require.NoError(t, c.reconcileViaGraphEngine(t.Context(), inst, &fakeInstanceWatcher{}))
+		stampedLong := newConfigMapObject("annotated-long", "default")
+		require.NoError(t, runtimeClient.Get(t.Context(), client.ObjectKeyFromObject(stampedLong), stampedLong))
+		hashedLabel := stampedLong.GetLabels()[metadata.NodeIDLabel]
+		require.Equal(t, metadata.NodeIDToken(longID), hashedLabel)
+		require.Equal(t, longID, stampedLong.GetAnnotations()[metadata.NodePathAnnotation])
+		cases := []struct {
+			name, path, label string
+			pruned            bool
+		}{
+			{name: "annotated", path: "cms", label: "cms", pruned: true},
+			{name: "legacy", label: "cms", pruned: true},
+			{name: "path-without-label", path: "cms", pruned: true},
+			{name: "path-overrides-label", path: "cms", label: "summary", pruned: true},
+			{name: "annotated-long", path: longID, label: hashedLabel, pruned: true},
+			{name: "hash-only", label: hashedLabel},
+			{name: "unattributed"},
+			{name: "unknown-path", path: "removed", label: "cms"},
+			{name: "renamed-away", label: "oldcms"},
+			{name: "unresolved-path", path: "summary", label: "cms"},
+			{name: "legacy-unresolved", label: "summary"},
+			{name: "distinct-root", path: "summaryx", label: "summaryx", pruned: true},
+			{name: "qualified-path", path: "cms/child", label: "cms"},
+			{name: "qualified-label", label: "cms.child"},
+		}
+		for _, tc := range cases {
+			base := newConfigMapObject(tc.name, "default")
+			if tc.name == "annotated-long" {
+				base = stampedLong
+			}
+			obj := newManagedObject(base, inst, tc.label, 1)
+			obj.SetUID(types.UID(tc.name + "-uid"))
+			if tc.name != "annotated-long" {
+				annotations := obj.GetAnnotations()
+				annotations[metadata.NodePathAnnotation] = tc.path
+				obj.SetAnnotations(annotations)
+			}
+			require.NoError(t, raw.Tracker().Create(controllerTestCMGVR, obj, "default"))
+		}
+		require.NoError(t, c.reconcileApplySetInventory(t.Context(), c.log, inst, nil, nil, applyset.Metadata{}, false, sets.New("cms", "summaryx", longID)))
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				obj, err := raw.Resource(controllerTestCMGVR).Namespace("default").Get(t.Context(), tc.name, metav1.GetOptions{})
+				if tc.pruned {
+					require.True(t, apierrors.IsNotFound(err), "attributable retired member must be pruned: %v", err)
+				} else {
+					require.NoError(t, err)
+					assert.Equal(t, types.UID(tc.name+"-uid"), obj.GetUID())
+				}
+			})
+		}
+		// Full resolution removes the remaining unknown and legacy members too.
+		require.NoError(t, c.reconcileApplySetInventory(t.Context(), c.log, inst, nil, nil, applyset.Metadata{}, true, nil))
+		remaining, err := raw.Resource(controllerTestCMGVR).Namespace("default").List(t.Context(), metav1.ListOptions{})
+		require.NoError(t, err)
+		assert.Empty(t, remaining.Items)
+	})
 
 	t.Run("KeepUIDs populated from applied resources", func(t *testing.T) {
 		inst := newInstanceObject("demo", "default")
@@ -1619,7 +1976,7 @@ func TestPruneGraphEngineOrphans_Direct(t *testing.T) {
 		meta := applySetMetadataFromApplied(inst, applied)
 		supersetMeta, _ := applier.Union(meta)
 
-		pruned, conflictFree, err := c.pruneGraphEngineOrphans(context.Background(), c.log, applier, applied, supersetMeta)
+		pruned, conflictFree, err := c.pruneGraphEngineOrphans(context.Background(), c.log, applier, applied, supersetMeta, sets.New("deploy"))
 		require.NoError(t, err)
 		assert.True(t, pruned)
 		assert.True(t, conflictFree)
@@ -1653,7 +2010,7 @@ func TestPruneGraphEngineOrphans_Direct(t *testing.T) {
 		}, inst)
 
 		supersetMeta, _ := applier.Project(nil)
-		_, _, err := c.pruneGraphEngineOrphans(context.Background(), c.log, applier, nil, supersetMeta)
+		_, _, err := c.pruneGraphEngineOrphans(context.Background(), c.log, applier, nil, supersetMeta, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "delete failed: internal server error")
 	})
@@ -1857,7 +2214,8 @@ func TestReconcileViaGraphEngine_PatchContributions(t *testing.T) {
 
 	t.Run("Duplicate rendered identities prevent child writes and persist failure status", func(t *testing.T) {
 		inst := newInstanceObject("demo", "default")
-		raw := newControllerTestDynamicClient(t, inst.DeepCopy())
+		retired := newManagedObject(newConfigMapObject("retired", "default"), inst, "cm1", 1)
+		raw := newControllerTestDynamicClient(t, inst.DeepCopy(), retired)
 
 		// Construct an RGD spec with two distinct nodes that render the same object (same GVK, ns, name)
 		spec := &v1alpha1.ResourceGraphDefinitionSpec{
@@ -1895,6 +2253,11 @@ func TestReconcileViaGraphEngine_PatchContributions(t *testing.T) {
 		cm := newConfigMapObject("shared-cm", "default")
 		assert.True(t, apierrors.IsNotFound(fakeRuntimeCl.Get(context.Background(), client.ObjectKeyFromObject(cm), cm)),
 			"the duplicate must be rejected before either child is created")
+		for _, action := range raw.Actions() {
+			assert.NotEqual(t, "delete", action.GetVerb(), "hard duplicate-identity failure must veto pruning")
+		}
+		_, getErr := raw.Tracker().Get(controllerTestCMGVR, "default", "retired")
+		require.NoError(t, getErr)
 
 		stored := getStoredParentObject(t, raw)
 		cond := conditionByType(t, stored, ResourcesReady)

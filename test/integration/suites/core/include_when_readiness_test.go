@@ -131,7 +131,7 @@ var _ = DescribeTable("IncludeWhen readiness",
 			if disableWhileUnready {
 				retired := &corev1.ConfigMap{}
 				g.Expect(env.Client.Get(ctx, extraKey, retired)).To(Succeed(),
-					"a withheld owning node closes the existing instance-wide prune gate")
+					"the skipped extra must remain while app is withheld")
 				g.Expect(retired.UID).To(Equal(extra.UID))
 			}
 		}, 10*time.Second, 250*time.Millisecond).Should(Succeed())
@@ -151,6 +151,6 @@ var _ = DescribeTable("IncludeWhen readiness",
 	},
 	Entry("retains an existing child through a false interim resource value",
 		"InclusionReadyInputs", `${schema.spec.name != "" && db.data.phase == "Running"}`, false, SpecTimeout(120*time.Second)),
-	Entry("withholds schema-disabled children and unrelated pruning until template inputs are ready",
+	Entry("retains schema-disabled children and a skipped extra until template inputs are ready",
 		"InclusionSchemaDisabled", `${schema.spec.enabled}`, true, SpecTimeout(120*time.Second)),
 )

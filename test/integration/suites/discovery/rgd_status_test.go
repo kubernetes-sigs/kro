@@ -34,8 +34,8 @@ import (
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	"github.com/kubernetes-sigs/kro/pkg/features"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/environment"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
 // This package has its own controller lifetime and default feature gates;

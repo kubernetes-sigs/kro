@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/environment"
 )
 
 // Drives the contract that includeWhen=false on one node propagates to

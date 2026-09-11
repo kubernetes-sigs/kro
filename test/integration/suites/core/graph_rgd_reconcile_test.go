@@ -37,7 +37,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/rgdadapter"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/environment"
 )
 
 var _ = Describe("Graph RGD Reconcile", func() {

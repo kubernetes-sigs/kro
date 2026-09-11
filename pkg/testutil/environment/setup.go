@@ -89,7 +89,7 @@ type ControllerConfig struct {
 // built in this test process, silencing benign warning headers (e.g. "child
 // pods are preserved by default when jobs are deleted; set
 // propagationPolicy=Background ...") that otherwise clutter spec output. It
-// affects only the integration test binary, never production clients.
+// affects only test binaries importing this helper, never production clients.
 func init() {
 	rest.SetDefaultWarningHandler(rest.NoWarnings{})
 }

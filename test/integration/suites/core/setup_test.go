@@ -26,7 +26,7 @@ import (
 
 	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	"github.com/kubernetes-sigs/kro/pkg/features"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/environment"
 )
 
 var env *environment.Environment

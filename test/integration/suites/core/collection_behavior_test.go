@@ -31,7 +31,7 @@ import (
 )
 
 // configuredMaxCollectionSize mirrors the RGDConfig the integration environment
-// installs (see test/integration/environment/setup.go). The collection cap is
+// installs (see pkg/testutil/environment/setup.go). The collection cap is
 // an operator-facing setting, so the value the controller enforces has to be
 // the value it was given rather than a built-in default.
 const configuredMaxCollectionSize = 1000

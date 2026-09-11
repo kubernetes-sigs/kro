@@ -30,7 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/environment"
 )
 
 func getSchemaWatchEnv(t environment.TestingT) *environment.Environment {

@@ -28,7 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/environment"
 )
 
 var _ = Describe("Graph Patch", func() {

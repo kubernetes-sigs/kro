@@ -280,23 +280,26 @@ func (r *Runtime) Node(id string) *Node { return r.byID[id] }
 func (r *Runtime) Scope() map[string]any { return r.scope }
 
 // Set publishes value under id in the scope so downstream nodes can read
-// it via CEL expressions like ${id.field}. Values with known OpenAPI schemas
-// on Template and Ref nodes are wrapped via UnstructuredToVal so CEL format
-// annotations (such as format: "byte") are respected at runtime.
+// it via CEL expressions like ${id.field}. Template, Ref, and overridden Def
+// nodes with known OpenAPI schemas are wrapped via UnstructuredToVal so CEL
+// format annotations (such as format: "byte") are respected at runtime.
 func (r *Runtime) Set(id string, value any) {
 	var sc *spec.Schema
-	isTemplateOrRef := false
+	useSchema := false
 	if r.program != nil {
 		sc = r.program.NodeSchemas[id]
 	}
 	if node, ok := r.byID[id]; ok {
-		isTemplateOrRef = node.Kind() == compiler.NodeKindTemplate || node.Kind() == compiler.NodeKindRef
+		// Ordinary Defs can contain computed values whose inferred schemas
+		// use int-or-string as a dyn marker, so they must stay unwrapped.
+		useSchema = node.Kind() == compiler.NodeKindTemplate || node.Kind() == compiler.NodeKindRef ||
+			(node.Kind() == compiler.NodeKindDef && node.objectOverride != nil)
 	}
-	r.scope[id] = wrapValueForScope(value, sc, isTemplateOrRef)
+	r.scope[id] = wrapValueForScope(value, sc, useSchema)
 }
 
-func wrapValueForScope(val any, sc *spec.Schema, isTemplateOrRef bool) any {
-	if !isTemplateOrRef || sc == nil || val == nil {
+func wrapValueForScope(val any, sc *spec.Schema, useSchema bool) any {
+	if !useSchema || sc == nil || val == nil {
 		return val
 	}
 	switch v := val.(type) {

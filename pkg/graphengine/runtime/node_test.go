@@ -325,6 +325,34 @@ func TestNode_Resolve(t *testing.T) {
 			},
 		},
 		{
+			name: "published computed def fields keep their dynamic values",
+			graph: generator.NewGraph("g",
+				generator.WithDef("input", map[string]any{"name": "alpha"}),
+				generator.WithDef("values", map[string]any{
+					"enabled": "${input.name == 'alpha'}",
+					"mapping": "${{'name': input.name}}",
+					"names":   "${[input.name, 'beta']}",
+				}),
+				generator.WithDef("consumer", map[string]any{
+					"enabled": "${values.enabled}",
+					"mapping": "${values.mapping}",
+					"names":   "${values.names}",
+				}),
+			),
+			populate: func(rt *Runtime) {
+				setFirst(rt, "input")
+				setFirst(rt, "values")
+			},
+			assertID: "consumer",
+			want: []func(t *testing.T, out map[string]any){
+				func(t *testing.T, out map[string]any) {
+					assert.Equal(t, true, out["enabled"])
+					assert.Equal(t, map[string]any{"name": "alpha"}, out["mapping"])
+					assert.Equal(t, []any{"alpha", "beta"}, out["names"])
+				},
+			},
+		},
+		{
 			name: "template substitution at metadata.name",
 			graph: generator.NewGraph("g",
 				generator.WithDef("naming", map[string]any{"prefix": "team-", "app": "billing"}),

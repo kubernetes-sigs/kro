@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,11 +27,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	memory "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/restmapper"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/registry"
 	graphruntime "github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
 	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
 
@@ -134,6 +138,35 @@ func TestBuildRuntimeForInstanceCached_ReusesProgram(t *testing.T) {
 	// No cross-instance data leakage: each runtime resolves its OWN value.
 	assert.Equal(t, "value-A", resolveCMValue(t, rtA))
 	assert.Equal(t, "value-B", resolveCMValue(t, rtB))
+}
+
+func TestBuildRuntimeForInstanceCached_SchemaKeepsDeclaredTypingAfterPublish(t *testing.T) {
+	rgd := schemaValueRGD("webapp")
+	rgd.Spec.Resources[0].Template = rawResource(map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]any{"name": "cm", "namespace": "default"},
+		"data":       map[string]any{"year": "${string(schema.metadata.creationTimestamp.getFullYear())}"},
+	})
+	instance := webInstance("app", "default", "value")
+	instance.SetCreationTimestamp(metav1.Date(2024, time.May, 6, 7, 8, 9, 0, time.UTC))
+	rt, _, err := BuildRuntimeForInstanceCached(rgd, instance, newTestCompiler(t), registry.New())
+	require.NoError(t, err)
+
+	// The seeded schema already supports timestamp methods before publication.
+	objects, err := rt.Node("cm").Resolve()
+	require.NoError(t, err)
+	require.Len(t, objects, 1)
+	require.Equal(t, "2024", nestedString(t, objects[0].Object, "data", "year"))
+
+	// The executor publishes the schema Def before resolving and applying cm.
+	ex := executor.NewSimple(fake.NewClientBuilder().Build())
+	result, err := ex.Apply(t.Context(), rt, watchrouter.NoopWatcher{})
+	require.NoError(t, err, "schema publication must preserve its declared CEL type")
+	require.Len(t, result.Applied, 1)
+	objects = rt.Node("cm").Observed()
+	require.Len(t, objects, 1)
+	assert.Equal(t, "2024", nestedString(t, objects[0].Object, "data", "year"))
 }
 
 // TestBuildRuntimeForInstanceCached_NoLeakUnderConcurrency runs many instances

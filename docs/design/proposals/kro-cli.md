@@ -50,7 +50,7 @@ Expand the existing `kro` CLI with new commands and improve existing ones. All c
 | `kro generate crd`      | Generate CRD from an RGD                          | Existing                          |
 | `kro generate instance` | Generate sample instance from an RGD              | Existing                          |
 | `kro generate diagram`  | Generate HTML dependency graph                    | Existing                          |
-| `kro bootstrap`         | Bootstrap Kro in an existing cluster              | New                               |
+| `kro bootstrap`         | Install and upgrade kro in an existing cluster    | New                               |
 
 ### Design Details
 
@@ -153,6 +153,114 @@ kro registry login registry.io -u username --password-stdin
 
 Supports standard OCI auth options (TLS certs, CA bundles, insecure).
 
+#### Bootstrap
+
+`kro bootstrap` installs and upgrades the kro controller and CRDs in an existing cluster.
+
+The plain helm install with the chart is missing a number of features that are required
+in today's cluster management world: discovery, preflight checks, sensible opinionated
+defaults and above all, a working, trustable *upgrade* flow.
+
+##### Prior art
+
+| Dimension       | Flux (`flux bootstrap` / `flux install`)                                 | CAPI (`clusterctl init`)                                                              |
+|-----------------|--------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
+| Manifest source | Embedded in the binary (`go:embed`), rendered by `pkg/manifestgen`       | Fetched from provider release assets (`components.yaml` + `metadata.yaml`)            |
+| Version model   | CLI version *is* the component version                                   | Resolves latest stable per provider; pin with `provider:vX.Y.Z`                       |
+| Customization   | Kustomize overlay, `--export` to stdout                                  | Variable substitution from `clusterctl.yaml` or env                                   |
+| Inventory       | Explicit object list in `.status.inventory`; labels link child to parent | A `Provider` object records version and inventory                                     |
+| Re-run          | Idempotent, `--reconcile` updates in place                               | Errors if initialized; upgrade is a separate verb                                     |
+| Upgrade         | Git push (self-managed) or re-run bootstrap                              | `upgrade plan` / `upgrade apply`, deletes components but preserves namespace and CRDs |
+| Preflight       | `flux check --pre` (API version, RBAC)                                   | Detects cert-manager, installs it if absent, then owns it                             |
+| GitOps handoff  | writes manifests to git, cluster syncs itself                            | None                                                                                  |
+
+##### Decision: embed the rendered manifests
+
+`kro bootstrap` embeds the release-rendered manifests with `go:embed` over
+`manifests/rendered/*.yaml` and applies them directly. It does not link the Helm SDK to avoid
+go mod bloat and not be just a plain Helm wrapper.
+
+The Helm SDK was considered and rejected:
+
+- **It adds nothing over `helm install`.** Helm is not in `go.mod`. Linking the SDK for template rendering plus
+  `--set` passthrough would make `kro bootstrap` a reimplementation of
+  `helm install kro oci://<repo>/kro --version vX.Y.Z`. The only advantage would be not
+  needing the helm binary on PATH.
+- **The cost is disproportionate.** The chart loader, registry client, ORAS, and a second
+  set of Kubernetes client libraries, linked into a CLI whose other commands parse YAML
+  and evaluate CEL. This would be an enormous intake of dependencies.
+- **It reproduces the exact bug we are trying to fix.** Helm never upgrades or deletes
+  anything in a chart's `crds/` directory.
+
+##### Version
+
+`--version` can only mean "the version this binary shipped with". This is the Flux model.
+A kro CLI at vX.Y.Z installs kro vX.Y.Z. Upgrading kro means fetching a newer CLI, which
+makes version skew between CLI and controller is impossible.
+
+##### Upgrade
+
+Re-running `kro bootstrap` against a cluster that already has kro is an upgrade. There is
+no separate verb. kro is one component, so there is nothing for an upgrade planner to
+schedule.
+
+**Apply strategy.** Server-side apply with a stable field manager(`kro-bootstrap`).
+Re-runs converge to detect drift cause by possible other tooling.
+`--force-conflicts` would just overwrite.
+
+**Ordering.** CRDs first, wait for `Established`, then ServiceAccount and RBAC, then the
+Deployment last.
+
+**CRD handling.** This is where a dedicated CLI will be more helpful.
+
+- All crds under `helm/crds/` are managed by this bootstrapper. They are server-side
+  applied on every run.
+- All crds at the time of writing are `v1alpha1` so migration is not a concern yet.
+
+**Pruning.** An upgrade path where something needs to be removed will, using normal apply,
+orphan the resource.
+
+Bootstrap reuses kro's existing ApplySet implementation in
+`pkg/controller/instance/applyset`, which already implements KEP-3659 for the instance
+controller. Nothing new to build: `Project`, `Apply`, `ListOrphans` and `DeleteOrphan`.
+Incidentally, ownership is also taken care of by the ApplySet mechanism.
+
+Two things that might be a problem still:
+
+- **Prune only works if every apply succeeded.** A failed apply leaves that resource's UID out of
+  `KeepUIDs`, so pruning would delete something still in use. Check `ApplyResult` errors
+  first and abort the prune, not the whole run.
+- **CRDs are applied but never pruned**, for the cascade reason under Uninstall.
+
+Side effect worth having: the controller prunes instance resources through ApplySet and the
+CLI prunes install components through ApplySet. One mechanism, one place to fix bugs.
+
+**Version detection and downgrade.** Current version is read from the controller Deployment
+image tag, downgrades are only considered through a force flag.
+
+**Uninstall.** Removal deletes the components and *preserves the CRDs by default*.
+
+##### Sketch
+
+```bash
+kro bootstrap                              # install or upgrade, current kubecontext
+kro bootstrap --variant <name>             # named variant from manifests/variants.yaml
+kro bootstrap --export                     # render to stdout, apply nothing
+kro bootstrap --dry-run                    # server-side dry run, shows the diff
+kro bootstrap --force-conflicts            # take ownership of conflicted fields
+kro check                                  # preflight: API version, RBAC, existing install (should this be separate?)
+```
+
+##### Open questions
+
+1. Is uninstall in scope here, or its own proposal? The CRD cascade argues for its own
+   design, with confirmation prompts and a `--keep-crds` default.
+2. Does bootstrap own any dependency the way `clusterctl` owns cert-manager? kro appears
+   to have none today. Confirm before designing around it.
+3. Naming collision: `kro install` versus `kro bootstrap`.
+4. Should upgrade run a kro-specific precheck, validating existing RGDs against the
+   incoming controller's schema before swapping the Deployment?
+
 #### Cluster Dependency Summary
 
 | Command                     | Cluster Required                        |
@@ -165,6 +273,7 @@ Supports standard OCI auth options (TLS certs, CA bundles, insecure).
 | `preview`                   | Yes                                     |
 | `push` / `pull` / `install` | No / No / Yes (for apply)               |
 | `generate *`                | Yes (existing behavior)                 |
+| `bootstrap`                 | Yes (No with `--export`)                |
 
 ## Scope
 
@@ -178,6 +287,7 @@ Supports standard OCI auth options (TLS certs, CA bundles, insecure).
 - Preview of changes against live cluster
 - OCI packaging and distribution via ORAS
 - Registry authentication
+- Bootstrapping and upgrading the kro controller and CRDs in an existing cluster
 
 ### Not In Scope
 

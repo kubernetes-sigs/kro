@@ -28,66 +28,43 @@ implementation or consequences for either.
 
 ## Solution
 
-We are proposing a CEL standard library. The most interesting and novel aspect
-of this is the impure section, a single `time.now()` function. It always takes
-one argument.
+We are proposing a CEL standard time library with restrictions on the types.
+With the correct restrictions on the types we can solve for when reconciles 
+should happen.
 
-`time.now(null)` returns the current timestamp. This form will not cause the
-instances of the RGD to have any additional reconciles. There is no guarantee of
-when it will be updated or how stale it can be.
+This CEL library will introduce new types called 
 
-`time.now(evaluateAfter)` also returns the current timestamp, and additionally
-causes the instance to be reconciled after `evaluateAfter`. If the CEL
-evaluation time has already passed `evaluateAfter`, the argument is ignored and
-no special scheduling consideration is given.
+1. `KroTimestamp` returned by `now()`
+2. `KroDuration` only accessible by subtracting two `KroTimestamp`
 
-Both forms return the standard CEL
-[`timestamp`](https://github.com/google/cel-spec/blob/master/doc/langdef.md)
-type, the same type as `schema.metadata.creationTimestamp`, so the result
-composes with `duration()` arithmetic and the comparison operators used in the
-examples.
+`now()` is set once per reconcile. Every call to `now()` will have the same value.
+
+These timestamps are very similar to the CEL standard library Timestamp/Duration but they 
+track if now() has been used to compute them. This is done to enable "solving" of requeue.
+
+The CEL standard library is designed to always be able to figure out when we need to requeue.
+This means our time values are intentionally limiting. Casting to an integer would remove our ability
+to solve for the time, so we would not allow it.
+
+As a compromise we will still allow casting to a ```string(time.now())``` for the purposes of setting 
+last transition timestamp and other values. This cast will be inherently removing our ability to solve.
+It's possible someone could do something like ```Timestamp(string(time.now())) > ...``` and write an incorrect
+expression. To prevent this, we could require a special function that is clear you are opting out of time solving
+as something explicit like ```time.now().toStringNoRequeue()```.
 
 ## Examples
 
 ### Startup grace period
 
-To illustrate how this works, here is a condition that has a 5 minute grace
-period. Suppose we have a component that has a long startup period. As a result
+Suppose we have a component that has a long startup period. As a result
 of this it may be acceptable to ignore issues (for example in a custom status
 condition) for a brief period after the object is created.
 
 ```cel
-${time.now(schema.metadata.creationTimestamp + duration("5m"))
-  >= schema.metadata.creationTimestamp + duration("5m")}
+${time.now() >= schema.metadata.creationTimestamp + duration("5m")}
 ```
 
-### Periodic rollout
-
-A ticker rolls a workload on a fixed interval, for example to restart the pods
-every 10 minutes to work around a memory leak.
-
-The ticker is built by passing `time.now()` into itself with an offset added,
-which schedules the next reconcile one interval out:
-```cel
-${time.now(time.now(null) + duration("10m"))}
-```
-
-To actually roll the pods we put a value that changes once per interval into the
-pod template. A rolling restart happens whenever the pod template changes, so we
-set an annotation to a monotonic bucket number: the current time divided by the
-interval.
-```cel
-# pod template annotation; bumps once per 10-minute bucket and rolls the pods
-spec:
-  template:
-    metadata:
-      annotations:
-        kro.run/restart-bucket: ${string(int(time.now(time.now(null) + duration("10m"))) / 600)}
-```
-
-`int(time.now(null))` is the current time in seconds since the epoch. Dividing by
-the interval in seconds (600 for 10 minutes) gives a counter that increments by
-one every interval and never repeats.
+Solver will requeue after 5 minutes of creation timestamp.
 
 ### Certificate renewal
 
@@ -95,10 +72,10 @@ We can include a renewal job that will renew a certificate only if the
 certificate is going to expire within 5 days.
 ```cel
 includeWhen:  # renew within 5d of a 90d expiry
-  - ${cel.bind(renewAt,
-        timestamp(credential.spec.renewedTime) + duration("2160h") - duration("120h"),
-        time.now(renewAt) >= renewAt)}
+  - ${time.now() >= timestamp(credential.spec.renewedTime) + duration("2160h") - duration("120h")}
 ```
+
+Solver will requeue 5 days before 90 day expiry.
 
 Note that kro can't commit to a strong guarantee of when things get rescheduled.
 It would be a bad idea to try to renew the certificate 5 seconds before it
@@ -110,101 +87,284 @@ guarantee is nearly impossible in a K8s operator world.
 Time window blockers are a good illustration of the power of this primitive.
 
 Suppose you have a job that should run only during 9am-5pm, so the consequences
-of the job failing can be dealt with during business hours. First we define a
-ConfigMap (note this can and should be just kro variables after the variables
-KREP is merged).
-
-```yaml
-# ConfigMap (id: clock) computing the window boundaries
-data:
-  nextWindowOpen: ${cel.bind(now, time.now(null),
-    cel.bind(o, now.withTime({hours: 9}, schema.spec.timezone),
-      cel.bind(nextOpen, now < o ? o : o.addDays(1, schema.spec.timezone),
-        cel.bind(_, time.now(nextOpen), string(nextOpen)))))}
-  nextWindowClose: ${cel.bind(now, time.now(null),
-    cel.bind(c, now.withTime({hours: 17}, schema.spec.timezone),
-      cel.bind(nextClose, now < c ? c : c.addDays(1, schema.spec.timezone),
-        cel.bind(_, time.now(nextClose), string(nextClose)))))}
-```
-
-This ConfigMap uses the current time and some time helpers to tell us the next
-time the window opens and the next time it closes.
-
-Either we are inside the window or outside it. Reading the timeline from now,
-whichever boundary comes first tells us which case we are in
-(`O` = window opens, `C` = window closes):
+of the job failing can be dealt with during business hours.
 
 ```
-Case 1: inside the window (business hours)
-
-    O(9am)     C(5pm)                      O(next 9am)
-  ───●━━━ now ━━━●───────────────────────────●──────────▶
-                 ↑ next close is sooner than next open
-     nextClose < nextOpen   =>   inside   =>   include
-
-
-Case 2: outside the window (after hours)
-
-    O(9am)     C(5pm)              O(next 9am)   C(next 5pm)
-  ───●──────────●━━━━━ now ━━━━━━━━━●─────────────●──────▶
-                                    ↑ next open is sooner than next close
-     nextOpen < nextClose   =>   outside   =>   exclude
-```
-
-When the next close comes before the next open we are inside the window, which
-is exactly what the includeWhen checks:
-```cel
 includeWhen:
-  - ${timestamp(clock.data.nextWindowClose) < timestamp(clock.data.nextWindowOpen)}
+  - ${cel.bind(open,  time.now().withTime({hours: 9},  schema.spec.timezone),
+     cel.bind(close, time.now().withTime({hours: 17}, schema.spec.timezone),
+       time.now() < close
+         ? time.now() >= open                                   # before/in window today
+         : time.now() >= open.addDays(1, schema.spec.timezone)  # past close: gate on tomorrow's open
+     ))}
 ```
 
-Our requeue ends up being the sooner of the two, so we will reevaluate then.
+The solver will requeue at the next time the window opens or closes.
 
-(If this ends up being a common use case, a CEL helper like
-`time.inWindow(open, close, tz)` could be added that follows this same logic.
-This example is included to show the usefulness of `time.now()` and the ability
-to build it into complex tools.)
+Note this example assumes `KroTimestamps` have a `withTime`. The exact details of 
+time helpers are not fully specified in this document.
+
+### LastTransitionedTime
+
+Time will allow converting to string for setting lastTransitionTime.
+
+```
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: ${string(time.now())}
+```
+
+No requeue will occur because of this.
+
+### Propagation control
+
+[Propagation control](https://github.com/kubernetes-sigs/kro/pull/861/changes) is a major use case for this time function.
+Time is effectively a prerequisite for handling propagation control. 
+
+One concept may be wanting to rollout a change to one instance every 5 minutes
+```
+resources:
+  - id: deployments
+    forEach:
+      app: ${apps}
+    # propagateWhen is AND-of-all (same as readyWhen). The gate opens when
+    # enough wall-clock time has passed for THIS instance's slot in the order.
+    propagateWhen:
+      - >-
+        ${time.now() >=
+          timestamp(schema.metadata.annotations['kro.run/propagation-start'])
+            + duration("5m") * indexOf(deployments, app)}
+    template:
+```
+
+The exact propagation control design is not finalized but it's clear time will be useful.
+
 
 ## Implementation
 
-Once per instance reconcile the runtime takes a timestamp and binds it into the
-CEL activation as the `time` variable; the library's `now()` function reads that
-bound value. All the `now()` calls in a given reconciliation are guaranteed to
-get the same exact value.
+### Basic Definitions
 
-The library records every future `evaluateAfter` call into a `RequeueCollector`
-that was injected alongside the timestamp and shared by pointer with the
-runtime. The CEL result carries only the timestamp; the earliest requeue instant
-travels back through that shared collector, which the runtime exposes via
-`EarliestRequeue()` and the controller translates into a `RequeueAfter` on the
-reconcile result.
+```
+type KroTimestamp struct {
+    NowCount    int
+    TimeOffset  time.Duration
+}
 
-If the controller restarts we lose all the information about when to requeue.
-This is ok because we will reconcile every instance again and compute when they
-next need to requeue.
+type KroDuration struct {
+    NowCount int
+    Duration time.Duration
+}
+```
 
-## Limitations
+A value represents the affine function `value(now) = NowCount * now + TimeOffset`
+(or `Duration` for `KroDuration`). `TimeOffset` is the constant term, measured from the
+Unix epoch, not a delta from the current time. A plain CEL `timestamp` `T` lifts to
+`KroTimestamp{NowCount: 0, TimeOffset: T}` and a plain CEL `duration` `d` lifts to
+`KroDuration{NowCount: 0, Duration: d}`.
 
-- Can't stop infinite reconciles. A user can easily write an RGD that requeues
-  every second. This is true without the time primitive; users write RGDs, or
-  RGDs within RGDs, that end up infinitely looping too by changing a resource
-  they are watching.
+Some examples
+```
+Now() -> KroTimestamp{NowCount: +1, TimeOffset: 0}
+
+Now() + 1h -> KroTimestamp{NowCount: +1, TimeOffset: +time.Hour}
+Now() - 1h -> KroTimestamp{NowCount: +1, TimeOffset: -time.Hour} 
+
+# Adding timestamps in CEL errors. We replicate this.
+Now() + Now() -> Error. Adding timestamps is not meaningful.
+
+# Subtracting timestamps gives a duration in CEL. We replicate this too.
+# Let T = timeOf("1/2/2029") as an epoch offset.
+Now() - timeOf("1/2/2029") -> KroDuration{NowCount: +1, Duration: -T}   # now - T
+timeOf("1/2/2029") - Now() -> KroDuration{NowCount: -1, Duration: +T}   # T - now
+
+# a=difference between current time and 2029
+# b=current time added to difference between current time and 2029. 
+# b will increase in value faster than a
+let a = Now() - timeOf("1/2/2029") = KroDuration{NowCount: +1, Duration: -T}
+let b = Now() + a = KroTimestamp{NowCount: +2, TimeOffset: -T}           # 2*now - T
+```
+
+Definitions of operations
+
+Addition
+```
+TSa + TSb   = ERROR   # timestamp + timestamp: no CEL overload; adding two instants is meaningless
+TS  + Dur   = KroTimestamp{ NowCount: TS.NowCount + Dur.NowCount, TimeOffset: TS.TimeOffset + Dur.Duration }
+Dura + Durb = KroDuration{ NowCount: Dura.NowCount + Durb.NowCount, Duration: Dura.Duration + Durb.Duration }
+```
+
+Subtraction
+```
+TSa - TSb   = KroDuration{ NowCount: TSa.NowCount - TSb.NowCount, Duration: TSa.TimeOffset - TSb.TimeOffset }
+TS  - Dur   = KroTimestamp{ NowCount: TS.NowCount - Dur.NowCount, TimeOffset: TS.TimeOffset - Dur.Duration }
+Dura - Durb = KroDuration{ NowCount: Dura.NowCount - Durb.NowCount, Duration: Dura.Duration - Durb.Duration }
+Dur  - TS   = ERROR   # duration - timestamp: no CEL overload
+```
+
+Comparison
+```
+# Let now be the literal timestamp for the cel evaluation.
+TSa < TSb => TSa.NowCount * now + TSa.TimeOffset < TSb.NowCount * now + TSb.TimeOffset
+```
+
+### Solving
+
+To solve, we only need to consider every comparison operator `<`, `<=`, `>`, `>=`.
+The comparison operators are the only way a Kro timestamp or a Kro duration is able to
+affect the result of a CEL expression while staying inside the solver. Kro times are not
+valid for Kubernetes objects and cannot be cast to any other type, with one exception:
+`string()`.
+
+`string()` is an explicit escape hatch. The moment a Kro time is converted to a string,
+solving gives up on that value: no requeue is recorded for it, and anything derived from
+the string (for example `timestamp(string(time.now())) > ...`) is an ordinary CEL value the
+solver knows nothing about. This is the trade-off that lets `lastTransitionTime` and similar
+fields be written. Every other exit from the Kro types is one of the 4 comparison operators.
+
+Solving will happen as part of the evaluation of each comparison operator for Kro's time types.
+This means we don't need to implement complicated static analysis that is hard to maintain.
+
+For example, we will never execute the second part of this statement.
+```
+false && time.now() >= timestamp("20267-01-01T12:10:00Z")
+```
+
+We don't need to run any solving logic of any statements that do not execute. If the graph changes
+then another reconcile will occur.
+
+To actually solve for the critical time we need to reeval we can do the following math. 
+
+For LHS < RHS, we can picture two lines
+```
+LHS:  y = LHS.NowCount · now + LHS.TimeOffset
+RHS:  y = RHS.NowCount · now + RHS.TimeOffset
+```
+
+We can compute the intersection of these lines as
+```
+LHS.NowCount·now + LHS.TimeOffset = RHS.NowCount·now + RHS.TimeOffset
+(LHS.NowCount − RHS.NowCount)·now = RHS.TimeOffset − LHS.TimeOffset
+flipTime = (RHS.TimeOffset − LHS.TimeOffset) / (LHS.NowCount − RHS.NowCount)
+```
+
+Decide to requeue or not
+```
+if (LHS.NowCount - RHS.NowCount) == 0 { // Parallel lines. Never changing.
+  return noRequeue
+}
+
+if flipTime > now { // Flip in the future, requeue then.
+  return requeue(flipTime)
+} else { // Already flipped in past. No need to requeue.
+  return noRequeue
+}
+```
+
+This same math generalizes for the duration. We take the earliest requeue time out of all comparisons.
+
+Note the same formula handles a `NowCount` whose magnitude is greater than one (for example `b = Now() + a` has `NowCount == 2`): the denominator is simply non-zero, so `flipTime` is still solved normally. Such a value advances faster than the wall clock and is not a real clock instant, but the intersection math treats it uniformly and requeues at the computed `flipTime`.
+
+### Overriding
+
+CEL doesn't support [adding custom overloads to standard operators across types](https://github.com/cel-expr/cel-go/issues/252) (attempting it fails as a [singleton function incompatible with specialized overloads](https://github.com/cel-expr/cel-go/issues/990)).
+
+So to support comparisons like
+```now() > k8sObject.expirationTime```
+
+we would need to have users cast values explicitly like 
+```now() > KroTimestamp(k8sObject.expirationTime)``` 
+
+or use a custom function like
+```now().isAfter(k8sObject.expirationTime)```
+
+A workaround we could do is automatically rewrite the CEL AST from the form
+`now() > k8sObject.expirationTime` to `now().isAfter(k8sObject.expirationTime)`. 
+This does require some effort but this is not a first for Kro. We already rewrite
+the AST in custom status conditions to make the user interface more ergonomic. 
+
+It's possible automatically casting values will be cleaner or another solution is possible.
+This section is to highlight some complexities with this approach that will need 
+to be worked out.
+
+### Rollout plan
+
+This feature will be behind an alpha feature gate much like ```omit``` default off.
+
+The plan would be to set to default on after a couple of versions and positive community feedback.
+
+### Fairness and infinite reconciles
+
+Suppose a user writes
+```
+resources:
+  - id: clock
+    template:
+      # ConfigMap — WRITE the new timestamp (desired state)
+      apiVersion: v1
+      kind: ConfigMap
+      data:
+        lastUpdatedTime: ${string(time.now())}
+
+  - id: gated
+    # READ the OBSERVED (previous) value → real age → valid gate
+    propagateWhen:
+      - ${time.now() - timestamp(clock.data.lastUpdatedTime) > duration("5s")}
+```
+
+We would requeue every 5 seconds and potentially slow down other instances reconciling 
+by adding a backlog. 
+
+One idea would be to prevent casting to a string, but this isn't the only way a user could
+abuse time to reconcile every so often.
+
+To prevent this we need some way for Kro admins to put controls on this. The simplest option would
+be a ```--min-time-solver-requeue=10m```. Any time an instance tries to requeue faster than that it 
+gets delayed to the minimum.
+
+This document proposes a per instance (or graph instance) token bucket rate limiter to give more flexibility.
+```
+lim := buckets.get(instanceKey)          // rate.NewLimiter(1/300s, 5): 5 burst, refill 1 per 5min
+if lim.Allow() {
+    return RequeueNeededAfter(d)          // token available → honor the time requeue
+} else {
+    // over budget → push the requeue out to when the next token is available
+    return RequeueNeededAfter(max(d, lim.Reserve().Delay()))
+}
+```
+
+Configured with
+```
+--instance-time-requeue-burst=3
+--instance-time-requeue-refill-interval=10m
+```
+
+This would be in memory so Kro restarts would reset the token bucket.
+
 
 ## Other time functions
 
-This section on pure time helpers is intentionally brief. Once we align on the
-hard part of time (getting timestamps into CEL) we can work towards building
-more helpers to manipulate and calculate time.
+This document does not describe other time helpers to reduce scope.
 
-These functions are included because they were needed to make the examples
-viable. They do not necessarily need to block the rest of the KREP.
+Most time helpers should fit very naturally into the described library.
 
-`ts.withTime({hours, minutes, seconds, nanos}, tz) -> timestamp` sets the
-time-of-day on `ts`'s calendar date in the IANA timezone `tz`. Any field left
-out defaults to 0 and the result is DST-safe.
+Certain helpers need a little extra machinery. `time.now().withTime({hours: 17}, tz)` is not
+affine in `now()`: it is constant for the whole day and then jumps at local midnight. Modelled
+as a plain `KroTimestamp` it is correct until midnight and silently stale after. This case is
+easy to handle: a helper that snaps to a calendar boundary records the next instant at which its
+value changes (here, the next midnight in `tz`), and the solver requeues at the earlier of that
+instant and the comparison's `flipTime`. The same rule covers `addDays` on `now()` (jumps at DST
+transitions) and helpers like `nextBusinessDay` (jumps at midnight). This is a conservative
+requeue: kro may wake, re-evaluate, and find nothing changed.
 
-`ts.addDays(n, tz) -> timestamp` adds `n` calendar days to `ts` in the IANA
-timezone `tz`, keeping the wall-clock time stable across DST transitions.
+Helpers whose value changes at fine granularity, for example `time.now().getSeconds()` or
+truncating `now()` to the second, are not hard to model but are hard to support well: the value
+genuinely changes every second, so any gate built on it wants to requeue every second. These
+should be rejected or restricted rather than solved. The follow-up KREP should decide which
+helpers to ship with this in mind.
+
+If this KREP is accepted, a follow up KREP can be written to go over potential helpers and usefulness. 
 
 ## Alternatives
 
@@ -234,62 +394,10 @@ Well written RGDs should not be random. A goal is that changing the default
 requeue period from 10 seconds to 10 hours should not change how user RGDs
 mostly behave.
 
-### decouple requeue and time.now()
+### explicit ask for next requeues
 
-An alternative design could be having `time.now` and a separate
-`time.requeueAfter` to give finer-grained control.
+An alternative design could be having `time.now` and requiring the user
+provide a direction `requeueAfter`. This adds extra complexity and area
+for users to make mistakes.
 
-The issue with this solution is it allows RGD authors to easily ignore the
-concept of requeuing. Time becomes a potential for hard-to-debug unexpected
-behavior without thinking through requeue. By forcing every call of time to
-declare when it thinks it should be evaluated next we bring this front and
-center.
-
-### time.after(evaluateTime)
-
-This was my initial thinking for `time.now()`. `time.after` would return false
-before the time specified then true afterwards. It would requeue after the
-evaluation time.
-
-It is a hard-to-misuse primitive but lacks power. The ability to pass
-`time.now()` to itself gives the ability to build tickers and on-off cycles like
-those specified in the examples.
-
-### Offset instead of a moment
-
-`time.now` could take an offset such as `duration("5m")` as its argument to know
-when to requeue, rather than an absolute instant. This makes some things easier
-to represent; the ticker becomes more obvious. It makes others more difficult to
-represent, like the time window blockers.
-
-Overall we are not strongly opinionated here. It is possible we could take both.
-
-### Time now solver
-
-A solver. We could analyze CEL expressions and attempt to realize when
-expressions flip. For example the expression `now() > startDate` could be parsed
-and analyzed to understand `startDate` here is a critical time that we need to
-requeue at. It's clever and would be a magical, great user experience if it
-could work.
-
-There is nothing to solve for in the example of setting an environment variable
-to `time.now()`. When should this be requeued? A solver would say never. The
-proposed design is asking the user to explicitly decide. Making the user make an
-explicit choice avoids a false sense of security that we are able to figure out
-what users intended from their RGD.
-
-Solving is complicated. Every function a user passes into time needs a backwards
-model. For example, if we call `someFunction(now()) > x` the only way to know
-when we need to requeue is to know at what time `someFunction(now()) > x` becomes
-true. At best we are on the hook to support this logic for every function we add
-that takes time.
-
-Solving is impossible in some situations. Even if we assume a perfectly
-implemented solver evaluating `someFunction(now()) > x`, if `someFunction` is
-sha256 no backwards model exists. We lose the ability to realistically run
-solving logic on these.
-
-The issue with this approach is not that we cannot cover every case, but that
-from the RGD author's perspective the solver handling a case and not handling it
-look identical. There are no error messages; your RGD just won't work and will
-be really hard to debug.
+If we can solve accurately, that is a much better user experience.

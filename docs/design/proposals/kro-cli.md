@@ -1,10 +1,12 @@
 # KREP-021: kro CLI
 
+> **Draft.** Supersedes [#1156](https://github.com/kubernetes-sigs/kro/pull/1156).
+> Scope narrowed 2026-09 following review on [#1234](https://github.com/kubernetes-sigs/kro/pull/1234):
+
 ## Summary
 
-The kro CLI exists today with basic validate and generate commands, all requiring a cluster connection and only available by building from source. This proposal expands the CLI into a comprehensive tool for authoring, validating, distributing, and previewing kro ResourceGraphDefinitions — offline where possible, with cluster access when needed. The CLI ships as part of kro releases.
-
-The CLI is the primitive layer for working with kro compositions. It is deterministic, scriptable, suitable for CI, and agent-friendly.
+This proposal makes the CLI a released artifact and gives it two jobs: offline authoring of
+kro compositions, and installing and upgrading kro itself. Deterministic, scriptable, CI-friendly.
 
 ## Problem Statement
 
@@ -14,144 +16,74 @@ It is also fairly limited in scope, in contrast to broad use cases for kro and w
 
 **Dry run**
 Updating an RGD affects all instances immediately with no preview of impact. Teams need to see what will change, both to the RGD itself and to the resources it manages, before committing.
-
-**Distribution**
-There is no standard way to package and distribute RGDs. Users resort to git repositories and kubectl apply. The Kubernetes ecosystem thrives on reusable artifacts (Helm charts, OCI images) — RGDs need the same distribution model.
-
-**Validation**
-The only way to know if an RGD is valid today is to apply it to a cluster. Errors surface at reconciliation time, not authoring time. Users need fast feedback in their local workflow and CI pipelines, without requiring a live cluster.
-
-**Authoring tools**
-The CLI does not currently offer diff, linter, or other authoring tools to help users adopt and succeed with kro.
+Because of [Deferred Schema Resolution](./deferred-schema-resolution.md), this has now limited capabilities.
 
 **Bootstrapping Kro**
-The CLI could be used to bootstrap Kro, ending the problem of where Kro is coming from and how it should be configured. Prior art: Flux, CAPI/CAPA and others. 
+Helm charts offer limited capabilities in terms of upgrading CRDs and distribution. A CLI which has `kro bootstrap` alleviates
+this problem and gives full control over how Kro gets into a cluster and what happens to it once it's there.
 
 ## Proposal
 
 ### Overview
 
-Expand the existing `kro` CLI with new commands and improve existing ones. All changes are to the existing `cmd/kro/` codebase. The CLI is published as part of kro releases via GoReleaser.
+Expand the existing `kro` CLI in `cmd/kro/`. Published as part of kro releases via GoReleaser.
 
 ### Command Summary
 
-| Command                 | Description                                       | Status                            |
-|-------------------------|---------------------------------------------------|-----------------------------------|
-| `kro validate rgd`      | Validate an RGD file                              | Existing, updated for offline use |
-| `kro validate instance` | Validate an RGD and instance together             | New                               |
-| `kro lint`              | Check RGDs against conventions and best practices | New                               |
-| `kro fmt`               | Normalize RGD YAML formatting                     | New                               |
-| `kro diff`              | Structural diff between two RGD files             | New                               |
-| `kro preview`           | Preview changes against live cluster state        | New                               |
-| `kro push`              | Validate and push an RGD to an OCI registry       | New                               |
-| `kro pull`              | Pull an RGD from an OCI registry                  | New                               |
-| `kro install`           | Pull an RGD and apply it to the cluster           | New                               |
-| `kro registry login`    | Authenticate to OCI registries                    | New                               |
-| `kro generate crd`      | Generate CRD from an RGD                          | Existing                          |
-| `kro generate instance` | Generate sample instance from an RGD              | Existing                          |
-| `kro generate diagram`  | Generate HTML dependency graph                    | Existing                          |
-| `kro bootstrap`         | Install and upgrade kro in an existing cluster    | New                               |
+| Command                 | Description                                    | Status                       |
+|-------------------------|------------------------------------------------|------------------------------|
+| `kro validate rgd`      | Validate an RGD file                           | Existing, offline by default |
+| `kro validate instance` | Validate an RGD and instance together          | New                          |
+| `kro fmt`               | Normalize RGD YAML formatting                  | New                          |
+| `kro bootstrap`         | Install and upgrade kro in an existing cluster | New                          |
+| `kro check`             | Preflight and report an existing install       | New                          |
+| `kro generate crd`      | Generate CRD from an RGD                       | Existing                     |
+| `kro generate instance` | Generate sample instance from an RGD           | Existing                     |
+| `kro generate diagram`  | Generate HTML dependency graph                 | Existing                     |
+
+### Global Flags
+
+Cluster-touching commands should have the standard kubeconfig subset: `--kubeconfig`, `--context`,
+`--namespace`.
+
+Commands that display data should have a standard display format `-o json|yaml`. Exit codes: `0` success, `1` error, `2` findings
+without error (`fmt --check`).
 
 ### Design Details
 
 #### Validate
 
-Update existing `validate rgd` to work offline by default. The current implementation requires a cluster connection for CRD schema resolution. The updated command resolves schemas from local CRD files or bundled Kubernetes schemas, with cluster discovery as an opt-in flag.
+`validate rgd` is offline by default. Schemas resolves from local CRD files or bundled
+Kubernetes schemas. Cluster discovery is opt-in.
 
 ```bash
 kro validate rgd -f rgd.yaml \
-  --crds ./crds/              \  # Optional: directory of CRD files for schema resolution
-  --kubernetes-version 1.30   \  # Optional: built-in schema version (default: latest bundled)
-  --from-cluster                 # Optional: discover CRDs and version from API server
+  --crds ./crds/              \  # directory of CRD files
+  --kubernetes-version 1.30   \  # bundled schema version (default: latest)
+  --from-cluster                 # discover CRDs and version from the API server
 ```
 
-New `validate instance` command validates an RGD and a sample instance together — confirming the instance conforms to the schema the RGD would generate.
+`validate instance` checks an instance against the schema the RGD would generate.
 
 ```bash
 kro validate instance --rgd-file rgd.yaml --instance-file instance.yaml
 ```
 
-#### Lint
+`graph.NewBuilder` currently takes `*rest.Config` and `*http.Client` positionally
+(`pkg/graph/builder.go:57`). Offline resolution requires an abstraction against these two.
+That refactor results in code `generate` can then use.
 
-Check RGDs against conventions and best practices beyond schema validity. Lint rules are deterministic checks against the RGD structure — no cluster connection required.
-
-Examples: resource ID naming conventions, CEL expression style, required annotations, status field coverage, SimpleSchema usage patterns.
-
-```bash
-kro lint -f rgd.yaml
-```
+Open: Should  `Graph` (KREP-024) is a first-class input alongside RGD. See
+[Relationship to Existing KREPs](#relationship-to-existing-kreps).
 
 #### Fmt
 
-Normalize RGD YAML. Consistent field ordering, indentation, and formatting for readability and consistency. Pure text transformation — no cluster, no schema knowledge.
+Normalize RGD YAML: field ordering, indentation, spacing. Pure text transformation.
 
 ```bash
-kro fmt -f rgd.yaml        # in-place
-kro fmt -f rgd.yaml --check # exit non-zero if changes needed (for CI)
+kro fmt -f rgd.yaml         # in place
+kro fmt -f rgd.yaml --check # exit 2 if changes needed
 ```
-
-#### Diff
-
-Structural diff between two RGD files. Surfaces field additions, removals, type changes, and CEL expression changes. No cluster required.
-
-```bash
-kro diff -f old-rgd.yaml -f new-rgd.yaml
-```
-
-This is distinct from `preview`, which diffs against live cluster state.
-
-#### Preview
-
-Preview the impact of changes against a live cluster. Requires API server access. Performs client-side diffs to show what would be created, updated, or deleted.
-
-For instances — shows the resource diff:
-```bash
-kro preview -f instance.yaml
-```
-
-For RGDs — shows the RGD diff and the impact on existing instances:
-```bash
-kro preview -f rgd.yaml
-```
-
-Example output:
-```
-UPDATE: ResourceGraphDefinition my-app (kro.run/v1alpha1)
-  spec.schema.spec:
--   replicas: int
-+   replicas: int | default=3
-
-Affected instances (2): my-app-prod, my-app-dev
-
-UPDATE: Deployment my-app-prod-deployment (apps/v1) [instance: my-app-prod]
-  spec:
--   replicas: 1
-+   replicas: 3
-```
-
-#### OCI Distribution
-
-RGDs are packaged as OCI artifacts and published to repositories in OCI-compliant registries. Uses ORAS for registry interaction.
-
-```bash
-kro push -f rgd.yaml registry.io/org/my-rgd:v1.0.0
-kro pull registry.io/org/my-rgd:v1.0.0 -o rgd.yaml
-kro install registry.io/org/my-rgd:v1.0.0
-```
-
-`push` validates the RGD before pushing — invalid compositions cannot be published. `install` is a convenience that pulls and applies in one step.
-
-#### Registry Authentication
-
-The CLI looks for credentials in order:
-1. Credentials set by `kro registry login` (stored at `~/.kro/config.json`)
-2. Credentials set by `docker login` and friends
-
-```bash
-kro registry login registry.io -u username --password-stdin
-```
-
-Supports standard OCI auth options (TLS certs, CA bundles, insecure).
 
 #### Bootstrap
 
@@ -253,27 +185,56 @@ kro check                                  # preflight: API version, RBAC, exist
 
 ##### Open questions
 
-1. Is uninstall in scope here, or its own proposal? The CRD cascade argues for its own
-   design, with confirmation prompts and a `--keep-crds` default.
-2. Does bootstrap own any dependency the way `clusterctl` owns cert-manager? kro appears
+1. Does bootstrap own any dependency the way `clusterctl` owns cert-manager? kro appears
    to have none today. Confirm before designing around it.
-3. Naming collision: `kro install` versus `kro bootstrap`.
-4. Should upgrade run a kro-specific precheck, validating existing RGDs against the
+2. Should upgrade run a kro-specific precheck, validating existing RGDs against the
    incoming controller's schema before swapping the Deployment?
+
+Uninstall is out of scope, see [Not In Scope](#not-in-scope).
 
 #### Cluster Dependency Summary
 
-| Command                     | Cluster Required                        |
-|-----------------------------|-----------------------------------------|
-| `validate rgd`              | No (default), Yes with `--from-cluster` |
-| `validate instance`         | No                                      |
-| `lint`                      | No                                      |
-| `fmt`                       | No                                      |
-| `diff`                      | No                                      |
-| `preview`                   | Yes                                     |
-| `push` / `pull` / `install` | No / No / Yes (for apply)               |
-| `generate *`                | Yes (existing behavior)                 |
-| `bootstrap`                 | Yes (No with `--export`)                |
+| Command             | Cluster Required                        |
+|---------------------|-----------------------------------------|
+| `validate rgd`      | No (default), Yes with `--from-cluster` |
+| `validate instance` | No                                      |
+| `fmt`               | No                                      |
+| `generate *`        | Yes (existing behavior)                 |
+| `bootstrap`         | Yes (No with `--export`)                |
+| `check`             | Yes                                     |
+
+## Other solutions considered
+
+**Leave validation to the controller.** This is what is happening currently. Validation is slow, requires
+apply, a cluster and a connection. It's cumbersome just to be informed that a CEL function has a typo in it.
+
+**Helm for bootstrap.** Rejected under [Bootstrap](#bootstrap).
+
+**Document `helm install`.** This is the original problem where CRDs will never be properly updated.
+
+**Use the Helm SDK for bootstrapping.** This is explained in [Bootstrapping](#bootstrap) section.
+
+## Relationship to Existing KREPs
+
+| KREP                       | Relationship                                                                                               |
+|----------------------------|------------------------------------------------------------------------------------------------------------|
+| KREP-024 (Graph)           | RGD has a new runtime engine. **Open decision:** does the CLI accept `Graph` as a first-class input?      |
+| KREP-013 (Graph Revisions) | Persisted revision history is the natural input for a future `diff` potentially                            |
+| Deferred Schema Resolution | Validation offline changes since some objects will be resolved later. Still can validate CEL and others.   |
+| KREP-002 (Collections)     | `forEach` expansion needs live collection contents, and dynamic GVKs compute the kind at evaluation. Offline `validate` compiles these nodes, it does not expand them. |
+
+## Backward Compatibility
+
+**Bootstrap installs different RBAC than `helm install` with chart defaults.** `values.yaml`
+ships `rbac.mode: unrestricted` (`*/*` on `*`, retained for backwards compatibility) while
+every rendered variant uses `aggregation`. Under aggregation the controller starts with no
+permission over user resources until an aggregated ClusterRole labelled
+`rbac.kro.run/aggregate-to-controller: "true"` is added.
+
+`validate rgd` flips from cluster-required to offline by default. An RGD referencing CRDs that
+exist only in-cluster now needs `--crds` or `--from-cluster`. The error must say so explicitly.
+
+`generate *` is unchanged in v1. No API or controller changes.
 
 ## Scope
 
@@ -282,25 +243,68 @@ kro check                                  # preflight: API version, RBAC, exist
 - Publishing the CLI as part of releases via GoReleaser
 - Offline validation with local CRD files and bundled Kubernetes schemas
 - Instance validation against RGD schemas
-- Lint and fmt commands
-- Structural diff between RGD files
-- Preview of changes against live cluster
-- OCI packaging and distribution via ORAS
-- Registry authentication
+- `fmt`
 - Bootstrapping and upgrading the kro controller and CRDs in an existing cluster
 
 ### Not In Scope
 
-- **Package managers.** Homebrew, apt, etc. are potential future work. Initial distribution mechanism is GitHub.
-- **Experimental features.** Helm-to-RGD conversion and similar workflows may come later as the CLI matures.
-- **Telemetry.** No usage tracking. Feedback via GitHub issues, download metrics, and community feedback.
+- **Package managers.** Homebrew, apt and friends are future work. Initial distribution is GitHub.
+- **Helm-to-RGD conversion** and similar experimental workflows.
+- **Telemetry.** No usage tracking. Feedback via GitHub issues and download metrics.
+- **Uninstall.** The CRD cascade warrants its own proposal.
+
+## Future Work
+
+Deferred from the original draft [#1234](https://github.com/kubernetes-sigs/kro/pull/1234).
+
+| Deferred                                | Why                                                                                                                                                                                                                                  |
+|-----------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `kro lint`                              | No rule corpus yet. Revisit once real recurring problems are identified rather than guessed.                                                                                                                                         |
+| `kro diff`                              | No use case yet. If it returns, comparing `GraphRevision` objects is the likely form, not two files on disk.                                                                                                                         |
+| `kro preview`                           | Soft dependencies, collection caps, dynamic GVKs, impersonation, and pending propagation control (KREP-006). A client-side renderer cannot stay correct against a moving engine. Revisit when the engine can serve a dry run itself. |
+| OCI push/pull/install, `registry login` | Needs scoping first: what is the artifact? RGD, Graph, bundle, or RGD plus default instance. Graph is arguably the better unit.                                                                                                      |
 
 ## Testing Strategy
 
 ### Requirements
 
-No additional infrastructure needed. Offline commands are tested with fixture files. Cluster-dependent commands are tested against envtest or kind.
+Offline commands use fixtures. `bootstrap` uses envtest or kind.
 
 ### Test Plan
 
-Unit tests for each command's core logic. Integration tests for the full CLI workflow (validate → lint → push → pull → install → preview). OCI tests against a local registry.
+Unit tests per command. Integration coverage for the authoring loop (`validate` then `fmt`)
+and the cluster loop (`check`, `bootstrap`, re-run as upgrade, prune, `--export` round trip).
+Bootstrap is a bit more complex with upgrades, but not impossible to test with a kind cluster
+and an integration suite.
+
+## Discussion and notes
+
+Reviews on [#1234](https://github.com/kubernetes-sigs/kro/pull/1234) suggested to tighten the scope.
+This revision applies those reviews. `--namespace` and the kubeconfig flags were also raised there and are
+now specified under [Global Flags](#global-flags).
+
+Taken over from @jlbutler and @NicholasBlaskey 2026-09. Bootstrap added in rather than split
+into its own KREP.
+
+## Appendix: implementation plan
+
+### Work items
+
+1. **Release plumbing.** `.goreleaser.yaml`, CLI into the release pipeline. No design risk,
+   unblocks distribution of everything else.
+2. **Schema resolver abstraction.** Decouple `graph.NewBuilder` from `*rest.Config`. Bundle
+   Kubernetes OpenAPI schemas and decide which versions to include.
+3. **`validate instance`** on top of (2).
+4. **`fmt`.**
+5. **`bootstrap`.** `go:embed` over `manifests/rendered/*.yaml`, SSA with ordering, ApplySet
+   prune via `pkg/controller/instance/applyset`, version detection. Plus `check`.
+
+### Sequencing
+
+(1) and (5) are independent of (2) and go first. (3) and (4) next (2).
+
+### Risks
+
+- The `graph.NewBuilder` refactor will touch the controller's compile path, not just the CLI.
+- Deferred Schema Resolution may land first and change the resolver contract underneath (2).
+- The Graph decision may change the final version of `validate` and `fmt`.

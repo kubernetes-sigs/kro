@@ -219,6 +219,24 @@ func (ctx *CompilationContext) buildDefNode(n *expv1alpha1.Node, order int, payl
 	return node, inferDefSchema(payload), nil
 }
 
+// restMapping resolves the REST mapping for gvk, retrying once via an
+// explicit Reset on a NoMatch error. The DeferredDiscoveryRESTMapper only
+// self-heals a NoMatch when its underlying discovery client reports itself
+// not-yet-populated; once populated it never becomes stale on its own. So a
+// kind registered after the mapper's first successful discovery (a CRD or
+// aggregated APIService installed after kro started) would otherwise 404
+// forever. This mirrors the executor's dynamic REST mapper
+// (apiutil.NewDynamicRESTMapper), which reloads on every NoMatch instead of
+// only the first one.
+func (ctx *CompilationContext) restMapping(gvk k8sschema.GroupVersionKind) (*meta.RESTMapping, error) {
+	mapping, err := ctx.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil && meta.IsNoMatchError(err) {
+		meta.MaybeResetRESTMapper(ctx.restMapper)
+		mapping, err = ctx.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	}
+	return mapping, err
+}
+
 func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, order int) (*Node, *spec.Schema, error) {
 	kind, payload, err := projectPayload(p, n)
 	if err != nil {
@@ -266,7 +284,7 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve schema for %s: %w", gvk, err)
 	}
-	mapping, err := ctx.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	mapping, err := ctx.restMapping(gvk)
 	if err != nil {
 		return nil, nil, fmt.Errorf("rest mapping for %s: %w", gvk, err)
 	}

@@ -19,7 +19,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	k8sschema "k8s.io/apimachinery/pkg/runtime/schema"
 	memory "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -271,6 +273,59 @@ func TestCompilationContext_BuildNode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCompilationContext_BuildNode_RESTMapperRediscoversAfterNoMatch is a
+// regression test for https://github.com/kubernetes-sigs/kro/issues/1423.
+// DeferredDiscoveryRESTMapper only self-heals a NoMatch when its underlying
+// discovery client reports itself not-yet-populated (Fresh() == false); once
+// populated, Fresh() never goes false again on its own. So a kind registered
+// after the mapper's first successful discovery — e.g. a CRD or an
+// aggregated APIService installed after kro started — 404s on every compile
+// until something explicitly resets the mapper. buildNode must force that
+// reset itself on a NoMatch instead of relying on the mapper's own check.
+func TestCompilationContext_BuildNode_RESTMapperRediscoversAfterNoMatch(t *testing.T) {
+	t.Parallel()
+	r, disco := testk8s.NewFakeResolver()
+	gvk := k8sschema.GroupVersionKind{Group: "aggregated.example.com", Version: "v1", Kind: "Gizmo"}
+	r.AddSchema(gvk, &spec.Schema{SchemaProps: spec.SchemaProps{
+		Type: []string{"object"},
+		Properties: map[string]spec.Schema{
+			"apiVersion": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+			"kind":       {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+			"metadata": {SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				},
+			}},
+		},
+	}})
+	rm := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disco))
+	ctx := newRootContext(r, rm)
+	p := parser.New(ctx.fieldCache)
+	node := &expv1alpha1.Node{ID: "g", Template: rawExtensionFromObject(map[string]any{
+		"apiVersion": "aggregated.example.com/v1", "kind": "Gizmo",
+		"metadata": map[string]any{"name": "g"},
+	})}
+
+	_, _, err := ctx.buildNode(p, node, 0)
+	require.Error(t, err, "Gizmo is not yet registered in discovery")
+	assert.Contains(t, err.Error(), "rest mapping for")
+
+	// Simulate the CRD/APIService showing up after the mapper's cache was
+	// already populated once.
+	disco.Resources = append(disco.Resources, &metav1.APIResourceList{
+		GroupVersion: "aggregated.example.com/v1",
+		APIResources: []metav1.APIResource{{
+			Name: "gizmos", Namespaced: true, Kind: "Gizmo",
+			Verbs: []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+		}},
+	})
+
+	built, _, err := ctx.buildNode(p, node, 0)
+	require.NoError(t, err, "buildNode must rediscover the newly-registered kind instead of returning a stale NoMatch")
+	assert.Equal(t, "gizmos", built.GVR.Resource)
 }
 
 func TestIsDynamicGVK(t *testing.T) {

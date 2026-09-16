@@ -171,9 +171,8 @@ func (c *Controller) reconcileViaGraphEngine(
 	mark.GraphResolved()
 
 	// 1. Pre-apply ApplySet inventory projection & grow.
-	// Persist the superset inventory to the parent instance BEFORE applying resources
-	// to the cluster. This eliminates the crash window where resources exist in the cluster
-	// but the parent has no inventory tracking them.
+	// Persist the projected inventory union to the parent instance before applying
+	// resources to the cluster.
 	supersetMeta, applier, preErr := c.preApplyApplySetInventory(ctx, log, inst, rt)
 	if preErr != nil {
 		return preErr
@@ -508,8 +507,7 @@ func validateAppliedIdentities(applied []v1alpha1.ManagedResource) error {
 
 // preApplyApplySetInventory projects candidate metadata from the runtime in memory,
 // computes the superset inventory, and persists it to the parent instance before
-// any cluster SSA writes. This eliminates the crash window where resources exist
-// in the cluster but the parent has no inventory tracking them.
+// any cluster SSA writes.
 func (c *Controller) preApplyApplySetInventory(
 	ctx context.Context,
 	log logr.Logger,
@@ -541,6 +539,20 @@ func (c *Controller) preApplyApplySetInventory(
 // AdditionalNamespaces) expected to be managed this cycle from the runtime's template
 // nodes, without constructing artificial Kubernetes objects.
 func (c *Controller) candidateMetadata(rt *geruntime.Runtime, inst *unstructured.Unstructured) applyset.Metadata {
+	// Projection can cache includeWhen verdicts against absent dependencies.
+	// Keep those verdicts and Def observations out of the execution runtime.
+	opts := []geruntime.Option{
+		geruntime.WithSeedScope(rt.Scope()),
+		geruntime.WithMaxCollectionSize(rt.MaxCollectionSize()),
+	}
+	if schemaNode := rt.Node(rgdadapter.SchemaNodeID); schemaNode != nil {
+		// Cached Programs have an empty schema payload; preserve its effective value.
+		if desired, err := schemaNode.Resolve(); err == nil && len(desired) == 1 {
+			opts = append(opts, geruntime.WithNodeObjectOverride(rgdadapter.SchemaNodeID, desired[0]))
+		}
+	}
+	rt = geruntime.New(rt.Program(), rt.Graph(), opts...)
+
 	meta := applyset.Metadata{
 		ID:                   applyset.ID(inst),
 		Tooling:              applyset.ToolingID(),
@@ -579,13 +591,10 @@ func (c *Controller) candidateMetadata(rt *geruntime.Runtime, inst *unstructured
 			continue
 		}
 
-		// A node skipped this reconcile (includeWhen:false, or contagiously
-		// ignored) contributes no resource, so it must not seed its GroupKind
-		// into the pre-apply inventory superset — reconcileApplySetInventory
-		// would then align the inventory down and remove it every cycle, a write
-		// that re-enqueues the instance and fights the pre-apply writer forever.
-		// On an IsIgnored error we can't decide, so keep the node (holding the
-		// inventory steady is the safe direction).
+		// Skip nodes whose inclusion resolves false in this projection to avoid
+		// fighting the post-apply inventory shrink. A placeholder-backed verdict
+		// can be wrong: its GroupKind is then only recorded after apply. On an
+		// IsIgnored error we can't decide, so keep the candidate.
 		if ignored, err := n.IsIgnored(); err == nil && ignored {
 			continue
 		}

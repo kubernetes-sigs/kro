@@ -56,6 +56,10 @@ var TimeType = types.NewOpaqueType("kro.Time")
 var (
 	kroTimeTraits = traits.AdderType | traits.SubtractorType | traits.ComparerType
 
+	// kro.Duration additionally negates: the rewrite's plain−kro
+	// normalization emits −(kroDur), dispatched via the Negater trait.
+	kroDurationTraits = kroTimeTraits | traits.NegatorType
+
 	// KroTimestampType and KroDurationType are the honest static AND runtime
 	// types of time.now()-derived values (KREP-025 "separate types"). They
 	// are intentionally NOT the native CEL timestamp/duration types: every
@@ -65,7 +69,7 @@ var (
 	// the kro.time.* functions installed by the AST rewrite
 	// (pkg/cel/ast/timerewrite.go).
 	KroTimestampType = types.NewObjectType("kro.Timestamp", kroTimeTraits)
-	KroDurationType  = types.NewObjectType("kro.Duration", kroTimeTraits)
+	KroDurationType  = types.NewObjectType("kro.Duration", kroDurationTraits)
 )
 
 // Clock is the per-reconcile time state: the fixed `now` every call to

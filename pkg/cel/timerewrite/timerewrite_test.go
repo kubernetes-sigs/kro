@@ -15,7 +15,6 @@
 package timerewrite
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -33,6 +32,24 @@ func parseEnv(t *testing.T) *cel.Env {
 		t.Fatalf("env: %v", err)
 	}
 	return env
+}
+
+func rewrite(t *testing.T, expr string) *exprpb.ParsedExpr {
+	t.Helper()
+	env := parseEnv(t)
+	parsed, iss := env.Parse(expr)
+	if iss != nil && iss.Err() != nil {
+		t.Fatalf("parse %q: %v", expr, iss.Err())
+	}
+	rewritten, err := RewriteTimeOperators(parsed)
+	if err != nil {
+		t.Fatalf("rewrite %q: %v", expr, err)
+	}
+	pe, err := cel.AstToParsedExpr(rewritten)
+	if err != nil {
+		t.Fatalf("to proto: %v", err)
+	}
+	return pe
 }
 
 // functionsIn collects all call function names in the AST.
@@ -68,79 +85,72 @@ func functionsIn(e *exprpb.Expr, out map[string]int) {
 	}
 }
 
-func rewriteFunctions(t *testing.T, expr string) map[string]int {
-	t.Helper()
-	env := parseEnv(t)
-	parsed, iss := env.Parse(expr)
-	if iss != nil && iss.Err() != nil {
-		t.Fatalf("parse %q: %v", expr, iss.Err())
-	}
-	rewritten, err := RewriteTimeOperators(parsed)
-	if err != nil {
-		t.Fatalf("rewrite %q: %v", expr, err)
-	}
-	pe, err := cel.AstToParsedExpr(rewritten)
-	if err != nil {
-		t.Fatalf("to proto: %v", err)
-	}
-	fns := map[string]int{}
-	functionsIn(pe.GetExpr(), fns)
-	return fns
-}
-
-func TestRewriteRenamesTaintedOperators(t *testing.T) {
+func TestNormalizationSwapsKroToLeft(t *testing.T) {
 	cases := []struct {
-		expr        string
-		wantRenamed []string
-		wantKept    []string
+		expr string
+		want map[string]int // function → count expected AFTER rewrite
 	}{
-		// now on LHS of comparison
-		{`time.now() >= timestamp(schema.openAt)`, []string{"kro.time.ge"}, nil},
-		// now on RHS
-		{`timestamp(schema.openAt) <= time.now()`, []string{"kro.time.le"}, nil},
-		// arithmetic chains taint into outer comparison
-		{`time.now() - timestamp(schema.t) > duration("5s")`,
-			[]string{"kro.time.sub", "kro.time.gt"}, nil},
-		// plain operators stay untouched
-		{`1 + 2 < 4 && timestamp(schema.a) < timestamp(schema.b)`,
-			nil, []string{"_+_", "_<_"}},
-		// mixed: only the tainted comparison is renamed
-		{`schema.n < 3 && time.now() < timestamp(schema.t)`,
-			[]string{"kro.time.lt"}, []string{"_<_"}},
-		// taint through cel.bind
+		// kro already on the left: untouched.
+		{`time.now() >= timestamp(schema.openAt)`, map[string]int{"_>=_": 1}},
+		{`time.now() - timestamp(schema.t) > duration("5s")`, map[string]int{"_-_": 1, "_>_": 1}},
+		// kro on the right of a plain operand: comparison mirrored.
+		{`timestamp(schema.openAt) <= time.now()`, map[string]int{"_>=_": 1, "_<=_": 0}},
+		{`timestamp(schema.openAt) < time.now()`, map[string]int{"_>_": 1, "_<_": 0}},
+		// plain + kro: swapped, operator unchanged.
+		{`duration("5m") + time.now() >= timestamp(schema.t)`, map[string]int{"_+_": 1, "_>=_": 1}},
+		// plainTs − kroTs ⇒ −(kroTs − plainTs): one new unary minus. The
+		// negated result is a kro value on the LEFT of <, so the comparison
+		// itself correctly stays unmirrored.
+		{`timestamp(schema.expiry) - time.now() < duration("5m")`,
+			map[string]int{"-_": 1, "_-_": 1, "_<_": 1}},
+		// no time involved: fully untouched.
+		{`schema.n < 3 && 1 + 2 > 0`, map[string]int{"_<_": 1, "_+_": 1, "_>_": 1}},
+		// value-directed, not contains-based: size() yields an int.
+		{`size([time.now()]) + 1 > 0`, map[string]int{"_+_": 1, "_>_": 1}},
+		// mixed: only the kro-on-right comparison is mirrored.
+		{`schema.n < 3 && timestamp(schema.t) < time.now()`, map[string]int{"_<_": 1, "_>_": 1}},
+		// bind-carried kro value on the right: mirrored.
 		{`cel.bind(deadline, time.now() + duration("5m"), timestamp(schema.t) < deadline)`,
-			[]string{"kro.time.add", "kro.time.lt"}, nil},
-		// taint through a map comprehension's iterator
-		{`[time.now()].map(x, x < timestamp(schema.t))`, []string{"kro.time.lt"}, nil},
-		// string() launders taint: comparison on the string is NOT renamed
-		{`string(time.now()) < schema.s`, nil, []string{"_<_"}},
-		// value-type directed, NOT contains-taint: size() yields an int, so
-		// the arithmetic and comparison are ordinary CEL and stay untouched
-		{`size([time.now()]) + 1 > 0`, nil, []string{"_+_", "_>_"}},
-		// indexing extracts the kro element from a list
-		{`[time.now()][0] >= timestamp(schema.t)`, []string{"kro.time.ge"}, nil},
-		// ternary carries the kro value through either branch
-		{`(schema.b ? time.now() : timestamp(schema.t)) < timestamp(schema.u)`,
-			[]string{"kro.time.lt"}, nil},
+			map[string]int{"_>_": 1, "_+_": 1}},
+		// iterator-carried kro on the right: mirrored inside the loop.
+		{`[time.now()].map(x, timestamp(schema.t) <= x)`, map[string]int{"_>=_": 1}},
+		// index extracts kro element; already LHS: untouched.
+		{`[time.now()][0] >= timestamp(schema.t)`, map[string]int{"_>=_": 1}},
+		// ternary carries kro; on the right: mirrored.
+		{`timestamp(schema.t) < (schema.b ? time.now() : time.now() + duration("1m"))`,
+			map[string]int{"_>_": 1, "_<_": 0}},
+		// string() launders: not a kro value, comparison untouched.
+		{`string(time.now()) < schema.s`, map[string]int{"_<_": 1}},
 	}
 	for _, tc := range cases {
-		fns := rewriteFunctions(t, tc.expr)
-		for _, want := range tc.wantRenamed {
-			if fns[want] == 0 {
-				t.Errorf("%q: expected %s in rewritten AST, got %v", tc.expr, want, fns)
-			}
-		}
-		for _, keep := range tc.wantKept {
-			if fns[keep] == 0 {
-				t.Errorf("%q: expected %s kept in rewritten AST, got %v", tc.expr, keep, fns)
+		pe := rewrite(t, tc.expr)
+		fns := map[string]int{}
+		functionsIn(pe.GetExpr(), fns)
+		for fn, want := range tc.want {
+			if fns[fn] != want {
+				t.Errorf("%q: function %s count = %d, want %d (all: %v)",
+					tc.expr, fn, fns[fn], want, fns)
 			}
 		}
 	}
 }
 
-func TestRewritePreservesIDsAndSource(t *testing.T) {
+func TestSwapReversesArguments(t *testing.T) {
+	// timestamp(schema.openAt) <= time.now()  ⇒  time.now() >= timestamp(...)
+	pe := rewrite(t, `timestamp(schema.openAt) <= time.now()`)
+	root := pe.GetExpr().GetCallExpr()
+	if root.GetFunction() != "_>=_" {
+		t.Fatalf("root function = %s, want _>=_", root.GetFunction())
+	}
+	lhs := root.GetArgs()[0].GetCallExpr()
+	if lhs.GetFunction() != "now" {
+		t.Fatalf("lhs after swap = %v, want the now() call", root.GetArgs()[0])
+	}
+}
+
+func TestPureSwapPreservesIDs(t *testing.T) {
 	env := parseEnv(t)
-	expr := `time.now() >= timestamp(schema.openAt)`
+	expr := `timestamp(schema.openAt) <= time.now()`
 	parsed, iss := env.Parse(expr)
 	if iss != nil && iss.Err() != nil {
 		t.Fatalf("parse: %v", iss.Err())
@@ -158,15 +168,53 @@ func TestRewritePreservesIDsAndSource(t *testing.T) {
 	collectIDs(after.GetExpr(), afterIDs)
 
 	if len(beforeIDs) != len(afterIDs) {
-		t.Fatalf("node count changed: %d -> %d", len(beforeIDs), len(afterIDs))
+		t.Fatalf("node count changed on a pure swap: %d -> %d", len(beforeIDs), len(afterIDs))
 	}
 	for id := range beforeIDs {
 		if !afterIDs[id] {
 			t.Fatalf("expression ID %d lost in rewrite", id)
 		}
 	}
-	if !strings.Contains(rewritten.Source().Content(), "time.now()") {
-		t.Fatalf("source content lost")
+}
+
+func TestSubtractionNormalizationAddsOneFreshID(t *testing.T) {
+	env := parseEnv(t)
+	expr := `timestamp(schema.expiry) - time.now()`
+	parsed, iss := env.Parse(expr)
+	if iss != nil && iss.Err() != nil {
+		t.Fatalf("parse: %v", iss.Err())
+	}
+	before, _ := cel.AstToParsedExpr(parsed)
+	beforeIDs := map[int64]bool{}
+	collectIDs(before.GetExpr(), beforeIDs)
+
+	rewritten, err := RewriteTimeOperators(parsed)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	after, _ := cel.AstToParsedExpr(rewritten)
+	afterIDs := map[int64]bool{}
+	collectIDs(after.GetExpr(), afterIDs)
+
+	if len(afterIDs) != len(beforeIDs)+1 {
+		t.Fatalf("node count = %d, want %d (exactly one new unary minus)", len(afterIDs), len(beforeIDs)+1)
+	}
+	for id := range beforeIDs {
+		if !afterIDs[id] {
+			t.Fatalf("pre-existing expression ID %d lost", id)
+		}
+	}
+	// Shape: -_( _-_( now(), plain ) )
+	root := after.GetExpr().GetCallExpr()
+	if root.GetFunction() != "-_" || len(root.GetArgs()) != 1 {
+		t.Fatalf("root = %s/%d args, want unary -_", root.GetFunction(), len(root.GetArgs()))
+	}
+	inner := root.GetArgs()[0].GetCallExpr()
+	if inner.GetFunction() != "_-_" {
+		t.Fatalf("inner = %s, want _-_", inner.GetFunction())
+	}
+	if inner.GetArgs()[0].GetCallExpr().GetFunction() != "now" {
+		t.Fatalf("inner lhs should be the now() call after normalization")
 	}
 }
 

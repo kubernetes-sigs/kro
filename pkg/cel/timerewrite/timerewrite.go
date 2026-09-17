@@ -12,27 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// timerewrite.go is the KREP-025 operator rewrite. kro time values are
-// honest, intentionally-limited CEL types (kro.Timestamp / kro.Duration),
-// and CEL does not allow adding overloads for standard operators across
-// types (cel-go #252/#990). The KREP's "Overriding" section therefore calls
-// for rewriting the AST so that operators on time values become ordinary
-// function calls, which ARE declarable.
+// timerewrite.go is the KREP-025 operand normalization. kro time values
+// (kro.Timestamp / kro.Duration) participate in the standard operators via
+// two mechanisms: overload DECLARATIONS merged onto the operators (the
+// checker side — see pkg/cel/library/time_functions.go) and trait dispatch
+// (the runtime side — CEL's standard operators dispatch through the LEFT
+// operand's Comparer/Adder/Subtractor traits, which the kro types implement
+// with requeue solving).
 //
-// The rewrite runs between Parse and Check and is TYPE-DIRECTED: it infers,
-// bottom-up, which subexpressions produce a kro time VALUE — time.now()
-// itself, arithmetic on it, values carried through cel.bind and ternaries —
-// and renames the six operators (`_<_`, `_<=_`, `_>_`, `_>=_`, `_+_`,
-// `_-_`) to kro.time.* calls ONLY when an operand is such a value. It is a
-// pure rename: no nodes are added or removed, all expression IDs and source
-// positions are preserved.
+// Both mechanisms are left-biased, so the only expressions needing help are
+// those with a kro value on the RIGHT of a plain operand. This pass runs
+// between Parse and Check, infers bottom-up which subexpressions produce a
+// kro time value, and normalizes:
 //
-// Expressions that merely mention time.now() without their operands BEING a
-// time value (e.g. `size([time.now()]) + 1`) are left untouched and checked
-// under normal CEL rules. An ill-typed time operation (e.g.
-// `time.now() >= "oops"`) is renamed and then rejected by the checker,
-// because kro.time.* declares exactly the legal kro pairs — the same
-// compile-time failure any unknown type combination gets.
+//	plain <  kro   ⇒  kro >  plain      (mirrored comparison)
+//	plain <= kro   ⇒  kro >= plain
+//	plain +  kro   ⇒  kro +  plain      (commutative)
+//	plainTs − kroTs  ⇒  −(kroTs − plainTs)
+//	plain   − kroDur ⇒  (−kroDur) + plain
+//
+// Comparisons and addition are pure argument swaps (no nodes added, all
+// expression IDs preserved). The two subtraction forms wrap one new unary
+// minus node with a fresh ID. Expressions with the kro value already on
+// the left — or with no kro value at all — are untouched: static overload
+// resolution and trait dispatch handle them without any rewriting.
 package timerewrite
 
 import (
@@ -40,19 +43,16 @@ import (
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 )
 
-// timeOperatorRenames maps CEL operator internal names to the kro.time.*
-// functions declared by the time library (pkg/cel/library/time_functions.go).
-var timeOperatorRenames = map[string]string{
-	"_<_":  "kro.time.lt",
-	"_<=_": "kro.time.le",
-	"_>_":  "kro.time.gt",
-	"_>=_": "kro.time.ge",
-	"_+_":  "kro.time.add",
-	"_-_":  "kro.time.sub",
+// mirroredComparisons maps a comparison to its operand-swapped equivalent.
+var mirroredComparisons = map[string]string{
+	"_<_":  "_>_",
+	"_<=_": "_>=_",
+	"_>_":  "_<_",
+	"_>=_": "_<=_",
 }
 
-// kroKind classifies what a subexpression's VALUE is, as far as the rewrite
-// needs to know.
+// kroKind classifies what a subexpression's VALUE is, as far as the
+// normalization needs to know.
 type kroKind int
 
 const (
@@ -86,9 +86,6 @@ func listOf(k kroKind) kroKind {
 }
 
 // join merges the kinds of alternative branches (ternary, list elements).
-// Differing time kinds join conservatively to the branch that is a time
-// value; a mixed ts/dur join cannot be represented and degrades to the
-// first, which the checker will reject if actually misused.
 func join(a, b kroKind) kroKind {
 	if a == kindNone {
 		return b
@@ -96,25 +93,36 @@ func join(a, b kroKind) kroKind {
 	return a
 }
 
-// RewriteTimeOperators rewrites operators whose operands are
-// time.now()-derived values into kro.time.* function calls. The input must
-// be a parsed (not necessarily checked) AST; the result preserves source
-// info and should be passed to env.Check.
+// RewriteTimeOperators normalizes operators with a time.now()-derived value
+// on the right of a plain operand so that left-biased overload declarations
+// and trait dispatch apply. The input must be a parsed (not necessarily
+// checked) AST; the result preserves source info and should be passed to
+// env.Check.
 func RewriteTimeOperators(a *cel.Ast) (*cel.Ast, error) {
 	pe, err := cel.AstToParsedExpr(a)
 	if err != nil {
 		return nil, err
 	}
-	rw := &timeRewriter{vars: map[string][]kroKind{}}
+	rw := &timeRewriter{
+		vars:   map[string][]kroKind{},
+		nextID: maxExprID(pe.GetExpr()) + 1,
+	}
 	rw.walk(pe.GetExpr())
 	return cel.ParsedExprToAstWithSource(pe, a.Source()), nil
 }
 
 // timeRewriter tracks comprehension variables (cel.bind values, map/filter
-// iterators) currently bound to kro time values. Values are stacks so
-// shadowing nests correctly.
+// iterators) bound to kro time values, and allocates fresh expression IDs
+// for the unary-minus nodes the subtraction normalization introduces.
 type timeRewriter struct {
-	vars map[string][]kroKind
+	vars   map[string][]kroKind
+	nextID int64
+}
+
+func (rw *timeRewriter) freshID() int64 {
+	id := rw.nextID
+	rw.nextID++
+	return id
 }
 
 func (rw *timeRewriter) push(name string, k kroKind) {
@@ -144,8 +152,8 @@ func (rw *timeRewriter) lookup(name string) kroKind {
 	return s[len(s)-1]
 }
 
-// walk infers the kro kind of e's value bottom-up and renames operator calls
-// with a kro time operand in place.
+// walk infers the kro kind of e's value bottom-up and normalizes operator
+// calls in place.
 func (rw *timeRewriter) walk(e *exprpb.Expr) kroKind {
 	if e == nil {
 		return kindNone
@@ -158,8 +166,8 @@ func (rw *timeRewriter) walk(e *exprpb.Expr) kroKind {
 		return rw.lookup(node.IdentExpr.GetName())
 
 	case *exprpb.Expr_SelectExpr:
-		// kro values have no fields; selecting from anything yields non-kro.
-		// Still walk the operand for nested rewrites.
+		// A select from a map/struct is not tracked (its static type still
+		// reaches the checker, and kro-on-LHS needs no rewriting anyway).
 		rw.walk(node.SelectExpr.GetOperand())
 		return kindNone
 
@@ -175,7 +183,6 @@ func (rw *timeRewriter) walk(e *exprpb.Expr) kroKind {
 			rw.walk(entry.GetMapKey())
 			rw.walk(entry.GetValue())
 		}
-		// Values inside maps/structs are not tracked through lookups.
 		return kindNone
 
 	case *exprpb.Expr_CallExpr:
@@ -188,9 +195,8 @@ func (rw *timeRewriter) walk(e *exprpb.Expr) kroKind {
 }
 
 func (rw *timeRewriter) walkCall(call *exprpb.Expr_Call) kroKind {
-	targetKind := kindNone
 	if t := call.GetTarget(); t != nil {
-		targetKind = rw.walk(t)
+		rw.walk(t)
 	}
 	argKinds := make([]kroKind, len(call.GetArgs()))
 	for i, arg := range call.GetArgs() {
@@ -206,21 +212,45 @@ func (rw *timeRewriter) walkCall(call *exprpb.Expr_Call) kroKind {
 		return kindTs
 	}
 
-	// Binary operators: rename when an operand IS a kro time value, and
-	// infer the arithmetic result kind per the KREP definitions table.
-	if newName, ok := timeOperatorRenames[fn]; ok &&
-		call.GetTarget() == nil && len(call.GetArgs()) == 2 {
+	if call.GetTarget() == nil && len(call.GetArgs()) == 2 {
 		l, r := argKinds[0], argKinds[1]
-		if l.isTime() || r.isTime() {
-			call.Function = newName
-			switch fn {
-			case "_+_", "_-_":
-				return arithmeticKind(fn, l, r)
-			default:
-				return kindNone // comparisons yield bool
+
+		// plain ⋛ kro  ⇒  kro (mirrored ⋛) plain
+		if mirror, ok := mirroredComparisons[fn]; ok {
+			if !l.isTime() && r.isTime() {
+				call.Function = mirror
+				call.Args[0], call.Args[1] = call.Args[1], call.Args[0]
 			}
+			return kindNone // comparisons yield bool
 		}
-		return kindNone
+
+		switch fn {
+		case "_+_":
+			// plain + kro  ⇒  kro + plain (commutative).
+			if !l.isTime() && r.isTime() {
+				call.Args[0], call.Args[1] = call.Args[1], call.Args[0]
+				l, r = r, l
+			}
+			if l.isTime() || r.isTime() {
+				return addKind(l, r)
+			}
+			return kindNone
+		case "_-_":
+			if !l.isTime() && r.isTime() {
+				rw.normalizeSubtraction(call, r)
+				// ts−kroTs → dur; plain−kroDur → same kind as the plain side
+				// (unknowable here); either way the checker types the result
+				// from the declared overloads — report the conservative kind.
+				if r == kindTs {
+					return kindDur
+				}
+				return kindNone
+			}
+			if l.isTime() {
+				return subKind(l, r)
+			}
+			return kindNone
+		}
 	}
 
 	// Ternary carries either branch's value.
@@ -235,10 +265,9 @@ func (rw *timeRewriter) walkCall(call *exprpb.Expr_Call) kroKind {
 
 	// Whitelisted identity casts keep the value a solver value; string() is
 	// the escape hatch (a plain string); everything else — size(), helper
-	// functions, macros not otherwise handled — is treated as NOT producing
-	// a kro value. If such a function actually returns one at runtime (only
-	// possible through dyn), operators on it fail loudly rather than being
-	// rewritten.
+	// functions — is treated as NOT producing a kro value. A kro value that
+	// escapes through dyn still works when it lands on an operator's LEFT
+	// (trait dispatch); on the right of a plain operand it errors loudly.
 	switch fn {
 	case "timestamp":
 		if len(argKinds) == 1 && argKinds[0] == kindTs {
@@ -249,39 +278,69 @@ func (rw *timeRewriter) walkCall(call *exprpb.Expr_Call) kroKind {
 			return kindDur
 		}
 	}
-	_ = targetKind
 	return kindNone
 }
 
-// arithmeticKind mirrors the KREP definitions table for the value kind of a
-// renamed + / − whose operands include a kro time value. Plain counterparts
-// (a timestamp() or duration() call, a schema field) have kind kindNone; the
-// checker validates the actual pairing, so this only needs to be right for
-// the LEGAL combinations.
-func arithmeticKind(fn string, l, r kroKind) kroKind {
-	switch fn {
-	case "_+_":
-		// ts+dur, dur+ts → ts; dur+dur → dur.
-		if l == kindTs || r == kindTs {
-			return kindTs
+// normalizeSubtraction rewrites `plain − kro` in place:
+//
+//	plainTs − kroTs   ⇒  −(kroTs − plainTs)     (result: kro.Duration)
+//	plain   − kroDur  ⇒  (−kroDur) + plain      (result matches plain's kind)
+//
+// Each form introduces exactly one unary-minus node with a fresh ID. An
+// illegal pairing (e.g. plainDur − kroTs, whose swapped form kroTs−plainDur
+// types as kro.Timestamp and cannot be negated) fails closed at check time.
+func (rw *timeRewriter) normalizeSubtraction(call *exprpb.Expr_Call, rhsKind kroKind) {
+	plain, kro := call.Args[0], call.Args[1]
+	if rhsKind == kindTs {
+		// −( kro − plain )
+		inner := &exprpb.Expr{
+			Id: rw.freshID(),
+			ExprKind: &exprpb.Expr_CallExpr{CallExpr: &exprpb.Expr_Call{
+				Function: "_-_",
+				Args:     []*exprpb.Expr{kro, plain},
+			}},
 		}
-		return kindDur
-	case "_-_":
-		// ts−ts → dur; ts−dur → ts; dur−dur → dur.
-		if l == kindTs && r == kindTs {
-			return kindDur
-		}
-		if l == kindTs {
-			return kindTs
-		}
-		if l == kindNone && r == kindTs {
-			// plain − kroTs: ts−ts → dur (any other pairing is rejected
-			// by the checker).
-			return kindDur
-		}
+		call.Function = "-_"
+		call.Args = []*exprpb.Expr{inner}
+		return
+	}
+	// ( −kro ) + plain
+	neg := &exprpb.Expr{
+		Id: rw.freshID(),
+		ExprKind: &exprpb.Expr_CallExpr{CallExpr: &exprpb.Expr_Call{
+			Function: "-_",
+			Args:     []*exprpb.Expr{kro},
+		}},
+	}
+	call.Function = "_+_"
+	call.Args = []*exprpb.Expr{neg, plain}
+}
+
+// addKind / subKind mirror the KREP definitions table for the value kind of
+// arithmetic whose operands include a kro time value. These kinds only steer
+// LATER normalization decisions; the checker's declared overload result
+// types are the authority for typing.
+func addKind(l, r kroKind) kroKind {
+	if l == kindTs || r == kindTs {
+		return kindTs
+	}
+	return kindDur
+}
+
+func subKind(l, r kroKind) kroKind {
+	if l == kindTs && r == kindTs {
 		return kindDur
 	}
-	return kindNone
+	if l == kindTs && r == kindNone {
+		// now() − plain: could be ts−ts (→dur) or ts−dur (→ts); assume the
+		// common "age" shape (→dur). A wrong guess only affects a LATER
+		// plain−kro normalization choice, which then fails closed at check.
+		return kindDur
+	}
+	if l == kindTs {
+		return kindTs // ts − kroDur → ts
+	}
+	return kindDur
 }
 
 // walkComprehension threads value kinds through CEL's variable-binding
@@ -304,4 +363,44 @@ func (rw *timeRewriter) walkComprehension(comp *exprpb.Expr_Comprehension) kroKi
 	rw.pop(comp.GetIterVar())
 
 	return resultKind
+}
+
+// maxExprID returns the largest expression ID in the tree, so normalization
+// can mint fresh, non-colliding IDs.
+func maxExprID(e *exprpb.Expr) int64 {
+	if e == nil {
+		return 0
+	}
+	maxID := e.GetId()
+	visit := func(child *exprpb.Expr) {
+		if m := maxExprID(child); m > maxID {
+			maxID = m
+		}
+	}
+	switch node := e.GetExprKind().(type) {
+	case *exprpb.Expr_CallExpr:
+		visit(node.CallExpr.GetTarget())
+		for _, a := range node.CallExpr.GetArgs() {
+			visit(a)
+		}
+	case *exprpb.Expr_SelectExpr:
+		visit(node.SelectExpr.GetOperand())
+	case *exprpb.Expr_ListExpr:
+		for _, el := range node.ListExpr.GetElements() {
+			visit(el)
+		}
+	case *exprpb.Expr_StructExpr:
+		for _, en := range node.StructExpr.GetEntries() {
+			visit(en.GetMapKey())
+			visit(en.GetValue())
+		}
+	case *exprpb.Expr_ComprehensionExpr:
+		c := node.ComprehensionExpr
+		visit(c.GetIterRange())
+		visit(c.GetAccuInit())
+		visit(c.GetLoopCondition())
+		visit(c.GetLoopStep())
+		visit(c.GetResult())
+	}
+	return maxID
 }

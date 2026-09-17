@@ -10,8 +10,12 @@
 # shipped engine, so applying it will not fully reconcile. Kept in-tree as the
 # design's north star; the gaps below are tracked follow-up work, not bugs in
 # this PR:
-#   - simpleSchema.toOpenAPI() and plural() CEL functions are not registered in
-#     the shipped CEL environment (needed at L1 to synthesize the Kind's CRD).
+#   - plural() is not a registered CEL function (needed at L1 for the Kind's
+#     CRD name and plural).
+#   - The L1 CRD's status schema is weaker than the RGD controller's: fields
+#     whose value is a CEL expression are emitted as preserve-unknown-fields
+#     because simpleschema.toOpenAPI() cannot infer their types from the
+#     referenced resources the way the controller does.
 #   - .ready() on a node is deferred to KREP-006 (readiness lifecycle) — used
 #     here for status gating; there is no working replacement yet.
 #   - propagateWhen (conditional status updates) is deferred to KREP-006.
@@ -42,7 +46,7 @@
 #   (def: nodes check reserved words, naming conventions, duplicate IDs, and
 #   schema validity), creates the Kind's CRD (gated on validation passing), and
 #   watches instances of the user's Kind. The CRD's OpenAPI schema is
-#   synthesized from the RGD's spec.schema using simpleSchema.toOpenAPI().
+#   synthesized from the RGD's spec.schema using simpleschema.toOpenAPI().
 #
 #   The rgdStatus node writes Ready/state/conditions back to the RGD via patch:.
 #   It is the single writer for these fields, keeping the status pipeline to
@@ -216,8 +220,12 @@ spec:
                       subresources:
                         status: {}
                       schema:
+                        # The RGD's spec.schema block converted whole; kro's default
+                        # instance status fields (state, conditions) are merged in
+                        # first, replacing the RGD's expression-valued conditions
+                        # list with a typed declaration, as the RGD controller does.
                         openAPIV3Schema: >-
-                          ${"${simpleSchema.toOpenAPI(schema.spec.schema, has(schema.spec.resources) ? schema.spec.resources : [])}"}
+                          ${"${simpleschema.toOpenAPI(schema.spec.schema.deepMerge({'status': {'state': 'string', 'conditions': '[]KroCondition'}, 'types': {'KroCondition': {'type': 'string', 'status': 'string', 'reason': 'string', 'message': 'string', 'lastTransitionTime': 'string', 'observedGeneration': 'integer'}}}))}"}
                       additionalPrinterColumns: >-
                         ${"${schema.?spec.?schema.?additionalPrinterColumns.orValue([])}"}
 

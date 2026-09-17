@@ -145,6 +145,7 @@ func coreDeclarations() []cel.EnvOption {
 		k8scellib.SemverLib(),
 		library.Random(),
 		library.Maps(),
+		library.SimpleSchema(),
 		library.JSON(),
 		library.Hash(),
 		library.Lists(),

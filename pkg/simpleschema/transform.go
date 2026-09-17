@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
@@ -33,6 +34,10 @@ type customType struct {
 
 type transformer struct {
 	customTypes map[string]customType
+
+	// allowExpressions makes buildFieldSchema treat CEL-expression values as
+	// untyped fields instead of type names. See AllowExpressionFields.
+	allowExpressions bool
 }
 
 // newTransformer creates a new transformer with the given custom types.
@@ -169,12 +174,56 @@ func (t *transformer) buildSchema(spec map[string]any) (*extv1.JSONSchemaProps, 
 func (t *transformer) buildFieldSchema(name string, spec any, parent *extv1.JSONSchemaProps) (*extv1.JSONSchemaProps, error) {
 	switch val := spec.(type) {
 	case string:
+		// Checked before ParseField: an expression may contain '|' (e.g. "||"),
+		// which ParseField would otherwise read as the marker separator.
+		if t.allowExpressions && isExpression(val) {
+			return untypedSchema(), nil
+		}
 		return t.buildFieldFromString(name, val, parent)
 	case map[string]any:
 		return t.buildSchema(val)
+	case []any:
+		if t.allowExpressions {
+			if isExpressionList(val) {
+				return untypedSchema(), nil
+			}
+			return nil, errors.New("a list value must contain only CEL expressions")
+		}
+		return nil, fmt.Errorf("unexpected type: %T", spec)
 	default:
 		return nil, fmt.Errorf("unexpected type: %T", spec)
 	}
+}
+
+// isExpression reports whether a field value is a CEL expression (or a string
+// interpolating one) rather than a SimpleSchema type. Only the type position is
+// inspected — the text before the first '|', where ParseField reads the type —
+// so a marker whose value contains "${" (default="${x}") still yields a typed
+// field.
+func isExpression(s string) bool {
+	typ, _, _ := strings.Cut(s, "|")
+	return strings.Contains(typ, "${")
+}
+
+// isExpressionList reports whether a list value consists solely of CEL
+// expression strings, the shape of an RGD status block's `conditions:` list.
+func isExpressionList(items []any) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		s, ok := item.(string)
+		if !ok || !isExpression(s) {
+			return false
+		}
+	}
+	return true
+}
+
+// untypedSchema accepts a value of any type at this position. The API server
+// permits a property without a type when it preserves unknown fields.
+func untypedSchema() *extv1.JSONSchemaProps {
+	return &extv1.JSONSchemaProps{XPreserveUnknownFields: new(true)}
 }
 
 func (t *transformer) buildFieldFromString(name, fieldValue string, parent *extv1.JSONSchemaProps) (*extv1.JSONSchemaProps, error) {

@@ -475,15 +475,14 @@ func (b *Builder) buildResourceNode(
 			return nil, nil, fmt.Errorf("failed to parse external ref resource %s: %w", rs.ID, err)
 		}
 	} else if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
+		// CRDs are parsed schemalessly: the apiextensions OpenAPI document
+		// models openAPIV3Schema as the recursive JSONSchemaProps and the
+		// resolver collapses its self-references to {type: object}, so the
+		// typed parser cannot walk a real schema. Expressions found at any
+		// path are still type-checked via expectedTypeForField.
 		fieldDescriptors, _, err = parser.ParseSchemalessResource(rs.Object)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rs.ID, err)
-		}
-
-		for _, expr := range fieldDescriptors {
-			if !strings.HasPrefix(expr.Path, "metadata.") {
-				return nil, nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, rs.ID)
-			}
 		}
 	} else {
 		fieldDescriptors, err = p.ParseResource(rs.Object, resourceSchema)

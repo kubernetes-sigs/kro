@@ -89,6 +89,49 @@ func TestMergeRejectsNonMaps(t *testing.T) {
 	assertCELErr(t, mergeVals(m, types.String("not-a-map")), "no such overload")
 }
 
+func TestSimpleSchemaToOpenAPIErrorPaths(t *testing.T) {
+	t.Parallel()
+	block := types.DefaultTypeAdapter.NativeToValue(map[string]any{
+		"spec": map[string]any{"name": "string"},
+	})
+
+	t.Run("rejects a non-map argument", func(t *testing.T) {
+		t.Parallel()
+		assertCELErr(t, toOpenAPI(types.String("spec: {}")),
+			"simpleschema.toOpenAPI: schema argument must be a map")
+		assertCELErr(t, toOpenAPI(types.Int(1)),
+			"simpleschema.toOpenAPI: schema argument must be a map")
+		assertCELErr(t, toOpenAPI(types.NullValue),
+			"simpleschema.toOpenAPI: schema argument must be a map")
+	})
+
+	t.Run("propagates an error argument unchanged", func(t *testing.T) {
+		t.Parallel()
+		in := types.NewErr("upstream failure")
+		assert.Equal(t, in, toOpenAPI(in))
+	})
+
+	t.Run("reports SimpleSchema conversion failures with the block key", func(t *testing.T) {
+		t.Parallel()
+		bad := types.DefaultTypeAdapter.NativeToValue(map[string]any{
+			"spec": map[string]any{"name": "nope"},
+		})
+		assertCELErr(t, toOpenAPI(bad), "simpleschema.toOpenAPI: spec: field name: unknown type: nope")
+	})
+
+	t.Run("converts a valid block", func(t *testing.T) {
+		t.Parallel()
+		out := toOpenAPI(block)
+		require.False(t, types.IsError(out), "got %v", out)
+		root, ok := out.Value().(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"name": map[string]any{"type": "string"}},
+		}, root["properties"].(map[string]any)["spec"])
+	})
+}
+
 func TestSeededIntArgumentValidation(t *testing.T) {
 	t.Parallel()
 	seed := types.String("s")

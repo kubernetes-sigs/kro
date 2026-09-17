@@ -16,10 +16,17 @@ package runtime
 
 import (
 	"errors"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextinstall "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/install"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	memory "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/restmapper"
 
@@ -534,6 +541,220 @@ func TestNode_Resolve(t *testing.T) {
 			}
 		})
 	}
+}
+
+// mustCompilerWithRealCRDSchema is mustCompiler with the resolver serving the
+// real apiextensions CustomResourceDefinition schema, so CRD templates are
+// type-checked and rendered against the shape a live cluster reports.
+func mustCompilerWithRealCRDSchema(t *testing.T) *compiler.Compiler {
+	t.Helper()
+	r, disco, err := testk8s.NewFakeResolverWithRealCRDSchema()
+	require.NoError(t, err)
+	rm := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disco))
+	return compiler.NewCompilerWithDependencies(r, rm)
+}
+
+// kindCRDTemplate returns a CustomResourceDefinition template whose names and
+// version come from a def node "kindSpec" (group, kind, plural, version) and
+// whose versions[0].schema.openAPIV3Schema is set to openAPIV3Schema — a
+// static map, a CEL expression string, or a map containing expressions.
+func kindCRDTemplate(openAPIV3Schema any) map[string]any {
+	return map[string]any{
+		"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+		"metadata": map[string]any{"name": "${kindSpec.plural + '.' + kindSpec.group}"},
+		"spec": map[string]any{
+			"group": "${kindSpec.group}",
+			"names": map[string]any{"kind": "${kindSpec.kind}", "plural": "${kindSpec.plural}"},
+			"scope": "Namespaced",
+			"versions": []any{map[string]any{
+				"name": "${kindSpec.version}", "served": true, "storage": true,
+				"subresources": map[string]any{"status": map[string]any{}},
+				"schema":       map[string]any{"openAPIV3Schema": openAPIV3Schema},
+			}},
+		},
+	}
+}
+
+// renderCRD compiles g against the real CRD schema, publishes every def node,
+// renders node "crd" and returns it decoded into a typed CRD. Along the way it
+// checks what every apply path relies on: the rendered object is JSON-safe (it
+// survives the unstructured deep copy) and its schema passes the apiextensions
+// structural-schema validation the API server applies on admission.
+func renderCRD(t *testing.T, g *expv1alpha1.Graph) (*extv1.CustomResourceDefinition, map[string]any) {
+	t.Helper()
+	prog, err := mustCompilerWithRealCRDSchema(t).Compile(g)
+	require.NoError(t, err)
+	rt := New(prog, g)
+	for _, id := range prog.TopologicalOrder {
+		if prog.Nodes[id].Kind == compiler.NodeKindDef {
+			setFirst(rt, id)
+		}
+	}
+
+	objs, err := rt.Node("crd").Resolve()
+	require.NoError(t, err)
+	require.Len(t, objs, 1)
+	assert.Equal(t, objs[0].Object, objs[0].DeepCopy().Object, "rendered object must be JSON-safe")
+
+	var crd extv1.CustomResourceDefinition
+	require.NoError(t, k8sruntime.DefaultUnstructuredConverter.FromUnstructured(objs[0].Object, &crd))
+	require.Len(t, crd.Spec.Versions, 1)
+	require.NotNil(t, crd.Spec.Versions[0].Schema)
+	require.NotNil(t, crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
+
+	// The API server converts to the internal type and validates the structural
+	// schema on admission; v1 -> internal hoists a single version's schema to
+	// spec.validation.
+	convScheme := k8sruntime.NewScheme()
+	apiextinstall.Install(convScheme)
+	var internal apiextensions.CustomResourceDefinition
+	require.NoError(t, convScheme.Convert(&crd, &internal, nil))
+	require.NotNil(t, internal.Spec.Validation)
+	structural, err := structuralschema.NewStructural(internal.Spec.Validation.OpenAPIV3Schema)
+	require.NoError(t, err)
+	assert.Empty(t, structuralschema.ValidateStructural(nil, structural))
+
+	return &crd, objs[0].Object
+}
+
+// kindSpecNames is the def node every CRD render test reads its names from.
+var kindSpecNames = map[string]any{
+	"group": "example.com", "kind": "App", "plural": "apps", "version": "v1alpha1",
+}
+
+// assertKindCRD checks the CRD fields that come from the kindSpecNames def.
+func assertKindCRD(t *testing.T, crd *extv1.CustomResourceDefinition) {
+	t.Helper()
+	assert.Equal(t, "apps.example.com", crd.Name)
+	assert.Equal(t, "example.com", crd.Spec.Group)
+	assert.Equal(t, "App", crd.Spec.Names.Kind)
+	assert.Equal(t, "apps", crd.Spec.Names.Plural)
+	assert.Equal(t, "v1alpha1", crd.Spec.Versions[0].Name)
+	root := crd.Spec.Versions[0].Schema.OpenAPIV3Schema
+	assert.Equal(t, "object", root.Type)
+	assert.ElementsMatch(t, []string{"apiVersion", "kind", "metadata", "spec", "status"}, slices.Collect(maps.Keys(root.Properties)))
+}
+
+// TestNode_Resolve_CRDTemplateSchemaFromCEL renders a CustomResourceDefinition
+// whose openAPIV3Schema is produced by CEL, for both authoring styles: the
+// whole openAPIV3Schema as one expression, and a static root with the spec and
+// status sub-schemas as expressions. Both must render the same CRD, decode into
+// a typed CRD and pass structural validation.
+func TestNode_Resolve_CRDTemplateSchemaFromCEL(t *testing.T) {
+	t.Parallel()
+
+	const specSchema = `{"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "replicas": {"type": "integer", "default": 1, "minimum": 0}}}`
+	const statusSchema = `{"type": "object", "properties": {"readyReplicas": {"type": "integer"}}}`
+	wantSpecSchema := extv1.JSONSchemaProps{
+		Type:     "object",
+		Required: []string{"name"},
+		Properties: map[string]extv1.JSONSchemaProps{
+			"name":     {Type: "string"},
+			"replicas": {Type: "integer", Default: &extv1.JSON{Raw: []byte("1")}, Minimum: new(float64(0))},
+		},
+	}
+	wantStatusSchema := extv1.JSONSchemaProps{
+		Type:       "object",
+		Properties: map[string]extv1.JSONSchemaProps{"readyReplicas": {Type: "integer"}},
+	}
+
+	templates := map[string]map[string]any{
+		"whole openAPIV3Schema is one expression": kindCRDTemplate(
+			`${{"type": "object", "properties": {"apiVersion": {"type": "string"}, "kind": {"type": "string"}, "metadata": {"type": "object"}, "spec": ` + specSchema + `, "status": ` + statusSchema + `}}}`,
+		),
+		"sub-schemas nested inside a static root": kindCRDTemplate(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"apiVersion": map[string]any{"type": "string"},
+				"kind":       map[string]any{"type": "string"},
+				"metadata":   map[string]any{"type": "object"},
+				"spec":       "${" + specSchema + "}",
+				"status":     "${" + statusSchema + "}",
+			},
+		}),
+	}
+
+	rendered := map[string]map[string]any{}
+	for name, tmpl := range templates {
+		t.Run(name, func(t *testing.T) {
+			g := generator.NewGraph("g",
+				generator.WithDef("kindSpec", kindSpecNames),
+				generator.WithTemplate("crd", tmpl),
+			)
+			crd, obj := renderCRD(t, g)
+			rendered[name] = obj
+			assertKindCRD(t, crd)
+			root := crd.Spec.Versions[0].Schema.OpenAPIV3Schema
+			assert.Equal(t, wantSpecSchema, root.Properties["spec"])
+			assert.Equal(t, wantStatusSchema, root.Properties["status"])
+		})
+	}
+
+	require.Len(t, rendered, 2)
+	assert.Equal(t,
+		rendered["whole openAPIV3Schema is one expression"],
+		rendered["sub-schemas nested inside a static root"],
+		"both authoring styles must render the same CRD")
+}
+
+// TestNode_Resolve_SimpleSchemaToOpenAPI renders a CustomResourceDefinition
+// whose openAPIV3Schema comes from simpleschema.toOpenAPI() applied to a
+// SimpleSchema block (spec, types, status) held in a def node — the graph-native
+// way to define a Kind. The CEL result must land in the rendered object as
+// JSON-safe values, decode into a typed CRD and pass structural validation.
+func TestNode_Resolve_SimpleSchemaToOpenAPI(t *testing.T) {
+	t.Parallel()
+
+	kindSpec := map[string]any{
+		"types": map[string]any{
+			"Owner": map[string]any{"team": "string | required=true"},
+		},
+		"spec": map[string]any{
+			"name":     "string | required=true",
+			"replicas": "integer | default=1 minimum=0",
+			"owner":    "Owner",
+		},
+		"status": map[string]any{
+			"readyReplicas": "integer",
+			// Deferred: the def evaluates to the literal string
+			// "${service.spec.clusterIP}", which the function then sees as an
+			// expression-valued status field.
+			"url": "${'${service.spec.clusterIP}'}",
+		},
+	}
+	for k, v := range kindSpecNames {
+		kindSpec[k] = v
+	}
+
+	g := generator.NewGraph("g",
+		generator.WithDef("kindSpec", kindSpec),
+		generator.WithTemplate("crd", kindCRDTemplate("${simpleschema.toOpenAPI(kindSpec)}")),
+	)
+	crd, _ := renderCRD(t, g)
+	assertKindCRD(t, crd)
+
+	root := crd.Spec.Versions[0].Schema.OpenAPIV3Schema
+	assert.Equal(t, extv1.JSONSchemaProps{
+		Type:     "object",
+		Required: []string{"name"},
+		Properties: map[string]extv1.JSONSchemaProps{
+			"name":     {Type: "string"},
+			"replicas": {Type: "integer", Default: &extv1.JSON{Raw: []byte("1")}, Minimum: new(float64(0))},
+			"owner": {
+				Type:       "object",
+				Required:   []string{"team"},
+				Properties: map[string]extv1.JSONSchemaProps{"team": {Type: "string"}},
+			},
+		},
+	}, root.Properties["spec"])
+	assert.Equal(t, extv1.JSONSchemaProps{
+		Type: "object",
+		Properties: map[string]extv1.JSONSchemaProps{
+			"readyReplicas": {Type: "integer"},
+			// An expression-valued status field cannot be typed by the function.
+			"url": {XPreserveUnknownFields: new(true)},
+		},
+	}, root.Properties["status"])
 }
 
 func TestNode_TolerateDataPending(t *testing.T) {

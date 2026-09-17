@@ -22,7 +22,10 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+
+	celunstructured "github.com/kubernetes-sigs/kro/pkg/cel/unstructured"
 )
 
 func TestWithResourceIDs(t *testing.T) {
@@ -435,6 +438,114 @@ func BenchmarkDefaultEnvironment(b *testing.B) {
 	}
 }
 
+// TestTypedEnvironment_SimpleSchemaToOpenAPI exercises the real call
+// path for simpleschema.toOpenAPI: the argument is a typed variable's
+// spec.schema whose spec/types/status blocks are x-kubernetes-preserve-unknown-
+// fields objects (the shape of ResourceGraphDefinition.spec.schema), the checker
+// sees it as an object type rather than a map, and the runtime value is a
+// schema-aware unstructured map. Type-check, conversion and the handling of
+// absent blocks must all go through.
+func TestTypedEnvironment_SimpleSchemaToOpenAPI(t *testing.T) {
+	preserveUnknown := func() spec.Schema {
+		return spec.Schema{
+			SchemaProps: spec.SchemaProps{Type: []string{"object"}},
+			VendorExtensible: spec.VendorExtensible{
+				Extensions: spec.Extensions{"x-kubernetes-preserve-unknown-fields": true},
+			},
+		}
+	}
+	rgdSchema := &spec.Schema{SchemaProps: spec.SchemaProps{
+		Type: []string{"object"},
+		Properties: map[string]spec.Schema{
+			"spec": {SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"schema": {SchemaProps: spec.SchemaProps{
+						Type: []string{"object"},
+						Properties: map[string]spec.Schema{
+							"kind":   {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+							"spec":   preserveUnknown(),
+							"types":  preserveUnknown(),
+							"status": preserveUnknown(),
+						},
+					}},
+				},
+			}},
+		},
+	}}
+
+	env, _, err := TypedEnvironmentWithProvider(map[string]*spec.Schema{"rgd": rgdSchema})
+	require.NoError(t, err)
+
+	const expr = `simpleschema.toOpenAPI(rgd.spec.schema)`
+	ast, issues := env.Compile(expr)
+	require.NoError(t, issues.Err(), "must type-check against the object-typed schema block")
+	assert.Equal(t, cel.DynType.String(), ast.OutputType().String())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+
+	eval := func(t *testing.T, schemaBlock map[string]any) map[string]any {
+		t.Helper()
+		obj := map[string]any{"spec": map[string]any{"schema": schemaBlock}}
+		out, _, err := prg.Eval(map[string]any{
+			"rgd": celunstructured.UnstructuredToVal(obj, &openapi.Schema{Schema: rgdSchema}),
+		})
+		require.NoError(t, err)
+		root, ok := out.Value().(map[string]any)
+		require.True(t, ok, "result must be a map, got %T", out.Value())
+		return root["properties"].(map[string]any)
+	}
+
+	t.Run("full block", func(t *testing.T) {
+		props := eval(t, map[string]any{
+			"kind": "App",
+			"spec": map[string]any{
+				"name":  "string | required=true",
+				"owner": "Owner",
+			},
+			"types": map[string]any{
+				"Owner": map[string]any{"team": "string"},
+			},
+			"status": map[string]any{
+				"count": "integer",
+				"url":   "${service.spec.clusterIP}",
+			},
+		})
+		assert.Equal(t, map[string]any{
+			"type":     "object",
+			"required": []any{"name"},
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+				"owner": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"team": map[string]any{"type": "string"}},
+				},
+			},
+		}, props["spec"])
+		assert.Equal(t, map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"count": map[string]any{"type": "integer"},
+				"url":   map[string]any{"x-kubernetes-preserve-unknown-fields": true},
+			},
+		}, props["status"])
+		assert.Equal(t, map[string]any{"type": "string"}, props["kind"], "the block's own kind key is ignored; the root's kind is the CRD's")
+	})
+
+	t.Run("absent types and status blocks", func(t *testing.T) {
+		props := eval(t, map[string]any{
+			"kind": "App",
+			"spec": map[string]any{"name": "string | required=true"},
+		})
+		assert.Equal(t, map[string]any{
+			"type":       "object",
+			"required":   []any{"name"},
+			"properties": map[string]any{"name": map[string]any{"type": "string"}},
+		}, props["spec"])
+		assert.Equal(t, map[string]any{"type": "object"}, props["status"])
+	})
+}
+
 func Test_CELEnvHasFunction(t *testing.T) {
 	env, err := DefaultEnvironment()
 	require.NoError(t, err, "failed to create CEL env")
@@ -446,6 +557,7 @@ func Test_CELEnvHasFunction(t *testing.T) {
 		// types
 		"int", "uint", "double", "bool", "string", "bytes", "timestamp", "duration", "type",
 		// Custom functions
+		"simpleschema.toOpenAPI",
 		"random.seededString",
 		"json.unmarshal",
 		"json.marshal",

@@ -288,15 +288,12 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	var descriptors []variable.FieldDescriptor
 	if kind == NodeKindTemplate || kind == NodeKindPatch {
 		if kind == NodeKindTemplate && gvk.Group == "apiextensions.k8s.io" && gvk.Kind == "CustomResourceDefinition" {
+			// CRDs are parsed schemalessly: the apiextensions OpenAPI document
+			// models openAPIV3Schema as the recursive JSONSchemaProps and the
+			// resolver collapses its self-references to {type: object}, so the
+			// typed parser cannot walk a real schema. Expressions found at any
+			// path are still type-checked via expectedTypeForField.
 			descriptors, _, err = parser.ParseSchemalessResource(payload)
-			if err != nil {
-				return nil, nil, fmt.Errorf("parse %s payload: %w", kind, err)
-			}
-			for _, expr := range descriptors {
-				if !strings.HasPrefix(expr.Path, "metadata.") {
-					return nil, nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, n.ID)
-				}
-			}
 		} else {
 			// A patch body is a partial manifest shaped like the target, so it
 			// type-checks against the target schema exactly as a template does.

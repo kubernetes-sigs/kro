@@ -692,7 +692,11 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "expected array type for path spec.cidrBlocks, got string",
 		},
 		{
-			name: "crds aren't allowed to have variables in their spec fields",
+			// CRD templates used to accept CEL only under metadata.*; expressions
+			// are now allowed anywhere in the template (see
+			// TestGraphBuilder_CRDTemplateExpressions for type-checking against
+			// the real CRD schema).
+			name: "crds may use CEL expressions in spec fields",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
@@ -720,8 +724,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 					},
 				}, nil, nil),
 			},
-			wantErr: true,
-			errMsg:  "CEL expressions in CRDs are only supported for metadata fields",
+			wantErr: false,
 		},
 		{
 			name: "crds are allowed to have CEL expressions in metadata.name",
@@ -924,6 +927,111 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+// TestGraphBuilder_CRDTemplateExpressions covers CEL expressions in
+// CustomResourceDefinition resources on the RGD path, against the real
+// apiextensions CRD schema. CRD templates are parsed schemalessly (the typed
+// parser cannot walk the recursive JSONSchemaProps) and used to be limited to
+// metadata.*; expressions are now accepted anywhere and still type-checked
+// where the CRD schema resolves their path.
+func TestGraphBuilder_CRDTemplateExpressions(t *testing.T) {
+	fakeResolver, fakeDiscovery, err := k8s.NewFakeResolverWithRealCRDSchema()
+	require.NoError(t, err)
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+
+	// An RGD whose instances describe a Kind: the instance carries the Kind's
+	// openAPIV3Schema as an opaque object and the graph places it into the CRD.
+	schemaOpt := generator.WithSchema(
+		"KindFactory", "v1alpha1",
+		map[string]any{
+			"kind":            "string | required=true",
+			"group":           "string | default=example.com",
+			"replicas":        "integer | default=1",
+			"openAPIV3Schema": "object",
+		},
+		map[string]any{
+			"established": "${crd.status.conditions.exists(c, c.type == 'Established' && c.status == 'True')}",
+		},
+	)
+	crdTemplate := func(overrides map[string]any) map[string]any {
+		tmpl := map[string]any{
+			"apiVersion": "apiextensions.k8s.io/v1",
+			"kind":       "CustomResourceDefinition",
+			"metadata":   map[string]any{"name": "${schema.spec.kind.lowerAscii() + 's.' + schema.spec.group}"},
+			"spec": map[string]any{
+				"group": "${schema.spec.group}",
+				"names": map[string]any{
+					"kind":   "${schema.spec.kind}",
+					"plural": "${schema.spec.kind.lowerAscii() + 's'}",
+				},
+				"scope": "Namespaced",
+				"versions": []any{map[string]any{
+					"name": "v1alpha1", "served": true, "storage": true,
+					"schema": map[string]any{
+						"openAPIV3Schema": "${schema.spec.openAPIV3Schema}",
+					},
+				}},
+			},
+		}
+		for k, v := range overrides {
+			tmpl["spec"].(map[string]any)[k] = v
+		}
+		return tmpl
+	}
+
+	t.Run("openAPIV3Schema from the instance spec is accepted", func(t *testing.T) {
+		rgd := generator.NewResourceGraphDefinition("kind-factory", schemaOpt,
+			generator.WithResource("crd", crdTemplate(nil), nil, nil))
+		g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+		require.NoError(t, err)
+
+		node := g.Resources["crd"]
+		require.NotNil(t, node)
+		paths := make([]string, 0, len(node.Variables))
+		for _, v := range node.Variables {
+			paths = append(paths, v.Path)
+		}
+		assert.ElementsMatch(t, []string{
+			"metadata.name", "spec.group", "spec.names.kind", "spec.names.plural",
+			"spec.versions[0].schema.openAPIV3Schema",
+		}, paths)
+	})
+
+	t.Run("non-metadata expressions are type-checked against the CRD schema", func(t *testing.T) {
+		rgd := generator.NewResourceGraphDefinition("kind-factory", schemaOpt,
+			generator.WithResource("crd", crdTemplate(map[string]any{"group": "${schema.spec.replicas}"}), nil, nil))
+		_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `path "spec.group"`)
+		assert.Contains(t, err.Error(), `returns type "int" but expected "string"`)
+	})
+
+	t.Run("backwards compatible: metadata-only CRD expressions still build", func(t *testing.T) {
+		rgd := generator.NewResourceGraphDefinition("kind-factory", schemaOpt,
+			generator.WithResource("crd", map[string]any{
+				"apiVersion": "apiextensions.k8s.io/v1",
+				"kind":       "CustomResourceDefinition",
+				"metadata":   map[string]any{"name": "${schema.spec.kind.lowerAscii() + 's.' + schema.spec.group}"},
+				"spec": map[string]any{
+					"group": "example.com",
+					"names": map[string]any{"kind": "Widget", "plural": "widgets"},
+					"scope": "Namespaced",
+					"versions": []any{map[string]any{
+						"name": "v1alpha1", "served": true, "storage": true,
+						"schema": map[string]any{"openAPIV3Schema": map[string]any{"type": "object", "x-kubernetes-preserve-unknown-fields": true}},
+					}},
+				},
+			}, nil, nil))
+		g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+		require.NoError(t, err)
+		require.Len(t, g.Resources["crd"].Variables, 1)
+		assert.Equal(t, "metadata.name", g.Resources["crd"].Variables[0].Path)
+	})
 }
 
 func TestGraphBuilder_DependencyValidation(t *testing.T) {
@@ -4141,9 +4249,9 @@ spec:
 		assert.Contains(t, err.Error(), "failed to parse schemaless resource")
 	})
 
-	t.Run("crd only allows metadata expressions", func(t *testing.T) {
+	t.Run("crd extracts expressions outside metadata", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
+		node, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "crd",
 			Template: rawExt(`
 apiVersion: apiextensions.k8s.io/v1
@@ -4152,10 +4260,20 @@ metadata:
   name: tests.kro.run
 spec:
   group: ${schema.spec.group}
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema: ${schema.spec.openAPIV3Schema}
 `),
 		}, true)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "only supported for metadata fields")
+		require.NoError(t, err)
+		paths := make([]string, 0, len(node.Variables))
+		for _, v := range node.Variables {
+			paths = append(paths, v.Path)
+		}
+		assert.ElementsMatch(t, []string{"spec.group", "spec.versions[0].schema.openAPIV3Schema"}, paths)
 	})
 
 	t.Run("schema based parsing error", func(t *testing.T) {

@@ -16,6 +16,7 @@ kro includes a rich set of CEL function libraries from three sources: kro's own 
 | Maps                        | kro        | [kro](#maps), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#Maps) |
 | Index Mutation              | kro        | [kro](#index-mutation), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#Lists) |
 | Omit                        | kro        | [kro](#omit), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#Omit) |
+| SimpleSchema                | kro        | [kro](#simpleschema), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#SimpleSchema) |
 | Strings                     | cel-go     | [kro](#strings), [Go doc](https://pkg.go.dev/github.com/google/cel-go/ext#Strings) |
 | Lists (cel-go)              | cel-go     | [kro](#lists-cel-go), [Go doc](https://pkg.go.dev/github.com/google/cel-go/ext#Lists) |
 | Encoders                    | cel-go     | [kro](#encoders), [Go doc](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders) |
@@ -160,6 +161,133 @@ nodeSelector: ${schema.spec.pinToNode ? {"kubernetes.io/hostname": schema.spec.n
 
 :::note
 `omit()` is only allowed in resource template fields. It is rejected in `includeWhen`, `readyWhen`, and `forEach` expressions.
+:::
+
+### SimpleSchema
+
+Convert kro's [SimpleSchema](../../../api/specifications/simple-schema.md) format into OpenAPI v3 JSON schema. This is the same conversion kro applies to an RGD's `spec.schema` when it generates the instance CRD, exposed so an RGD or a Graph can define a Kind itself: template a `CustomResourceDefinition` whose `openAPIV3Schema` is derived from a SimpleSchema block. CEL expressions are accepted anywhere in a CRD template, not only under `metadata`.
+
+| Function | Returns | Description |
+| --- | --- | --- |
+| `simpleschema.toOpenAPI(schema)` | `dyn` (map) | Convert an RGD-style schema block (a map with the optional keys `spec`, `types` and `status`) into the root `openAPIV3Schema` of a CRD: `{type: object, properties: {apiVersion, kind, metadata, spec: <converted spec>, status: <converted status>}}`. |
+
+`spec` and `status` are SimpleSchema field maps (field name → type expression such as `string | required=true`, or a nested map for an inline object), both resolved against the custom types in `types`; an absent block yields `{type: object}`. Other keys in the block (`apiVersion`, `kind`, `group`, `scope`, `additionalPrinterColumns`, ...) describe the CRD rather than its schema and are ignored, so an RGD's `spec.schema` can be passed as-is. A status field whose value is a CEL expression — a string with `${` in its type position, or a list of such strings like kro's `status.conditions` block — cannot be typed by the function (its type depends on the resources it references, which only kro's RGD controller can resolve against the cluster) and is emitted as `{x-kubernetes-preserve-unknown-fields: true}`, which accepts whatever the expression evaluates to. kro's default instance status fields (`state`, `conditions`) are not injected: declare them in the status block when you need them.
+
+The result is a regular CEL map: each converted block has `type: "object"`, a `properties` map with one entry per field, and a sorted `required` list; markers become their OpenAPI counterparts (`default`, `enum`, `x-kubernetes-validations`, ...). Integral numbers (`default=3`, `minimum=1`, ...) come back as `int`, so the value can be placed directly into a resource template or serialized with `json.marshal()`. Conversion errors (unknown types, unknown markers, cyclic custom types, non-string map keys) fail the expression with a message naming the function and the block (`spec:`, `types:` or `status:`).
+
+**Examples:**
+
+```kro
+# {"type": "object", "properties": {"apiVersion": {"type": "string"}, "kind": {"type": "string"}, "metadata": {"type": "object"},
+#   "spec": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+#   "status": {"type": "object"}}}
+openAPIV3Schema: ${simpleschema.toOpenAPI({"spec": {"name": "string | required=true"}})}
+
+# Whole CRD schema from an RGD-style block held in a def: node (see below)
+openAPIV3Schema: ${simpleschema.toOpenAPI(kindSpec)}
+
+# Whole CRD schema from an RGD read into the Graph via ref:, adding kro's
+# default status fields the RGD controller would inject. deepMerge replaces the
+# RGD's expression-valued conditions list with a typed declaration.
+openAPIV3Schema: ${simpleschema.toOpenAPI(rgd.spec.schema.deepMerge({"status": {"state": "string", "conditions": "[]KroCondition"}, "types": {"KroCondition": {"type": "string", "status": "string", "reason": "string", "message": "string", "lastTransitionTime": "string", "observedGeneration": "integer"}}}))}
+
+# Only the spec sub-schema, to compose a root by hand
+spec: ${simpleschema.toOpenAPI(kindSpec).properties.spec}
+
+# Store a generated schema as JSON
+data:
+  openapi: ${json.marshal(simpleschema.toOpenAPI(rgd.spec.schema))}
+```
+
+A Graph (the alpha `kro.run/v1alpha1` `Graph` kind, behind the `GraphKind` feature gate) that defines a Kind — the block is written the way an RGD author writes `spec.schema`, and the CRD's names and versions come from the same `def:`:
+
+```yaml
+- id: kindSpec
+  def:
+    group: example.com
+    kind: Widget
+    plural: widgets
+    types:
+      Condition:
+        type: string | required=true
+        status: string | required=true
+        reason: string
+        message: string
+    spec:
+      name: string | required=true
+      replicas: integer | default=1 minimum=0
+    status:
+      items: integer
+      conditions: "[]Condition"
+- id: crd
+  template:
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      name: ${kindSpec.plural + '.' + kindSpec.group}
+    spec:
+      group: ${kindSpec.group}
+      names:
+        kind: ${kindSpec.kind}
+        plural: ${kindSpec.plural}
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          served: true
+          storage: true
+          subresources:
+            status: {}
+          schema:
+            openAPIV3Schema: ${simpleschema.toOpenAPI(kindSpec)}
+  readyWhen:
+    - ${crd.?status.?conditions.orValue([]).exists(c, c.type == 'Established' && c.status == 'True')}
+```
+
+Instances of `Widget` get `replicas` defaulted and `name` enforced by the API server. The same works in an RGD whose instances each describe a new Kind and carry its schema block as an opaque `object`:
+
+```yaml
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: kind-factory
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: KindFactory
+    spec:
+      group: string | required=true
+      kind: string | required=true
+      plural: string | required=true
+      definition: object   # {spec: {...}, types: {...}, status: {...}}
+  resources:
+    - id: crd
+      readyWhen:
+        - ${crd.?status.?conditions.orValue([]).exists(c, c.type == 'Established' && c.status == 'True')}
+      template:
+        apiVersion: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        metadata:
+          name: ${schema.spec.plural + '.' + schema.spec.group}
+        spec:
+          group: ${schema.spec.group}
+          names:
+            kind: ${schema.spec.kind}
+            plural: ${schema.spec.plural}
+          scope: Namespaced
+          versions:
+            - name: v1alpha1
+              served: true
+              storage: true
+              subresources:
+                status: {}
+              schema:
+                openAPIV3Schema: ${simpleschema.toOpenAPI(schema.spec.definition)}
+```
+
+Expressions in CRD templates are type-checked against the CRD schema where their path resolves (`spec.group` must be a string, ...). The `openAPIV3Schema` field is typed as `JSONSchemaProps`; the function result is `dyn` and always assignable, but a schema composed by hand must be dyn-valued too — a map literal whose values are all strings (`${{"type": "object"}}`) has type `map(string, string)` and is rejected, and so is an OpenAPI schema held as a typed `def:` value; wrap either in `dyn(...)`.
+
+:::note
+A non-empty block must contain at least one of `spec`, `types` or `status`, or one of the CRD-describing keys above. A bare field map (`toOpenAPI({"name": "string"})`) is rejected rather than silently converting to an empty spec — wrap it as `{"spec": {...}}`.
 :::
 
 ### Runtime

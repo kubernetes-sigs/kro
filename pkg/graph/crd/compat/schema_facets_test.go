@@ -15,15 +15,90 @@
 package compat
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+
+	"github.com/kubernetes-sigs/kro/pkg/features"
 )
 
+func setStrictCRDCompatibilityChecks(t *testing.T, enabled bool) {
+	t.Helper()
+
+	previous := features.FeatureGate.Enabled(features.StrictCRDCompatibilityChecks)
+	require.NoError(t, features.FeatureGate.Set(fmt.Sprintf("%s=%t", features.StrictCRDCompatibilityChecks, enabled)))
+	t.Cleanup(func() {
+		require.NoError(t, features.FeatureGate.Set(fmt.Sprintf("%s=%t", features.StrictCRDCompatibilityChecks, previous)))
+	})
+}
+
+func TestCompareStrictCRDCompatibilityChecksFeatureGate(t *testing.T) {
+	tests := []struct {
+		name               string
+		oldSchema          *v1.JSONSchemaProps
+		newSchema          *v1.JSONSchemaProps
+		expectedChangeType ChangeType
+	}{
+		{
+			name:      "CEL validation",
+			oldSchema: &v1.JSONSchemaProps{Type: "object"},
+			newSchema: &v1.JSONSchemaProps{
+				Type:         "object",
+				XValidations: v1.ValidationRules{{Rule: "self.size() < 2"}},
+			},
+			expectedChangeType: ValidationRulesChanged,
+		},
+		{
+			name: "map value property",
+			oldSchema: &v1.JSONSchemaProps{
+				Type: "object",
+				AdditionalProperties: &v1.JSONSchemaPropsOrBool{
+					Schema: &v1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]v1.JSONSchemaProps{
+							"removed": {Type: "string"},
+						},
+					},
+				},
+			},
+			newSchema: &v1.JSONSchemaProps{
+				Type: "object",
+				AdditionalProperties: &v1.JSONSchemaPropsOrBool{
+					Schema: &v1.JSONSchemaProps{Type: "object"},
+				},
+			},
+			expectedChangeType: PropertyRemoved,
+		},
+		{
+			name:               "enum constraint",
+			oldSchema:          &v1.JSONSchemaProps{Type: "string"},
+			newSchema:          &v1.JSONSchemaProps{Type: "string", Enum: []v1.JSON{{Raw: []byte(`"value"`)}}},
+			expectedChangeType: EnumConstraintAdded,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Run("disabled", func(t *testing.T) {
+				setStrictCRDCompatibilityChecks(t, false)
+				assert.False(t, Compare(tt.oldSchema, tt.newSchema).HasChanges())
+			})
+
+			t.Run("enabled", func(t *testing.T) {
+				setStrictCRDCompatibilityChecks(t, true)
+				report := Compare(tt.oldSchema, tt.newSchema)
+				require.Len(t, report.BreakingChanges, 1)
+				assert.Equal(t, tt.expectedChangeType, report.BreakingChanges[0].ChangeType)
+			})
+		})
+	}
+}
+
 func TestCompareAdditionalPropertiesSchema(t *testing.T) {
-	t.Parallel()
+	setStrictCRDCompatibilityChecks(t, true)
 
 	mapSchema := func(properties map[string]v1.JSONSchemaProps) *v1.JSONSchemaProps {
 		return &v1.JSONSchemaProps{
@@ -76,7 +151,7 @@ func TestCompareAdditionalPropertiesSchema(t *testing.T) {
 }
 
 func TestCompareValidationRules(t *testing.T) {
-	t.Parallel()
+	setStrictCRDCompatibilityChecks(t, true)
 
 	tests := []struct {
 		name string
@@ -115,7 +190,7 @@ func TestCompareValidationRules(t *testing.T) {
 }
 
 func TestCompareValidationFacets(t *testing.T) {
-	t.Parallel()
+	setStrictCRDCompatibilityChecks(t, true)
 
 	trueValue := true
 	atomic := "atomic"

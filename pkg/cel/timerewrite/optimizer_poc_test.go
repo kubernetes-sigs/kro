@@ -49,6 +49,13 @@ func TestOptimizerPOCBehavioralParity(t *testing.T) {
 	for name, normalize := range map[string]func(*cel.Env, string) (*cel.Ast, error){
 		"recursive": timerewrite.NormalizeAndCheck,
 		"visitor":   timerewrite.NormalizeAndCheckVisitor,
+		"typed": func(env *cel.Env, expr string) (*cel.Ast, error) {
+			twin, err := env.Extend(library.TwinCheckDeclarations()...)
+			if err != nil {
+				return nil, err
+			}
+			return timerewrite.NormalizeAndCheckTyped(env, twin, expr)
+		},
 	} {
 		t.Run(name, func(t *testing.T) { runBehavioralParity(t, normalize) })
 	}
@@ -154,5 +161,62 @@ func TestOptimizerPOCRejectsIllTyped(t *testing.T) {
 		if _, err := timerewrite.NormalizeAndCheckVisitor(env, expr); err == nil {
 			t.Errorf("visitor %q: expected rejection, but it compiled", expr)
 		}
+		twin, _ := env.Extend(library.TwinCheckDeclarations()...)
+		if _, err := timerewrite.NormalizeAndCheckTyped(env, twin, expr); err == nil {
+			t.Errorf("typed %q: expected rejection, but it compiled", expr)
+		}
+	}
+}
+
+// TestTypedPipelineExtraWins: cases only the checker-as-oracle can resolve —
+// a kro value reached through a MAP FIELD select. The syntactic walkers do
+// not track map-literal values: the bind variable types as dyn, the
+// expression compiles, and the un-normalized comparison fails LOUDLY at
+// eval (plain timestamp Compare rejects the kro RHS). The twin checker
+// types m.t as kro.Timestamp, so the typed pipeline normalizes it into a
+// working, solving gate.
+func TestTypedPipelineExtraWins(t *testing.T) {
+	env := optimizerEnv(t)
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	expr := "cel.bind(m, {\"t\": time.now()}, timestamp(schema.openAt) <= m.t)"
+
+	// Pin the syntactic walker's behavior: compiles (dyn), errs at eval.
+	if recChecked, err := timerewrite.NormalizeAndCheck(env, expr); err != nil {
+		t.Fatalf("recursive: unexpected compile error: %v", err)
+	} else {
+		prog, _ := env.Program(recChecked)
+		_, _, evalErr := prog.Eval(map[string]any{
+			library.TimeVarName: library.NewTimeValue(now),
+			"schema":            map[string]any{"openAt": now.Format(time.RFC3339)},
+		})
+		if evalErr == nil {
+			t.Fatalf("recursive: expected loud eval error for un-normalized map-select")
+		}
+	}
+	twin, err := env.Extend(library.TwinCheckDeclarations()...)
+	if err != nil {
+		t.Fatalf("twin env: %v", err)
+	}
+	checked, err := timerewrite.NormalizeAndCheckTyped(env, twin, expr)
+	if err != nil {
+		t.Fatalf("typed pipeline: %v", err)
+	}
+	prog, err := env.Program(checked)
+	if err != nil {
+		t.Fatalf("program: %v", err)
+	}
+	tv := library.NewTimeValue(now)
+	out, _, err := prog.Eval(map[string]any{
+		library.TimeVarName: tv,
+		"schema":            map[string]any{"openAt": now.Add(5 * time.Minute).Format(time.RFC3339)},
+	})
+	if err != nil {
+		t.Fatalf("eval: %v", err)
+	}
+	if out.Value() != false {
+		t.Fatalf("gate = %v, want false", out.Value())
+	}
+	if f, ok := tv.EarliestFlip(); !ok || !f.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("flip = %v ok=%v, want +5m", f, ok)
 	}
 }

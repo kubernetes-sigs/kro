@@ -361,11 +361,11 @@ func TestDecoratorLeavesPlainOperatorsUntouched(t *testing.T) {
 	env := timeEnv(t)
 	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 	for expr, want := range map[string]any{
-		`1 < 2`:            true,
-		`2.5 >= 3.0`:       false,
-		`"a" + "b"`:        "ab",
-		`size([1] + [2])`:  int64(2),
-		`10 - 4`:           int64(6),
+		`1 < 2`:           true,
+		`2.5 >= 3.0`:      false,
+		`"a" + "b"`:       "ab",
+		`size([1] + [2])`: int64(2),
+		`10 - 4`:          int64(6),
 		`timestamp(schema.a) < timestamp(schema.b)`: true,
 	} {
 		got, tv := evalTime(t, env, expr, now, map[string]any{"schema": map[string]any{
@@ -404,15 +404,15 @@ func checkTime(t *testing.T, env *cel.Env, expr string) error {
 func TestTypeMismatchesRejectedAtCompileTime(t *testing.T) {
 	env := timeEnv(t)
 	rejected := []string{
-		`time.now() >= "oops"`,                       // ts vs string
-		`time.now() + 1`,                             // ts + int
-		`time.now() - "5m"`,                          // ts - string (must cast duration)
-		`time.now() < duration("5m")`,                // ts vs dur: different kinds
-		`time.now() - time.now() > 5`,                // dur vs int
-		`time.now() + time.now()`,                    // ts + ts
-		`duration("5m") - time.now()`,                // dur - ts
-		`time.now().getSeconds() > 0`,                // calendar accessors not whitelisted
-		`int(time.now())`,                            // only string() escapes the solver
+		`time.now() >= "oops"`,        // ts vs string
+		`time.now() + 1`,              // ts + int
+		`time.now() - "5m"`,           // ts - string (must cast duration)
+		`time.now() < duration("5m")`, // ts vs dur: different kinds
+		`time.now() - time.now() > 5`, // dur vs int
+		`time.now() + time.now()`,     // ts + ts
+		`duration("5m") - time.now()`, // dur - ts
+		`time.now().getSeconds() > 0`, // calendar accessors not whitelisted
+		`int(time.now())`,             // only string() escapes the solver
 	}
 	for _, expr := range rejected {
 		if err := checkTime(t, env, expr); err == nil {
@@ -421,14 +421,14 @@ func TestTypeMismatchesRejectedAtCompileTime(t *testing.T) {
 	}
 
 	accepted := []string{
-		`time.now() >= timestamp(schema.t)`,                        // kro ts vs ts
-		`timestamp(schema.t) <= time.now()`,                        // reversed
-		`time.now() - timestamp(schema.t) > duration("5s")`,        // kro dur vs dur
-		`time.now() + duration("1h") < timestamp(schema.t)`,        // arithmetic then compare
-		`string(time.now())`,                                       // the escape hatch
-		`string(time.now() + duration("1h"))`,                      // arithmetic then escape
-		`timestamp(schema.a) < timestamp(schema.b)`,                // plain ts comparison
-		`size([time.now()]) + 1 > 0`,                               // over-taint: int mirror pairs
+		`time.now() >= timestamp(schema.t)`,                                 // kro ts vs ts
+		`timestamp(schema.t) <= time.now()`,                                 // reversed
+		`time.now() - timestamp(schema.t) > duration("5s")`,                 // kro dur vs dur
+		`time.now() + duration("1h") < timestamp(schema.t)`,                 // arithmetic then compare
+		`string(time.now())`,                                                // the escape hatch
+		`string(time.now() + duration("1h"))`,                               // arithmetic then escape
+		`timestamp(schema.a) < timestamp(schema.b)`,                         // plain ts comparison
+		`size([time.now()]) + 1 > 0`,                                        // over-taint: int mirror pairs
 		`cel.bind(d, time.now() + duration("5m"), timestamp(schema.t) < d)`, // bind-carried
 	}
 	for _, expr := range accepted {

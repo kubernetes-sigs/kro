@@ -96,6 +96,37 @@ func operatorDeclarations(op, prefix string, pairs []operandPair) cel.EnvOption 
 	return cel.Function(op, opts...)
 }
 
+// TwinCheckDeclarations returns the extra declaration-only overloads for the
+// PERMISSIVE TWIN environment used by TypeMap-directed normalization
+// (pkg/cel/timerewrite/typed.go): the operand orders the normalization
+// exists to fix — a kro time value on the RIGHT of a plain operand. These
+// are NOT installed in the real environment (fail-closed there); the twin
+// is a typing oracle only. Result types mirror the KREP definitions table.
+func TwinCheckDeclarations() []cel.EnvOption {
+	pair := func(op, id string, l, r, res *cel.Type) cel.EnvOption {
+		return cel.Function(op, cel.Overload("kro_twin_"+id, []*cel.Type{l, r}, res))
+	}
+	kts, kdur := KroTimestampType, KroDurationType
+	ts, dur := cel.TimestampType, cel.DurationType
+	var opts []cel.EnvOption
+	for op, name := range map[string]string{
+		"_<_": "lt", "_<=_": "le", "_>_": "gt", "_>=_": "ge",
+	} {
+		opts = append(opts,
+			pair(op, name+"_ts_krots", ts, kts, cel.BoolType),
+			pair(op, name+"_dur_krodur", dur, kdur, cel.BoolType),
+		)
+	}
+	return append(opts,
+		pair("_+_", "add_dur_krots", dur, kts, kts),
+		pair("_+_", "add_ts_krodur", ts, kdur, kts),
+		pair("_+_", "add_dur_krodur", dur, kdur, kdur),
+		pair("_-_", "sub_ts_krots", ts, kts, kdur),
+		pair("_-_", "sub_ts_krodur", ts, kdur, kts),
+		pair("_-_", "sub_dur_krodur", dur, kdur, kdur),
+	)
+}
+
 // timeFunctionDeclarations returns the operator declaration merges and the
 // whitelist overloads. Installed by the Time() library.
 func timeFunctionDeclarations() []cel.EnvOption {

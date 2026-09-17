@@ -1,0 +1,31 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: check-deletion-policy-rgd
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: CheckDeletionPolicyApp
+    spec:
+      name: string | default="app"
+  resources:
+    - id: retained
+      deletionPolicy: Detach
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.name}-retained
+          labels:
+            app: ${schema.spec.name}
+        data:
+          kind: retained
+    - id: removed
+      deletionPolicy: Delete
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.name}-removed
+        data:
+          kind: removed

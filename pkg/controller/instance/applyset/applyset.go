@@ -37,6 +37,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/dynamic"
+
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // Compile-time check that ApplySet implements Interface.
@@ -71,6 +73,10 @@ type Interface interface {
 
 	// DeleteOrphan deletes a single orphan candidate using a UID precondition.
 	DeleteOrphan(ctx context.Context, candidate OrphanCandidate) (DeleteOrphanResult, error)
+
+	// ReleaseOrphan relinquishes kro's claim on a single orphan candidate
+	// instead of deleting it, for a resource declared deletionPolicy: Detach.
+	ReleaseOrphan(ctx context.Context, candidate OrphanCandidate) (ReleaseOrphanResult, error)
 }
 
 // Resource is an input to Apply.
@@ -554,6 +560,53 @@ func (a *ApplySet) DeleteOrphan(ctx context.Context, candidate OrphanCandidate) 
 		"gvr", candidate.GVR.String(),
 	)
 	return DeleteOrphanResult{Pruned: &PruneResultItem{Object: candidate.Object}}, nil
+}
+
+// ReleaseOrphan relinquishes kro's claim on an orphan candidate instead of
+// deleting it. It strips the kro-applied labels and annotations, which drops
+// the ApplySet part-of label, so the object survives in the cluster but is no
+// longer a member: neither prune nor teardown can rediscover it (both list by
+// that label) and another instance may later adopt it.
+//
+// The write is an Update carrying the listed resourceVersion rather than a
+// patch, so it fails closed with a Conflict if the object changed since it was
+// listed. That is the same protection DeleteOrphan gets from its UID
+// precondition: without it a release could strip the labels off an object that
+// was deleted and recreated under the same name in the meantime.
+func (a *ApplySet) ReleaseOrphan(ctx context.Context, candidate OrphanCandidate) (ReleaseOrphanResult, error) {
+	obj := candidate.Object.DeepCopy()
+	if !metadata.ReleaseKROMetadata(obj) {
+		// Nothing kro-applied is left, so the object is already released and
+		// cannot be listed as a member again.
+		return ReleaseOrphanResult{}, nil
+	}
+
+	var ri dynamic.ResourceInterface = a.client.Resource(candidate.GVR)
+	if obj.GetNamespace() != "" {
+		ri = a.client.Resource(candidate.GVR).Namespace(obj.GetNamespace())
+	}
+
+	if _, err := ri.Update(ctx, obj, metav1.UpdateOptions{FieldManager: FieldManager}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ReleaseOrphanResult{}, nil
+		}
+		if apierrors.IsConflict(err) {
+			a.log.V(2).Info("skipped release due to a concurrent change",
+				"name", obj.GetName(),
+				"namespace", obj.GetNamespace(),
+				"gvr", candidate.GVR.String(),
+			)
+			return ReleaseOrphanResult{Conflict: true}, nil
+		}
+		return ReleaseOrphanResult{}, fmt.Errorf("release %s/%s: %w", obj.GetNamespace(), obj.GetName(), err)
+	}
+
+	a.log.V(2).Info("released resource (deletionPolicy: Detach)",
+		"name", obj.GetName(),
+		"namespace", obj.GetNamespace(),
+		"gvr", candidate.GVR.String(),
+	)
+	return ReleaseOrphanResult{Released: true}, nil
 }
 
 // listOrphans lists applyset members not in keepUIDs. This is the listing half

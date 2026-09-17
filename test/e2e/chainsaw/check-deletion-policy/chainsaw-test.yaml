@@ -1,0 +1,86 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-deletion-policy
+spec:
+  description: |
+    Tests that deleting an instance deletes the resources declared
+    deletionPolicy: Delete and releases the ones declared deletionPolicy: Detach,
+    leaving them in the cluster with kro's labels and annotations stripped.
+  steps:
+  - name: install-rgd
+    try:
+    - apply:
+        file: cluster-role.yaml
+      description: Apply Cluster Role
+    - apply:
+        file: rgd.yaml
+      description: Apply RGD
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+  - name: create-instance
+    try:
+    - apply:
+        file: instance.yaml
+      description: Create the instance
+    - assert:
+        file: instance-assert.yaml
+      description: Verify instance state
+    - assert:
+        file: configmaps-assert.yaml
+      description: Verify both ConfigMaps exist and carry the policy annotation
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: delete-instance
+    try:
+    - delete:
+        ref:
+          apiVersion: kro.run/v1alpha1
+          kind: CheckDeletionPolicyApp
+          name: test-instance
+          namespace: default
+      description: Delete the instance
+    - error:
+        file: instance-gone.yaml
+      description: Verify the instance finished deleting (the finalizer came off)
+    - error:
+        file: removed-configmap.yaml
+      description: Verify the Delete-policy ConfigMap is gone
+    - assert:
+        file: released-configmap-assert.yaml
+      description: Verify the Detach-policy ConfigMap survived with its own labels intact
+    - error:
+        file: still-owned.yaml
+      description: Verify the kro ownership label was released
+    - error:
+        file: still-managed-by-kro.yaml
+      description: Verify the managed-by label was released
+    - error:
+        file: still-policy-annotated.yaml
+      description: Verify kro's annotations were released
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+    finally:
+    - description: clean up the released ConfigMap kro no longer owns
+      delete:
+        ref:
+          apiVersion: v1
+          kind: ConfigMap
+          name: demo-retained
+          namespace: default

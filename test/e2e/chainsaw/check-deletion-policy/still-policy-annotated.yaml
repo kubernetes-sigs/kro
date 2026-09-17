@@ -1,0 +1,8 @@
+# Asserted with `error`: kro's annotations come off with its labels.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-retained
+  namespace: default
+  annotations:
+    kro.run/deletion-policy: Detach

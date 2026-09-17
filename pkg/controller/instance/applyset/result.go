@@ -58,6 +58,16 @@ type DeleteOrphanResult struct {
 	Conflict bool
 }
 
+// ReleaseOrphanResult describes the outcome of a single orphan release.
+type ReleaseOrphanResult struct {
+	// Released is true when kro's labels and annotations were removed from the
+	// live object, so it is no longer an ApplySet member.
+	Released bool
+	// Conflict is true when the object changed since it was listed, so the
+	// release was skipped and must be retried on a later cycle.
+	Conflict bool
+}
+
 // ByID returns a map of results keyed by resource ID for easy lookup.
 func (r *ApplyResult) ByID() map[string]ApplyResultItem {
 	m := make(map[string]ApplyResultItem, len(r.Applied))

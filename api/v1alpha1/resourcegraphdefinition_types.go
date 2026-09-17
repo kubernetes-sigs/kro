@@ -229,6 +229,7 @@ type ForEachDimension map[string]string
 // Resources can depend on each other through CEL expressions, creating a dependency graph.
 //
 // +kubebuilder:validation:XValidation:rule="(has(self.template) && !has(self.externalRef)) || (!has(self.template) && has(self.externalRef))",message="exactly one of template or externalRef must be provided"
+// +kubebuilder:validation:XValidation:rule="!has(self.deletionPolicy) || has(self.template)",message="deletionPolicy is only supported on template resources"
 type Resource struct {
 	// ID is a unique identifier for this resource within the ResourceGraphDefinition.
 	// It is used to reference this resource in CEL expressions from other resources.
@@ -278,7 +279,41 @@ type Resource struct {
 	//
 	// +kubebuilder:validation:Optional
 	ForEach []ForEachDimension `json:"forEach,omitempty"`
+	// DeletionPolicy controls what happens to this resource when the instance
+	// that owns it is deleted, or when the resource leaves the desired set
+	// (its node is removed from the graph, its includeWhen turns false, or a
+	// forEach expansion shrinks).
+	//
+	// "Delete" (the default when unset) deletes the resource.
+	// "Detach" leaves the resource in the cluster and releases it: kro drops
+	// its own labels and annotations so the resource is no longer a member of
+	// the instance and can later be adopted by another instance.
+	//
+	// Only supported on template resources. An externalRef is read-only and is
+	// never created or deleted by kro, so a policy on it has no meaning.
+	//
+	// This field is alpha. It may be superseded by the broader resource
+	// lifecycle field currently under design (KREP-014).
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=Delete;Detach
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 }
+
+// DeletionPolicy controls whether kro deletes or releases a resource it
+// manages once that resource is no longer wanted.
+//
+// +kubebuilder:validation:Enum=Delete;Detach
+type DeletionPolicy string
+
+const (
+	// DeletionPolicyDelete deletes the resource. This is the behaviour when no
+	// policy is declared.
+	DeletionPolicyDelete DeletionPolicy = "Delete"
+	// DeletionPolicyDetach leaves the resource in the cluster and releases kro's
+	// claim on it by removing the kro-applied labels and annotations.
+	DeletionPolicyDetach DeletionPolicy = "Detach"
+)
 
 // ResourceScope defines whether the generated instance CRD is Namespaced or Cluster scoped.
 //

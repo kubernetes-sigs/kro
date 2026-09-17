@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // ErrUnsupported is returned when an RGD resource shape has no Graph-node
@@ -166,9 +167,13 @@ func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {
 	case hasTemplate && hasRef:
 		return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: template and externalRef are both set", ErrUnsupported, res.ID)
 	case hasTemplate:
+		tmpl, err := templateWithDeletionPolicy(res)
+		if err != nil {
+			return v1alpha1.Node{}, err
+		}
 		return v1alpha1.Node{
 			ID:          res.ID,
-			Template:    copyRaw(res.Template.Raw),
+			Template:    tmpl,
 			ReadyWhen:   copyStrings(res.ReadyWhen),
 			IncludeWhen: copyStrings(res.IncludeWhen),
 			ForEach:     copyForEach(res.ForEach),
@@ -209,6 +214,77 @@ func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {
 
 func copyRaw(raw []byte) *runtime.RawExtension {
 	return &runtime.RawExtension{Raw: append([]byte(nil), raw...)}
+}
+
+// templateWithDeletionPolicy returns the resource's template, carrying the
+// declared deletion policy as a metadata annotation on the manifest so it is
+// server-side-applied onto the managed object itself.
+//
+// The annotation has to travel on the object because neither the prune nor the
+// teardown path re-reads the RGD: both rediscover their candidates from live
+// cluster state, so the object is the only place the author's intent can be
+// found when the resource is about to be removed. Carrying it in the template
+// (rather than stamping it in the executor) also keeps it inside GraphSpec,
+// which is what the per-revision compile cache hashes: a policy change would
+// otherwise hit a stale compiled Program.
+//
+// Delete is the default and is represented by the annotation's ABSENCE, so
+// existing objects are untouched and flipping a resource back to Delete lets
+// SSA prune the annotation.
+func templateWithDeletionPolicy(res *v1alpha1.Resource) (*runtime.RawExtension, error) {
+	if res.DeletionPolicy != v1alpha1.DeletionPolicyDetach {
+		return copyRaw(res.Template.Raw), nil
+	}
+
+	var manifest map[string]any
+	if err := json.Unmarshal(res.Template.Raw, &manifest); err != nil {
+		return nil, fmt.Errorf("%w: resource %q: unmarshal template: %w", ErrUnsupported, res.ID, err)
+	}
+	meta, err := annotatableMetadata(manifest, res.ID)
+	if err != nil {
+		return nil, err
+	}
+	annotations, ok := meta["annotations"]
+	if !ok || annotations == nil {
+		annotations = map[string]any{}
+		meta["annotations"] = annotations
+	}
+	annotationMap, ok := annotations.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf(
+			"%w: resource %q: deletionPolicy needs to add an annotation to the template, but metadata.annotations is not a literal map; move the expression onto the individual annotation keys",
+			ErrUnsupported,
+			res.ID,
+		)
+	}
+	annotationMap[metadata.DeletionPolicyAnnotation] = string(v1alpha1.DeletionPolicyDetach)
+
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, fmt.Errorf("%w: resource %q: marshal template: %w", ErrUnsupported, res.ID, err)
+	}
+	return &runtime.RawExtension{Raw: raw}, nil
+}
+
+// annotatableMetadata returns the manifest's metadata map, creating it when
+// absent. A metadata stanza that is a CEL expression instead of a literal map
+// cannot be annotated, so it is rejected rather than silently overwritten.
+func annotatableMetadata(manifest map[string]any, id string) (map[string]any, error) {
+	meta, ok := manifest["metadata"]
+	if !ok || meta == nil {
+		created := map[string]any{}
+		manifest["metadata"] = created
+		return created, nil
+	}
+	metaMap, ok := meta.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf(
+			"%w: resource %q: deletionPolicy needs to add an annotation to the template, but metadata is not a literal map; move the expression onto the individual metadata fields",
+			ErrUnsupported,
+			id,
+		)
+	}
+	return metaMap, nil
 }
 
 // SchemaNodeID is the node ID under which an instance's spec/metadata/status is

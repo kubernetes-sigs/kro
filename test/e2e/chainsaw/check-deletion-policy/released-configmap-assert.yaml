@@ -1,0 +1,10 @@
+# The object itself survives untouched, including the author's own label.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-retained
+  namespace: default
+  labels:
+    app: demo
+data:
+  kind: retained

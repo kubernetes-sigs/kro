@@ -43,4 +43,16 @@ const (
 	// holds the exact value there is nothing to preserve.
 	InstanceNameAnnotation  = InternalKROPrefix + "instance-name"
 	InstanceGroupAnnotation = InternalKROPrefix + "instance-group"
+	// DeletionPolicyAnnotation records the resource's declared
+	// v1alpha1.DeletionPolicy so the deletion and prune paths can honour it.
+	//
+	// It is deliberately a PUBLIC kro annotation rather than an internal one:
+	// both paths rediscover their candidates from the live cluster and never
+	// re-evaluate the graph, so this annotation is the only carrier of the
+	// author's intent at the moment a resource would be removed. Being
+	// readable also lets an operator confirm from the object itself that kro
+	// will not delete it.
+	//
+	// Absent means v1alpha1.DeletionPolicyDelete.
+	DeletionPolicyAnnotation = KROPrefix + "deletion-policy"
 )

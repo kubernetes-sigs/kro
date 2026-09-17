@@ -20,15 +20,18 @@
 package rgdadapter
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/json"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // ErrUnsupported is returned when an RGD resource shape has no Graph-node
@@ -165,9 +168,13 @@ func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {
 	case hasTemplate && hasRef:
 		return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: template and externalRef are both set", ErrUnsupported, res.ID)
 	case hasTemplate:
+		tmpl, err := templateWithDeletionPolicy(res)
+		if err != nil {
+			return v1alpha1.Node{}, err
+		}
 		return v1alpha1.Node{
 			ID:          res.ID,
-			Template:    copyRaw(res.Template.Raw),
+			Template:    tmpl,
 			ReadyWhen:   copyStrings(res.ReadyWhen),
 			IncludeWhen: copyStrings(res.IncludeWhen),
 			ForEach:     copyForEach(res.ForEach),
@@ -208,6 +215,78 @@ func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {
 
 func copyRaw(raw []byte) *runtime.RawExtension {
 	return &runtime.RawExtension{Raw: append([]byte(nil), raw...)}
+}
+
+// templateWithDeletionPolicy returns the resource's template having the
+// declared deletion policy as a metadata annotation on the manifest so it is
+// server-side-applied onto the managed object itself.
+//
+// Delete is the default and is represented by the annotation's ABSENCE, so
+// existing objects are untouched.
+func templateWithDeletionPolicy(res *v1alpha1.Resource) (*runtime.RawExtension, error) {
+	if res.DeletionPolicy != v1alpha1.DeletionPolicyOrphaned {
+		return copyRaw(res.Template.Raw), nil
+	}
+
+	var manifest map[string]any
+	if err := json.Unmarshal(res.Template.Raw, &manifest); err != nil {
+		return nil, fmt.Errorf("%w: resource %q: unmarshal template: %w", ErrUnsupported, res.ID, err)
+	}
+	meta, err := annotatableMetadata(manifest, res.ID)
+	if err != nil {
+		return nil, err
+	}
+	annotations, ok := meta["annotations"]
+	if !ok || annotations == nil {
+		annotations = map[string]any{}
+		meta["annotations"] = annotations
+	}
+	switch a := annotations.(type) {
+	case map[string]any:
+		a[metadata.DeletionPolicyAnnotation] = string(v1alpha1.DeletionPolicyOrphaned)
+	case string:
+		merged, err := mergeDeletionPolicyExpression(a, res.ID)
+		if err != nil {
+			return nil, err
+		}
+		meta["annotations"] = merged
+	default:
+		return nil, fmt.Errorf("%w: resource %q: metadata.annotations is not a map", ErrUnsupported, res.ID)
+	}
+
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, fmt.Errorf("%w: resource %q: marshal template: %w", ErrUnsupported, res.ID, err)
+	}
+	return &runtime.RawExtension{Raw: raw}, nil
+}
+
+// mergeDeletionPolicyExpression wraps a standalone `${expr}` annotations value
+// so the policy is merged in at resolve time. merge() lets the policy win.
+func mergeDeletionPolicyExpression(value, id string) (string, error) {
+	standalone, err := parser.IsStandaloneExpression(value)
+	if err != nil || !standalone {
+		return "", fmt.Errorf("%w: resource %q: metadata.annotations must be a map or a single ${...} expression", ErrUnsupported, id)
+	}
+	expr := strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
+	return fmt.Sprintf("${(%s).merge({%q: %q})}",
+		expr, metadata.DeletionPolicyAnnotation, string(v1alpha1.DeletionPolicyOrphaned)), nil
+}
+
+// annotatableMetadata returns the manifest's metadata map, creating it when
+// absent.
+func annotatableMetadata(manifest map[string]any, id string) (map[string]any, error) {
+	meta, ok := manifest["metadata"]
+	if !ok || meta == nil {
+		created := map[string]any{}
+		manifest["metadata"] = created
+		return created, nil
+	}
+	metaMap, ok := meta.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%w: resource %q: metadata is not a map", ErrUnsupported, id)
+	}
+	return metaMap, nil
 }
 
 // SchemaNodeID is the node ID under which an instance's spec/metadata/status is

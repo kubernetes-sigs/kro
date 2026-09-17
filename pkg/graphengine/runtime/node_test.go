@@ -655,6 +655,100 @@ func TestNode_TolerateDataPending(t *testing.T) {
 		assert.False(t, hasConditions, "nested enclosing array field status.conditions must be absent")
 	})
 
+	// p1 regression: when EVERY child of a nested object property is
+	// data-pending, the whole enclosing object field must be dropped rather
+	// than rendered as an empty {}. An empty object survives against a status
+	// schema that types the object's properties (the apiserver rejects the SSA
+	// apply with "status.<obj>: Invalid"), which froze the instance status on
+	// main instead of trimming like v0.9.4. Dropping the emptied object makes
+	// the applied object schema-valid AND lets SSA prune the previously-owned
+	// field — restoring v0.9.4's IN_PROGRESS + trimmed-status behavior.
+	t.Run("drops the enclosing object field when all its children are data-pending", func(t *testing.T) {
+		t.Parallel()
+		g := generator.NewGraph("g",
+			generator.WithDef("seed", map[string]any{"k": "v"}),
+			generator.WithDef("upstream", map[string]any{"data": "${'val'}"}),
+			generator.WithTemplate("vpc", map[string]any{
+				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+				"kind":       "VPC",
+				"metadata":   map[string]any{"name": "vpc-test"},
+				"status": map[string]any{
+					// A sibling scalar that resolves must survive.
+					"vpcID": "${upstream.data}",
+					// Every child of ackResourceMetadata (a typed nested
+					// object) is data-pending -> the object would become {}
+					// today; it must be dropped entirely so the applied status
+					// stays schema-valid and SSA prunes the previously-owned
+					// field.
+					"ackResourceMetadata": map[string]any{
+						"arn":            "${upstream.data.missing}",
+						"ownerAccountID": "${upstream.data.alsoMissing}",
+						"region":         "${upstream.data.stillMissing}",
+					},
+				},
+			}),
+		)
+		p, err := mustCompiler(t).CompileWithOptions(g, compiler.WithDataPendingTolerant("vpc"))
+		require.NoError(t, err)
+
+		rt := New(p, g)
+		setFirst(rt, "seed")
+		setFirst(rt, "upstream")
+
+		out, err := rt.Node("vpc").Resolve()
+		require.NoError(t, err, "an emptied nested object must not data-pend the whole node")
+		require.Len(t, out, 1)
+
+		status, ok := out[0].Object["status"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "val", status["vpcID"], "sibling scalar must survive")
+
+		// The fully-pending object field must be ABSENT, not present-but-empty.
+		ackMeta, hasAckMeta := status["ackResourceMetadata"]
+		assert.False(t, hasAckMeta,
+			"an object whose children all omit must be dropped, not rendered as empty %v", ackMeta)
+	})
+
+	// A nested object that keeps at least one resolvable child must survive
+	// (only the individually-pending child is omitted) — the emptied-object
+	// drop must not over-fire and delete objects that still carry data.
+	t.Run("keeps a partially-resolved object with only its resolvable children", func(t *testing.T) {
+		t.Parallel()
+		g := generator.NewGraph("g",
+			generator.WithDef("seed", map[string]any{"k": "v"}),
+			generator.WithDef("upstream", map[string]any{"data": "${'val'}"}),
+			generator.WithTemplate("vpc", map[string]any{
+				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+				"kind":       "VPC",
+				"metadata":   map[string]any{"name": "vpc-test"},
+				"status": map[string]any{
+					"ackResourceMetadata": map[string]any{
+						"arn":            "${upstream.data}",         // resolves
+						"ownerAccountID": "${upstream.data.missing}", // pending
+					},
+				},
+			}),
+		)
+		p, err := mustCompiler(t).CompileWithOptions(g, compiler.WithDataPendingTolerant("vpc"))
+		require.NoError(t, err)
+
+		rt := New(p, g)
+		setFirst(rt, "seed")
+		setFirst(rt, "upstream")
+
+		out, err := rt.Node("vpc").Resolve()
+		require.NoError(t, err)
+		require.Len(t, out, 1)
+
+		status, ok := out[0].Object["status"].(map[string]any)
+		require.True(t, ok)
+		ackMeta, ok := status["ackResourceMetadata"].(map[string]any)
+		require.True(t, ok, "an object with a resolvable child must survive")
+		assert.Equal(t, "val", ackMeta["arn"], "resolvable child must render")
+		_, hasOwner := ackMeta["ownerAccountID"]
+		assert.False(t, hasOwner, "the individually-pending child must be omitted")
+	})
+
 	// A non-tolerant node still data-pends the whole node on any pending field,
 	// array element included.
 	t.Run("non-tolerant node data-pends the whole node on a pending array element", func(t *testing.T) {

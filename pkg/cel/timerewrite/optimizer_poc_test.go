@@ -46,6 +46,15 @@ func optimizerEnv(t *testing.T) *cel.Env {
 // the ASTOptimizer path (NormalizeAndCheck) and asserts identical results
 // and solved flips to the proto-walk path.
 func TestOptimizerPOCBehavioralParity(t *testing.T) {
+	for name, normalize := range map[string]func(*cel.Env, string) (*cel.Ast, error){
+		"recursive": timerewrite.NormalizeAndCheck,
+		"visitor":   timerewrite.NormalizeAndCheckVisitor,
+	} {
+		t.Run(name, func(t *testing.T) { runBehavioralParity(t, normalize) })
+	}
+}
+
+func runBehavioralParity(t *testing.T, normalize func(*cel.Env, string) (*cel.Ast, error)) {
 	env := optimizerEnv(t)
 	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 	vars := map[string]any{"schema": map[string]any{
@@ -78,10 +87,16 @@ func TestOptimizerPOCBehavioralParity(t *testing.T) {
 		{`string(time.now())`, "2026-09-17T12:00:00Z", 0},
 		// far-range saturation fix carries over
 		{`time.now() < timestamp(schema.future)`, true, -1}, // -1: flip allowed only at saturation horizon
+		// SCOPING EDGES for the flat-visitor parent-walk:
+		// range ident shadowed by same-named iterVar: the range `x` is the
+		// OUTER bind (a kro list); the loop `x` is the element (kro ts).
+		{`cel.bind(x, [time.now()], x.map(x, timestamp(schema.openAt) < x)[0])`, false, 5 * time.Minute},
+		// iterator-carried kro value on the comparison's RIGHT: mirrored.
+		{`[time.now()].map(x, timestamp(schema.openAt) <= x)[0]`, false, 5 * time.Minute},
 	}
 
 	for _, tc := range cases {
-		checked, err := timerewrite.NormalizeAndCheck(env, tc.expr)
+		checked, err := normalize(env, tc.expr)
 		if err != nil {
 			t.Errorf("%q: NormalizeAndCheck: %v", tc.expr, err)
 			continue
@@ -134,7 +149,10 @@ func TestOptimizerPOCRejectsIllTyped(t *testing.T) {
 		`int(time.now())`,
 	} {
 		if _, err := timerewrite.NormalizeAndCheck(env, expr); err == nil {
-			t.Errorf("%q: expected rejection, but it compiled", expr)
+			t.Errorf("recursive %q: expected rejection, but it compiled", expr)
+		}
+		if _, err := timerewrite.NormalizeAndCheckVisitor(env, expr); err == nil {
+			t.Errorf("visitor %q: expected rejection, but it compiled", expr)
 		}
 	}
 }

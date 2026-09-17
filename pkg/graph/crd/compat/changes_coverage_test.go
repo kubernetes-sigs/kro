@@ -157,7 +157,7 @@ func TestChangeDescriptions(t *testing.T) {
 		{"format removed", Change{Path: "spec.f", ChangeType: FormatRemoved, OldValue: "date"},
 			[]string{"Format", "date", "removed"}},
 		{"additional properties changed", Change{Path: "spec.m", ChangeType: AdditionalPropertiesChanged},
-			[]string{"Additional properties", "spec.m"}},
+			[]string{"Additional properties", "spec.m", "cannot be classified safely"}},
 		{"preserve unknown removed", Change{Path: "spec.u", ChangeType: PreserveUnknownFieldsRemoved},
 			[]string{"Unknown fields", "no longer preserved", "spec.u"}},
 		{"preserve unknown added", Change{Path: "spec.u", ChangeType: PreserveUnknownFieldsAdded},

@@ -16,6 +16,7 @@ package instance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -41,6 +42,15 @@ func (c *Controller) reconcileDeletion(dcx *DeletionContext) error {
 	if err != nil {
 		dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
 		return err
+	}
+
+	candidates, err = c.releaseOrphanedResources(dcx, applier, candidates)
+	if err != nil {
+		dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
+		if errors.Is(err, errConflict) {
+			return dcx.delayedRequeue(err)
+		}
+		return fmt.Errorf("failed to release orphaned resources: %v", err)
 	}
 
 	if len(candidates) == 0 {
@@ -97,6 +107,37 @@ func (c *Controller) discoverDeletionInventory(
 		return nil, nil, fmt.Errorf("list deletion inventory: %w", err)
 	}
 	return candidates, applier, nil
+}
+
+// errConflict indicates a conflict occurred during release of an orphaned object.
+var errConflict = errors.New("conflict")
+
+// releaseOrphanedResources go through all resources and based on
+// the deletion policy, orphan them.
+func (c *Controller) releaseOrphanedResources(
+	dcx *DeletionContext,
+	applier *applyset.ApplySet,
+	candidates []applyset.OrphanCandidate,
+) ([]applyset.OrphanCandidate, error) {
+	remaining := make([]applyset.OrphanCandidate, 0, len(candidates))
+	var conflicts int
+	for _, candidate := range candidates {
+		if metadata.DeletionPolicyOf(candidate.Object) != v1alpha1.DeletionPolicyOrphaned {
+			remaining = append(remaining, candidate)
+			continue
+		}
+		result, err := applier.ReleaseOrphan(dcx.Ctx, candidate)
+		if err != nil {
+			return nil, fmt.Errorf("release orphaned resource: %w", err)
+		}
+		if result.Conflict {
+			conflicts++
+		}
+	}
+	if conflicts > 0 {
+		return nil, fmt.Errorf("%w: release of %d orphaned resource(s) hit concurrent changes, retrying", errConflict, conflicts)
+	}
+	return remaining, nil
 }
 
 const fallbackDeletionOrder = 0

@@ -136,6 +136,21 @@ func WithResource(
 	}
 }
 
+// WithResourceDeletionPolicy sets the deletion policy on an already-added
+// resource, so the common WithResource/WithResourceCollection signatures stay
+// unchanged for the tests that do not care about it.
+func WithResourceDeletionPolicy(id string, policy krov1alpha1.DeletionPolicy) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		for _, res := range rgd.Spec.Resources {
+			if res.ID == id {
+				res.DeletionPolicy = policy
+				return
+			}
+		}
+		panic("WithResourceDeletionPolicy: no resource with id " + id)
+	}
+}
+
 // WithTypes returns a SchemaOption that sets the types for the schema
 func WithTypes(types map[string]any) SchemaOption {
 	rawTypes, err := json.Marshal(types)

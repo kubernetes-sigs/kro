@@ -771,6 +771,14 @@ func TestValidateNoKROOwnedAnnotations(t *testing.T) {
 			errorMsg:    "internal.kro.run/",
 		},
 		{
+			// The deletion policy is set only through deletionPolicy, never
+			// by the template.
+			name:        "deletion policy annotation",
+			annotations: map[string]any{"internal.kro.run/deletion-policy": "Orphaned"},
+			expectError: true,
+			errorMsg:    "internal.kro.run/",
+		},
+		{
 			name:        "unowned annotation",
 			annotations: map[string]any{"example.com/key": "value"},
 			expectError: false,

@@ -15,15 +15,11 @@
 package cel
 
 import (
-	"fmt"
-
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
-
-	"github.com/kubernetes-sigs/kro/pkg/cel/timerewrite"
 )
 
 // SchemaDeclType converts an OpenAPI schema into a CEL DeclType. Returns nil
@@ -40,19 +36,11 @@ func SchemaDeclType(s *spec.Schema) *apiservercel.DeclType {
 // AST. It performs no compilation and no caching; callers layer their own
 // per-build memoization on top.
 func ParseAndCheck(env *cel.Env, expr string) (*cel.Ast, error) {
-	parsed, issues := env.Parse(expr)
-	if issues != nil && issues.Err() != nil {
-		return nil, issues.Err()
-	}
-	// KREP-025: rewrite operators over time.now()-tainted operands into
-	// kro.time.* function calls before type-checking. Kro time types carry
-	// no standard operator overloads, so without the rewrite such
-	// expressions would fail the check below.
-	parsed, err := timerewrite.RewriteTimeOperators(parsed)
-	if err != nil {
-		return nil, fmt.Errorf("time operator rewrite: %w", err)
-	}
-	checked, issues := env.Check(parsed)
+	// KREP-025 needs no compile-time rewriting: kro time operations are
+	// declared in both operand orders (library/time_functions.go) and
+	// runtime routing is handled by the standard singleton's left-trait
+	// dispatch plus the plan-time decorator (library/time_dispatch.go).
+	checked, issues := env.Compile(expr)
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()
 	}

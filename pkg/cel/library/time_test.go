@@ -20,8 +20,6 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
-
-	kroast "github.com/kubernetes-sigs/kro/pkg/cel/timerewrite"
 )
 
 // timeEnv builds a CEL environment with the time library and a dyn `schema`
@@ -39,25 +37,19 @@ func timeEnv(t *testing.T) *cel.Env {
 	return env
 }
 
-// evalTime compiles (parse → time-operator rewrite → check → program) and
+// evalTime compiles directly (both operand orders are declared) and runs
+// the program with the time operator decorator, mirroring production
+// (krocel.ProgramOptions), and
 // evaluates expr with `time` fixed at now, returning the result and the
 // TimeVal (for flip inspection). Mirrors krocel.ParseAndCheck, which cannot
 // be imported here (pkg/cel imports this package).
 func evalTime(t *testing.T, env *cel.Env, expr string, now time.Time, vars map[string]any) (any, *TimeVal) {
 	t.Helper()
-	parsed, iss := env.Parse(expr)
+	ast, iss := env.Compile(expr)
 	if iss != nil && iss.Err() != nil {
-		t.Fatalf("parse %q: %v", expr, iss.Err())
+		t.Fatalf("compile %q: %v", expr, iss.Err())
 	}
-	parsed, err := kroast.RewriteTimeOperators(parsed)
-	if err != nil {
-		t.Fatalf("rewrite %q: %v", expr, err)
-	}
-	ast, iss := env.Check(parsed)
-	if iss != nil && iss.Err() != nil {
-		t.Fatalf("check %q: %v", expr, iss.Err())
-	}
-	prog, err := env.Program(ast)
+	prog, err := env.Program(ast, TimeOperatorDecorator())
 	if err != nil {
 		t.Fatalf("program %q: %v", expr, err)
 	}
@@ -239,19 +231,11 @@ func TestAddingTwoTimestampsErrors(t *testing.T) {
 // evalTimeErr is evalTime for expressions expected to fail at check or eval.
 func evalTimeErr(t *testing.T, env *cel.Env, expr string, vars map[string]any) (error, *TimeVal) {
 	t.Helper()
-	parsed, iss := env.Parse(expr)
+	ast, iss := env.Compile(expr)
 	if iss != nil && iss.Err() != nil {
 		return iss.Err(), nil
 	}
-	parsed, err := kroast.RewriteTimeOperators(parsed)
-	if err != nil {
-		return err, nil
-	}
-	ast, iss := env.Check(parsed)
-	if iss != nil && iss.Err() != nil {
-		return iss.Err(), nil
-	}
-	prog, err := env.Program(ast)
+	prog, err := env.Program(ast, TimeOperatorDecorator())
 	if err != nil {
 		return err, nil
 	}
@@ -386,16 +370,7 @@ func TestDecoratorLeavesPlainOperatorsUntouched(t *testing.T) {
 // the expression compiles).
 func checkTime(t *testing.T, env *cel.Env, expr string) error {
 	t.Helper()
-	parsed, iss := env.Parse(expr)
-	if iss != nil && iss.Err() != nil {
-		t.Fatalf("parse %q: %v", expr, iss.Err())
-	}
-	parsed, err := kroast.RewriteTimeOperators(parsed)
-	if err != nil {
-		t.Fatalf("rewrite %q: %v", expr, err)
-	}
-	_, iss = env.Check(parsed)
-	if iss != nil && iss.Err() != nil {
+	if _, iss := env.Compile(expr); iss != nil && iss.Err() != nil {
 		return iss.Err()
 	}
 	return nil

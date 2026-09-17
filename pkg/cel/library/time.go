@@ -29,8 +29,8 @@
 // (kro.Timestamp / kro.Duration) per the KREP's "separate types" design.
 // They match no standard overload, so any use that has not been explicitly
 // whitelisted fails closed at type-check or dispatch time. Operators reach
-// them through the kro.time.* functions installed by the AST rewrite
-// (pkg/cel/ast/timerewrite.go); string() and identity timestamp()/duration()
+// them through the standard operators (two-sided declarations + decorator)
+// (pkg/cel/library/time_dispatch.go); string() and identity timestamp()/duration()
 // casts are whitelisted in time_functions.go.
 package library
 
@@ -68,7 +68,7 @@ var (
 	// whitelisted fails closed with a no-such-overload error, keeping the
 	// values inside the requeue solver. Operators reach these values through
 	// the kro.time.* functions installed by the AST rewrite
-	// (pkg/cel/ast/timerewrite.go).
+	// (pkg/cel/library/time_dispatch.go).
 	KroTimestampType = types.NewObjectType("kro.Timestamp", kroTimeTraits)
 	KroDurationType  = types.NewObjectType("kro.Duration", kroDurationTraits)
 )

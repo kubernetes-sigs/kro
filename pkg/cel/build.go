@@ -15,11 +15,15 @@
 package cel
 
 import (
+	"fmt"
+
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+
+	"github.com/kubernetes-sigs/kro/pkg/cel/timerewrite"
 )
 
 // SchemaDeclType converts an OpenAPI schema into a CEL DeclType. Returns nil
@@ -39,6 +43,14 @@ func ParseAndCheck(env *cel.Env, expr string) (*cel.Ast, error) {
 	parsed, issues := env.Parse(expr)
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()
+	}
+	// KREP-025: rewrite operators over time.now()-tainted operands into
+	// kro.time.* function calls before type-checking. Kro time types carry
+	// no standard operator overloads, so without the rewrite such
+	// expressions would fail the check below.
+	parsed, err := timerewrite.RewriteTimeOperators(parsed)
+	if err != nil {
+		return nil, fmt.Errorf("time operator rewrite: %w", err)
 	}
 	checked, issues := env.Check(parsed)
 	if issues != nil && issues.Err() != nil {

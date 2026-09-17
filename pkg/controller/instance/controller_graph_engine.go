@@ -296,6 +296,14 @@ func (c *Controller) reconcileViaGraphEngine(
 		// reference decays to a slow poll instead of a flat-interval hammer. Any
 		// other apply error keeps the flat DefaultRequeueDuration behavior.
 		if errors.Is(applyErr, executor.ErrNotReady) {
+			// A time-solved flip (KREP-025) bounds the not-ready wait: wake at
+			// the earlier of the solved flip and the backoff delay.
+			if after, ok := rt.TimeRequeueAfter(); ok {
+				if next := c.backoff.Next(instanceKey(inst)); next < after {
+					after = next
+				}
+				return requeue.NeededAfter(applyErr, after)
+			}
 			return c.notReadyRequeue(instanceKey(inst), applyErr)
 		}
 		return c.delayedRequeue(applyErr)
@@ -303,6 +311,13 @@ func (c *Controller) reconcileViaGraphEngine(
 	// Clean converge: end the not-ready backoff streak so a fixed reference
 	// returns to fast requeues on its next stall.
 	c.backoff.Reset(instanceKey(inst))
+	// A comparison on time.now() evaluated this reconcile flips at a known
+	// future instant (KREP-025): requeue exactly then so the time gate opens
+	// or closes without waiting for an unrelated event.
+	if after, ok := rt.TimeRequeueAfter(); ok {
+		return requeue.NeededAfter(
+			fmt.Errorf("time-gated expression changes result in %s", after), after)
+	}
 	return nil
 }
 

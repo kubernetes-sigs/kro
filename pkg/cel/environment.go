@@ -148,6 +148,10 @@ func coreDeclarations() []cel.EnvOption {
 		library.JSON(),
 		library.Hash(),
 		library.Lists(),
+		// Time() registers the `time` variable and time.now() (KREP-025).
+		// The variable is seeded per reconcile by the graphengine runtime;
+		// comparisons on now()-derived values solve for requeue instants.
+		library.Time(),
 		// Omit() is registered globally so CEL can parse and type-check it
 		// everywhere. The graph builder rejects it in restricted contexts
 		// (includeWhen, readyWhen, forEach) via inspectExpressionRestricted

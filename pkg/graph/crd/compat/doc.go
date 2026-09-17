@@ -19,17 +19,12 @@
 // compatibility issues. It's designed to prevent accidental schema changes that would break
 // existing CRD instances.
 //
-// Breaking changes detected include:
+// Breaking changes detected by default include:
 //   - Property removal
 //   - Type changes
 //   - Adding required fields
 //   - Restricting enum values
 //   - Pattern changes
-//   - Restricting map value schemas
-//   - Changing CEL validation rules
-//   - Removing nullable or unknown-field preservation
-//   - Changing Kubernetes list or map topology
-//   - Changing schema facets without an explicit compatibility classification
 //
 // Non-breaking changes detected include:
 //   - Adding new properties that are not required
@@ -37,8 +32,14 @@
 //   - Changing descriptions
 //   - Changing default values
 //   - Removing optional fields from 'required' list
-//   - Adding nullable or unknown-field preservation
-//   - Removing format constraints
+//
+// When the strict-crd-compatibility-checks feature gate is enabled, the
+// comparator also checks map value schemas, CEL validation rules, nullable and
+// format changes, unknown-field preservation, and Kubernetes list or map
+// topology. It classifies safe relaxations such as adding nullable or
+// unknown-field preservation and removing format constraints as non-breaking.
+// Changes to schema facets without an explicit compatibility classification
+// fail closed while the gate is enabled.
 //
 // Usage:
 //

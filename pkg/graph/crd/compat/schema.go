@@ -24,16 +24,19 @@ import (
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+
+	"github.com/kubernetes-sigs/kro/pkg/features"
 )
 
 // Compare compares two OpenAPIV3Schema objects and returns a compatibility report.
 // It identifies breaking and non-breaking changes between the schemas.
 func Compare(oldSchema, newSchema *v1.JSONSchemaProps) *Report {
-	return compare("", oldSchema, newSchema)
+	strictChecks := features.FeatureGate.Enabled(features.StrictCRDCompatibilityChecks)
+	return compare("", oldSchema, newSchema, strictChecks)
 }
 
 // compare is the internal recursive implementation
-func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps) *Report {
+func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps, strictChecks bool) *Report {
 	result := &Report{
 		BreakingChanges:    []Change{},
 		NonBreakingChanges: []Change{},
@@ -105,30 +108,32 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps) *Report {
 	compareConstraints(path, oldSchema, newSchema, result)
 
 	// Compare properties
-	compareProperties(path, oldSchema, newSchema, result)
+	compareProperties(path, oldSchema, newSchema, result, strictChecks)
 
 	// Check required fields
 	compareRequiredFields(path, oldSchema, newSchema, result)
 
 	// Check enum values
-	compareEnumValues(path, oldSchema, newSchema, result)
+	compareEnumValues(path, oldSchema, newSchema, result, strictChecks)
 
 	// For arrays, check items schema
-	compareArrayItems(path, oldSchema, newSchema, result)
+	compareArrayItems(path, oldSchema, newSchema, result, strictChecks)
 
-	// For maps, check the value schema.
-	compareAdditionalProperties(path, oldSchema, newSchema, result)
+	if strictChecks {
+		// For maps, check the value schema.
+		compareAdditionalProperties(path, oldSchema, newSchema, result, strictChecks)
 
-	compareFormat(path, oldSchema, newSchema, result)
-	compareNullable(path, oldSchema, newSchema, result)
-	comparePreserveUnknownFields(path, oldSchema, newSchema, result)
-	compareTopology(path, oldSchema, newSchema, result)
-	compareValidationRules(path, oldSchema, newSchema, result)
+		compareFormat(path, oldSchema, newSchema, result)
+		compareNullable(path, oldSchema, newSchema, result)
+		comparePreserveUnknownFields(path, oldSchema, newSchema, result)
+		compareTopology(path, oldSchema, newSchema, result)
+		compareValidationRules(path, oldSchema, newSchema, result)
 
-	// Reject changes to schema facets that are not explicitly classified above.
-	// This keeps newly added or currently unsupported validation keywords from
-	// silently passing as compatible.
-	compareUnclassifiedFields(path, oldSchema, newSchema, result)
+		// Reject changes to schema facets that are not explicitly classified above.
+		// This keeps newly added or currently unsupported validation keywords from
+		// silently passing as compatible.
+		compareUnclassifiedFields(path, oldSchema, newSchema, result)
+	}
 
 	return result
 }
@@ -146,7 +151,12 @@ func getDefaultValue(val *v1.JSON) string {
 }
 
 // compareProperties checks for added, removed, or changed properties
-func compareProperties(path string, oldSchema, newSchema *v1.JSONSchemaProps, result *Report) {
+func compareProperties(
+	path string,
+	oldSchema, newSchema *v1.JSONSchemaProps,
+	result *Report,
+	strictChecks bool,
+) {
 	// First, check for removed properties (breaking changes)
 	for propName, oldProp := range oldSchema.Properties {
 		propPath := path + ".properties." + propName
@@ -160,7 +170,7 @@ func compareProperties(path string, oldSchema, newSchema *v1.JSONSchemaProps, re
 		}
 
 		// property exists in both schemas - compare them recursively
-		appendReport(result, compare(propPath, &oldProp, &newProp))
+		appendReport(result, compare(propPath, &oldProp, &newProp, strictChecks))
 	}
 
 	// Then check for added properties. Now things get a bit more spicy.
@@ -245,11 +255,19 @@ func compareRequiredFields(path string, oldSchema, newSchema *v1.JSONSchemaProps
 }
 
 // compareEnumValues checks for changes to enum values
-func compareEnumValues(path string, oldSchema, newSchema *v1.JSONSchemaProps, result *Report) {
+func compareEnumValues(
+	path string,
+	oldSchema, newSchema *v1.JSONSchemaProps,
+	result *Report,
+	strictChecks bool,
+) {
 	if len(oldSchema.Enum) == 0 && len(newSchema.Enum) == 0 {
 		return
 	}
 	if len(oldSchema.Enum) == 0 {
+		if !strictChecks {
+			return
+		}
 		result.AddBreakingChange(
 			path+".enum",
 			EnumConstraintAdded,
@@ -259,6 +277,9 @@ func compareEnumValues(path string, oldSchema, newSchema *v1.JSONSchemaProps, re
 		return
 	}
 	if len(newSchema.Enum) == 0 {
+		if !strictChecks {
+			return
+		}
 		result.AddNonBreakingChange(
 			path+".enum",
 			EnumConstraintRemoved,
@@ -287,14 +308,19 @@ func compareEnumValues(path string, oldSchema, newSchema *v1.JSONSchemaProps, re
 }
 
 // compareArrayItems checks array item schemas recursively
-func compareArrayItems(path string, oldSchema, newSchema *v1.JSONSchemaProps, result *Report) {
+func compareArrayItems(
+	path string,
+	oldSchema, newSchema *v1.JSONSchemaProps,
+	result *Report,
+	strictChecks bool,
+) {
 	if oldSchema.Type == "array" && newSchema.Type == "array" {
 		// Use safer existence checks
 		oldHasItems := oldSchema.Items != nil && oldSchema.Items.Schema != nil
 		newHasItems := newSchema.Items != nil && newSchema.Items.Schema != nil
 
 		if oldHasItems && newHasItems {
-			appendReport(result, compare(path+".items", oldSchema.Items.Schema, newSchema.Items.Schema))
+			appendReport(result, compare(path+".items", oldSchema.Items.Schema, newSchema.Items.Schema, strictChecks))
 		} else if oldHasItems && !newHasItems {
 			// Items schema was removed - breaking
 			result.AddBreakingChange(path+".items", PropertyRemoved, "", "")
@@ -309,7 +335,12 @@ func compareArrayItems(path string, oldSchema, newSchema *v1.JSONSchemaProps, re
 // safely classify changes between absent, boolean, and schema forms because
 // their compatibility depends on both validation and structural-schema pruning.
 // Fail closed for those changes instead of claiming they are always breaking.
-func compareAdditionalProperties(path string, oldSchema, newSchema *v1.JSONSchemaProps, result *Report) {
+func compareAdditionalProperties(
+	path string,
+	oldSchema, newSchema *v1.JSONSchemaProps,
+	result *Report,
+	strictChecks bool,
+) {
 	oldAdditional := oldSchema.AdditionalProperties
 	newAdditional := newSchema.AdditionalProperties
 
@@ -321,7 +352,7 @@ func compareAdditionalProperties(path string, oldSchema, newSchema *v1.JSONSchem
 	oldHasSchema := oldAdditional != nil && oldAdditional.Schema != nil
 	newHasSchema := newAdditional != nil && newAdditional.Schema != nil
 	if oldHasSchema && newHasSchema {
-		appendReport(result, compare(fieldPath, oldAdditional.Schema, newAdditional.Schema))
+		appendReport(result, compare(fieldPath, oldAdditional.Schema, newAdditional.Schema, strictChecks))
 		return
 	}
 

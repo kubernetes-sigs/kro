@@ -114,6 +114,14 @@ func TestRewriteRenamesTaintedOperators(t *testing.T) {
 		{`[time.now()].map(x, x < timestamp(schema.t))`, []string{"kro.time.lt"}, nil},
 		// string() launders taint: comparison on the string is NOT renamed
 		{`string(time.now()) < schema.s`, nil, []string{"_<_"}},
+		// value-type directed, NOT contains-taint: size() yields an int, so
+		// the arithmetic and comparison are ordinary CEL and stay untouched
+		{`size([time.now()]) + 1 > 0`, nil, []string{"_+_", "_>_"}},
+		// indexing extracts the kro element from a list
+		{`[time.now()][0] >= timestamp(schema.t)`, []string{"kro.time.ge"}, nil},
+		// ternary carries the kro value through either branch
+		{`(schema.b ? time.now() : timestamp(schema.t)) < timestamp(schema.u)`,
+			[]string{"kro.time.lt"}, nil},
 	}
 	for _, tc := range cases {
 		fns := rewriteFunctions(t, tc.expr)

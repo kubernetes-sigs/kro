@@ -25,6 +25,11 @@
 //   - Adding required fields
 //   - Restricting enum values
 //   - Pattern changes
+//   - Restricting map value schemas
+//   - Changing CEL validation rules
+//   - Removing nullable or unknown-field preservation
+//   - Changing Kubernetes list or map topology
+//   - Changing schema facets without an explicit compatibility classification
 //
 // Non-breaking changes detected include:
 //   - Adding new properties that are not required
@@ -32,6 +37,8 @@
 //   - Changing descriptions
 //   - Changing default values
 //   - Removing optional fields from 'required' list
+//   - Adding nullable or unknown-field preservation
+//   - Removing format constraints
 //
 // Usage:
 //

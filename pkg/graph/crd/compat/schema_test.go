@@ -567,6 +567,19 @@ func TestCompareEnumValues(t *testing.T) {
 			expectBreaking: false,
 		},
 		{
+			name:              "added enum constraint",
+			newEnum:           []v1.JSON{{Raw: []byte("\"value1\"")}},
+			expectBreaking:    true,
+			breakingCount:     1,
+			checkBreakingType: EnumConstraintAdded,
+		},
+		{
+			name:             "removed enum constraint",
+			oldEnum:          []v1.JSON{{Raw: []byte("\"value1\"")}},
+			expectBreaking:   false,
+			nonBreakingCount: 1,
+		},
+		{
 			name:              "removed enum value",
 			oldEnum:           []v1.JSON{{Raw: []byte("\"value1\"")}, {Raw: []byte("\"value2\"")}},
 			newEnum:           []v1.JSON{{Raw: []byte("\"value1\"")}},

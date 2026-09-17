@@ -437,3 +437,38 @@ func TestTypeMismatchesRejectedAtCompileTime(t *testing.T) {
 		}
 	}
 }
+
+// --- UnixNano range safety ---
+
+// TestFarRangeTimestampsCompareCorrectly pins the saturating-clamp fix:
+// time.Time.UnixNano() is undefined outside ~1678..2262 (it wraps), but CEL
+// timestamps span 0001..9999. A certificate notAfter of 9999-12-31 (the
+// common "never expires" sentinel) must not silently flip comparisons.
+func TestFarRangeTimestampsCompareCorrectly(t *testing.T) {
+	env := timeEnv(t)
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	vars := map[string]any{"schema": map[string]any{
+		"future": "9999-12-31T23:59:59Z",
+		"past":   "1500-01-01T00:00:00Z",
+	}}
+
+	for expr, want := range map[string]any{
+		`time.now() < timestamp(schema.future)`:  true,
+		`time.now() >= timestamp(schema.future)`: false,
+		`timestamp(schema.future) > time.now()`:  true, // reversed operand
+		`time.now() > timestamp(schema.past)`:    true,
+		`time.now() <= timestamp(schema.past)`:   false,
+		// remaining-time shape against the sentinel: effectively infinite
+		`timestamp(schema.future) - time.now() < duration("5m")`: false,
+	} {
+		got, tv := evalTime(t, env, expr, now, vars)
+		if got != want {
+			t.Errorf("%q = %v, want %v", expr, got, want)
+		}
+		// No flip should be recorded within any realistic horizon: the only
+		// permissible flip is at the saturation boundary (~2262) or none.
+		if f, ok := tv.EarliestFlip(); ok && f.Before(now.AddDate(100, 0, 0)) {
+			t.Errorf("%q recorded near-term flip %v for an out-of-range operand", expr, f)
+		}
+	}
+}

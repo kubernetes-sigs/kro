@@ -36,6 +36,7 @@ package library
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"sync"
 	"time"
@@ -195,6 +196,30 @@ func compareAndSolve(l, r affine) types.Int {
 	}
 }
 
+// epochNanos returns t as nanoseconds since the epoch, SATURATED to the
+// int64-representable window (~1678..2262). CEL timestamps span 0001..9999
+// but time.Time.UnixNano() is undefined outside that window (it silently
+// wraps), which would turn a comparison against a far-future sentinel like a
+// certificate notAfter of 9999-12-31 into a silently wrong boolean.
+// Clamping keeps every comparison against an in-range operand (now() always
+// is) correct; ordering AMONG out-of-range instants degrades to equality,
+// and a solved flip at the clamp boundary is centuries away — both harmless
+// for requeue gates.
+func epochNanos(t time.Time) int64 {
+	if t.After(maxSafeTime) {
+		return math.MaxInt64
+	}
+	if t.Before(minSafeTime) {
+		return math.MinInt64
+	}
+	return t.UnixNano()
+}
+
+var (
+	minSafeTime = time.Unix(0, math.MinInt64) // ~1677-09-21
+	maxSafeTime = time.Unix(0, math.MaxInt64) // ~2262-04-11
+)
+
 // liftTimestamp lifts a value to a timestamp affine: a *KroTimestamp as-is,
 // a plain CEL timestamp to {0, T}. clock supplies the Clock for lifted plain
 // values.
@@ -203,11 +228,11 @@ func liftTimestamp(v ref.Val, clock *Clock) (affine, bool) {
 	case *KroTimestamp:
 		return t.affine, true
 	case types.Timestamp:
-		return affine{clock: clock, nowCount: 0, offset: t.Time.UnixNano()}, true
+		return affine{clock: clock, nowCount: 0, offset: epochNanos(t.Time)}, true
 	}
 	if v.Type() == types.TimestampType {
 		if tt, ok := v.Value().(time.Time); ok {
-			return affine{clock: clock, nowCount: 0, offset: tt.UnixNano()}, true
+			return affine{clock: clock, nowCount: 0, offset: epochNanos(tt)}, true
 		}
 	}
 	return affine{}, false

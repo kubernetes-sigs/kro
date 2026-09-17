@@ -41,28 +41,139 @@ import (
 	"github.com/google/cel-go/common/types/traits"
 )
 
+// operandPair is one legal (lhs, rhs) → result signature for a kro.time.*
+// operator function.
+type operandPair struct {
+	id   string
+	l, r *cel.Type
+	res  *cel.Type
+}
+
+// The precise coercion table. Each kro.time.* function declares:
+//
+//  1. The KRO PAIRS — every combination of a kro time value with its plain
+//     counterpart that the affine solver defines (KREP-025 definitions
+//     table): comparisons between like kinds, ts±dur arithmetic, ts−ts.
+//  2. A MIRROR of the CEL standard library's own overload set for the
+//     operator. The taint analysis is conservative (an expression that
+//     merely CONTAINS time.now(), like `size([time.now()]) + 1`, is
+//     renamed too), so every plain signature the standard operator accepts
+//     must stay compilable; the runtime binding falls back to standard
+//     semantics for those.
+//
+// Anything outside the table — e.g. `time.now() >= "oops"`, `time.now() + 1`
+// — is rejected by the type checker at RGD build time.
+var (
+	listA = cel.ListType(cel.TypeParamType("A"))
+
+	// stdComparablePairs mirrors the standard library's comparison overloads.
+	stdComparablePairs = []operandPair{
+		{"bool_bool", cel.BoolType, cel.BoolType, cel.BoolType},
+		{"int_int", cel.IntType, cel.IntType, cel.BoolType},
+		{"int_uint", cel.IntType, cel.UintType, cel.BoolType},
+		{"int_double", cel.IntType, cel.DoubleType, cel.BoolType},
+		{"uint_uint", cel.UintType, cel.UintType, cel.BoolType},
+		{"uint_int", cel.UintType, cel.IntType, cel.BoolType},
+		{"uint_double", cel.UintType, cel.DoubleType, cel.BoolType},
+		{"double_double", cel.DoubleType, cel.DoubleType, cel.BoolType},
+		{"double_int", cel.DoubleType, cel.IntType, cel.BoolType},
+		{"double_uint", cel.DoubleType, cel.UintType, cel.BoolType},
+		{"string_string", cel.StringType, cel.StringType, cel.BoolType},
+		{"bytes_bytes", cel.BytesType, cel.BytesType, cel.BoolType},
+		{"ts_ts", cel.TimestampType, cel.TimestampType, cel.BoolType},
+		{"dur_dur", cel.DurationType, cel.DurationType, cel.BoolType},
+	}
+
+	// kroComparablePairs are the solver comparisons: like kinds only, kro on
+	// either side.
+	kroComparablePairs = []operandPair{
+		{"krots_krots", KroTimestampType, KroTimestampType, cel.BoolType},
+		{"krots_ts", KroTimestampType, cel.TimestampType, cel.BoolType},
+		{"ts_krots", cel.TimestampType, KroTimestampType, cel.BoolType},
+		{"krodur_krodur", KroDurationType, KroDurationType, cel.BoolType},
+		{"krodur_dur", KroDurationType, cel.DurationType, cel.BoolType},
+		{"dur_krodur", cel.DurationType, KroDurationType, cel.BoolType},
+	}
+
+	// addPairs: kro arithmetic (ts+dur → ts in every kro/plain combination,
+	// dur+dur → dur) plus the standard library's add overload mirror.
+	addPairs = []operandPair{
+		{"krots_dur", KroTimestampType, cel.DurationType, KroTimestampType},
+		{"krots_krodur", KroTimestampType, KroDurationType, KroTimestampType},
+		{"ts_krodur", cel.TimestampType, KroDurationType, KroTimestampType},
+		{"dur_krots", cel.DurationType, KroTimestampType, KroTimestampType},
+		{"krodur_krots", KroDurationType, KroTimestampType, KroTimestampType},
+		{"krodur_ts", KroDurationType, cel.TimestampType, KroTimestampType},
+		{"krodur_krodur", KroDurationType, KroDurationType, KroDurationType},
+		{"krodur_dur", KroDurationType, cel.DurationType, KroDurationType},
+		{"dur_krodur", cel.DurationType, KroDurationType, KroDurationType},
+		// standard mirror
+		{"int_int", cel.IntType, cel.IntType, cel.IntType},
+		{"uint_uint", cel.UintType, cel.UintType, cel.UintType},
+		{"double_double", cel.DoubleType, cel.DoubleType, cel.DoubleType},
+		{"string_string", cel.StringType, cel.StringType, cel.StringType},
+		{"bytes_bytes", cel.BytesType, cel.BytesType, cel.BytesType},
+		{"list_list", listA, listA, listA},
+		{"dur_dur", cel.DurationType, cel.DurationType, cel.DurationType},
+		{"dur_ts", cel.DurationType, cel.TimestampType, cel.TimestampType},
+		{"ts_dur", cel.TimestampType, cel.DurationType, cel.TimestampType},
+	}
+
+	// subPairs: kro arithmetic (ts−ts → dur, ts−dur → ts, dur−dur → dur in
+	// every kro/plain combination) plus the standard mirror.
+	subPairs = []operandPair{
+		{"krots_krots", KroTimestampType, KroTimestampType, KroDurationType},
+		{"krots_ts", KroTimestampType, cel.TimestampType, KroDurationType},
+		{"ts_krots", cel.TimestampType, KroTimestampType, KroDurationType},
+		{"krots_dur", KroTimestampType, cel.DurationType, KroTimestampType},
+		{"krots_krodur", KroTimestampType, KroDurationType, KroTimestampType},
+		{"ts_krodur", cel.TimestampType, KroDurationType, KroTimestampType},
+		{"krodur_krodur", KroDurationType, KroDurationType, KroDurationType},
+		{"krodur_dur", KroDurationType, cel.DurationType, KroDurationType},
+		{"dur_krodur", cel.DurationType, KroDurationType, KroDurationType},
+		// standard mirror
+		{"int_int", cel.IntType, cel.IntType, cel.IntType},
+		{"uint_uint", cel.UintType, cel.UintType, cel.UintType},
+		{"double_double", cel.DoubleType, cel.DoubleType, cel.DoubleType},
+		{"ts_ts", cel.TimestampType, cel.TimestampType, cel.DurationType},
+		{"ts_dur", cel.TimestampType, cel.DurationType, cel.TimestampType},
+		{"dur_dur", cel.DurationType, cel.DurationType, cel.DurationType},
+	}
+)
+
+// timeOperatorFunction declares one kro.time.* function: the full overload
+// table for static checking, and a single runtime binding (evalTimeOp) that
+// solves for kro operands and falls back to standard semantics otherwise.
+func timeOperatorFunction(name, op string, pairs []operandPair) cel.EnvOption {
+	opts := make([]cel.FunctionOpt, 0, len(pairs)+1)
+	for _, p := range pairs {
+		opts = append(opts, cel.Overload(
+			"kro_time_"+opName(op)+"_"+p.id,
+			[]*cel.Type{p.l, p.r}, p.res,
+		))
+	}
+	opts = append(opts, cel.SingletonBinaryBinding(func(lhs, rhs ref.Val) ref.Val {
+		return evalTimeOp(op, lhs, rhs)
+	}))
+	return cel.Function(name, opts...)
+}
+
 // timeFunctionDeclarations returns the kro.time.* operator functions and the
 // whitelist overloads. Installed by the Time() library.
 func timeFunctionDeclarations() []cel.EnvOption {
-	binaryOp := func(op string) cel.FunctionOpt {
-		return cel.Overload("kro_time_"+opName(op)+"_dyn_dyn",
-			[]*cel.Type{cel.DynType, cel.DynType},
-			resultType(op),
-			cel.BinaryBinding(func(lhs, rhs ref.Val) ref.Val {
-				return evalTimeOp(op, lhs, rhs)
-			}),
-		)
+	comparable := func() []operandPair {
+		return append(append([]operandPair{}, kroComparablePairs...), stdComparablePairs...)
 	}
 	identity := func(v ref.Val) ref.Val { return v }
 	toString := func(v ref.Val) ref.Val { return v.ConvertToType(types.StringType) }
 
 	return []cel.EnvOption{
-		cel.Function("kro.time.lt", binaryOp(operators.Less)),
-		cel.Function("kro.time.le", binaryOp(operators.LessEquals)),
-		cel.Function("kro.time.gt", binaryOp(operators.Greater)),
-		cel.Function("kro.time.ge", binaryOp(operators.GreaterEquals)),
-		cel.Function("kro.time.add", binaryOp(operators.Add)),
-		cel.Function("kro.time.sub", binaryOp(operators.Subtract)),
+		timeOperatorFunction("kro.time.lt", operators.Less, comparable()),
+		timeOperatorFunction("kro.time.le", operators.LessEquals, comparable()),
+		timeOperatorFunction("kro.time.gt", operators.Greater, comparable()),
+		timeOperatorFunction("kro.time.ge", operators.GreaterEquals, comparable()),
+		timeOperatorFunction("kro.time.add", operators.Add, addPairs),
+		timeOperatorFunction("kro.time.sub", operators.Subtract, subPairs),
 
 		// Whitelist: string() is THE escape hatch from requeue solving.
 		cel.Function("string",
@@ -97,13 +208,6 @@ func opName(op string) string {
 		return "sub"
 	}
 	return "unknown"
-}
-
-func resultType(op string) *cel.Type {
-	if op == operators.Add || op == operators.Subtract {
-		return cel.DynType
-	}
-	return cel.BoolType
 }
 
 // kroClockOf returns the reconcile clock if v is a Kro time value.

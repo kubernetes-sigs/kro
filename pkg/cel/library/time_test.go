@@ -379,3 +379,61 @@ func TestDecoratorLeavesPlainOperatorsUntouched(t *testing.T) {
 		}
 	}
 }
+
+// --- Static type safety of the coercion table ---
+
+// checkTime runs parse → rewrite → check and returns the check error (nil if
+// the expression compiles).
+func checkTime(t *testing.T, env *cel.Env, expr string) error {
+	t.Helper()
+	parsed, iss := env.Parse(expr)
+	if iss != nil && iss.Err() != nil {
+		t.Fatalf("parse %q: %v", expr, iss.Err())
+	}
+	parsed, err := kroast.RewriteTimeOperators(parsed)
+	if err != nil {
+		t.Fatalf("rewrite %q: %v", expr, err)
+	}
+	_, iss = env.Check(parsed)
+	if iss != nil && iss.Err() != nil {
+		return iss.Err()
+	}
+	return nil
+}
+
+func TestTypeMismatchesRejectedAtCompileTime(t *testing.T) {
+	env := timeEnv(t)
+	rejected := []string{
+		`time.now() >= "oops"`,                       // ts vs string
+		`time.now() + 1`,                             // ts + int
+		`time.now() - "5m"`,                          // ts - string (must cast duration)
+		`time.now() < duration("5m")`,                // ts vs dur: different kinds
+		`time.now() - time.now() > 5`,                // dur vs int
+		`time.now() + time.now()`,                    // ts + ts
+		`duration("5m") - time.now()`,                // dur - ts
+		`time.now().getSeconds() > 0`,                // calendar accessors not whitelisted
+		`int(time.now())`,                            // only string() escapes the solver
+	}
+	for _, expr := range rejected {
+		if err := checkTime(t, env, expr); err == nil {
+			t.Errorf("%q: expected compile-time rejection, but it type-checked", expr)
+		}
+	}
+
+	accepted := []string{
+		`time.now() >= timestamp(schema.t)`,                        // kro ts vs ts
+		`timestamp(schema.t) <= time.now()`,                        // reversed
+		`time.now() - timestamp(schema.t) > duration("5s")`,        // kro dur vs dur
+		`time.now() + duration("1h") < timestamp(schema.t)`,        // arithmetic then compare
+		`string(time.now())`,                                       // the escape hatch
+		`string(time.now() + duration("1h"))`,                      // arithmetic then escape
+		`timestamp(schema.a) < timestamp(schema.b)`,                // plain ts comparison
+		`size([time.now()]) + 1 > 0`,                               // over-taint: int mirror pairs
+		`cel.bind(d, time.now() + duration("5m"), timestamp(schema.t) < d)`, // bind-carried
+	}
+	for _, expr := range accepted {
+		if err := checkTime(t, env, expr); err != nil {
+			t.Errorf("%q: expected to compile, got: %v", expr, err)
+		}
+	}
+}

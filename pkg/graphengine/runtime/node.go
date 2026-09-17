@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"sort"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -363,6 +365,17 @@ func (n *Node) renderOne(bindings map[string]any) (*unstructured.Unstructured, e
 	// down), so we drop the whole enclosing array field after Resolve — see
 	// below.
 	var omitArrayFields [][]string
+	// omitObjectParents collects the map-key paths of the enclosing object
+	// fields of every data-pending object PROPERTY we omitted. After Resolve
+	// (which strips the omit sentinels, potentially leaving an empty {}), any
+	// of these enclosing objects that became empty is dropped: an empty object
+	// whose properties are typed by the target's status schema is rejected by
+	// the apiserver ("status.<obj>: Invalid"), which froze the instance status
+	// on main instead of trimming like v0.9.4. Dropping the emptied object
+	// keeps the applied object schema-valid and lets SSA prune the
+	// previously-owned field. Deepest-first ordering below collapses nested
+	// empties (dropping a.b empties a, which is then dropped too).
+	var omitObjectParents [][]string
 	for _, v := range n.spec.Variables {
 		val, err := v.Expression.Eval(scope)
 		if err != nil {
@@ -388,6 +401,10 @@ func (n *Node) renderOne(bindings map[string]any) (*unstructured.Unstructured, e
 					// than data-pending the whole node.
 					if isObjectProperty(v.Path) {
 						data[v.Expression.Original] = sentinels.Omit{}
+						// Record every enclosing object field so an object left
+						// empty by omission (all its properties pending) is
+						// dropped after Resolve rather than rendered as {}.
+						omitObjectParents = append(omitObjectParents, enclosingObjectFieldPaths(v.Path)...)
 						continue
 					}
 				}
@@ -407,7 +424,43 @@ func (n *Node) renderOne(bindings map[string]any) (*unstructured.Unstructured, e
 	for _, fields := range omitArrayFields {
 		unstructured.RemoveNestedField(out.Object, fields...)
 	}
+	// Drop enclosing object fields that omission left empty. Deepest paths
+	// first so a nested empty collapses its now-empty parent too. A field is
+	// removed only when it is currently an empty map, so a sibling that still
+	// resolved a property (or a legitimately-empty object the template author
+	// wrote) is untouched.
+	dropEmptyObjectFields(out.Object, omitObjectParents)
 	return out, nil
+}
+
+// dropEmptyObjectFields removes each path in parents that currently points to
+// an empty map[string]any, processing the deepest paths first so removing a
+// nested empty object collapses its parent (which may then also be empty and
+// removed). Paths that are absent, non-map, or non-empty are left untouched.
+func dropEmptyObjectFields(root map[string]any, parents [][]string) {
+	if len(parents) == 0 {
+		return
+	}
+	// Deduplicate and sort deepest-first (longest path first).
+	seen := make(map[string]struct{}, len(parents))
+	uniq := make([][]string, 0, len(parents))
+	for _, p := range parents {
+		if len(p) == 0 {
+			continue
+		}
+		key := strings.Join(p, "\x00")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		uniq = append(uniq, p)
+	}
+	sort.SliceStable(uniq, func(i, j int) bool { return len(uniq[i]) > len(uniq[j]) })
+	for _, p := range uniq {
+		if m, found, _ := unstructured.NestedMap(root, p...); found && len(m) == 0 {
+			unstructured.RemoveNestedField(root, p...)
+		}
+	}
 }
 
 // expand evaluates each forEach axis against the runtime scope and
@@ -492,6 +545,37 @@ func enclosingArrayFieldPath(path string) ([]string, bool) {
 		names = append(names, seg.Name)
 	}
 	return nil, false
+}
+
+// enclosingObjectFieldPaths returns the map-key paths of every enclosing
+// object field of a pure object-property path (one with no array index),
+// ordered outer-most-first EXCLUDING the leaf property itself. For
+// status.extInfo.source it returns [[status extInfo] [status]]; for a
+// top-level status.tag it returns [[status]]. These are the objects that can
+// be left empty when the leaf property is omitted under tolerance; the caller
+// drops whichever became empty. Returns nil for a path that indexes into an
+// array (those are handled by enclosingArrayFieldPath) or fails to parse.
+func enclosingObjectFieldPaths(path string) [][]string {
+	segments, err := fieldpath.Parse(path)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		if seg.Index >= 0 {
+			// Not a pure object property; array handling owns this path.
+			return nil
+		}
+		names = append(names, seg.Name)
+	}
+	// Drop the leaf property; every strict prefix is an enclosing object.
+	var out [][]string
+	for depth := len(names) - 1; depth >= 1; depth-- {
+		prefix := make([]string, depth)
+		copy(prefix, names[:depth])
+		out = append(out, prefix)
+	}
+	return out
 }
 
 // toFieldDescriptors strips ResourceField wrappers down to the bare

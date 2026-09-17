@@ -305,9 +305,10 @@ func compareArrayItems(path string, oldSchema, newSchema *v1.JSONSchemaProps, re
 	}
 }
 
-// compareAdditionalProperties checks map value schemas recursively. Changes
-// between schema and boolean forms are rejected conservatively because they can
-// change both validation and pruning behavior.
+// compareAdditionalProperties checks map value schemas recursively. We cannot
+// safely classify changes between absent, boolean, and schema forms because
+// their compatibility depends on both validation and structural-schema pruning.
+// Fail closed for those changes instead of claiming they are always breaking.
 func compareAdditionalProperties(path string, oldSchema, newSchema *v1.JSONSchemaProps, result *Report) {
 	oldAdditional := oldSchema.AdditionalProperties
 	newAdditional := newSchema.AdditionalProperties

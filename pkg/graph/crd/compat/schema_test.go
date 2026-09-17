@@ -594,6 +594,15 @@ func TestCompareEnumValues(t *testing.T) {
 			expectBreaking:   false,
 			nonBreakingCount: 1,
 		},
+		{
+			name:              "changed enum values",
+			oldEnum:           []v1.JSON{{Raw: []byte("\"value1\"")}, {Raw: []byte("\"removed\"")}},
+			newEnum:           []v1.JSON{{Raw: []byte("\"value1\"")}, {Raw: []byte("\"added\"")}},
+			expectBreaking:    true,
+			breakingCount:     1,
+			nonBreakingCount:  1,
+			checkBreakingType: EnumRestricted,
+		},
 	}
 
 	for _, tt := range tests {

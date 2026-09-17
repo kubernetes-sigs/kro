@@ -216,7 +216,7 @@ func (c Change) Description() string {
 	case FormatRemoved:
 		return fmt.Sprintf("Format %s was removed", c.OldValue)
 	case AdditionalPropertiesChanged:
-		return fmt.Sprintf("Additional properties changed at %s", c.Path)
+		return fmt.Sprintf("Additional properties at %s changed and cannot be classified safely", c.Path)
 	case PreserveUnknownFieldsRemoved:
 		return fmt.Sprintf("Unknown fields are no longer preserved at %s", c.Path)
 	case PreserveUnknownFieldsAdded:

@@ -23,6 +23,11 @@
 // shape does it evaluate the mirrored operation through the kro operand's
 // traits. Any other failure keeps the original error, so the decorator
 // never widens the language.
+//
+// It also wraps equality: `==` and `!=` on a kro time value error at eval
+// time. Typed kro/plain equality is already a compile error; this covers
+// the operands the checker cannot see (dyn) and kro==kro, which would
+// otherwise evaluate without ever recording a requeue.
 package library
 
 import (
@@ -52,10 +57,16 @@ type kroTimeValue interface {
 func TimeOperatorDecorator() cel.ProgramOption {
 	return cel.CustomDecoratorV2(func(i interpreter.InterpretableV2) (interpreter.InterpretableV2, error) {
 		call, ok := i.(interpreter.InterpretableCall)
-		if !ok || !timeReroutableOps[call.Function()] || len(call.Args()) != 2 {
+		if !ok || len(call.Args()) != 2 {
 			return i, nil
 		}
-		return &timeOpCall{InterpretableCall: call}, nil
+		switch fn := call.Function(); {
+		case timeReroutableOps[fn]:
+			return &timeOpCall{InterpretableCall: call}, nil
+		case fn == "_==_" || fn == "_!=_":
+			return &timeEqCall{InterpretableCall: call, negate: fn == "_!=_"}, nil
+		}
+		return i, nil
 	})
 }
 
@@ -146,4 +157,50 @@ func rerouteMirrored(fn string, plain ref.Val, kro kroTimeValue) ref.Val {
 		}
 	}
 	return nil
+}
+
+// timeEqCall wraps an equality call. Equality on a kro time value is a
+// runtime error: it cannot record a requeue, so a gate built on it would
+// silently never fire. The non-kro path mirrors the standard equality
+// semantics (error propagation, unknown merging, types.Equal).
+type timeEqCall struct {
+	interpreter.InterpretableCall
+	negate bool
+}
+
+func (c *timeEqCall) Exec(frame *interpreter.ExecutionFrame) ref.Val {
+	args := c.Args()
+	return c.equal(args[0].Exec(frame), args[1].Exec(frame))
+}
+
+func (c *timeEqCall) Eval(a interpreter.Activation) ref.Val {
+	args := c.Args()
+	return c.equal(args[0].Eval(a), args[1].Eval(a))
+}
+
+func (c *timeEqCall) equal(l, r ref.Val) ref.Val {
+	if types.IsError(l) {
+		return l
+	}
+	if types.IsError(r) {
+		return r
+	}
+	var unk *types.Unknown
+	unk, _ = types.MaybeMergeUnknowns(l, unk)
+	unk, _ = types.MaybeMergeUnknowns(r, unk)
+	if unk != nil {
+		return unk
+	}
+	_, lKro := l.(kroTimeValue)
+	_, rKro := r.(kroTimeValue)
+	if lKro || rKro {
+		return types.NewErr("equality is not supported on time values; use ordered comparisons (<, <=, >, >=)")
+	}
+	eq := types.Equal(l, r)
+	if c.negate {
+		if b, ok := eq.(types.Bool); ok {
+			return !b
+		}
+	}
+	return eq
 }

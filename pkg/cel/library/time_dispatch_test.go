@@ -170,6 +170,10 @@ func TestDispatchRejectsIllTyped(t *testing.T) {
 		// ternaries cannot join kro with plain or cross-kind values
 		`true ? time.now() : timestamp("2026-01-01T00:00:00Z")`,
 		`true ? time.now() : duration("5m")`,
+		// typed equality and membership need type agreement
+		`time.now() == timestamp("2026-01-01T00:00:00Z")`,
+		`timestamp("2026-01-01T00:00:00Z") != time.now()`,
+		`time.now() in [timestamp("2026-01-01T00:00:00Z")]`,
 	} {
 		if _, iss := env.Compile(expr); iss == nil || iss.Err() == nil {
 			t.Errorf("%q: expected compile rejection", expr)
@@ -211,6 +215,67 @@ func TestDispatchIllegalDynPairsFailLoudly(t *testing.T) {
 		})
 		if err == nil {
 			t.Errorf("%q: expected loud eval error for illegal pairing", expr)
+		}
+	}
+}
+
+// TestDispatchEqualityRejectedAtRuntime: equality shapes the checker cannot
+// reject (dyn operands, kro==kro) error at eval instead of silently
+// evaluating — an equality gate records no requeue.
+func TestDispatchEqualityRejectedAtRuntime(t *testing.T) {
+	env := dispatchEnv(t)
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	vars := map[string]any{"schema": map[string]any{"x": now.Format(time.RFC3339)}}
+
+	for _, expr := range []string{
+		`time.now() == schema.x`,
+		`schema.x == time.now()`,
+		`time.now() != schema.x`,
+		`time.now() == time.now()`,
+		`(time.now() - time.now()) == schema.x`,
+	} {
+		ast, iss := env.Compile(expr)
+		if iss != nil && iss.Err() != nil {
+			t.Errorf("%q: unexpected compile error: %v", expr, iss.Err())
+			continue
+		}
+		prog, err := env.Program(ast, TimeOperatorDecorator())
+		if err != nil {
+			t.Fatalf("%q: program: %v", expr, err)
+		}
+		scope := map[string]any{TimeVarName: NewTimeValue(now)}
+		for k, v := range vars {
+			scope[k] = v
+		}
+		_, _, err = prog.Eval(scope)
+		if err == nil {
+			t.Errorf("%q: expected runtime rejection", expr)
+		} else if !strings.Contains(err.Error(), "equality is not supported on time values") {
+			t.Errorf("%q: wrong error: %v", expr, err)
+		}
+	}
+
+	// Plain equality is untouched by the wrapper.
+	for expr, want := range map[string]any{
+		`schema.x == schema.x`:             true,
+		`1 != 2`:                           true,
+		`"a" == "b"`:                       false,
+		`schema.x == "nope" ? "eq" : "ne"`: "ne",
+	} {
+		ast, iss := env.Compile(expr)
+		if iss != nil && iss.Err() != nil {
+			t.Fatalf("%q: compile: %v", expr, iss.Err())
+		}
+		prog, _ := env.Program(ast, TimeOperatorDecorator())
+		scope := map[string]any{TimeVarName: NewTimeValue(now)}
+		for k, v := range vars {
+			scope[k] = v
+		}
+		out, _, err := prog.Eval(scope)
+		if err != nil {
+			t.Errorf("%q: eval: %v", expr, err)
+		} else if out.Value() != want {
+			t.Errorf("%q = %v, want %v", expr, out.Value(), want)
 		}
 	}
 }

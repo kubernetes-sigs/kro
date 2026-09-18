@@ -20,6 +20,7 @@ package library
 // correct solved flip.
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -130,19 +131,59 @@ func TestDispatchBehavioralCorpus(t *testing.T) {
 	}
 }
 
-// TestDispatchRejectsIllTyped: undeclared pairings are rejected at compile
-// time with the real operator name.
+// TestDispatchRejectsIllTyped: anything outside the declared surface is a
+// compile error. Grouped by the rule that rejects it.
 func TestDispatchRejectsIllTyped(t *testing.T) {
 	env := dispatchEnv(t)
 	for _, expr := range []string{
+		// wrong operand types, kro on the left
 		`time.now() >= "oops"`,
 		`time.now() + 1`,
-		`duration("5m") - time.now()`, // dur − ts is not a KREP operation
+		`time.now() < 5`,
+		`time.now() * 2`,
+		// wrong operand types, kro on the right
+		`"oops" >= time.now()`,
+		`1 + time.now()`,
+		`2 * time.now()`,
+		// operations between time values that are not defined
+		`time.now() + time.now()`,                                       // ts + ts
+		`duration("5m") - time.now()`,                                   // dur − ts
+		`time.now() < duration("5m")`,                                   // cross-kind comparison
+		`duration("5m") > time.now()`,                                   // cross-kind, reversed
+		`(time.now() - time.now()) < timestamp("2026-01-01T00:00:00Z")`, // dur vs ts
+		// unary minus is declared only on kro.Duration
+		`-time.now()`,
+		// conversions out of the solver (string() is the only exit)
 		`int(time.now())`,
+		`double(time.now())`,
+		`int(time.now() - time.now())`,
+		`duration(time.now())`,
+		`timestamp(time.now() - time.now())`,
+		// calendar accessors are not part of the surface
+		`time.now().getSeconds()`,
+		`time.now().getHours()`,
+		`time.now().getDayOfWeek()`,
+		`time.now().getFullYear()`,
+		`(time.now() - time.now()).getHours()`,
+		// unknown members on the time scope
+		`time.later()`,
+		// ternaries cannot join kro with plain or cross-kind values
+		`true ? time.now() : timestamp("2026-01-01T00:00:00Z")`,
+		`true ? time.now() : duration("5m")`,
 	} {
 		if _, iss := env.Compile(expr); iss == nil || iss.Err() == nil {
 			t.Errorf("%q: expected compile rejection", expr)
 		}
+	}
+
+	// The errors name the real operator, so RGD authors see e.g. "_+_"
+	// rather than an internal function.
+	_, iss := env.Compile(`time.now() + 1`)
+	if iss == nil || iss.Err() == nil {
+		t.Fatal("expected compile rejection")
+	}
+	if !strings.Contains(iss.Err().Error(), "_+_") {
+		t.Errorf("error should name the operator, got: %v", iss.Err())
 	}
 }
 

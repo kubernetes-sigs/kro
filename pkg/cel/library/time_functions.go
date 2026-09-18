@@ -12,24 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// time_functions.go declares the CEL surface for the honest kro.Timestamp /
-// kro.Duration types:
+// time_functions.go declares the CEL surface for kro.Timestamp and
+// kro.Duration:
 //
-//  1. DECLARATION-ONLY overload merges on the standard operators, in BOTH
-//     operand orders. cel-go forbids attaching custom BINDINGS to standard
-//     operators (#990), but overload DECLARATIONS merge cleanly: the
-//     checker learns every KREP-legal kro pairing, and anything undeclared
-//     (`time.now() + 1`, `>= "oops"`, dur − kroTs) fails closed at check
-//     time with the real operator name. At runtime, kro-on-LEFT rides the
-//     standard singleton's left-operand trait dispatch into the affine
-//     solver (time.go); kro-on-RIGHT is rerouted by the plan-time
-//     decorator (time_dispatch.go). No AST rewriting exists.
+//  1. Declaration-only overloads on the standard operators, in both operand
+//     orders. Undeclared pairings fail at check time with the real operator
+//     name. At runtime, kro-on-left dispatches through the operand's traits
+//     (time.go); kro-on-right is routed by the decorator
+//     (time_dispatch.go).
 //
-//  2. The explicit whitelist on standard FUNCTIONS: string() is the
-//     sanctioned escape hatch (renders RFC3339 / duration string, records
-//     no requeue), and timestamp()/duration() are identity casts that keep
-//     the value inside the solver. Everything else fails closed: an honest
-//     type matches no other standard overload.
+//  2. A whitelist on standard functions: string() renders the value and
+//     exits the solver; timestamp() and duration() are identity casts.
+//     Everything else matches no overload and fails closed.
 package library
 
 import (
@@ -47,14 +41,9 @@ type operandPair struct {
 	res  *cel.Type
 }
 
-// The coercion table: exactly the operations the affine solver defines
-// (KREP-025 definitions table), declared in BOTH operand orders. Runtime
-// dispatch: kro-on-LEFT rides the standard singleton's left-operand trait
-// dispatch; kro-on-RIGHT is rerouted by the plan-time decorator
-// (time_dispatch.go). No AST rewriting anywhere.
-// An ill-typed pairing (`time.now() >= "oops"`, `time.now() + 1`) matches
-// no declaration and is rejected by the checker like any other unknown
-// type combination — with the REAL operator name in the error.
+// The coercion table: exactly the operations the affine solver defines,
+// declared in both operand orders. Ill-typed pairings (`time.now() + 1`,
+// `>= "oops"`) match no declaration and are rejected at check time.
 var (
 	// comparisons: like kinds only.
 	kroComparablePairs = []operandPair{
@@ -62,7 +51,7 @@ var (
 		{"krots_ts", KroTimestampType, cel.TimestampType, cel.BoolType},
 		{"krodur_krodur", KroDurationType, KroDurationType, cel.BoolType},
 		{"krodur_dur", KroDurationType, cel.DurationType, cel.BoolType},
-		// reversed orders (runtime via decorator reroute)
+		// reversed orders
 		{"ts_krots", cel.TimestampType, KroTimestampType, cel.BoolType},
 		{"dur_krodur", cel.DurationType, KroDurationType, cel.BoolType},
 	}
@@ -75,7 +64,7 @@ var (
 		{"krodur_krots", KroDurationType, KroTimestampType, KroTimestampType},
 		{"krodur_dur", KroDurationType, cel.DurationType, KroDurationType},
 		{"krodur_krodur", KroDurationType, KroDurationType, KroDurationType},
-		// reversed orders (runtime via decorator reroute)
+		// reversed orders
 		{"ts_krodur", cel.TimestampType, KroDurationType, KroTimestampType},
 		{"dur_krots", cel.DurationType, KroTimestampType, KroTimestampType},
 		{"dur_krodur", cel.DurationType, KroDurationType, KroDurationType},
@@ -89,8 +78,7 @@ var (
 		{"krots_krodur", KroTimestampType, KroDurationType, KroTimestampType},
 		{"krodur_dur", KroDurationType, cel.DurationType, KroDurationType},
 		{"krodur_krodur", KroDurationType, KroDurationType, KroDurationType},
-		// reversed orders (runtime via decorator reroute); note dur−kroTs
-		// stays UNDECLARED — it is not a KREP operation.
+		// reversed orders; dur−kroTs stays undeclared (not a KREP operation)
 		{"ts_krots", cel.TimestampType, KroTimestampType, KroDurationType},
 		{"ts_krodur", cel.TimestampType, KroDurationType, KroTimestampType},
 		{"dur_krodur", cel.DurationType, KroDurationType, KroDurationType},
@@ -98,7 +86,7 @@ var (
 )
 
 // operatorDeclarations merges the kro pairs onto op as declaration-only
-// overloads (no bindings — the standard singleton + traits carry runtime).
+// overloads; runtime dispatch is traits + the decorator.
 func operatorDeclarations(op, prefix string, pairs []operandPair) cel.EnvOption {
 	opts := make([]cel.FunctionOpt, 0, len(pairs))
 	for _, p := range pairs {
@@ -123,19 +111,19 @@ func timeFunctionDeclarations() []cel.EnvOption {
 		operatorDeclarations(operators.GreaterEquals, "ge", kroComparablePairs),
 		operatorDeclarations(operators.Add, "add", kroAddPairs),
 		operatorDeclarations(operators.Subtract, "sub", kroSubPairs),
-		// Unary minus on kro.Duration (Negater trait), used by the
-		// decorator's plain−kro reroute: a − b ⇒ −(b − a) / (−b) + a.
+		// Unary minus on kro.Duration (Negater trait); also used by the
+		// decorator's subtraction reroute.
 		cel.Function(operators.Negate,
 			cel.Overload("kro_time_neg_krodur", []*cel.Type{KroDurationType}, KroDurationType)),
 
-		// Whitelist: string() is THE escape hatch from requeue solving.
+		// string() is the escape hatch from requeue solving.
 		cel.Function("string",
 			cel.Overload("kro_timestamp_to_string", []*cel.Type{KroTimestampType}, cel.StringType,
 				cel.UnaryBinding(toString))),
 		cel.Function("string",
 			cel.Overload("kro_duration_to_string", []*cel.Type{KroDurationType}, cel.StringType,
 				cel.UnaryBinding(toString))),
-		// Identity casts: timestamp(time.now()) stays a solver value.
+		// Identity casts keep values inside the solver.
 		cel.Function("timestamp",
 			cel.Overload("kro_timestamp_identity", []*cel.Type{KroTimestampType}, KroTimestampType,
 				cel.UnaryBinding(identity))),

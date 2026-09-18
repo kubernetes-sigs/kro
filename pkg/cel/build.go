@@ -36,10 +36,8 @@ func SchemaDeclType(s *spec.Schema) *apiservercel.DeclType {
 // AST. It performs no compilation and no caching; callers layer their own
 // per-build memoization on top.
 func ParseAndCheck(env *cel.Env, expr string) (*cel.Ast, error) {
-	// KREP-025 needs no compile-time rewriting: kro time operations are
-	// declared in both operand orders (library/time_functions.go) and
-	// runtime routing is handled by the standard singleton's left-trait
-	// dispatch plus the plan-time decorator (library/time_dispatch.go).
+	// Kro time operations are fully declared (library/time_functions.go)
+	// and routed at eval time (library/time_dispatch.go).
 	checked, issues := env.Compile(expr)
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()

@@ -38,9 +38,8 @@ const (
 func ProgramOptions(costLimit uint64) []cel.ProgramOption {
 	opts := []cel.ProgramOption{
 		cel.InterruptCheckFrequency(DefaultInterruptCheckFrequency),
-		// KREP-025: reroute standard operators whose RIGHT operand is a kro
-		// time value through the kro operand's traits at eval time. See
-		// pkg/cel/library/time_dispatch.go.
+		// Route kro time values on the right of standard operators
+		// (library/time_dispatch.go).
 		library.TimeOperatorDecorator(),
 	}
 	if costLimit > 0 {

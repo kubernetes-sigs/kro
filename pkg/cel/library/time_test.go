@@ -37,12 +37,9 @@ func timeEnv(t *testing.T) *cel.Env {
 	return env
 }
 
-// evalTime compiles directly (both operand orders are declared) and runs
-// the program with the time operator decorator, mirroring production
-// (krocel.ProgramOptions), and
-// evaluates expr with `time` fixed at now, returning the result and the
-// TimeVal (for flip inspection). Mirrors krocel.ParseAndCheck, which cannot
-// be imported here (pkg/cel imports this package).
+// evalTime compiles expr, runs it with the time operator decorator and
+// `time` fixed at now, and returns the result and the TimeVal (for flip
+// inspection).
 func evalTime(t *testing.T, env *cel.Env, expr string, now time.Time, vars map[string]any) (any, *TimeVal) {
 	t.Helper()
 	ast, iss := env.Compile(expr)
@@ -366,8 +363,8 @@ func TestDecoratorLeavesPlainOperatorsUntouched(t *testing.T) {
 
 // --- Static type safety of the coercion table ---
 
-// checkTime runs parse → rewrite → check and returns the check error (nil if
-// the expression compiles).
+// checkTime compiles expr and returns the check error (nil if it
+// compiles).
 func checkTime(t *testing.T, env *cel.Env, expr string) error {
 	t.Helper()
 	if _, iss := env.Compile(expr); iss != nil && iss.Err() != nil {

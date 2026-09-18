@@ -28,10 +28,10 @@
 // KroTimestamp and KroDuration are HONEST, intentionally-limited CEL types
 // (kro.Timestamp / kro.Duration) per the KREP's "separate types" design.
 // They match no standard overload, so any use that has not been explicitly
-// whitelisted fails closed at type-check or dispatch time. Operators reach
-// them through the standard operators (two-sided declarations + decorator)
-// (pkg/cel/library/time_dispatch.go); string() and identity timestamp()/duration()
-// casts are whitelisted in time_functions.go.
+// whitelisted fails closed at type-check or dispatch time. Operators are
+// declared in time_functions.go and routed at runtime by traits and the
+// decorator (time_dispatch.go); string() and the identity casts are the
+// whitelist.
 package library
 
 import (
@@ -57,18 +57,14 @@ var TimeType = types.NewOpaqueType("kro.Time")
 var (
 	kroTimeTraits = traits.AdderType | traits.SubtractorType | traits.ComparerType
 
-	// kro.Duration additionally negates: the rewrite's plain−kro
-	// normalization emits −(kroDur), dispatched via the Negater trait.
+	// kro.Duration additionally negates (Negater trait), used by the
+	// decorator's subtraction reroute.
 	kroDurationTraits = kroTimeTraits | traits.NegatorType
 
-	// KroTimestampType and KroDurationType are the honest static AND runtime
-	// types of time.now()-derived values (KREP-025 "separate types"). They
-	// are intentionally NOT the native CEL timestamp/duration types: every
-	// standard function or conversion that has not been explicitly
-	// whitelisted fails closed with a no-such-overload error, keeping the
-	// values inside the requeue solver. Operators reach these values through
-	// the kro.time.* functions installed by the AST rewrite
-	// (pkg/cel/library/time_dispatch.go).
+	// KroTimestampType and KroDurationType are the honest static and
+	// runtime types of time.now()-derived values. They are intentionally
+	// NOT the native CEL timestamp/duration types: anything unwhitelisted
+	// fails closed, keeping values inside the requeue solver.
 	KroTimestampType = types.NewObjectType("kro.Timestamp", kroTimeTraits)
 	KroDurationType  = types.NewObjectType("kro.Duration", kroDurationTraits)
 )

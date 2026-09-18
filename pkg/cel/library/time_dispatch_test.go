@@ -14,11 +14,10 @@
 
 package library
 
-// Behavioral corpus for the operator dispatch architecture: two-sided
-// declarations + standard-singleton left-trait dispatch + the plan-time
-// decorator (time_dispatch.go). No AST rewriting exists; every case here
-// compiles directly and must produce the correct value AND the correct
-// solved flip.
+// Behavioral corpus for the time operator surface: declarations
+// (time_functions.go), trait dispatch (time.go), and the decorator
+// (time_dispatch.go). Every case must produce the correct value and the
+// correct solved flip.
 
 import (
 	"testing"
@@ -78,19 +77,14 @@ func TestDispatchBehavioralCorpus(t *testing.T) {
 		{`cel.bind(x, [time.now()], x.map(x, timestamp(schema.openAt) < x)[0])`, false, 5 * time.Minute},
 		{`[time.now()].map(x, timestamp(schema.openAt) <= x)[0]`, false, 5 * time.Minute},
 
-		// ── the two cases that killed previous architectures ──
-
-		// DYN-AGE (killed the TypeMap-directed rewrite): kro-ness laundered
-		// through a dyn-infected subtraction, then used on the RHS of +.
-		// Value-level dispatch does not care what the checker knew.
-		// expiry + (now − expiry) ≡ now, so the gate is now >= expiry:
-		// false until expiry, flipping at +10m.
+		// kro value carried through a dyn-typed binding, then used on the
+		// RHS of +. expiry + (now − expiry) ≡ now, so the gate is
+		// now >= expiry: false until expiry, flipping at +10m.
 		{`cel.bind(age, time.now() - timestamp(schema.expiry), timestamp(schema.expiry) + age >= timestamp(schema.expiry))`, false, 10 * time.Minute},
-		// MAP-SELECT (killed the syntactic walkers): kro value reached
-		// through a map-literal field, on the comparison's RHS.
+		// kro value reached through a map-literal field, on the RHS.
 		{`cel.bind(m, {"t": time.now()}, timestamp(schema.openAt) <= m.t)`, false, 5 * time.Minute},
-		// ternary-guarded gate (exercises the Eval() entry point of the
-		// decorator wrapper; conditionals drive children via Eval).
+		// ternary gate: conditionals drive children via Eval, covering the
+		// wrapper's Eval entry point.
 		{`timestamp(schema.openAt) <= time.now() ? "open" : "closed"`, "closed", 5 * time.Minute},
 	}
 
@@ -136,9 +130,8 @@ func TestDispatchBehavioralCorpus(t *testing.T) {
 	}
 }
 
-// TestDispatchRejectsIllTyped: fail-closed pairings are rejected at compile
-// time with the real operator name — declarations cover only KREP-legal
-// pairs, in both orders.
+// TestDispatchRejectsIllTyped: undeclared pairings are rejected at compile
+// time with the real operator name.
 func TestDispatchRejectsIllTyped(t *testing.T) {
 	env := dispatchEnv(t)
 	for _, expr := range []string{
@@ -153,9 +146,8 @@ func TestDispatchRejectsIllTyped(t *testing.T) {
 	}
 }
 
-// TestDispatchIllegalDynPairsFailLoudly: illegal pairings that reach eval
-// through dyn must error, not silently succeed — the decorator only rescues
-// KREP-legal shapes.
+// TestDispatchIllegalDynPairsFailLoudly: illegal pairings reaching eval
+// through dyn error loudly; the decorator only reroutes KREP operations.
 func TestDispatchIllegalDynPairsFailLoudly(t *testing.T) {
 	env := dispatchEnv(t)
 	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)

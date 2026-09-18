@@ -12,44 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// time_dispatch.go — plan-time operator interception for kro time values on
-// the RIGHT of standard operators.
+// time_dispatch.go routes kro time values appearing on the RIGHT of a
+// standard operator.
 //
-// Runtime dispatch model (verified against cel-go v0.31 internals):
-// standard operators are SINGLETON bindings that dispatch through the LEFT
-// operand's trait interface (common/stdlib/standard.go, e.g.
-// `lhs.(traits.Comparer).Compare(rhs)`), gated by evalBinary's
-// `lVal.Type().HasTrait(...)`. Kro time values implement those traits, so a
-// kro value on the LEFT already routes into kro's affine solver with no
-// help. A kro value on the RIGHT of a plain operand, however, reaches the
-// plain type's method (e.g. types.Timestamp.Compare), which type-asserts
-// the RHS and returns a no-such-overload error — flip collection lost.
-//
-// This decorator closes exactly that residue. Following the shipped
-// decRegexProgramSizeLimit precedent (interpreter/decorators.go), it wraps
-// each planned binary time-capable operator call in a thin node whose Exec:
-//
-//  1. delegates to the underlying stdlib node (zero-cost fast path: all
-//     plain-only and kro-on-LHS evaluations complete here);
-//
-//  2. only if that returned an error, re-evaluates the operands (CEL
-//     evaluation is pure, so this is safe) and, when the failure shape is
-//     (plain LHS, kro RHS), reroutes through the kro operand's traits using
-//     the mirrored operation:
-//
-//     a <  b  ⇒ b.Compare(a) == 1        a +  b  ⇒ b.Add(a)
-//     a <= b  ⇒ b.Compare(a) != -1       a − kroTs  ⇒ −(kroTs − a)
-//     a >  b  ⇒ b.Compare(a) == -1       a − kroDur ⇒ (−kroDur) + a
-//     a >= b  ⇒ b.Compare(a) != 1
-//
-//     Any other failure (including genuinely illegal pairs like
-//     duration − kro.Timestamp) returns the ORIGINAL error unchanged, so
-//     the decorator can only rescue KREP-legal operations, never widen the
-//     language.
-//
-// This never re-binds a standard operator (no cel-go #990 conflict), never
-// changes what type-checks (it runs strictly after a successful check), and
-// costs one wrapper allocation per operator node at plan time.
+// Standard operators dispatch through the LEFT operand's traits, so a kro
+// value on the left reaches the solver directly. A kro value on the right
+// reaches the plain operand's method, which errors on the foreign type.
+// The decorator wraps the six time-capable binary operators: it delegates
+// first, and only when that errored with a (plain LHS, kro RHS) operand
+// shape does it evaluate the mirrored operation through the kro operand's
+// traits. Any other failure keeps the original error, so the decorator
+// never widens the language.
 package library
 
 import (
@@ -60,25 +33,22 @@ import (
 	"github.com/google/cel-go/interpreter"
 )
 
-// timeReroutableOps are the binary operators whose kro-on-RHS evaluations
-// the decorator rescues. Unary minus needs no wrapping (single operand,
-// trait dispatch already reaches kro values).
+// timeReroutableOps are the binary operators the decorator wraps. Unary
+// minus dispatches on its only operand and needs no wrapping.
 var timeReroutableOps = map[string]bool{
 	"_<_": true, "_<=_": true, "_>_": true, "_>=_": true,
 	"_+_": true, "_-_": true,
 }
 
-// kroTimeValue matches the solver-tracked time values via their marker
-// method (same contract as the render guard in pkg/cel/conversion).
+// kroTimeValue matches solver-tracked time values via their marker method.
 type kroTimeValue interface {
 	ref.Val
 	KroTimeSolverValue()
 }
 
-// TimeOperatorDecorator returns the ProgramOption installing the plan-time
-// wrapper. It must be applied to every program that may evaluate time
-// expressions; kro funnels all program construction through
-// krocel.ProgramOptions, which installs it.
+// TimeOperatorDecorator returns the ProgramOption installing the operator
+// wrapper. Every program that may evaluate time expressions needs it;
+// krocel.ProgramOptions installs it for all kro programs.
 func TimeOperatorDecorator() cel.ProgramOption {
 	return cel.CustomDecoratorV2(func(i interpreter.InterpretableV2) (interpreter.InterpretableV2, error) {
 		call, ok := i.(interpreter.InterpretableCall)
@@ -89,13 +59,12 @@ func TimeOperatorDecorator() cel.ProgramOption {
 	})
 }
 
-// timeOpCall wraps a planned binary operator call, delegating on the fast
-// path and rerouting the (plain LHS, kro RHS) failure shape.
+// timeOpCall wraps a planned binary operator call.
 type timeOpCall struct {
 	interpreter.InterpretableCall
 }
 
-// Exec covers the ExecutionFrame evaluation path (top-level program eval).
+// Exec covers the ExecutionFrame evaluation path.
 func (c *timeOpCall) Exec(frame *interpreter.ExecutionFrame) ref.Val {
 	out := c.InterpretableCall.Exec(frame)
 	if !types.IsError(out) {
@@ -105,10 +74,9 @@ func (c *timeOpCall) Exec(frame *interpreter.ExecutionFrame) ref.Val {
 	return c.recover(out, args[0].Exec(frame), args[1].Exec(frame))
 }
 
-// Eval covers the Activation evaluation path. Some planned parents (e.g.
-// conditional attributes) drive children through Interpretable.Eval; with Go
-// embedding, an Exec-only override would be bypassed there, so both entry
-// points reroute.
+// Eval covers the Activation evaluation path. Conditionals drive children
+// through Eval, so both entry points must reroute (Go embedding would
+// otherwise bypass an Exec-only override).
 func (c *timeOpCall) Eval(a interpreter.Activation) ref.Val {
 	out := c.InterpretableCall.Eval(a)
 	if !types.IsError(out) {
@@ -118,8 +86,8 @@ func (c *timeOpCall) Eval(a interpreter.Activation) ref.Val {
 	return c.recover(out, args[0].Eval(a), args[1].Eval(a))
 }
 
-// recover reroutes the (plain LHS, kro RHS) failure shape; any other
-// failure keeps the original error.
+// recover reroutes the (plain LHS, kro RHS) failure shape; anything else
+// keeps the original error.
 func (c *timeOpCall) recover(out, l, r ref.Val) ref.Val {
 	if _, lIsKro := l.(kroTimeValue); lIsKro || types.IsError(l) {
 		return out // kro-on-LHS failures are genuine; keep the original error
@@ -134,13 +102,12 @@ func (c *timeOpCall) recover(out, l, r ref.Val) ref.Val {
 	return out
 }
 
-// rerouteMirrored evaluates `plain OP kro` through the kro operand's traits.
-// Returns nil when the pairing is not a KREP-legal operation, in which case
-// the caller surfaces the original error.
+// rerouteMirrored evaluates `plain OP kro` through the kro operand's
+// traits. Returns nil for pairings that are not KREP operations.
 func rerouteMirrored(fn string, plain ref.Val, kro kroTimeValue) ref.Val {
 	switch fn {
 	case "_+_":
-		// Addition is commutative across the KREP table.
+		// Addition is commutative.
 		return kro.(traits.Adder).Add(plain)
 
 	case "_-_":
@@ -156,8 +123,7 @@ func rerouteMirrored(fn string, plain ref.Val, kro kroTimeValue) ref.Val {
 			}
 			return d.(traits.Negater).Negate()
 		case *KroDuration:
-			// a − kroDur ⇒ (−kroDur) + a; the Add lifts (and rejects
-			// non-time a with a precise error).
+			// a − kroDur ⇒ (−kroDur) + a; Add rejects non-time a.
 			return k.Negate().(traits.Adder).Add(plain)
 		}
 		return nil

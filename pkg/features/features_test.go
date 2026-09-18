@@ -31,6 +31,8 @@ func TestDefaultFeatureGatesAreDisabled(t *testing.T) {
 		"InstanceConditionMetrics should be disabled by default (Alpha)")
 	assert.False(t, FeatureGate.Enabled(CELOmitFunction),
 		"CELOmitFunction should be disabled by default (Alpha)")
+	assert.False(t, FeatureGate.Enabled(StrictCRDCompatibilityChecks),
+		"strict-crd-compatibility-checks should be disabled by default (Alpha)")
 }
 
 // TestEnableFeatureViaSet verifies that a feature can be enabled by calling
@@ -76,4 +78,5 @@ func TestKnownFeaturesContainsAllRegistered(t *testing.T) {
 	assert.Contains(t, knownStr, string(InstanceConditionEvents))
 	assert.Contains(t, knownStr, string(InstanceConditionMetrics))
 	assert.Contains(t, knownStr, string(CELOmitFunction))
+	assert.Contains(t, knownStr, string(StrictCRDCompatibilityChecks))
 }

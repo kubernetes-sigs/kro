@@ -402,7 +402,7 @@ func TestCompareProperties(t *testing.T) {
 			}
 
 			result := &Report{}
-			compareProperties("root", oldSchema, newSchema, result)
+			compareProperties("root", oldSchema, newSchema, result, false)
 
 			if tt.breakingCount > 0 {
 				assert.True(t, result.HasBreakingChanges(), "Expected breaking changes")
@@ -559,12 +559,28 @@ func TestCompareEnumValues(t *testing.T) {
 		breakingCount     int
 		nonBreakingCount  int
 		checkBreakingType ChangeType
+		strictChecks      bool
 	}{
 		{
 			name:           "identical enums",
 			oldEnum:        []v1.JSON{{Raw: []byte("\"value1\"")}},
 			newEnum:        []v1.JSON{{Raw: []byte("\"value1\"")}},
 			expectBreaking: false,
+		},
+		{
+			name:              "added enum constraint",
+			newEnum:           []v1.JSON{{Raw: []byte("\"value1\"")}},
+			expectBreaking:    true,
+			breakingCount:     1,
+			checkBreakingType: EnumConstraintAdded,
+			strictChecks:      true,
+		},
+		{
+			name:             "removed enum constraint",
+			oldEnum:          []v1.JSON{{Raw: []byte("\"value1\"")}},
+			expectBreaking:   false,
+			nonBreakingCount: 1,
+			strictChecks:     true,
 		},
 		{
 			name:              "removed enum value",
@@ -581,6 +597,15 @@ func TestCompareEnumValues(t *testing.T) {
 			expectBreaking:   false,
 			nonBreakingCount: 1,
 		},
+		{
+			name:              "changed enum values",
+			oldEnum:           []v1.JSON{{Raw: []byte("\"value1\"")}, {Raw: []byte("\"removed\"")}},
+			newEnum:           []v1.JSON{{Raw: []byte("\"value1\"")}, {Raw: []byte("\"added\"")}},
+			expectBreaking:    true,
+			breakingCount:     1,
+			nonBreakingCount:  1,
+			checkBreakingType: EnumRestricted,
+		},
 	}
 
 	for _, tt := range tests {
@@ -595,7 +620,7 @@ func TestCompareEnumValues(t *testing.T) {
 			}
 
 			result := &Report{}
-			compareEnumValues("root", oldSchema, newSchema, result)
+			compareEnumValues("root", oldSchema, newSchema, result, tt.strictChecks)
 
 			if tt.expectBreaking {
 				assert.True(t, result.HasBreakingChanges(), "Expected breaking changes")
@@ -682,7 +707,7 @@ func TestCompareArrayItems(t *testing.T) {
 			}
 
 			result := &Report{}
-			compareArrayItems("root", oldSchema, newSchema, result)
+			compareArrayItems("root", oldSchema, newSchema, result, false)
 
 			if tt.expectBreaking {
 				assert.True(t, result.HasBreakingChanges(), "Expected breaking changes")

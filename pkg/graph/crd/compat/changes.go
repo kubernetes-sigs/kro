@@ -24,13 +24,21 @@ type ChangeType string
 
 const (
 	// Breaking change types
-	PropertyRemoved        ChangeType = "PROPERTY_REMOVED"
-	TypeChanged            ChangeType = "TYPE_CHANGED"
-	RequiredAdded          ChangeType = "REQUIRED_ADDED"
-	EnumRestricted         ChangeType = "ENUM_RESTRICTED"
-	PatternChanged         ChangeType = "PATTERN_CHANGED"
-	PatternAdded           ChangeType = "PATTERN_ADDED"
-	RequiredDefaultRemoved ChangeType = "REQUIRED_DEFAULT_REMOVED"
+	PropertyRemoved              ChangeType = "PROPERTY_REMOVED"
+	TypeChanged                  ChangeType = "TYPE_CHANGED"
+	RequiredAdded                ChangeType = "REQUIRED_ADDED"
+	EnumRestricted               ChangeType = "ENUM_RESTRICTED"
+	EnumConstraintAdded          ChangeType = "ENUM_CONSTRAINT_ADDED"
+	PatternChanged               ChangeType = "PATTERN_CHANGED"
+	PatternAdded                 ChangeType = "PATTERN_ADDED"
+	RequiredDefaultRemoved       ChangeType = "REQUIRED_DEFAULT_REMOVED"
+	ValidationRulesChanged       ChangeType = "VALIDATION_RULES_CHANGED"
+	NullableRemoved              ChangeType = "NULLABLE_REMOVED"
+	FormatChanged                ChangeType = "FORMAT_CHANGED"
+	AdditionalPropertiesChanged  ChangeType = "ADDITIONAL_PROPERTIES_CHANGED"
+	PreserveUnknownFieldsRemoved ChangeType = "PRESERVE_UNKNOWN_FIELDS_REMOVED"
+	TopologyChanged              ChangeType = "TOPOLOGY_CHANGED"
+	UnclassifiedSchemaChange     ChangeType = "UNCLASSIFIED_SCHEMA_CHANGE"
 
 	// Breaking - constraint tightened
 	MinimumAdded       ChangeType = "MINIMUM_ADDED"
@@ -52,8 +60,12 @@ const (
 	DefaultChanged                  ChangeType = "DEFAULT_CHANGED"
 	RequiredRemoved                 ChangeType = "REQUIRED_REMOVED"
 	EnumExpanded                    ChangeType = "ENUM_EXPANDED"
+	EnumConstraintRemoved           ChangeType = "ENUM_CONSTRAINT_REMOVED"
 	PatternRemoved                  ChangeType = "PATTERN_REMOVED"
 	AdditionalPrinterColumnsChanged ChangeType = "ADDITIONAL_PRINTER_COLUMNS_CHANGED"
+	NullableAdded                   ChangeType = "NULLABLE_ADDED"
+	FormatRemoved                   ChangeType = "FORMAT_REMOVED"
+	PreserveUnknownFieldsAdded      ChangeType = "PRESERVE_UNKNOWN_FIELDS_ADDED"
 
 	// Non-breaking - constraint relaxed
 	MinimumRemoved     ChangeType = "MINIMUM_REMOVED"
@@ -181,6 +193,10 @@ func (c Change) Description() string {
 		return fmt.Sprintf("Enum value %s was removed", c.OldValue)
 	case EnumExpanded:
 		return fmt.Sprintf("Enum value %s was added", c.NewValue)
+	case EnumConstraintAdded:
+		return fmt.Sprintf("Enum constraint %s was added", c.NewValue)
+	case EnumConstraintRemoved:
+		return fmt.Sprintf("Enum constraint %s was removed", c.OldValue)
 	case PatternChanged:
 		return fmt.Sprintf("Validation pattern changed from %s to %s", c.OldValue, c.NewValue)
 	case PatternAdded:
@@ -189,6 +205,26 @@ func (c Change) Description() string {
 		return fmt.Sprintf("Validation pattern %s was removed", c.OldValue)
 	case RequiredDefaultRemoved:
 		return fmt.Sprintf("Default value removed from required field %s", c.OldValue)
+	case ValidationRulesChanged:
+		return fmt.Sprintf("Validation rules changed at %s", c.Path)
+	case NullableRemoved:
+		return fmt.Sprintf("Nullable values are no longer allowed at %s", c.Path)
+	case NullableAdded:
+		return fmt.Sprintf("Nullable values are now allowed at %s", c.Path)
+	case FormatChanged:
+		return fmt.Sprintf("Format changed from %s to %s", c.OldValue, c.NewValue)
+	case FormatRemoved:
+		return fmt.Sprintf("Format %s was removed", c.OldValue)
+	case AdditionalPropertiesChanged:
+		return fmt.Sprintf("Additional properties at %s changed and cannot be classified safely", c.Path)
+	case PreserveUnknownFieldsRemoved:
+		return fmt.Sprintf("Unknown fields are no longer preserved at %s", c.Path)
+	case PreserveUnknownFieldsAdded:
+		return fmt.Sprintf("Unknown fields are now preserved at %s", c.Path)
+	case TopologyChanged:
+		return fmt.Sprintf("Kubernetes topology changed at %s", c.Path)
+	case UnclassifiedSchemaChange:
+		return fmt.Sprintf("Schema field %s changed and cannot be classified safely", c.Path)
 	case DescriptionChanged:
 		return fmt.Sprintf("Description field was changed from %s to %s", c.OldValue, c.NewValue)
 	case DefaultChanged:

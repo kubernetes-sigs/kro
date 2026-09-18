@@ -36,11 +36,9 @@ func SchemaDeclType(s *spec.Schema) *apiservercel.DeclType {
 // AST. It performs no compilation and no caching; callers layer their own
 // per-build memoization on top.
 func ParseAndCheck(env *cel.Env, expr string) (*cel.Ast, error) {
-	parsed, issues := env.Parse(expr)
-	if issues != nil && issues.Err() != nil {
-		return nil, issues.Err()
-	}
-	checked, issues := env.Check(parsed)
+	// Kro time operations are fully declared (library/time_functions.go)
+	// and routed at eval time (library/time_dispatch.go).
+	checked, issues := env.Compile(expr)
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()
 	}

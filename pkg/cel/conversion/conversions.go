@@ -40,6 +40,17 @@ func GoNativeType(v ref.Val) (any, error) {
 	if v == nil {
 		return nil, nil
 	}
+	// Kro time values (KREP-025) report the native timestamp/duration types
+	// so operators and string() dispatch correctly, but they must never be
+	// written into an object as-is: string(...) is the only sanctioned exit
+	// from requeue solving. Detected via marker method (the library package
+	// imports this one, so importing it back would cycle). Guard before the
+	// Type() switch below, which would otherwise render them like plain
+	// timestamps.
+	if _, ok := v.(interface{ KroTimeSolverValue() }); ok {
+		return nil, fmt.Errorf(
+			"a time.now()-derived value cannot be written to an object; wrap it in string(...) to explicitly opt out of requeue solving")
+	}
 	switch v.Type() {
 	case types.BoolType:
 		return v.Value().(bool), nil

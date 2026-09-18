@@ -224,7 +224,7 @@ func TestCandidateMetadata_PreservesRuntimeInputs(t *testing.T) {
 			// Projection must use the runtime's effective schema snapshot.
 			inst.Object["spec"] = map[string]any{"names": []any{}, "targetNamespace": "later"}
 
-			meta := c.candidateMetadata(rt, inst)
+			meta, _ := c.candidateMetadata(rt, inst)
 			assert.Equal(t, sets.New(schema.GroupKind{Kind: "ConfigMap"}), meta.GroupKinds)
 			if tt.limit > 0 && tt.size > tt.limit {
 				assert.Empty(t, meta.AdditionalNamespaces, "an over-limit collection must use the static GroupKind fallback")

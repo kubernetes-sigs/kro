@@ -175,6 +175,10 @@ func (c *Controller) reconcileViaGraphEngine(
 	// resources to the cluster.
 	supersetMeta, applier, preErr := c.preApplyApplySetInventory(ctx, log, inst, rt)
 	if preErr != nil {
+		if errors.Is(preErr, applyset.ErrDuplicateResource) {
+			mark.ResourcesNotReady("duplicate resource in graph: %v", preErr)
+			return c.persistRejectedGraphEngineStatus(ctx, inst, wireStatus, rt, rgd, preErr)
+		}
 		return preErr
 	}
 
@@ -222,7 +226,7 @@ func (c *Controller) reconcileViaGraphEngine(
 		} else {
 			mark.ResourcesDeleting("%v", applyErr)
 		}
-	case errors.Is(applyErr, executor.ErrNotReady) && errors.Is(applyErr, executor.ErrFieldManagerConflict):
+	case isSoftFieldManagerConflict(applyErr):
 		// Soft like any not-ready node, but the message must say the field is
 		// owned by another manager (the instance markers have no dedicated reason).
 		mark.ResourcesNotReady("field manager conflict: %v", applyErr)
@@ -521,11 +525,16 @@ func (c *Controller) preApplyApplySetInventory(
 		ParentNamespace: inst.GetNamespace(),
 	}, inst)
 
-	candidateMeta := c.candidateMetadata(rt, inst)
+	candidateMeta, candidates := c.candidateMetadata(rt, inst)
 	supersetMeta, projErr := applier.Union(candidateMeta)
 	if projErr != nil {
 		log.Error(projErr, "graph-engine: pre-apply applyset union failed")
 		return supersetMeta, applier, c.delayedRequeue(fmt.Errorf("pre-apply applyset union failed: %w", projErr))
+	}
+	// Project validates the stable rendered identities. Keep the broader union
+	// above for inventory: unresolved nodes still contribute fallback scope.
+	if _, err := applier.Project(candidates); err != nil {
+		return supersetMeta, applier, c.delayedRequeue(fmt.Errorf("pre-apply applyset projection failed: %w", err))
 	}
 
 	if err := c.patchInstanceApplySetMetadata(ctx, inst, supersetMeta); err != nil {
@@ -537,21 +546,9 @@ func (c *Controller) preApplyApplySetInventory(
 
 // candidateMetadata collects candidate ApplySet metadata (GroupKinds and
 // AdditionalNamespaces) expected to be managed this cycle from the runtime's template
-// nodes, without constructing artificial Kubernetes objects.
-func (c *Controller) candidateMetadata(rt *geruntime.Runtime, inst *unstructured.Unstructured) applyset.Metadata {
-	// Projection can cache includeWhen verdicts against absent dependencies.
-	// Keep those verdicts and Def observations out of the execution runtime.
-	opts := []geruntime.Option{
-		geruntime.WithSeedScope(rt.Scope()),
-		geruntime.WithMaxCollectionSize(rt.MaxCollectionSize()),
-	}
-	if schemaNode := rt.Node(rgdadapter.SchemaNodeID); schemaNode != nil {
-		// Cached Programs have an empty schema payload; preserve its effective value.
-		if desired, err := schemaNode.Resolve(); err == nil && len(desired) == 1 {
-			opts = append(opts, geruntime.WithNodeObjectOverride(rgdadapter.SchemaNodeID, desired[0]))
-		}
-	}
-	rt = geruntime.New(rt.Program(), rt.Graph(), opts...)
+// nodes, plus resolved schema-only resources for pre-apply identity validation.
+func (c *Controller) candidateMetadata(rt *geruntime.Runtime, inst *unstructured.Unstructured) (applyset.Metadata, []applyset.Resource) {
+	rt = newProjectionRuntime(rt)
 
 	meta := applyset.Metadata{
 		ID:                   applyset.ID(inst),
@@ -559,6 +556,7 @@ func (c *Controller) candidateMetadata(rt *geruntime.Runtime, inst *unstructured
 		GroupKinds:           sets.New[schema.GroupKind](),
 		AdditionalNamespaces: sets.New[string](),
 	}
+	var candidates []applyset.Resource
 	parentNS := inst.GetNamespace()
 
 	// Seed Def nodes (such as the synthesized `schema` instance node) into the runtime
@@ -595,8 +593,20 @@ func (c *Controller) candidateMetadata(rt *geruntime.Runtime, inst *unstructured
 		// fighting the post-apply inventory shrink. A placeholder-backed verdict
 		// can be wrong: its GroupKind is then only recorded after apply. On an
 		// IsIgnored error we can't decide, so keep the candidate.
-		if ignored, err := n.IsIgnored(); err == nil && ignored {
+		ignored, inclusionErr := n.IsIgnored()
+		if inclusionErr == nil && ignored {
 			continue
+		}
+
+		// Only the RGD's literal schema node is stable before the walk. Any
+		// resource dependency (including in the body or conditions) can still
+		// be a soft-dependency placeholder rather than its observed value.
+		stable := inclusionErr == nil && !n.DynamicGVK()
+		for _, dep := range n.Spec().HardDepIDs() {
+			if dep != rgdadapter.SchemaNodeID {
+				stable = false
+				break
+			}
 		}
 
 		// If the node resolves cleanly in memory, extract its rendered GroupKinds
@@ -614,6 +624,11 @@ func (c *Controller) candidateMetadata(rt *geruntime.Runtime, inst *unstructured
 				if ns != "" && ns != parentNS {
 					meta.AdditionalNamespaces.Insert(ns)
 				}
+				if stable && obj.GetName() != "" && (!n.Namespaced() || ns != "") {
+					// Project compares authored namespaces before defaulting them.
+					obj.SetNamespace(ns)
+					candidates = append(candidates, applyset.Resource{ID: n.ID(), Object: obj})
+				}
 			}
 			continue
 		}
@@ -627,7 +642,23 @@ func (c *Controller) candidateMetadata(rt *geruntime.Runtime, inst *unstructured
 			}
 		}
 	}
-	return meta
+	return meta, candidates
+}
+
+// newProjectionRuntime keeps cached includeWhen verdicts against absent
+// dependencies and speculative Def observations out of the execution runtime.
+func newProjectionRuntime(rt *geruntime.Runtime) *geruntime.Runtime {
+	opts := []geruntime.Option{
+		geruntime.WithSeedScope(rt.Scope()),
+		geruntime.WithMaxCollectionSize(rt.MaxCollectionSize()),
+	}
+	if schemaNode := rt.Node(rgdadapter.SchemaNodeID); schemaNode != nil {
+		// Cached Programs have an empty schema payload; preserve its effective value.
+		if desired, err := schemaNode.Resolve(); err == nil && len(desired) == 1 {
+			opts = append(opts, geruntime.WithNodeObjectOverride(rgdadapter.SchemaNodeID, desired[0]))
+		}
+	}
+	return geruntime.New(rt.Program(), rt.Graph(), opts...)
 }
 
 // applySetMetadataFromApplied builds ApplySet inventory metadata from only the
@@ -885,6 +916,22 @@ func inventoryUpToDate(inst *unstructured.Unstructured, wantLabels, wantAnnotati
 	return true
 }
 
+// persistRejectedGraphEngineStatus persists conditions and state without running
+// child or author-status patches, then returns the original rejection for requeue.
+func (c *Controller) persistRejectedGraphEngineStatus(
+	ctx context.Context,
+	inst *unstructured.Unstructured,
+	wireStatus map[string]any,
+	rt *geruntime.Runtime,
+	rgd *v1alpha1.ResourceGraphDefinition,
+	rejection error,
+) error {
+	if err := c.persistGraphEngineStatus(ctx, inst, wireStatus, rt, rgd, true); err != nil {
+		return err
+	}
+	return rejection
+}
+
 // persistGraphEngineStatus composes the controller-owned status surface for the
 // instance (built-in conditions, author conditions when the RGD declares them,
 // and .status.state) and persists it through persistConditionsAndState, reusing
@@ -936,6 +983,12 @@ func (c *Controller) persistGraphEngineStatus(
 	}
 
 	return c.persistConditionsAndState(ctx, inst, wireStatus, status, previousState)
+}
+
+// isSoftFieldManagerConflict reports whether err signals both not-ready and a
+// field-manager conflict.
+func isSoftFieldManagerConflict(err error) bool {
+	return errors.Is(err, executor.ErrNotReady) && errors.Is(err, executor.ErrFieldManagerConflict)
 }
 
 // isResourceDeleting reports whether err (an executor apply error) signals a

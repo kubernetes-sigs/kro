@@ -1329,7 +1329,7 @@ func TestCandidateMetadata(t *testing.T) {
 	raw := newControllerTestDynamicClient(t, inst.DeepCopy())
 	c, _ := newGraphEngineControllerUnderTest(t, raw, testEmptyRGDSpec(), revisions.RevisionStateActive, comp, nil)
 
-	meta := c.candidateMetadata(rt, inst)
+	meta, _ := c.candidateMetadata(rt, inst)
 	assert.True(t, meta.GroupKinds.Has(schema.GroupKind{Group: "", Kind: "ConfigMap"}))
 	assert.True(t, meta.AdditionalNamespaces.Has("custom-ns"))
 }
@@ -1381,7 +1381,7 @@ func TestCandidateMetadata_SkipsIgnoredNodes(t *testing.T) {
 	raw := newControllerTestDynamicClient(t, inst.DeepCopy())
 	c, _ := newGraphEngineControllerUnderTest(t, raw, testEmptyRGDSpec(), revisions.RevisionStateActive, comp, nil)
 
-	meta := c.candidateMetadata(rt, inst)
+	meta, _ := c.candidateMetadata(rt, inst)
 	assert.True(t, meta.GroupKinds.Has(schema.GroupKind{Group: "", Kind: "ConfigMap"}),
 		"included node's GroupKind must be in the candidate inventory")
 	assert.False(t, meta.GroupKinds.Has(schema.GroupKind{Group: "", Kind: "ResourceQuota"}),
@@ -1855,7 +1855,7 @@ func TestReconcileViaGraphEngine_PatchContributions(t *testing.T) {
 		assert.Len(t, storedContribs, 1, "unreleased patch contribution must be retained in ledger")
 	})
 
-	t.Run("Duplicate rendered identities are rejected pre-write with hardErr, ResourcesNotReady, degraded Error state", func(t *testing.T) {
+	t.Run("Duplicate rendered identities prevent child writes and persist failure status", func(t *testing.T) {
 		inst := newInstanceObject("demo", "default")
 		raw := newControllerTestDynamicClient(t, inst.DeepCopy())
 
@@ -1888,18 +1888,20 @@ func TestReconcileViaGraphEngine_PatchContributions(t *testing.T) {
 		watcher := &fakeInstanceWatcher{}
 		err := c.reconcileViaGraphEngine(context.Background(), inst, watcher)
 		require.Error(t, err)
-		// The collision is now caught PRE-WRITE by the executor's identity-claim
-		// guard (before cm2's SSA write clobbers cm1), so the error is
-		// ErrDuplicateIdentity rather than the post-apply validateAppliedIdentities
-		// message. (Like any hard apply error it is still delayed-requeued so the
-		// instance retries; the state below reflects the degraded outcome.)
-		assert.Contains(t, err.Error(), "duplicate resource identity across nodes")
+		assert.Contains(t, err.Error(), "cm1")
+		assert.Contains(t, err.Error(), "cm2")
+		assert.True(t, requeue.IsRequeueError(err))
+
+		cm := newConfigMapObject("shared-cm", "default")
+		assert.True(t, apierrors.IsNotFound(fakeRuntimeCl.Get(context.Background(), client.ObjectKeyFromObject(cm), cm)),
+			"the duplicate must be rejected before either child is created")
 
 		stored := getStoredParentObject(t, raw)
 		cond := conditionByType(t, stored, ResourcesReady)
 		assert.Equal(t, metav1.ConditionFalse, cond.Status)
 		require.NotNil(t, cond.Message)
-		assert.Contains(t, *cond.Message, "resource reconciliation failed")
+		assert.Contains(t, *cond.Message, "cm1")
+		assert.Contains(t, *cond.Message, "cm2")
 
 		status, _, _ := unstructured.NestedMap(stored.Object, "status")
 		require.NotNil(t, status)
@@ -1968,4 +1970,115 @@ func TestReconcileViaGraphEngine_PatchContributions(t *testing.T) {
 		cond := conditionByType(t, stored, ResourcesReady)
 		assert.Equal(t, metav1.ConditionTrue, cond.Status)
 	})
+}
+
+func TestReconcileViaGraphEngine_DuplicateIdentityCollections(t *testing.T) {
+	for _, overlap := range []bool{false, true} {
+		t.Run(fmt.Sprintf("scalarOverlap=%t", overlap), func(t *testing.T) {
+			inst := newInstanceObject("demo", "default")
+			spec := testRGDSpecWithConfigMap("shared-cm", "")
+			spec.Resources[0].ForEach = []v1alpha1.ForEachDimension{{"ns": `${['', schema.metadata.namespace]}`}}
+			spec.Resources[0].Template.Raw = []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"shared-cm","namespace":"${ns}"}}`)
+			if overlap {
+				// A resolved collection row must also be checked against scalar nodes.
+				spec.Resources[0].ForEach = []v1alpha1.ForEachDimension{{"ns": `${[schema.metadata.namespace]}`}}
+				spec.Resources = append(spec.Resources, &v1alpha1.Resource{
+					ID:       "scalar",
+					Template: apimachineryruntime.RawExtension{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"shared-cm"}}`)},
+				})
+			}
+			raw := newControllerTestDynamicClient(t, inst.DeepCopy())
+			cl := newFakeRuntimeClient(t)
+			c, _ := newGraphEngineControllerUnderTest(t, raw, spec, revisions.RevisionStateActive, newTestRealCompiler(t), cl)
+			err := c.reconcileViaGraphEngine(t.Context(), inst, &fakeInstanceWatcher{})
+			require.Error(t, err)
+			cm := newConfigMapObject("shared-cm", "default")
+			assert.True(t, apierrors.IsNotFound(cl.Get(t.Context(), client.ObjectKeyFromObject(cm), cm)),
+				"no row may write before namespace-defaulted duplicates are rejected")
+			assert.Equal(t, metav1.ConditionFalse, conditionByType(t, getStoredParentObject(t, raw), ResourcesReady).Status)
+		})
+	}
+}
+
+func TestReconcileViaGraphEngine_DuplicateIdentityStatusAndInventory(t *testing.T) {
+	for _, authorConditions := range []bool{false, true} {
+		t.Run(fmt.Sprintf("authorConditions=%t", authorConditions), func(t *testing.T) {
+			inst := newInstanceObject("demo", "default")
+			inst.SetGeneration(1)
+			mark := NewConditionsMarkerFor(inst)
+			mark.InstanceManaged()
+			mark.GraphResolved()
+			mark.ResourcesReady()
+			inst.Object["status"].(map[string]any)["state"] = string(v1alpha1.InstanceStateActive)
+			inst.Object["status"].(map[string]any)["endpoint"] = "previous"
+			inst.SetGeneration(2)
+			metadata.SetInstanceFinalizer(inst)
+
+			orphan := newManagedObject(newDeploymentObject("retired", "other-ns"), inst, "retired", 1)
+			contribs := []executor.Contribution{{APIVersion: "v1", Kind: "ConfigMap", Namespace: "default", Name: "prior-target", FieldManager: "prior-manager"}}
+			ledger, err := controllergraph.MarshalContributions(contribs)
+			require.NoError(t, err)
+			priorAnnotations := inst.GetAnnotations()
+			priorAnnotations[metadata.PatchContributionsAnnotation] = ledger
+			inst.SetAnnotations(priorAnnotations)
+
+			spec := testRGDSpecWithConfigMap("shared-cm", "")
+			other := spec.Resources[0].DeepCopy()
+			other.ID = "other"
+			spec.Resources = append(spec.Resources, other)
+			condType := ResourcesReady
+			if authorConditions {
+				condType = "AuthorReady"
+				spec.Schema.Status.Raw = []byte(`{"conditions":["${runtime.newCondition({type: 'AuthorReady', status: runtime.condition(schema, 'ResourcesReady').status, reason: 'Projected'})}"]}`)
+				inst.Object["status"].(map[string]any)["conditions"] = []any{map[string]any{
+					"type": condType, "status": "True", "reason": "Previous", "observedGeneration": int64(1),
+					"lastTransitionTime": "2026-01-01T00:00:00Z",
+				}}
+			}
+			raw := newControllerTestDynamicClient(t, inst.DeepCopy(), orphan.DeepCopy())
+			cl := newFakeRuntimeClient(t)
+			c, _ := newGraphEngineControllerUnderTest(t, raw, spec, revisions.RevisionStateActive, newTestRealCompiler(t), cl)
+			c.reconcileConfig.HasAuthorConditions = authorConditions
+
+			require.Error(t, c.reconcileViaGraphEngine(t.Context(), inst, &fakeInstanceWatcher{}))
+			stored := getStoredParentObject(t, raw)
+			status := stored.Object["status"].(map[string]any)
+			assert.Equal(t, string(v1alpha1.InstanceStateError), status["state"])
+			assert.Equal(t, "previous", status["endpoint"])
+			cond := conditionByType(t, stored, condType)
+			assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			for _, entry := range status["conditions"].([]any) {
+				condition := entry.(map[string]any)
+				assert.Equal(t, int64(2), condition["observedGeneration"])
+			}
+			for key, value := range priorAnnotations {
+				assert.Equal(t, value, stored.GetAnnotations()[key], "prior inventory %s", key)
+			}
+			live, err := raw.Tracker().Get(controllerTestDeployGVR, "other-ns", "retired")
+			require.NoError(t, err)
+			assert.Equal(t, orphan, live, "rejection must not prune prior managed resources")
+		})
+	}
+}
+
+func TestReconcileViaGraphEngine_DuplicateIdentityExcludesIgnored(t *testing.T) {
+	for _, includeWhen := range []string{`${false}`, `${schema.spec.enabled}`} {
+		t.Run(includeWhen, func(t *testing.T) {
+			inst := newInstanceObject("demo", "default")
+			inst.Object["spec"] = map[string]any{"enabled": false}
+			spec := testRGDSpecWithConfigMap("shared-cm", "")
+			spec.Schema.Spec.Raw = []byte(`{"enabled":"boolean"}`)
+			skipped := spec.Resources[0].DeepCopy()
+			skipped.ID = "skipped"
+			skipped.IncludeWhen = []string{includeWhen}
+			spec.Resources = append(spec.Resources, skipped)
+			raw := newControllerTestDynamicClient(t, inst.DeepCopy())
+			cl := newFakeRuntimeClient(t)
+			c, _ := newGraphEngineControllerUnderTest(t, raw, spec, revisions.RevisionStateActive, newTestRealCompiler(t), cl)
+			require.NoError(t, c.reconcileViaGraphEngine(t.Context(), inst, &fakeInstanceWatcher{}))
+			cm := newConfigMapObject("shared-cm", "default")
+			require.NoError(t, cl.Get(t.Context(), client.ObjectKeyFromObject(cm), cm))
+			assert.Equal(t, "cm", cm.GetLabels()[metadata.NodeIDLabel])
+		})
+	}
 }

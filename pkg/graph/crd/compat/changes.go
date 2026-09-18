@@ -28,9 +28,11 @@ const (
 	TypeChanged            ChangeType = "TYPE_CHANGED"
 	RequiredAdded          ChangeType = "REQUIRED_ADDED"
 	EnumRestricted         ChangeType = "ENUM_RESTRICTED"
+	EnumAdded              ChangeType = "ENUM_ADDED"
 	PatternChanged         ChangeType = "PATTERN_CHANGED"
 	PatternAdded           ChangeType = "PATTERN_ADDED"
 	RequiredDefaultRemoved ChangeType = "REQUIRED_DEFAULT_REMOVED"
+	XValidationAdded       ChangeType = "X_VALIDATION_ADDED"
 
 	// Breaking - constraint tightened
 	MinimumAdded       ChangeType = "MINIMUM_ADDED"
@@ -52,8 +54,10 @@ const (
 	DefaultChanged                  ChangeType = "DEFAULT_CHANGED"
 	RequiredRemoved                 ChangeType = "REQUIRED_REMOVED"
 	EnumExpanded                    ChangeType = "ENUM_EXPANDED"
+	EnumRemoved                     ChangeType = "ENUM_REMOVED"
 	PatternRemoved                  ChangeType = "PATTERN_REMOVED"
 	AdditionalPrinterColumnsChanged ChangeType = "ADDITIONAL_PRINTER_COLUMNS_CHANGED"
+	XValidationRemoved              ChangeType = "X_VALIDATION_REMOVED"
 
 	// Non-breaking - constraint relaxed
 	MinimumRemoved     ChangeType = "MINIMUM_REMOVED"
@@ -181,12 +185,20 @@ func (c Change) Description() string {
 		return fmt.Sprintf("Enum value %s was removed", c.OldValue)
 	case EnumExpanded:
 		return fmt.Sprintf("Enum value %s was added", c.NewValue)
+	case EnumAdded:
+		return fmt.Sprintf("Enum constraint was added with values %s", c.NewValue)
+	case EnumRemoved:
+		return fmt.Sprintf("Enum constraint (previously %s) was removed", c.OldValue)
 	case PatternChanged:
 		return fmt.Sprintf("Validation pattern changed from %s to %s", c.OldValue, c.NewValue)
 	case PatternAdded:
 		return fmt.Sprintf("Validation pattern %s was added", c.NewValue)
 	case PatternRemoved:
 		return fmt.Sprintf("Validation pattern %s was removed", c.OldValue)
+	case XValidationAdded:
+		return fmt.Sprintf("CEL validation rule was added: %s", c.NewValue)
+	case XValidationRemoved:
+		return fmt.Sprintf("CEL validation rule was removed: %s", c.OldValue)
 	case RequiredDefaultRemoved:
 		return fmt.Sprintf("Default value removed from required field %s", c.OldValue)
 	case DescriptionChanged:

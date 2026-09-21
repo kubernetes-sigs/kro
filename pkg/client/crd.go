@@ -137,7 +137,7 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 			)
 		}
 
-		if nameMatch && !idMatch {
+		if !idMatch {
 			log.Info(
 				"Adopting CRD with different RGD ID - RGD may have been deleted and recreated",
 				"crd", desired.Name,

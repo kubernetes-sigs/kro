@@ -552,7 +552,7 @@ envVars: '${{ "APP": "nginx", "PORT": "8080" }.transformList(k, v, k + "=" + v)}
 :::note Order is not stable
 A list extracted from a map has non-deterministic element order, since map
 iteration order is not guaranteed. If the list feeds a template field, sort it
-(for example `.sort()` on the keys) so the rendered desired state stays stable
+(for example `.sortBy()` on the keys) so the rendered desired state stays stable
 across reconciles. See
 [Sort lists built from maps](./02-cel-libraries.md#lists-cel-go) for details.
 :::

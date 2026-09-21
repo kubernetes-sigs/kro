@@ -21,21 +21,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/component-base/featuregate"
 
 	"github.com/kubernetes-sigs/kro/pkg/features"
 )
 
-func setStrictCRDCompatibilityChecks(t *testing.T, enabled bool) {
+func setFeatureGate(t *testing.T, feature featuregate.Feature, enabled bool) {
 	t.Helper()
 
-	previous := features.FeatureGate.Enabled(features.StrictCRDCompatibilityChecks)
-	require.NoError(t, features.FeatureGate.Set(fmt.Sprintf("%s=%t", features.StrictCRDCompatibilityChecks, enabled)))
+	previous := features.FeatureGate.Enabled(feature)
+	require.NoError(t, features.FeatureGate.Set(fmt.Sprintf("%s=%t", feature, enabled)))
 	t.Cleanup(func() {
-		require.NoError(t, features.FeatureGate.Set(fmt.Sprintf("%s=%t", features.StrictCRDCompatibilityChecks, previous)))
+		require.NoError(t, features.FeatureGate.Set(fmt.Sprintf("%s=%t", feature, previous)))
 	})
 }
 
-func TestCompareStrictCRDCompatibilityChecksFeatureGate(t *testing.T) {
+func TestCompareExtendedCRDComparisonFeatureGate(t *testing.T) {
 	tests := []struct {
 		name               string
 		oldSchema          *v1.JSONSchemaProps
@@ -83,12 +84,12 @@ func TestCompareStrictCRDCompatibilityChecksFeatureGate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Run("disabled", func(t *testing.T) {
-				setStrictCRDCompatibilityChecks(t, false)
+				setFeatureGate(t, features.ExtendedCRDComparison, false)
 				assert.False(t, Compare(tt.oldSchema, tt.newSchema).HasChanges())
 			})
 
 			t.Run("enabled", func(t *testing.T) {
-				setStrictCRDCompatibilityChecks(t, true)
+				setFeatureGate(t, features.ExtendedCRDComparison, true)
 				report := Compare(tt.oldSchema, tt.newSchema)
 				require.Len(t, report.BreakingChanges, 1)
 				assert.Equal(t, tt.expectedChangeType, report.BreakingChanges[0].ChangeType)
@@ -97,8 +98,53 @@ func TestCompareStrictCRDCompatibilityChecksFeatureGate(t *testing.T) {
 	}
 }
 
+func TestCompareUnclassifiedCRDChangesFeatureGate(t *testing.T) {
+	tests := []struct {
+		name                          string
+		extendedComparison            bool
+		conservativeComparison        bool
+		expectedUnclassifiedBreakages int
+	}{
+		{
+			name: "both disabled",
+		},
+		{
+			name:               "extended comparison only",
+			extendedComparison: true,
+		},
+		{
+			name:                          "unclassified fallback only",
+			conservativeComparison:        true,
+			expectedUnclassifiedBreakages: 1,
+		},
+		{
+			name:                          "both enabled",
+			extendedComparison:            true,
+			conservativeComparison:        true,
+			expectedUnclassifiedBreakages: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setFeatureGate(t, features.ExtendedCRDComparison, tt.extendedComparison)
+			setFeatureGate(t, features.ConservativeCRDComparison, tt.conservativeComparison)
+
+			report := Compare(
+				&v1.JSONSchemaProps{Type: "array"},
+				&v1.JSONSchemaProps{Type: "array", UniqueItems: true},
+			)
+
+			require.Len(t, report.BreakingChanges, tt.expectedUnclassifiedBreakages)
+			if tt.expectedUnclassifiedBreakages > 0 {
+				assert.Equal(t, UnclassifiedSchemaChange, report.BreakingChanges[0].ChangeType)
+			}
+		})
+	}
+}
+
 func TestCompareAdditionalPropertiesSchema(t *testing.T) {
-	setStrictCRDCompatibilityChecks(t, true)
+	setFeatureGate(t, features.ExtendedCRDComparison, true)
 
 	mapSchema := func(properties map[string]v1.JSONSchemaProps) *v1.JSONSchemaProps {
 		return &v1.JSONSchemaProps{
@@ -148,28 +194,51 @@ func TestCompareAdditionalPropertiesSchema(t *testing.T) {
 		assert.Equal(t, PropertyAdded, report.NonBreakingChanges[0].ChangeType)
 		assert.Equal(t, ".additionalProperties.properties.added", report.NonBreakingChanges[0].Path)
 	})
+
+	t.Run("adding a map value schema is non-breaking", func(t *testing.T) {
+		t.Parallel()
+
+		oldSchema := &v1.JSONSchemaProps{Type: "object"}
+		newSchema := mapSchema(nil)
+
+		report := Compare(oldSchema, newSchema)
+
+		assert.False(t, report.HasBreakingChanges())
+		require.Len(t, report.NonBreakingChanges, 1)
+		assert.Equal(t, AdditionalPropertiesChanged, report.NonBreakingChanges[0].ChangeType)
+		assert.Equal(t, ".additionalProperties", report.NonBreakingChanges[0].Path)
+	})
 }
 
 func TestCompareValidationRules(t *testing.T) {
-	setStrictCRDCompatibilityChecks(t, true)
+	setFeatureGate(t, features.ExtendedCRDComparison, true)
 
 	tests := []struct {
-		name string
-		old  v1.ValidationRules
-		new  v1.ValidationRules
+		name                string
+		old                 v1.ValidationRules
+		new                 v1.ValidationRules
+		expectedBreaking    int
+		expectedNonBreaking int
 	}{
 		{
-			name: "added",
-			new:  v1.ValidationRules{{Rule: "self.size() < 2"}},
+			name:             "added",
+			new:              v1.ValidationRules{{Rule: "self.size() < 2"}},
+			expectedBreaking: 1,
 		},
 		{
-			name: "removed",
-			old:  v1.ValidationRules{{Rule: "self.size() < 2"}},
+			name:                "removed",
+			old:                 v1.ValidationRules{{Rule: "self.size() < 2"}},
+			expectedNonBreaking: 1,
 		},
 		{
-			name: "changed",
-			old:  v1.ValidationRules{{Rule: "self.size() < 2"}},
-			new:  v1.ValidationRules{{Rule: "self.size() < 3"}},
+			name:             "changed",
+			old:              v1.ValidationRules{{Rule: "self.size() < 2"}},
+			new:              v1.ValidationRules{{Rule: "self.size() < 3"}},
+			expectedBreaking: 1,
+		},
+		{
+			name: "nil and empty are equivalent",
+			new:  v1.ValidationRules{},
 		},
 	}
 
@@ -182,15 +251,23 @@ func TestCompareValidationRules(t *testing.T) {
 				&v1.JSONSchemaProps{Type: "object", XValidations: tt.new},
 			)
 
-			require.Len(t, report.BreakingChanges, 1)
-			assert.Equal(t, ValidationRulesChanged, report.BreakingChanges[0].ChangeType)
-			assert.Equal(t, ".x-kubernetes-validations", report.BreakingChanges[0].Path)
+			require.Len(t, report.BreakingChanges, tt.expectedBreaking)
+			require.Len(t, report.NonBreakingChanges, tt.expectedNonBreaking)
+			if tt.expectedBreaking > 0 {
+				assert.Equal(t, ValidationRulesChanged, report.BreakingChanges[0].ChangeType)
+				assert.Equal(t, ".x-kubernetes-validations", report.BreakingChanges[0].Path)
+			}
+			if tt.expectedNonBreaking > 0 {
+				assert.Equal(t, ValidationRulesChanged, report.NonBreakingChanges[0].ChangeType)
+				assert.Equal(t, ".x-kubernetes-validations", report.NonBreakingChanges[0].Path)
+			}
 		})
 	}
 }
 
 func TestCompareValidationFacets(t *testing.T) {
-	setStrictCRDCompatibilityChecks(t, true)
+	setFeatureGate(t, features.ExtendedCRDComparison, true)
+	setFeatureGate(t, features.ConservativeCRDComparison, true)
 
 	trueValue := true
 	atomic := "atomic"
@@ -204,6 +281,7 @@ func TestCompareValidationFacets(t *testing.T) {
 		breakingType      ChangeType
 		nonBreakingType   ChangeType
 		expectedFieldPath string
+		noChange          bool
 	}{
 		{
 			name:              "nullable removed",
@@ -262,6 +340,18 @@ func TestCompareValidationFacets(t *testing.T) {
 			expectedFieldPath: ".x-kubernetes-list-map-keys",
 		},
 		{
+			name:     "default list type made explicit",
+			old:      v1.JSONSchemaProps{Type: "array"},
+			new:      v1.JSONSchemaProps{Type: "array", XListType: &atomic},
+			noChange: true,
+		},
+		{
+			name:     "list map keys reordered",
+			old:      v1.JSONSchemaProps{Type: "array", XListMapKeys: []string{"namespace", "name"}},
+			new:      v1.JSONSchemaProps{Type: "array", XListMapKeys: []string{"name", "namespace"}},
+			noChange: true,
+		},
+		{
 			name:              "map type added",
 			old:               v1.JSONSchemaProps{Type: "object"},
 			new:               v1.JSONSchemaProps{Type: "object", XMapType: &granular},
@@ -282,6 +372,10 @@ func TestCompareValidationFacets(t *testing.T) {
 			t.Parallel()
 
 			report := Compare(&tt.old, &tt.new)
+			if tt.noChange {
+				assert.False(t, report.HasChanges())
+				return
+			}
 
 			if tt.breakingType != "" {
 				require.Len(t, report.BreakingChanges, 1)

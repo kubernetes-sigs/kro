@@ -33,13 +33,31 @@
 //   - Changing default values
 //   - Removing optional fields from 'required' list
 //
-// When the strict-crd-compatibility-checks feature gate is enabled, the
-// comparator also checks map value schemas, CEL validation rules, nullable and
-// format changes, unknown-field preservation, and Kubernetes list or map
-// topology. It classifies safe relaxations such as adding nullable or
-// unknown-field preservation and removing format constraints as non-breaking.
-// Changes to schema facets without an explicit compatibility classification
-// fail closed while the gate is enabled.
+// ExtendedCRDComparison compares map value schemas recursively. It also detects
+// these additional breaking changes:
+//   - Disabling additional properties
+//   - Constraining additional properties
+//   - Adding an enum constraint where none existed
+//   - Adding a format constraint
+//   - Changing a format constraint
+//   - Removing nullable support
+//   - Removing unknown-field preservation
+//   - Changing Kubernetes list or map topology
+//   - Adding CEL validation rules
+//   - Changing CEL validation rules
+//
+// Additional non-breaking changes detected when ExtendedCRDComparison is enabled:
+//   - Enabling additional properties
+//   - Relaxing additional properties
+//   - Removing an enum constraint
+//   - Removing a format constraint
+//   - Adding nullable support
+//   - Adding unknown-field preservation
+//   - Removing CEL validation rules
+//
+// ConservativeCRDComparison treats changes to schema facets without an
+// explicit compatibility classification as breaking. It can be enabled
+// independently of ExtendedCRDComparison.
 //
 // Usage:
 //

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -31,12 +32,22 @@ import (
 // Compare compares two OpenAPIV3Schema objects and returns a compatibility report.
 // It identifies breaking and non-breaking changes between the schemas.
 func Compare(oldSchema, newSchema *v1.JSONSchemaProps) *Report {
-	strictChecks := features.FeatureGate.Enabled(features.StrictCRDCompatibilityChecks)
-	return compare("", oldSchema, newSchema, strictChecks)
+	options := compareOptions{
+		extendedComparison: features.FeatureGate.Enabled(features.ExtendedCRDComparison),
+		conservativeComparison: features.FeatureGate.Enabled(
+			features.ConservativeCRDComparison,
+		),
+	}
+	return compare("", oldSchema, newSchema, options)
+}
+
+type compareOptions struct {
+	extendedComparison     bool
+	conservativeComparison bool
 }
 
 // compare is the internal recursive implementation
-func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps, strictChecks bool) *Report {
+func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps, options compareOptions) *Report {
 	result := &Report{
 		BreakingChanges:    []Change{},
 		NonBreakingChanges: []Change{},
@@ -108,20 +119,20 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps, strictChecks
 	compareConstraints(path, oldSchema, newSchema, result)
 
 	// Compare properties
-	compareProperties(path, oldSchema, newSchema, result, strictChecks)
+	compareProperties(path, oldSchema, newSchema, result, options)
 
 	// Check required fields
 	compareRequiredFields(path, oldSchema, newSchema, result)
 
 	// Check enum values
-	compareEnumValues(path, oldSchema, newSchema, result, strictChecks)
+	compareEnumValues(path, oldSchema, newSchema, result, options.extendedComparison)
 
 	// For arrays, check items schema
-	compareArrayItems(path, oldSchema, newSchema, result, strictChecks)
+	compareArrayItems(path, oldSchema, newSchema, result, options)
 
-	if strictChecks {
+	if options.extendedComparison {
 		// For maps, check the value schema.
-		compareAdditionalProperties(path, oldSchema, newSchema, result, strictChecks)
+		compareAdditionalProperties(path, oldSchema, newSchema, result, options)
 
 		compareFormat(path, oldSchema, newSchema, result)
 		compareNullable(path, oldSchema, newSchema, result)
@@ -129,9 +140,9 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps, strictChecks
 		compareTopology(path, oldSchema, newSchema, result)
 		compareValidationRules(path, oldSchema, newSchema, result)
 
-		// Reject changes to schema facets that are not explicitly classified above.
-		// This keeps newly added or currently unsupported validation keywords from
-		// silently passing as compatible.
+	}
+
+	if options.conservativeComparison {
 		compareUnclassifiedFields(path, oldSchema, newSchema, result)
 	}
 
@@ -155,7 +166,7 @@ func compareProperties(
 	path string,
 	oldSchema, newSchema *v1.JSONSchemaProps,
 	result *Report,
-	strictChecks bool,
+	options compareOptions,
 ) {
 	// First, check for removed properties (breaking changes)
 	for propName, oldProp := range oldSchema.Properties {
@@ -170,7 +181,7 @@ func compareProperties(
 		}
 
 		// property exists in both schemas - compare them recursively
-		appendReport(result, compare(propPath, &oldProp, &newProp, strictChecks))
+		appendReport(result, compare(propPath, &oldProp, &newProp, options))
 	}
 
 	// Then check for added properties. Now things get a bit more spicy.
@@ -259,13 +270,13 @@ func compareEnumValues(
 	path string,
 	oldSchema, newSchema *v1.JSONSchemaProps,
 	result *Report,
-	strictChecks bool,
+	extendedComparison bool,
 ) {
 	if len(oldSchema.Enum) == 0 && len(newSchema.Enum) == 0 {
 		return
 	}
 	if len(oldSchema.Enum) == 0 {
-		if !strictChecks {
+		if !extendedComparison {
 			return
 		}
 		result.AddBreakingChange(
@@ -277,7 +288,7 @@ func compareEnumValues(
 		return
 	}
 	if len(newSchema.Enum) == 0 {
-		if !strictChecks {
+		if !extendedComparison {
 			return
 		}
 		result.AddNonBreakingChange(
@@ -312,7 +323,7 @@ func compareArrayItems(
 	path string,
 	oldSchema, newSchema *v1.JSONSchemaProps,
 	result *Report,
-	strictChecks bool,
+	options compareOptions,
 ) {
 	if oldSchema.Type == "array" && newSchema.Type == "array" {
 		// Use safer existence checks
@@ -320,7 +331,7 @@ func compareArrayItems(
 		newHasItems := newSchema.Items != nil && newSchema.Items.Schema != nil
 
 		if oldHasItems && newHasItems {
-			appendReport(result, compare(path+".items", oldSchema.Items.Schema, newSchema.Items.Schema, strictChecks))
+			appendReport(result, compare(path+".items", oldSchema.Items.Schema, newSchema.Items.Schema, options))
 		} else if oldHasItems && !newHasItems {
 			// Items schema was removed - breaking
 			result.AddBreakingChange(path+".items", PropertyRemoved, "", "")
@@ -331,15 +342,11 @@ func compareArrayItems(
 	}
 }
 
-// compareAdditionalProperties checks map value schemas recursively. We cannot
-// safely classify changes between absent, boolean, and schema forms because
-// their compatibility depends on both validation and structural-schema pruning.
-// Fail closed for those changes instead of claiming they are always breaking.
 func compareAdditionalProperties(
 	path string,
 	oldSchema, newSchema *v1.JSONSchemaProps,
 	result *Report,
-	strictChecks bool,
+	options compareOptions,
 ) {
 	oldAdditional := oldSchema.AdditionalProperties
 	newAdditional := newSchema.AdditionalProperties
@@ -352,7 +359,24 @@ func compareAdditionalProperties(
 	oldHasSchema := oldAdditional != nil && oldAdditional.Schema != nil
 	newHasSchema := newAdditional != nil && newAdditional.Schema != nil
 	if oldHasSchema && newHasSchema {
-		appendReport(result, compare(fieldPath, oldAdditional.Schema, newAdditional.Schema, strictChecks))
+		appendReport(result, compare(fieldPath, oldAdditional.Schema, newAdditional.Schema, options))
+		return
+	}
+
+	oldDisallows := oldAdditional == nil || (!oldAdditional.Allows && oldAdditional.Schema == nil)
+	newDisallows := newAdditional == nil || (!newAdditional.Allows && newAdditional.Schema == nil)
+	if oldDisallows && newDisallows {
+		return
+	}
+
+	newUnrestricted := newAdditional != nil && newAdditional.Allows && newAdditional.Schema == nil
+	if oldDisallows || (oldHasSchema && newUnrestricted) {
+		result.AddNonBreakingChange(
+			fieldPath,
+			AdditionalPropertiesChanged,
+			formatSchemaFieldValue(oldAdditional),
+			formatSchemaFieldValue(newAdditional),
+		)
 		return
 	}
 
@@ -413,34 +437,64 @@ func boolPointerValue(value *bool) bool {
 }
 
 func compareTopology(path string, oldSchema, newSchema *v1.JSONSchemaProps, result *Report) {
-	fields := []struct {
-		name string
-		old  any
-		new  any
-	}{
-		{"x-kubernetes-list-map-keys", oldSchema.XListMapKeys, newSchema.XListMapKeys},
-		{"x-kubernetes-list-type", oldSchema.XListType, newSchema.XListType},
-		{"x-kubernetes-map-type", oldSchema.XMapType, newSchema.XMapType},
+	if !equalStringsIgnoringOrder(oldSchema.XListMapKeys, newSchema.XListMapKeys) {
+		result.AddBreakingChange(
+			path+".x-kubernetes-list-map-keys",
+			TopologyChanged,
+			formatSchemaFieldValue(oldSchema.XListMapKeys),
+			formatSchemaFieldValue(newSchema.XListMapKeys),
+		)
 	}
 
-	for _, field := range fields {
-		if equality.Semantic.DeepEqual(field.old, field.new) {
-			continue
-		}
+	if listTypeValue(oldSchema.XListType) != listTypeValue(newSchema.XListType) {
 		result.AddBreakingChange(
-			path+"."+field.name,
+			path+".x-kubernetes-list-type",
 			TopologyChanged,
-			formatSchemaFieldValue(field.old),
-			formatSchemaFieldValue(field.new),
+			formatSchemaFieldValue(oldSchema.XListType),
+			formatSchemaFieldValue(newSchema.XListType),
+		)
+	}
+
+	if !equality.Semantic.DeepEqual(oldSchema.XMapType, newSchema.XMapType) {
+		result.AddBreakingChange(
+			path+".x-kubernetes-map-type",
+			TopologyChanged,
+			formatSchemaFieldValue(oldSchema.XMapType),
+			formatSchemaFieldValue(newSchema.XMapType),
 		)
 	}
 }
 
+func equalStringsIgnoringOrder(oldValues, newValues []string) bool {
+	if len(oldValues) != len(newValues) {
+		return false
+	}
+
+	oldSorted := slices.Clone(oldValues)
+	newSorted := slices.Clone(newValues)
+	slices.Sort(oldSorted)
+	slices.Sort(newSorted)
+	return slices.Equal(oldSorted, newSorted)
+}
+
+func listTypeValue(value *string) string {
+	if value == nil {
+		return "atomic"
+	}
+	return *value
+}
+
 func compareValidationRules(path string, oldSchema, newSchema *v1.JSONSchemaProps, result *Report) {
-	if len(oldSchema.XValidations) == 0 && len(newSchema.XValidations) == 0 {
+	if equality.Semantic.DeepEqual(oldSchema.XValidations, newSchema.XValidations) {
 		return
 	}
-	if equality.Semantic.DeepEqual(oldSchema.XValidations, newSchema.XValidations) {
+	if len(newSchema.XValidations) == 0 {
+		result.AddNonBreakingChange(
+			path+".x-kubernetes-validations",
+			ValidationRulesChanged,
+			formatSchemaFieldValue(oldSchema.XValidations),
+			formatSchemaFieldValue(newSchema.XValidations),
+		)
 		return
 	}
 
@@ -478,9 +532,9 @@ var classifiedSchemaFields = map[string]bool{
 }
 
 func compareUnclassifiedFields(path string, oldSchema, newSchema *v1.JSONSchemaProps, result *Report) {
-	schemaType := reflect.TypeOf(*oldSchema)
-	oldValue := reflect.ValueOf(*oldSchema)
-	newValue := reflect.ValueOf(*newSchema)
+	schemaType := reflect.TypeOf(oldSchema).Elem()
+	oldValue := reflect.ValueOf(oldSchema).Elem()
+	newValue := reflect.ValueOf(newSchema).Elem()
 
 	for i := range schemaType.NumField() {
 		field := schemaType.Field(i)

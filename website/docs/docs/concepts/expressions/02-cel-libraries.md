@@ -284,7 +284,7 @@ flat: ${schema.spec.nestedPorts.flatten()}
 :::warning Sort lists built from maps
 A list built from a map has **non-deterministic element order** — the order
 comes from map iteration and can change from one reconcile to the next. When a
-template field is a list of objects derived from a map, call `sort()` on the
+template field is a list of objects derived from a map, call `sort()`/`sortBy()` on the
 keys first, or the rendered desired state changes between reconciles even when
 nothing has actually changed. kro then re-applies the field every cycle and a
 downstream controller can see a perpetual diff on a resource nobody touched.
@@ -295,10 +295,10 @@ of objects (for example `[{key, value}]`) rather than a map, so converting a
 
 ```kro
 # Unstable: element order comes from map iteration
-tags: '${schema.spec.tags.map(k, {"key": k, "value": schema.spec.tags[k]})}'
+tags: '${schema.spec.tags.transformList(k, v, {"key": k, "value": v})}'
 
 # Stable: sort the keys before building the list
-tags: '${schema.spec.tags.map(k, k).sort().map(k, {"key": k, "value": schema.spec.tags[k]})}'
+tags: '${schema.spec.tags.transformList(k, v, {"key": k, "value": v}).sortBy(el, el.key)}'
 ```
 :::
 

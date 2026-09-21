@@ -4,7 +4,7 @@ metadata:
   name: check-external-references
 spec:
   description: | 
-    Tests if a ResourceGraphDefinition creates an Instance CRD
+    Tests external reference availability and progressive object and array status
   steps:
   - name: setup
     try:
@@ -17,6 +17,19 @@ spec:
     - assert:
         file: rgd-assert.yaml
       description: Verify RGD state
+    - command:
+        entrypoint: kubectl
+        args:
+        - patch
+        - crd
+        - externalreferencetests.kro.run
+        - --type=json
+        - -p
+        - >-
+          [{"op":"add","path":"/spec/versions/0/schema/openAPIV3Schema/properties/status/properties/sparseValues/items/nullable","value":true},
+           {"op":"add","path":"/spec/versions/0/schema/openAPIV3Schema/properties/status/properties/middleValues/items/nullable","value":true},
+           {"op":"add","path":"/spec/versions/0/schema/openAPIV3Schema/properties/status/properties/nullValues/items","value":{"type":"string","nullable":true}}]
+      description: Allow sparse array placeholders and resolved null elements
     - apply:
         file: instance.yaml
       description: Apply ExternalReferenceTest Instance
@@ -58,6 +71,114 @@ spec:
     - assert:
         file: owned.yaml
       description: Verify Owned Resource based on External Reference is created
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+
+  - name: remove-external-ref
+    try:
+    - command:
+        entrypoint: kubectl
+        args:
+        - patch
+        - crd
+        - externalreferencetests.kro.run
+        - --type=json
+        - -p
+        - >-
+          [{"op":"add","path":"/spec/versions/0/schema/openAPIV3Schema/properties/status/properties/extInfo/minProperties","value":1}]
+      description: Exercise a status schema that rejects an empty extInfo object
+    - delete:
+        file: configmap.yaml
+    - assert:
+        file: instance-assert-in-progress.yaml
+      description: Verify resolved values survive and unavailable status disappears
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+
+  - name: update-instance-while-pending
+    try:
+    - apply:
+        resource:
+          apiVersion: kro.run/v1alpha1
+          kind: ExternalReferenceTest
+          metadata:
+            name: test-external-reference
+          spec:
+            tag: v2
+    - assert:
+        resource:
+          apiVersion: kro.run/v1alpha1
+          kind: ExternalReferenceTest
+          metadata:
+            name: test-external-reference
+          status:
+            state: IN_PROGRESS
+            tag: v2
+            (contains(keys(@), 'extInfo')): false
+            '(partialInfo == `{"tag": "v2"}`)': true
+            (contains(keys(@), 'nestedInfo')): false
+            (contains(keys(@), 'arrayInfo')): false
+            '(emptyObject == `{}`)': true
+            '(emptyArray == `[]`)': true
+            '(resolvedValues == `["v2", "foobar"]`)': true
+            (contains(keys(@), 'externalValues')): false
+            '(values == `["v2"]`)': true
+            '(sparseValues == `[null, "v2"]`)': true
+            '(middleValues == `["v2", null, "foobar"]`)': true
+            '(nullValues == `[null, null]`)': true
+            '(entries == `[{"tag": "v2"}]`)': true
+            (contains(keys(@), 'objectExpression')): false
+            (contains(keys(@), 'arrayExpression')): false
+      description: Verify scalar, object, and array status still update while the reference is missing
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+
+  - name: restore-external-ref
+    try:
+    - apply:
+        file: configmap.yaml
+    - assert:
+        resource:
+          apiVersion: kro.run/v1alpha1
+          kind: ExternalReferenceTest
+          metadata:
+            name: test-external-reference
+          status:
+            state: ACTIVE
+            tag: v2
+            extInfo:
+              source: check-external-references
+              value: "Hello, World!"
+            partialInfo:
+              tag: v2
+              value: "Hello, World!"
+            nestedInfo:
+              nested:
+                value: "Hello, World!"
+            '(arrayInfo == `{"values": ["Hello, World!"]}`)': true
+            '(emptyObject == `{}`)': true
+            '(emptyArray == `[]`)': true
+            '(resolvedValues == `["v2", "foobar"]`)': true
+            '(values == `["v2", "Hello, World!"]`)': true
+            '(sparseValues == `["Hello, World!", "v2"]`)': true
+            '(middleValues == `["v2", "Hello, World!", "foobar"]`)': true
+            '(nullValues == `["Hello, World!", null, "Hello, World!"]`)': true
+            '(entries == `[{"tag": "v2", "value": "Hello, World!"}]`)': true
+            '(externalValues == `["Hello, World!", "Hello, World!"]`)': true
+            '(objectExpression == `{"ECHO_VALUE": "Hello, World!"}`)': true
+            '(arrayExpression == `["Hello, World!"]`)': true
+            (conditions[?type == 'Ready']):
+            - status: 'True'
+      description: Verify complete status is restored when the reference returns
     catch:
     - description: kro controller pod logs collector
       podLogs:

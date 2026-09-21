@@ -8,6 +8,51 @@ spec:
     kind: ExternalReferenceTest
     spec:
       name: string | default=foobar
+      tag: string | default=v1
+      emptyObject: map[string]string | default={}
+      emptyArray: "[]string | default=[]"
+      optionalValue: string
+    status:
+      tag: ${schema.spec.tag}
+      extInfo:
+        source: ${input.metadata.name}
+        value: ${input.data.ECHO_VALUE}
+      partialInfo:
+        tag: ${schema.spec.tag}
+        value: ${input.data.ECHO_VALUE}
+      nestedInfo:
+        nested:
+          value: ${input.data.ECHO_VALUE}
+      arrayInfo:
+        values:
+          - ${input.data.ECHO_VALUE}
+      emptyObject: ${schema.spec.emptyObject}
+      emptyArray: ${schema.spec.emptyArray}
+      resolvedValues:
+        - ${schema.spec.tag}
+        - ${schema.spec.name}
+      values:
+        - ${schema.spec.tag}
+        - ${input.data.ECHO_VALUE}
+      sparseValues:
+        - ${input.data.ECHO_VALUE}
+        - ${schema.spec.tag}
+      middleValues:
+        - ${schema.spec.tag}
+        - ${input.data.ECHO_VALUE}
+        - ${schema.spec.name}
+      nullValues:
+        - ${input.data.ECHO_VALUE}
+        - ${schema.spec.?optionalValue.orValue(dyn(null))}
+        - ${input.data.ECHO_VALUE}
+      entries:
+        - tag: ${schema.spec.tag}
+          value: ${input.data.ECHO_VALUE}
+      externalValues:
+        - ${input.data.ECHO_VALUE}
+        - ${input.data.ECHO_VALUE}
+      objectExpression: ${input.data}
+      arrayExpression: ${[input.data.ECHO_VALUE]}
   resources:
     - id: input
       externalRef:

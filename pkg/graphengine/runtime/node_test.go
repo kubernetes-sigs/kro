@@ -571,12 +571,7 @@ func TestNode_TolerateDataPending(t *testing.T) {
 		assert.False(t, hasK2, "data-pending map field should be omitted")
 	})
 
-	// Option A: a data-pending array element under tolerance omits the WHOLE
-	// enclosing array field (index corruption prevents omitting a single
-	// element), while every sibling field still renders and the node does NOT
-	// data-pend. Before the fix this returned ErrDataPending and dropped the
-	// whole node.
-	t.Run("omits the whole enclosing array field when one element is data-pending", func(t *testing.T) {
+	t.Run("keeps resolved array elements when a trailing element is pending", func(t *testing.T) {
 		t.Parallel()
 		g := generator.NewGraph("g",
 			generator.WithDef("seed", map[string]any{"k": "v"}),
@@ -611,14 +606,10 @@ func TestNode_TolerateDataPending(t *testing.T) {
 		require.True(t, ok)
 		// Sibling scalar renders.
 		assert.Equal(t, true, spec["enableDNSSupport"], "sibling scalar field must still render")
-		// The whole array field is absent (not present-but-empty, not partial).
-		_, hasCidr := spec["cidrBlocks"]
-		assert.False(t, hasCidr, "enclosing array field must be absent, not empty or partial")
+		assert.Equal(t, []any{"val"}, spec["cidrBlocks"])
 	})
 
-	// Option A applies to a nested array field too: status.conditions[1] omits
-	// status.conditions, leaving the rest of status intact.
-	t.Run("omits the nested enclosing array field", func(t *testing.T) {
+	t.Run("keeps resolved objects in a nested array", func(t *testing.T) {
 		t.Parallel()
 		g := generator.NewGraph("g",
 			generator.WithDef("seed", map[string]any{"k": "v"}),
@@ -651,8 +642,7 @@ func TestNode_TolerateDataPending(t *testing.T) {
 		status, ok := out[0].Object["status"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "val", status["vpcID"], "sibling field under the same parent must survive")
-		_, hasConditions := status["conditions"]
-		assert.False(t, hasConditions, "nested enclosing array field status.conditions must be absent")
+		assert.Equal(t, []any{map[string]any{"type": "val"}}, status["conditions"])
 	})
 
 	// A non-tolerant node still data-pends the whole node on any pending field,
@@ -686,4 +676,165 @@ func TestNode_TolerateDataPending(t *testing.T) {
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, ErrDataPending), "a non-tolerant node must data-pend the whole node")
 	})
+}
+
+// Pending inputs remove empty parent objects without dropping resolved array
+// entries. Arrays retain their original indices and omit trailing pending
+// elements; explicit empty values and resolved nulls are preserved.
+func TestNode_TolerateDataPendingProjection(t *testing.T) {
+	t.Parallel()
+	const (
+		pending  = "${upstream.data.value}"
+		resolved = "${seed.tag}"
+	)
+	cases := []struct {
+		name       string
+		status     map[string]any
+		wantStatus map[string]any
+	}{
+		{
+			name: "omits an object when all its children are pending",
+			status: map[string]any{
+				"tag": resolved,
+				"extInfo": map[string]any{
+					"source": "${upstream.metadata.name}",
+					"value":  pending,
+				},
+			},
+			wantStatus: map[string]any{"tag": "v1"},
+		},
+		{
+			name: "omits nested objects with escaped field names",
+			status: map[string]any{
+				"tag": resolved,
+				"external.info": map[string]any{
+					"nested": map[string]any{"value": pending},
+				},
+			},
+			wantStatus: map[string]any{"tag": "v1"},
+		},
+		{
+			name: "keeps resolved siblings in a partial object",
+			status: map[string]any{
+				"extInfo": map[string]any{"tag": resolved, "value": pending},
+			},
+			wantStatus: map[string]any{
+				"extInfo": map[string]any{"tag": "v1"},
+			},
+		},
+		{
+			name: "keeps original array indices and omits trailing pending elements",
+			status: map[string]any{
+				"values": []any{pending, resolved, pending, resolved, pending},
+			},
+			wantStatus: map[string]any{"values": []any{nil, "v1", nil, "v1"}},
+		},
+		{
+			name: "keeps partially resolved array objects at their original indices",
+			status: map[string]any{
+				"entries": []any{
+					map[string]any{"value": pending},
+					map[string]any{"tag": resolved, "value": pending},
+					map[string]any{"value": pending},
+				},
+			},
+			wantStatus: map[string]any{
+				"entries": []any{nil, map[string]any{"tag": "v1"}},
+			},
+		},
+		{
+			name: "projects nested arrays independently",
+			status: map[string]any{
+				"matrix": []any{[]any{pending}, []any{pending, resolved, pending}, []any{pending}},
+			},
+			wantStatus: map[string]any{"matrix": []any{nil, []any{nil, "v1"}}},
+		},
+		{
+			name: "omits an entirely pending array and its empty parents",
+			status: map[string]any{
+				"tag": resolved,
+				"extInfo": map[string]any{
+					"nested": map[string]any{"values": []any{pending, pending}},
+				},
+			},
+			wantStatus: map[string]any{"tag": "v1"},
+		},
+		{
+			name: "keeps resolved empty values and nulls",
+			status: map[string]any{
+				"extInfo": map[string]any{
+					"value": pending,
+					"map":   "${{}}",
+					"list":  "${[]}",
+					"null":  "${null}",
+				},
+				"values": []any{pending, "${{}}", "${[]}", "${null}", pending},
+			},
+			wantStatus: map[string]any{
+				"extInfo": map[string]any{"map": map[string]any{}, "list": []any{}, "null": nil},
+				"values":  []any{nil, map[string]any{}, []any{}, nil},
+			},
+		},
+		{
+			name: "keeps a resolved null as the only available array element",
+			status: map[string]any{
+				"values": []any{pending, "${null}", pending},
+			},
+			wantStatus: map[string]any{"values": []any{nil, nil}},
+		},
+		{
+			name: "omits pending expressions that supply whole containers",
+			status: map[string]any{
+				"tag":    resolved,
+				"object": "${upstream.data}",
+				"array":  "${[upstream.data.value]}",
+			},
+			wantStatus: map[string]any{"tag": "v1"},
+		},
+		{
+			name: "keeps literal empty containers alongside pending fields",
+			status: map[string]any{
+				"extInfo": map[string]any{
+					"value": pending,
+					"map":   map[string]any{},
+					"list":  []any{},
+				},
+			},
+			wantStatus: map[string]any{
+				"extInfo": map[string]any{"map": map[string]any{}, "list": []any{}},
+			},
+		},
+		{
+			name: "omits status when every authored field is pending",
+			status: map[string]any{
+				"extInfo": map[string]any{"value": pending},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g := generator.NewGraph("g",
+				generator.WithDef("seed", map[string]any{"tag": "v1"}),
+				generator.WithDef("upstream", map[string]any{
+					"metadata": map[string]any{"name": "ext"},
+					"data":     map[string]any{"value": "from-external"},
+				}),
+				generator.WithDef("projection", map[string]any{"status": tc.status}),
+			)
+			p, err := mustCompiler(t).CompileWithOptions(g, compiler.WithDataPendingTolerant("projection"))
+			require.NoError(t, err)
+			rt := New(p, g)
+			setFirst(rt, "seed")
+			// Leave upstream unpublished, as when an external reference is missing.
+			out, err := rt.Node("projection").Resolve()
+			require.NoError(t, err)
+			require.Len(t, out, 1)
+			want := map[string]any{}
+			if tc.wantStatus != nil {
+				want["status"] = tc.wantStatus
+			}
+			assert.Equal(t, want, out[0].Object)
+		})
+	}
 }

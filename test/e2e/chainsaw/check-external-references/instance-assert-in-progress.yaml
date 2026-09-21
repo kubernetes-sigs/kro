@@ -12,3 +12,19 @@ spec:
   name: foobar
 status:
   state: IN_PROGRESS
+  tag: v1
+  (contains(keys(@), 'extInfo')): false
+  '(partialInfo == `{"tag": "v1"}`)': true
+  (contains(keys(@), 'nestedInfo')): false
+  (contains(keys(@), 'arrayInfo')): false
+  '(emptyObject == `{}`)': true
+  '(emptyArray == `[]`)': true
+  '(resolvedValues == `["v1", "foobar"]`)': true
+  (contains(keys(@), 'externalValues')): false
+  '(values == `["v1"]`)': true
+  '(sparseValues == `[null, "v1"]`)': true
+  '(middleValues == `["v1", null, "foobar"]`)': true
+  '(nullValues == `[null, null]`)': true
+  '(entries == `[{"tag": "v1"}]`)': true
+  (contains(keys(@), 'objectExpression')): false
+  (contains(keys(@), 'arrayExpression')): false

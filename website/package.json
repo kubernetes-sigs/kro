@@ -27,11 +27,11 @@
     "npm-check-updates": "^23.1.0",
     "path-to-regexp": ">=8.4.2",
     "prism-react-renderer": "^2.4.1",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@docusaurus/module-type-aliases": "^3.10.2",
@@ -40,9 +40,9 @@
     "@testing-library/react": "^16.3.3",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
-    "@types/react-dom": "^19.2.5",
-    "jest": "^30.5.1",
-    "jest-environment-jsdom": "^30.5.1",
+    "@types/react-dom": "^19.3.0",
+    "jest": "^30.5.2",
+    "jest-environment-jsdom": "^30.5.2",
     "ts-jest": "^29.4.12",
     "typescript": "~6.0.3"
   },

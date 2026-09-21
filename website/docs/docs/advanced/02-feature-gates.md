@@ -27,12 +27,14 @@ Or pass the flag directly to the controller binary:
 
 ## Available Feature Gates
 
-| Feature Gate               | Default | Stage | Since   | Description                                                                             |
-| -------------------------- | ------- | ----- | ------- | --------------------------------------------------------------------------------------- |
-| `CELOmitFunction`          | `false` | Alpha | v0.9.0  | Enables the `omit()` CEL function for conditional field omission in resource templates. |
-| `InstanceConditionEvents`  | `false` | Alpha | v0.9.0  | Emits Kubernetes Events on instance status condition transitions.                       |
-| `InstanceConditionMetrics` | `false` | Alpha | v0.9.3  | Exports per-instance condition status as Prometheus metrics.                            |
-| `GraphKind`                | `false` | Alpha | v0.10.0 | Starts the controller for the `Graph` API (`kro.run/v1alpha1`).                         |
+| Feature Gate                               | Default | Stage | Since   | Description                                                                                  |
+| ------------------------------------------ | ------- | ----- | ------- | -------------------------------------------------------------------------------------------- |
+| `CELOmitFunction`                          | `false` | Alpha | v0.9.0  | Enables the `omit()` CEL function for conditional field omission in resource templates.      |
+| `InstanceConditionEvents`                  | `false` | Alpha | v0.9.0  | Emits Kubernetes Events on instance status condition transitions.                            |
+| `InstanceConditionMetrics`                 | `false` | Alpha | v0.9.3  | Exports per-instance condition status as Prometheus metrics.                                 |
+| `GraphKind`                                | `false` | Alpha | v0.10.0 | Starts the controller for the `Graph` API (`kro.run/v1alpha1`).                              |
+| `ExtendedCRDComparison`                    | `false` | Alpha | v0.10.0 | Checks additional, explicitly classified CRD schema changes.                                 |
+| `ConservativeCRDComparison`                | `false` | Alpha | v0.10.0 | Treats CRD schema changes without an explicit compatibility classification as breaking.      |
 
 ### CELOmitFunction
 
@@ -94,3 +96,32 @@ Enabling `GraphKind` has prerequisites beyond setting the gate:
 
 See [Enabling Graphs](../concepts/graph/01-overview.md#enabling-graphs) for the
 full procedure.
+
+### CRD compatibility checks
+
+By default, kro retains its original CRD compatibility checks. Enable
+`ExtendedCRDComparison` to classify additional schema changes,
+including map value schemas, enum constraints, formats, nullability,
+unknown-field preservation, Kubernetes list and map topology, and CEL
+validation rules. The comparator records safe relaxations as non-breaking and
+blocks changes that narrow accepted values or alter topology.
+
+`ConservativeCRDComparison` controls the conservative fallback for
+schema fields that kro does not explicitly classify. When enabled, any change
+to one of those fields is considered breaking until kro implements a more
+specific check. This can block compatible changes, but prevents unsupported
+schema changes from passing unnoticed.
+
+The gates are independent. For more accurate checks without the conservative
+fallback, enable only `ExtendedCRDComparison`. For the most restrictive
+policy, enable both:
+
+```yaml
+config:
+  featureGates:
+    ExtendedCRDComparison: true
+    ConservativeCRDComparison: true
+```
+
+For instructions on applying an intentional breaking schema change, see
+[Breaking Changes](../concepts/rgd/01-overview.md#breaking-changes).

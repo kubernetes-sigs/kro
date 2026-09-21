@@ -177,18 +177,22 @@ kro supports the following annotations on ResourceGraphDefinitions:
 
 #### Breaking Changes
 
-kro detects breaking changes when you update an RGD and blocks them by default to protect existing instances. If you need to force a breaking change, add the annotation:
+kro detects breaking changes when you update an RGD and blocks them by default
+to protect existing instances. After assessing and preparing existing instances
+for an intentional breaking change, temporarily set the
+`kro.run/allow-breaking-changes` annotation:
 
-```yaml
-apiVersion: kro.run/v1alpha1
-kind: ResourceGraphDefinition
-metadata:
-  name: my-rgd
-  annotations:
-    kro.run/allow-breaking-changes: "true"
-spec:
-  # ...
+```bash
+kubectl annotate resourcegraphdefinition my-rgd \
+  kro.run/allow-breaking-changes="true" --overwrite
+kubectl apply -f my-rgd.yaml
+kubectl annotate resourcegraphdefinition my-rgd \
+  kro.run/allow-breaking-changes-
 ```
+
+The annotation bypasses every breaking-change check, including checks enabled
+by the CRD comparison feature gates. Remove it after the intended update so
+later accidental breaking changes are blocked again.
 
 Currently, kro only detects breaking changes in the schema section of an RGD:
 
@@ -198,8 +202,15 @@ Currently, kro only detects breaking changes in the schema section of an RGD:
 - Enum restrictions
 - Pattern changes
 
+Additional opt-in checks cover more schema facets and can conservatively reject
+changes kro cannot yet classify. See
+[Feature Gates](../../advanced/02-feature-gates.md#crd-compatibility-checks) for
+the available policies and rollout guidance.
+
 :::warning
-Breaking changes can invalidate existing instances. Ensure you understand the impact before using this annotation.
+The annotation does not migrate existing instances. A breaking CRD schema
+change can make stored resources invalid or unusable; prepare or migrate them
+before bypassing the check.
 :::
 
 ## What RGDs Provide

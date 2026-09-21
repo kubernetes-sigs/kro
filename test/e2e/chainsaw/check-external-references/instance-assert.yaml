@@ -16,3 +16,25 @@ status:
   (conditions[?type == 'Ready']):
     - status: 'True'
   state: ACTIVE
+  tag: v1
+  extInfo:
+    source: check-external-references
+    value: "Hello, World!"
+  partialInfo:
+    tag: v1
+    value: "Hello, World!"
+  nestedInfo:
+    nested:
+      value: "Hello, World!"
+  '(arrayInfo == `{"values": ["Hello, World!"]}`)': true
+  '(emptyObject == `{}`)': true
+  '(emptyArray == `[]`)': true
+  '(resolvedValues == `["v1", "foobar"]`)': true
+  '(values == `["v1", "Hello, World!"]`)': true
+  '(sparseValues == `["Hello, World!", "v1"]`)': true
+  '(middleValues == `["v1", "Hello, World!", "foobar"]`)': true
+  '(nullValues == `["Hello, World!", null, "Hello, World!"]`)': true
+  '(entries == `[{"tag": "v1", "value": "Hello, World!"}]`)': true
+  '(externalValues == `["Hello, World!", "Hello, World!"]`)': true
+  '(objectExpression == `{"ECHO_VALUE": "Hello, World!"}`)': true
+  '(arrayExpression == `["Hello, World!"]`)': true

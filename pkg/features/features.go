@@ -41,21 +41,29 @@ const (
 	// and existing ResourceGraphDefinition behavior is unaffected.
 	GraphKind featuregate.Feature = "GraphKind"
 
-	// StrictCRDCompatibilityChecks enables conservative compatibility checks
-	// for schema facets that the original CRD comparator did not cover. When
-	// disabled, the comparator retains its previous behavior.
-	StrictCRDCompatibilityChecks featuregate.Feature = "strict-crd-compatibility-checks"
+	// ExtendedCRDComparison enables compatibility checks for schema facets that
+	// the original CRD comparator did not cover. When disabled, the comparator
+	// retains its previous behavior.
+	ExtendedCRDComparison featuregate.Feature = "ExtendedCRDComparison"
+
+	// ConservativeCRDComparison treats changes to OpenAPI schema fields without
+	// an explicit compatibility classification as breaking.
+	ConservativeCRDComparison featuregate.Feature = "ConservativeCRDComparison"
 )
 
 // defaultKroFeatureGates consists of all known KRO-specific feature keys.
 // To add a new feature, define a Feature constant above and add it here with
 // its default state and maturity stage (Alpha, Beta, or GA).
 var defaultKroFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
-	InstanceConditionEvents:      {Default: false, PreRelease: featuregate.Alpha},
-	InstanceConditionMetrics:     {Default: false, PreRelease: featuregate.Alpha},
-	CELOmitFunction:              {Default: false, PreRelease: featuregate.Alpha},
-	GraphKind:                    {Default: false, PreRelease: featuregate.Alpha},
-	StrictCRDCompatibilityChecks: {Default: false, PreRelease: featuregate.Alpha},
+	InstanceConditionEvents:  {Default: false, PreRelease: featuregate.Alpha},
+	InstanceConditionMetrics: {Default: false, PreRelease: featuregate.Alpha},
+	CELOmitFunction:          {Default: false, PreRelease: featuregate.Alpha},
+	GraphKind:                {Default: false, PreRelease: featuregate.Alpha},
+	ExtendedCRDComparison:    {Default: false, PreRelease: featuregate.Alpha},
+	ConservativeCRDComparison: {
+		Default:    false,
+		PreRelease: featuregate.Alpha,
+	},
 }
 
 // FeatureGate is the shared global MutableFeatureGate for KRO.

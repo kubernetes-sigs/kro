@@ -41,13 +41,8 @@ const (
 	// and existing ResourceGraphDefinition behavior is unaffected.
 	GraphKind featuregate.Feature = "GraphKind"
 
-	// ExtendedCRDComparison enables compatibility checks for schema facets that
-	// the original CRD comparator did not cover. When disabled, the comparator
-	// retains its previous behavior.
-	ExtendedCRDComparison featuregate.Feature = "ExtendedCRDComparison"
-
-	// ConservativeCRDComparison treats changes to OpenAPI schema fields without
-	// an explicit compatibility classification as breaking.
+	// ConservativeCRDComparison enables conservative compatibility checks
+	// for schema facets that the default CRD comparator does not cover.
 	ConservativeCRDComparison featuregate.Feature = "ConservativeCRDComparison"
 )
 
@@ -59,7 +54,6 @@ var defaultKroFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	InstanceConditionMetrics: {Default: false, PreRelease: featuregate.Alpha},
 	CELOmitFunction:          {Default: false, PreRelease: featuregate.Alpha},
 	GraphKind:                {Default: false, PreRelease: featuregate.Alpha},
-	ExtendedCRDComparison:    {Default: false, PreRelease: featuregate.Alpha},
 	ConservativeCRDComparison: {
 		Default:    false,
 		PreRelease: featuregate.Alpha,

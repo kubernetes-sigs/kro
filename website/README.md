@@ -58,10 +58,26 @@ When a new kro controller version is released, you should also update/release th
     npm run docusaurus docs:version $version_number
     ```
 
-2. **Submit a Pull Request**  
-    Commit your changes and open a PR to publish the new versioned docs.
+2. **Choose whether to promote the docs to latest**
+    `lastVersion` in `docusaurus.config.ts` controls which version is served at
+    the unversioned URLs and recommended as latest. Update it only when
+    promoting a stable release.
 
-3. **Add redirects for moved pages (when cutting 0.10.0)**  
+    For a release candidate, use the full version without the `v` prefix, e.g.
+    `npm run docusaurus docs:version 0.10.0-rc.0`, and leave `lastVersion` at
+    `0.9.4`. Keep the new entry at the start of `versions.json`: Docusaurus
+    serves it under `/0.10.0-rc.0/`, includes it in the version dropdown, and
+    displays its built-in unreleased banner with a link to the latest stable
+    docs. The development docs remain under `/next/`.
+
+3. **Review version-specific instructions**
+    The version command copies `docs/` and the sidebars; it does not update
+    installation commands. In the new snapshot, pin install and upgrade
+    examples to the release being documented. For RCs, an unpinned Helm command
+    or GitHub's `releases/latest` endpoint selects stable instead of the RC.
+    Keep the stable docs and their installation instructions unchanged.
+
+4. **Add redirects for moved pages (when promoting stable 0.10.0)**
     The current docs reorganized `docs/concepts/` ahead of 0.10.0. Once 0.10.0
     becomes `lastVersion` in `docusaurus.config.ts`, the pre-0.10.0 URLs below
     stop resolving at the site root. Add `@docusaurus/plugin-client-redirects`
@@ -79,3 +95,12 @@ When a new kro controller version is released, you should also update/release th
     | `/docs/concepts/rgd/resource-definitions/readiness` | `/docs/concepts/reconciliation/readiness` |
     | `/docs/concepts/rgd/resource-definitions/collections` | `/docs/concepts/reconciliation/collections` |
     | `/docs/concepts/rgd/resource-definitions/external-references` | `/docs/concepts/reconciliation/external-references` |
+
+5. **Validate and submit a Pull Request**
+    Run `npm run typecheck`, `npm test`, and `npm run build` from `website/`.
+    Check that the new snapshot has its own routes, that its internal links
+    stay in that version, and that the homepage and latest-version banner
+    links still target the stable docs. Commit the snapshot, versioned sidebar,
+    `versions.json`, and any supporting changes, then open a PR. The docs
+    deployment workflow publishes all versions when the PR merges into `main`;
+    a release tag is not required to publish the docs.

@@ -91,6 +91,8 @@ const config: Config = {
           editUrl: "https://github.com/kubernetes-sigs/kro/tree/main/website",
           disableVersioning: false,
           includeCurrentVersion: true,
+          // Latest stable release, independent of the first entry in versions.json.
+          // Keep this pinned when cutting release-candidate docs.
           lastVersion: "0.9.4",
         },
         blog: false,

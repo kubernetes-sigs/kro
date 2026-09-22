@@ -118,11 +118,13 @@ func TestApply_OnToleratedRejectionHookFires(t *testing.T) {
 			}
 
 			res, err := s.Apply(context.Background(), compileAndBuild(t, graph), watchrouter.NoopWatcher{})
-			require.NoError(t, err, "a tolerated update rejection must still converge")
-			assert.Len(t, res.Applied, 3)
-			assert.Empty(t, res.Unresolved)
-			assert.Equal(t, map[string]any{"k": "old"}, getFakeCM(t, base, "dependent").Object["data"],
-				"dependents must see the live value, not the rejected desired value")
+			require.Error(t, err,
+				"the RGD path surfaces the dropped update instead of converging")
+			assert.False(t, errors.Is(err, ErrNotReady),
+				"the RGD path fails hard (ERROR), not soft not-ready, got %v", err)
+			assert.False(t, cmExists(t, base, "dependent"),
+				"dependents must not converge while the collection update is rejected")
+			_ = res
 
 			mu.Lock()
 			defer mu.Unlock()

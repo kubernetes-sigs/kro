@@ -1040,10 +1040,9 @@ func (s *Simple) applyCollectionItem(ctx context.Context, rt *runtime.Runtime, n
 				st.recordFailure(i, fmt.Errorf("item %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
 				return nil
 			}
-			// Tolerate validation rejections on existing objects so immutable
-			// updates do not wedge the node. Surface the unapplied change through
-			// the log and optional event hook while publishing the live value.
-			log.FromContext(ctx).Info("collection item update rejected; keeping live object and converging (desired change did not land)",
+			// Keep the live object so an immutable update does not wedge the
+			// node; surface details through the log and optional event hook.
+			log.FromContext(ctx).Info("collection item update rejected; keeping live object (desired change did not land)",
 				"node", s.qualifiedPath(n.ID()),
 				"object", obj.GetNamespace()+"/"+obj.GetName(),
 				"gvk", obj.GroupVersionKind().String(),
@@ -1062,6 +1061,13 @@ func (s *Simple) applyCollectionItem(ctx context.Context, rt *runtime.Runtime, n
 				})
 			}
 			st.recordUpdateRejected(i, managedResourceFrom(n, current), desired, current)
+			// Maintain compatibility with the RGD/instance path, where a dropped
+			// update must surface as ERROR instead of ACTIVE. The standalone
+			// Graph path keeps converging (anti-wedge).
+			if s.GateReadiness {
+				st.recordHardError(i, fmt.Errorf("item %s/%s: update rejected (%s), keeping live object: %w",
+					obj.GetNamespace(), obj.GetName(), reason, err))
+			}
 			return nil
 		}
 		// The object does not exist and CREATE failed. A genuinely malformed

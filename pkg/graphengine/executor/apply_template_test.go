@@ -228,9 +228,10 @@ func TestSimple_ApplyTemplate_CollectionApplyTolerance(t *testing.T) {
 			"existing objects keep their tracked identities")
 	})
 
-	t.Run("a permanent update rejection on an existing object is tolerated", func(t *testing.T) {
+	t.Run("a permanent update rejection is tolerated on the standalone Graph path", func(t *testing.T) {
 		t.Parallel()
-		// Invalid updates on existing objects remain tolerated, including immutable fields.
+		// The Graph path does not gate readiness: Invalid updates on existing
+		// objects (incl. immutable fields) remain tolerated so the node converges.
 		base := fake.NewClientBuilder().WithScheme(newScheme(t)).
 			WithObjects(liveCM("cm-alpha"), liveCM("cm-beta")).Build()
 		cl := &patchFailClient{Client: base, err: apierrors.NewInvalid(schema.GroupKind{Kind: "ConfigMap"}, "cm-alpha", nil)}
@@ -240,6 +241,32 @@ func TestSimple_ApplyTemplate_CollectionApplyTolerance(t *testing.T) {
 
 		require.NoError(t, err,
 			"a permanent update rejection on existing items must be tolerated so the node converges")
+		names := make([]string, 0, len(res.Applied))
+		for _, a := range res.Applied {
+			names = append(names, a.Name)
+		}
+		assert.ElementsMatch(t, []string{"cm-alpha", "cm-beta"}, names,
+			"existing objects keep their tracked identities even when the update is rejected")
+	})
+
+	t.Run("a permanent update rejection fails the RGD path hard", func(t *testing.T) {
+		t.Parallel()
+		// The RGD/instance path gates readiness: the live object is kept but the
+		// node fails hard so the dropped update surfaces as ERROR (matching the
+		// pre-graph RGD contract) instead of being reported ACTIVE.
+		base := fake.NewClientBuilder().WithScheme(newScheme(t)).
+			WithObjects(liveCM("cm-alpha"), liveCM("cm-beta")).Build()
+		cl := &patchFailClient{Client: base, err: apierrors.NewInvalid(schema.GroupKind{Kind: "ConfigMap"}, "cm-alpha", nil)}
+
+		s := NewSimple(cl)
+		s.GateReadiness = true
+		res, err := s.Apply(context.Background(),
+			compileAndBuild(t, collectionCMGraph()), watchrouter.NoopWatcher{})
+
+		require.Error(t, err, "a tolerated update rejection on the RGD path must surface")
+		assert.False(t, errors.Is(err, ErrNotReady),
+			"the RGD path fails hard (ERROR), not soft not-ready, got %v", err)
+		assert.ErrorContains(t, err, "update rejected")
 		names := make([]string, 0, len(res.Applied))
 		for _, a := range res.Applied {
 			names = append(names, a.Name)

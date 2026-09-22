@@ -957,9 +957,16 @@ var _ = Describe("ForEach Collections", func() {
 					"restartPolicy": "Never",
 					"containers": []any{
 						map[string]any{
-							"name":    "worker",
-							"image":   "busybox:latest",
-							"command": []any{"sh", "-c", "echo ${summaryConfig.data.level2Count} items && sleep 3600"},
+							"name":  "worker",
+							"image": "busybox:latest",
+							// Command uses the per-item value (stable per Pod) rather
+							// than the collection-wide count, so scaling does not
+							// mutate the immutable command of existing Pods. The
+							// count form passed pre-graph-implementation, which did
+							// not re-render existing members on scale; post-graph
+							// re-renders every member, making the count change an
+							// immutable-field update the apiserver rejects.
+							"command": []any{"sh", "-c", "echo ${l2.data.sourceEntry} && sleep 3600"},
 						},
 					},
 				},

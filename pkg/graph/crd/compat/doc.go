@@ -24,40 +24,38 @@
 //   - Type changes
 //   - Adding required fields
 //   - Restricting enum values
+//   - Adding an enum constraint
 //   - Pattern changes
+//   - Removing nullable support
+//   - Removing unknown-field preservation
 //
 // Non-breaking changes detected include:
 //   - Adding new properties that are not required
 //   - Expanding enum values
+//   - Removing an enum constraint
 //   - Changing descriptions
 //   - Changing default values
 //   - Removing optional fields from 'required' list
+//   - Adding nullable support
+//   - Adding unknown-field preservation
 //
-// ExtendedCRDComparison compares map value schemas recursively. It also detects
-// these additional breaking changes:
+// ConservativeCRDComparison compares map value schemas recursively and
+// treats unclassified schema changes as breaking. It also detects these
+// additional breaking changes:
 //   - Disabling additional properties
 //   - Constraining additional properties
-//   - Adding an enum constraint where none existed
 //   - Adding a format constraint
 //   - Changing a format constraint
-//   - Removing nullable support
-//   - Removing unknown-field preservation
 //   - Changing Kubernetes list or map topology
 //   - Adding CEL validation rules
 //   - Changing CEL validation rules
 //
-// Additional non-breaking changes detected when ExtendedCRDComparison is enabled:
+// Additional non-breaking changes detected when
+// ConservativeCRDComparison is enabled:
 //   - Enabling additional properties
 //   - Relaxing additional properties
-//   - Removing an enum constraint
 //   - Removing a format constraint
-//   - Adding nullable support
-//   - Adding unknown-field preservation
 //   - Removing CEL validation rules
-//
-// ConservativeCRDComparison treats changes to schema facets without an
-// explicit compatibility classification as breaking. It can be enabled
-// independently of ExtendedCRDComparison.
 //
 // Usage:
 //

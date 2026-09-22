@@ -36,12 +36,15 @@ func setFeatureGate(t *testing.T, feature featuregate.Feature, enabled bool) {
 	})
 }
 
-func TestCompareExtendedCRDComparisonFeatureGate(t *testing.T) {
+func TestCompareConservativeCRDComparisonFeatureGate(t *testing.T) {
+	trueValue := true
 	tests := []struct {
-		name               string
-		oldSchema          *v1.JSONSchemaProps
-		newSchema          *v1.JSONSchemaProps
-		expectedChangeType ChangeType
+		name                   string
+		oldSchema              *v1.JSONSchemaProps
+		newSchema              *v1.JSONSchemaProps
+		expectedChangeType     ChangeType
+		breakingByDefault      bool
+		breakingConservatively bool
 	}{
 		{
 			name:      "CEL validation",
@@ -50,7 +53,15 @@ func TestCompareExtendedCRDComparisonFeatureGate(t *testing.T) {
 				Type:         "object",
 				XValidations: v1.ValidationRules{{Rule: "self.size() < 2"}},
 			},
-			expectedChangeType: ValidationRulesChanged,
+			expectedChangeType:     ValidationRulesChanged,
+			breakingConservatively: true,
+		},
+		{
+			name:                   "format",
+			oldSchema:              &v1.JSONSchemaProps{Type: "integer", Format: "int32"},
+			newSchema:              &v1.JSONSchemaProps{Type: "integer", Format: "int64"},
+			expectedChangeType:     FormatChanged,
+			breakingConservatively: true,
 		},
 		{
 			name: "map value property",
@@ -71,80 +82,93 @@ func TestCompareExtendedCRDComparisonFeatureGate(t *testing.T) {
 					Schema: &v1.JSONSchemaProps{Type: "object"},
 				},
 			},
-			expectedChangeType: PropertyRemoved,
+			expectedChangeType:     PropertyRemoved,
+			breakingConservatively: true,
 		},
 		{
-			name:               "enum constraint",
-			oldSchema:          &v1.JSONSchemaProps{Type: "string"},
-			newSchema:          &v1.JSONSchemaProps{Type: "string", Enum: []v1.JSON{{Raw: []byte(`"value"`)}}},
-			expectedChangeType: EnumConstraintAdded,
+			name:      "enum constraint added",
+			oldSchema: &v1.JSONSchemaProps{Type: "string"},
+			newSchema: &v1.JSONSchemaProps{
+				Type: "string",
+				Enum: []v1.JSON{{Raw: []byte(`"value"`)}},
+			},
+			expectedChangeType:     EnumConstraintAdded,
+			breakingByDefault:      true,
+			breakingConservatively: true,
+		},
+		{
+			name:                   "nullable removed",
+			oldSchema:              &v1.JSONSchemaProps{Type: "string", Nullable: true},
+			newSchema:              &v1.JSONSchemaProps{Type: "string"},
+			expectedChangeType:     NullableRemoved,
+			breakingByDefault:      true,
+			breakingConservatively: true,
+		},
+		{
+			name: "unknown-field preservation removed",
+			oldSchema: &v1.JSONSchemaProps{
+				Type:                   "object",
+				XPreserveUnknownFields: &trueValue,
+			},
+			newSchema:              &v1.JSONSchemaProps{Type: "object"},
+			expectedChangeType:     PreserveUnknownFieldsRemoved,
+			breakingByDefault:      true,
+			breakingConservatively: true,
+		},
+		{
+			name:                   "unclassified constraint",
+			oldSchema:              &v1.JSONSchemaProps{Type: "array"},
+			newSchema:              &v1.JSONSchemaProps{Type: "array", UniqueItems: true},
+			expectedChangeType:     UnclassifiedSchemaChange,
+			breakingConservatively: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Run("disabled", func(t *testing.T) {
-				setFeatureGate(t, features.ExtendedCRDComparison, false)
-				assert.False(t, Compare(tt.oldSchema, tt.newSchema).HasChanges())
-			})
+			states := []struct {
+				name             string
+				conservative     bool
+				expectedBreaking bool
+			}{
+				{
+					name:             "default",
+					expectedBreaking: tt.breakingByDefault,
+				},
+				{
+					name:             "conservative",
+					conservative:     true,
+					expectedBreaking: tt.breakingConservatively,
+				},
+			}
 
-			t.Run("enabled", func(t *testing.T) {
-				setFeatureGate(t, features.ExtendedCRDComparison, true)
-				report := Compare(tt.oldSchema, tt.newSchema)
-				require.Len(t, report.BreakingChanges, 1)
-				assert.Equal(t, tt.expectedChangeType, report.BreakingChanges[0].ChangeType)
-			})
-		})
-	}
-}
+			for _, state := range states {
+				t.Run(state.name, func(t *testing.T) {
+					setFeatureGate(t, features.ConservativeCRDComparison, state.conservative)
+					report := Compare(tt.oldSchema, tt.newSchema)
 
-func TestCompareUnclassifiedCRDChangesFeatureGate(t *testing.T) {
-	tests := []struct {
-		name                          string
-		extendedComparison            bool
-		conservativeComparison        bool
-		expectedUnclassifiedBreakages int
-	}{
-		{
-			name: "both disabled",
-		},
-		{
-			name:               "extended comparison only",
-			extendedComparison: true,
-		},
-		{
-			name:                          "unclassified fallback only",
-			conservativeComparison:        true,
-			expectedUnclassifiedBreakages: 1,
-		},
-		{
-			name:                          "both enabled",
-			extendedComparison:            true,
-			conservativeComparison:        true,
-			expectedUnclassifiedBreakages: 1,
-		},
-	}
+					setFeatureGate(t, features.ConservativeCRDComparison, !state.conservative)
+					explicitReport := Compare(
+						tt.oldSchema,
+						tt.newSchema,
+						WithConservativeComparison(state.conservative),
+					)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			setFeatureGate(t, features.ExtendedCRDComparison, tt.extendedComparison)
-			setFeatureGate(t, features.ConservativeCRDComparison, tt.conservativeComparison)
-
-			report := Compare(
-				&v1.JSONSchemaProps{Type: "array"},
-				&v1.JSONSchemaProps{Type: "array", UniqueItems: true},
-			)
-
-			require.Len(t, report.BreakingChanges, tt.expectedUnclassifiedBreakages)
-			if tt.expectedUnclassifiedBreakages > 0 {
-				assert.Equal(t, UnclassifiedSchemaChange, report.BreakingChanges[0].ChangeType)
+					assert.Equal(t, explicitReport, report)
+					if !state.expectedBreaking {
+						assert.False(t, report.HasBreakingChanges())
+						return
+					}
+					require.Len(t, report.BreakingChanges, 1)
+					assert.Equal(t, tt.expectedChangeType, report.BreakingChanges[0].ChangeType)
+				})
 			}
 		})
 	}
 }
 
 func TestCompareAdditionalPropertiesSchema(t *testing.T) {
-	setFeatureGate(t, features.ExtendedCRDComparison, true)
+	setFeatureGate(t, features.ConservativeCRDComparison, true)
 
 	mapSchema := func(properties map[string]v1.JSONSchemaProps) *v1.JSONSchemaProps {
 		return &v1.JSONSchemaProps{
@@ -211,7 +235,7 @@ func TestCompareAdditionalPropertiesSchema(t *testing.T) {
 }
 
 func TestCompareValidationRules(t *testing.T) {
-	setFeatureGate(t, features.ExtendedCRDComparison, true)
+	setFeatureGate(t, features.ConservativeCRDComparison, true)
 
 	tests := []struct {
 		name                string
@@ -266,7 +290,6 @@ func TestCompareValidationRules(t *testing.T) {
 }
 
 func TestCompareValidationFacets(t *testing.T) {
-	setFeatureGate(t, features.ExtendedCRDComparison, true)
 	setFeatureGate(t, features.ConservativeCRDComparison, true)
 
 	trueValue := true
@@ -326,7 +349,7 @@ func TestCompareValidationFacets(t *testing.T) {
 			expectedFieldPath: ".x-kubernetes-preserve-unknown-fields",
 		},
 		{
-			name:              "list type changed",
+			name:              "list type changed from atomic to set is breaking",
 			old:               v1.JSONSchemaProps{Type: "array", XListType: &atomic},
 			new:               v1.JSONSchemaProps{Type: "array", XListType: &set},
 			breakingType:      TopologyChanged,

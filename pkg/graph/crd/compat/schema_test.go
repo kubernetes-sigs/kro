@@ -402,7 +402,7 @@ func TestCompareProperties(t *testing.T) {
 			}
 
 			result := &Report{}
-			compareProperties("root", oldSchema, newSchema, result, compareOptions{})
+			compareProperties("root", oldSchema, newSchema, result, false)
 
 			if tt.breakingCount > 0 {
 				assert.True(t, result.HasBreakingChanges(), "Expected breaking changes")
@@ -552,14 +552,13 @@ func TestCompareRequiredFields(t *testing.T) {
 
 func TestCompareEnumValues(t *testing.T) {
 	tests := []struct {
-		name               string
-		oldEnum            []v1.JSON
-		newEnum            []v1.JSON
-		expectBreaking     bool
-		breakingCount      int
-		nonBreakingCount   int
-		checkBreakingType  ChangeType
-		extendedComparison bool
+		name              string
+		oldEnum           []v1.JSON
+		newEnum           []v1.JSON
+		expectBreaking    bool
+		breakingCount     int
+		nonBreakingCount  int
+		checkBreakingType ChangeType
 	}{
 		{
 			name:           "identical enums",
@@ -568,19 +567,17 @@ func TestCompareEnumValues(t *testing.T) {
 			expectBreaking: false,
 		},
 		{
-			name:               "added enum constraint",
-			newEnum:            []v1.JSON{{Raw: []byte("\"value1\"")}},
-			expectBreaking:     true,
-			breakingCount:      1,
-			checkBreakingType:  EnumConstraintAdded,
-			extendedComparison: true,
+			name:              "added enum constraint",
+			newEnum:           []v1.JSON{{Raw: []byte("\"value1\"")}},
+			expectBreaking:    true,
+			breakingCount:     1,
+			checkBreakingType: EnumConstraintAdded,
 		},
 		{
-			name:               "removed enum constraint",
-			oldEnum:            []v1.JSON{{Raw: []byte("\"value1\"")}},
-			expectBreaking:     false,
-			nonBreakingCount:   1,
-			extendedComparison: true,
+			name:             "removed enum constraint",
+			oldEnum:          []v1.JSON{{Raw: []byte("\"value1\"")}},
+			expectBreaking:   false,
+			nonBreakingCount: 1,
 		},
 		{
 			name:              "removed enum value",
@@ -620,7 +617,7 @@ func TestCompareEnumValues(t *testing.T) {
 			}
 
 			result := &Report{}
-			compareEnumValues("root", oldSchema, newSchema, result, tt.extendedComparison)
+			compareEnumValues("root", oldSchema, newSchema, result)
 
 			if tt.expectBreaking {
 				assert.True(t, result.HasBreakingChanges(), "Expected breaking changes")
@@ -707,7 +704,7 @@ func TestCompareArrayItems(t *testing.T) {
 			}
 
 			result := &Report{}
-			compareArrayItems("root", oldSchema, newSchema, result, compareOptions{})
+			compareArrayItems("root", oldSchema, newSchema, result, false)
 
 			if tt.expectBreaking {
 				assert.True(t, result.HasBreakingChanges(), "Expected breaking changes")

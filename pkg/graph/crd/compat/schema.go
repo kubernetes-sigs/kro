@@ -29,25 +29,39 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/features"
 )
 
-// Compare compares two OpenAPIV3Schema objects and returns a compatibility report.
-// It identifies breaking and non-breaking changes between the schemas.
-func Compare(oldSchema, newSchema *v1.JSONSchemaProps) *Report {
-	options := compareOptions{
-		extendedComparison: features.FeatureGate.Enabled(features.ExtendedCRDComparison),
-		conservativeComparison: features.FeatureGate.Enabled(
-			features.ConservativeCRDComparison,
-		),
-	}
-	return compare("", oldSchema, newSchema, options)
+type compareOptions struct {
+	conservative bool
 }
 
-type compareOptions struct {
-	extendedComparison     bool
-	conservativeComparison bool
+// CompareOption configures optional CRD compatibility checks.
+type CompareOption func(*compareOptions)
+
+// WithConservativeComparison controls whether additional and unclassified
+// schema changes are treated as breaking.
+func WithConservativeComparison(enabled bool) CompareOption {
+	return func(options *compareOptions) {
+		options.conservative = enabled
+	}
+}
+
+// Compare compares two OpenAPIV3Schema objects and returns a compatibility
+// report. Conservative comparison defaults to the configured feature-gate value
+// and can be overridden with WithConservativeComparison.
+func Compare(
+	oldSchema, newSchema *v1.JSONSchemaProps,
+	options ...CompareOption,
+) *Report {
+	config := compareOptions{
+		conservative: features.FeatureGate.Enabled(features.ConservativeCRDComparison),
+	}
+	for _, option := range options {
+		option(&config)
+	}
+	return compare("", oldSchema, newSchema, config.conservative)
 }
 
 // compare is the internal recursive implementation
-func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps, options compareOptions) *Report {
+func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps, conservativeComparison bool) *Report {
 	result := &Report{
 		BreakingChanges:    []Change{},
 		NonBreakingChanges: []Change{},
@@ -119,30 +133,26 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps, options comp
 	compareConstraints(path, oldSchema, newSchema, result)
 
 	// Compare properties
-	compareProperties(path, oldSchema, newSchema, result, options)
+	compareProperties(path, oldSchema, newSchema, result, conservativeComparison)
 
 	// Check required fields
 	compareRequiredFields(path, oldSchema, newSchema, result)
 
 	// Check enum values
-	compareEnumValues(path, oldSchema, newSchema, result, options.extendedComparison)
+	compareEnumValues(path, oldSchema, newSchema, result)
+	compareNullable(path, oldSchema, newSchema, result)
+	comparePreserveUnknownFields(path, oldSchema, newSchema, result)
 
 	// For arrays, check items schema
-	compareArrayItems(path, oldSchema, newSchema, result, options)
+	compareArrayItems(path, oldSchema, newSchema, result, conservativeComparison)
 
-	if options.extendedComparison {
+	if conservativeComparison {
 		// For maps, check the value schema.
-		compareAdditionalProperties(path, oldSchema, newSchema, result, options)
+		compareAdditionalProperties(path, oldSchema, newSchema, result, conservativeComparison)
 
 		compareFormat(path, oldSchema, newSchema, result)
-		compareNullable(path, oldSchema, newSchema, result)
-		comparePreserveUnknownFields(path, oldSchema, newSchema, result)
 		compareTopology(path, oldSchema, newSchema, result)
 		compareValidationRules(path, oldSchema, newSchema, result)
-
-	}
-
-	if options.conservativeComparison {
 		compareUnclassifiedFields(path, oldSchema, newSchema, result)
 	}
 
@@ -166,7 +176,7 @@ func compareProperties(
 	path string,
 	oldSchema, newSchema *v1.JSONSchemaProps,
 	result *Report,
-	options compareOptions,
+	conservativeComparison bool,
 ) {
 	// First, check for removed properties (breaking changes)
 	for propName, oldProp := range oldSchema.Properties {
@@ -181,7 +191,7 @@ func compareProperties(
 		}
 
 		// property exists in both schemas - compare them recursively
-		appendReport(result, compare(propPath, &oldProp, &newProp, options))
+		appendReport(result, compare(propPath, &oldProp, &newProp, conservativeComparison))
 	}
 
 	// Then check for added properties. Now things get a bit more spicy.
@@ -270,15 +280,11 @@ func compareEnumValues(
 	path string,
 	oldSchema, newSchema *v1.JSONSchemaProps,
 	result *Report,
-	extendedComparison bool,
 ) {
 	if len(oldSchema.Enum) == 0 && len(newSchema.Enum) == 0 {
 		return
 	}
 	if len(oldSchema.Enum) == 0 {
-		if !extendedComparison {
-			return
-		}
 		result.AddBreakingChange(
 			path+".enum",
 			EnumConstraintAdded,
@@ -288,9 +294,6 @@ func compareEnumValues(
 		return
 	}
 	if len(newSchema.Enum) == 0 {
-		if !extendedComparison {
-			return
-		}
 		result.AddNonBreakingChange(
 			path+".enum",
 			EnumConstraintRemoved,
@@ -323,7 +326,7 @@ func compareArrayItems(
 	path string,
 	oldSchema, newSchema *v1.JSONSchemaProps,
 	result *Report,
-	options compareOptions,
+	conservativeComparison bool,
 ) {
 	if oldSchema.Type == "array" && newSchema.Type == "array" {
 		// Use safer existence checks
@@ -331,7 +334,12 @@ func compareArrayItems(
 		newHasItems := newSchema.Items != nil && newSchema.Items.Schema != nil
 
 		if oldHasItems && newHasItems {
-			appendReport(result, compare(path+".items", oldSchema.Items.Schema, newSchema.Items.Schema, options))
+			appendReport(result, compare(
+				path+".items",
+				oldSchema.Items.Schema,
+				newSchema.Items.Schema,
+				conservativeComparison,
+			))
 		} else if oldHasItems && !newHasItems {
 			// Items schema was removed - breaking
 			result.AddBreakingChange(path+".items", PropertyRemoved, "", "")
@@ -346,7 +354,7 @@ func compareAdditionalProperties(
 	path string,
 	oldSchema, newSchema *v1.JSONSchemaProps,
 	result *Report,
-	options compareOptions,
+	conservativeComparison bool,
 ) {
 	oldAdditional := oldSchema.AdditionalProperties
 	newAdditional := newSchema.AdditionalProperties
@@ -359,7 +367,12 @@ func compareAdditionalProperties(
 	oldHasSchema := oldAdditional != nil && oldAdditional.Schema != nil
 	newHasSchema := newAdditional != nil && newAdditional.Schema != nil
 	if oldHasSchema && newHasSchema {
-		appendReport(result, compare(fieldPath, oldAdditional.Schema, newAdditional.Schema, options))
+		appendReport(result, compare(
+			fieldPath,
+			oldAdditional.Schema,
+			newAdditional.Schema,
+			conservativeComparison,
+		))
 		return
 	}
 

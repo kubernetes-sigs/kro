@@ -687,6 +687,223 @@ var _ = Describe("CRD", func() {
 			// Cleanup
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
+
+		// kubernetes-sigs/kro#1391: compareEnumValues returned immediately whenever either
+		// side's Enum was empty, so the "no enum -> has enum" transition on an existing field
+		// was never reported as a change. HasChanges() came back false and the CRD's
+		// openAPIV3Schema was never patched, even though the RGD update itself was accepted.
+		It("should require allow-breaking-changes and patch the CRD when an enum marker is added to an existing field", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-enum-added",
+				generator.WithSchema(
+					"EnumAdded", "v1alpha1",
+					map[string]any{
+						"color": "string",
+					},
+					nil,
+				),
+			)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			crdName := "enumaddeds.kro.run"
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["color"].Enum).To(BeEmpty())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			// Add an enum marker to the existing color field. This restricts what new writes
+			// can set the field to, so - consistent with PatternAdded/MinLengthAdded/etc. - it
+			// is a breaking change requiring the opt-in annotation.
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]any{
+					"color": `string | enum="red,green,blue"`,
+				})
+
+				err = env.Client.Update(ctx, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			// Without the annotation, the update must be blocked and the CRD left unpatched.
+			// Before the fix, this update would have been silently accepted
+			// (GraphAccepted: True, Ready: True) without ever reaching the CRD.
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
+
+				var foundCondition bool
+				for _, cond := range rgd.Status.Conditions {
+					if cond.Type == "KindReady" && cond.Status == metav1.ConditionFalse {
+						g.Expect(cond.Message).ToNot(BeNil())
+						g.Expect(*cond.Message).To(ContainSubstring("breaking"))
+						foundCondition = true
+						break
+					}
+				}
+				g.Expect(foundCondition).To(BeTrue(), "Expected to find KindReady=False condition")
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["color"].Enum).To(BeEmpty(),
+					"CRD must not be patched until the breaking change is allowed")
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			// Allow the breaking change and touch spec to trigger reconcile (annotation
+			// changes alone don't bump generation).
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				if rgd.Annotations == nil {
+					rgd.Annotations = make(map[string]string)
+				}
+				rgd.Annotations[krov1alpha1.AllowBreakingChangesAnnotation] = "true"
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]any{
+					"color": `string | enum="red,green,blue"`,
+				})
+
+				err = env.Client.Update(ctx, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			// Verify the RGD becomes active and the CRD's openAPIV3Schema is actually
+			// patched with the enum - this is the fix: the transition is now detected.
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				enumValues := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["color"].Enum
+				g.Expect(enumValues).To(HaveLen(3))
+				raws := make([]string, len(enumValues))
+				for i, v := range enumValues {
+					raws[i] = string(v.Raw)
+				}
+				g.Expect(raws).To(ConsistOf(`"red"`, `"green"`, `"blue"`))
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			// The constraint must actually be enforced by the apiserver now, not merely
+			// present as unread schema text.
+			invalid := newInstance("EnumAdded", "enum-added-invalid", namespace, map[string]any{
+				"color": "purple",
+			})
+			Expect(env.Client.Create(ctx, invalid)).To(HaveOccurred())
+
+			// Cleanup
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		// kubernetes-sigs/kro#1391: there was no compareXValidations-equivalent function at
+		// all, so a validation= CEL marker added to a field that previously had none was
+		// never detected as a change, regardless of the nil/empty transition.
+		It("should require allow-breaking-changes and patch the CRD when a CEL validation marker is added to an existing field", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-xvalidation-added",
+				generator.WithSchema(
+					"XValidationAdded", "v1alpha1",
+					map[string]any{
+						"name": "string",
+					},
+					nil,
+				),
+			)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			crdName := "xvalidationaddeds.kro.run"
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["name"].XValidations).To(BeEmpty())
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			// Add a CEL validation marker to the existing name field - breaking, same
+			// reasoning as the enum case above. The rule itself is a bounded, cheap scalar
+			// check (self.startsWith): what's under test is whether kro detects and applies
+			// the schema change, not CEL's own cost-estimation budget for the rule.
+			celRule := `self.startsWith('kro-')`
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]any{
+					"name": fmt.Sprintf(`string | validation="%s"`, celRule),
+				})
+
+				err = env.Client.Update(ctx, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			// Without the annotation, the update must be blocked and the CRD left unpatched.
+			// Before the fix, this update would have been silently accepted with no
+			// compareXValidations function even existing to catch it.
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["name"].XValidations).To(BeEmpty(),
+					"CRD must not be patched until the breaking change is allowed")
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			// Allow the breaking change and touch spec to trigger reconcile.
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				if rgd.Annotations == nil {
+					rgd.Annotations = make(map[string]string)
+				}
+				rgd.Annotations[krov1alpha1.AllowBreakingChangesAnnotation] = "true"
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]any{
+					"name": fmt.Sprintf(`string | validation="%s"`, celRule),
+				})
+
+				err = env.Client.Update(ctx, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			// Verify the RGD becomes active and the CRD's openAPIV3Schema is actually
+			// patched with the CEL rule under x-kubernetes-validations.
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				rules := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["name"].XValidations
+				g.Expect(rules).To(HaveLen(1))
+				g.Expect(rules[0].Rule).To(Equal(celRule))
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			// The rule must actually be enforced by the apiserver now, not merely present
+			// as unread schema text.
+			invalid := newInstance("XValidationAdded", "xvalidation-added-invalid", namespace, map[string]any{
+				"name": "not-prefixed",
+			})
+			Expect(env.Client.Create(ctx, invalid)).To(HaveOccurred())
+
+			// Cleanup
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
 	})
 
 	Context("CRD Watch Reconciliation", func() {

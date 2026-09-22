@@ -17,6 +17,7 @@ package compat
 import (
 	"bytes"
 	"strconv"
+	"strings"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
@@ -107,6 +108,9 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps) *Report {
 
 	// Check enum values
 	compareEnumValues(path, oldSchema, newSchema, result)
+
+	// Check CEL x-kubernetes-validations rules
+	compareXValidations(path, oldSchema, newSchema, result)
 
 	// For arrays, check items schema
 	compareArrayItems(path, oldSchema, newSchema, result)
@@ -224,8 +228,23 @@ func compareRequiredFields(path string, oldSchema, newSchema *v1.JSONSchemaProps
 
 // compareEnumValues checks for changes to enum values
 func compareEnumValues(path string, oldSchema, newSchema *v1.JSONSchemaProps, result *Report) {
-	// Use length checks instead of nil checks
-	if len(oldSchema.Enum) == 0 || len(newSchema.Enum) == 0 {
+	oldEmpty := len(oldSchema.Enum) == 0
+	newEmpty := len(newSchema.Enum) == 0
+
+	if oldEmpty && newEmpty {
+		return
+	}
+
+	if oldEmpty {
+		// Adding an enum where none existed - breaking, same as PatternAdded: it restricts
+		// what new writes can set the field to, even though it doesn't affect stored data.
+		result.AddBreakingChange(path+".enum", EnumAdded, "", joinJSONValues(newSchema.Enum))
+		return
+	}
+	if newEmpty {
+		// Removing the enum entirely - non-breaking, same as PatternRemoved: it relaxes
+		// the constraint.
+		result.AddNonBreakingChange(path+".enum", EnumRemoved, joinJSONValues(oldSchema.Enum), "")
 		return
 	}
 
@@ -245,6 +264,52 @@ func compareEnumValues(path string, oldSchema, newSchema *v1.JSONSchemaProps, re
 			result.AddNonBreakingChange(path+".enum", EnumExpanded, "", val)
 		}
 	}
+}
+
+// compareXValidations checks for changes to CEL x-kubernetes-validations rules. A rule's
+// identity is its Rule expression: Message/MessageExpression/Reason/FieldPath only affect
+// the error surfaced on failure, not what the rule actually validates.
+func compareXValidations(path string, oldSchema, newSchema *v1.JSONSchemaProps, result *Report) {
+	if len(oldSchema.XValidations) == 0 && len(newSchema.XValidations) == 0 {
+		return
+	}
+
+	oldRules := toValidationRuleSet(oldSchema.XValidations)
+	newRules := toValidationRuleSet(newSchema.XValidations)
+
+	// Check for removed validation rules (non-breaking: relaxes the constraint)
+	for rule := range oldRules {
+		if !newRules[rule] {
+			result.AddNonBreakingChange(path+".x-kubernetes-validations", XValidationRemoved, rule, "")
+		}
+	}
+
+	// Check for added validation rules (breaking: restricts what new writes can set the
+	// field to, same as PatternAdded/EnumAdded)
+	for rule := range newRules {
+		if !oldRules[rule] {
+			result.AddBreakingChange(path+".x-kubernetes-validations", XValidationAdded, "", rule)
+		}
+	}
+}
+
+// toValidationRuleSet converts a list of CEL validation rules to a set of rule expressions.
+func toValidationRuleSet(rules v1.ValidationRules) map[string]bool {
+	set := make(map[string]bool, len(rules))
+	for _, r := range rules {
+		set[r.Rule] = true
+	}
+	return set
+}
+
+// joinJSONValues renders a slice of JSON enum values as a comma-separated string for use in
+// a Change's OldValue/NewValue.
+func joinJSONValues(values []v1.JSON) string {
+	strs := make([]string, len(values))
+	for i, val := range values {
+		strs[i] = string(val.Raw)
+	}
+	return strings.Join(strs, ",")
 }
 
 // compareArrayItems checks array item schemas recursively

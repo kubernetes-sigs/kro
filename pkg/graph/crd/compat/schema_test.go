@@ -91,6 +91,55 @@ func TestCompareSchemas(t *testing.T) {
 			nonBreakingCount: 1,
 		},
 		{
+			// kubernetes-sigs/kro#1391 repro, exercised through the top-level compare()
+			// entrypoint (not compareEnumValues directly) to prove the wiring works end to
+			// end: a nested spec.color field gains an enum= marker it didn't have before.
+			name: "enum added to an existing nested property - breaking",
+			oldSchema: &v1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]v1.JSONSchemaProps{
+					"color": {Type: "string"},
+				},
+			},
+			newSchema: &v1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]v1.JSONSchemaProps{
+					"color": {
+						Type: "string",
+						Enum: []v1.JSON{{Raw: []byte("\"red\"")}, {Raw: []byte("\"green\"")}, {Raw: []byte("\"blue\"")}},
+					},
+				},
+			},
+			breakingCount:      1,
+			expectedChangeType: EnumAdded,
+		},
+		{
+			// kubernetes-sigs/kro#1391 repro for the CEL case: a nested spec.arns field
+			// gains a validation= marker it didn't have before. There was no comparison
+			// function for x-kubernetes-validations at all prior to this fix.
+			name: "CEL validation rule added to an existing nested property - breaking",
+			oldSchema: &v1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]v1.JSONSchemaProps{
+					"arns": {Type: "array", Items: &v1.JSONSchemaPropsOrArray{Schema: &v1.JSONSchemaProps{Type: "string"}}},
+				},
+			},
+			newSchema: &v1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]v1.JSONSchemaProps{
+					"arns": {
+						Type:  "array",
+						Items: &v1.JSONSchemaPropsOrArray{Schema: &v1.JSONSchemaProps{Type: "string"}},
+						XValidations: v1.ValidationRules{
+							{Rule: "self.all(item, item.matches('^arn:aws'))"},
+						},
+					},
+				},
+			},
+			breakingCount:      1,
+			expectedChangeType: XValidationAdded,
+		},
+		{
 			name: "multiple breaking changes",
 			oldSchema: &v1.JSONSchemaProps{
 				Type: "object",
@@ -552,13 +601,14 @@ func TestCompareRequiredFields(t *testing.T) {
 
 func TestCompareEnumValues(t *testing.T) {
 	tests := []struct {
-		name              string
-		oldEnum           []v1.JSON
-		newEnum           []v1.JSON
-		expectBreaking    bool
-		breakingCount     int
-		nonBreakingCount  int
-		checkBreakingType ChangeType
+		name                 string
+		oldEnum              []v1.JSON
+		newEnum              []v1.JSON
+		expectBreaking       bool
+		breakingCount        int
+		nonBreakingCount     int
+		checkBreakingType    ChangeType
+		checkNonBreakingType ChangeType
 	}{
 		{
 			name:           "identical enums",
@@ -580,6 +630,26 @@ func TestCompareEnumValues(t *testing.T) {
 			newEnum:          []v1.JSON{{Raw: []byte("\"value1\"")}, {Raw: []byte("\"value2\"")}},
 			expectBreaking:   false,
 			nonBreakingCount: 1,
+		},
+		{
+			// kubernetes-sigs/kro#1391: an existing field with no enum= marker at all (not
+			// merely an enum with no values) gaining one on a later update. This is the
+			// nil-to-non-empty transition the old length check (`len(oldSchema.Enum) == 0 ||
+			// len(newSchema.Enum) == 0`) silently ignored, so kro never patched the CRD.
+			name:              "enum constraint added to a previously unconstrained field",
+			oldEnum:           nil,
+			newEnum:           []v1.JSON{{Raw: []byte("\"red\"")}, {Raw: []byte("\"green\"")}},
+			expectBreaking:    true,
+			breakingCount:     1,
+			checkBreakingType: EnumAdded,
+		},
+		{
+			name:                 "enum constraint removed entirely",
+			oldEnum:              []v1.JSON{{Raw: []byte("\"red\"")}, {Raw: []byte("\"green\"")}},
+			newEnum:              nil,
+			expectBreaking:       false,
+			nonBreakingCount:     1,
+			checkNonBreakingType: EnumRemoved,
 		},
 	}
 
@@ -612,6 +682,126 @@ func TestCompareEnumValues(t *testing.T) {
 			if tt.nonBreakingCount > 0 {
 				assert.Equal(t, tt.nonBreakingCount, len(result.NonBreakingChanges),
 					"Unexpected number of non-breaking changes")
+
+				if tt.checkNonBreakingType != "" {
+					assert.Equal(t, tt.checkNonBreakingType, result.NonBreakingChanges[0].ChangeType,
+						"Unexpected non-breaking change type")
+				}
+			}
+		})
+	}
+}
+
+func TestCompareXValidations(t *testing.T) {
+	tests := []struct {
+		name                 string
+		oldRules             v1.ValidationRules
+		newRules             v1.ValidationRules
+		expectBreaking       bool
+		breakingCount        int
+		nonBreakingCount     int
+		checkBreakingType    ChangeType
+		checkNonBreakingType ChangeType
+	}{
+		{
+			name:           "no rules on either side",
+			expectBreaking: false,
+		},
+		{
+			name: "identical rules",
+			oldRules: v1.ValidationRules{
+				{Rule: "self.size() < 10"},
+			},
+			newRules: v1.ValidationRules{
+				{Rule: "self.size() < 10"},
+			},
+			expectBreaking: false,
+		},
+		{
+			// kubernetes-sigs/kro#1391: there was no compareXValidations-equivalent function
+			// at all before this fix, so a validation= CEL marker added to a field that
+			// previously had none was never detected as a schema change, regardless of the
+			// nil/empty transition.
+			name: "CEL validation rule added to a previously unconstrained field",
+			newRules: v1.ValidationRules{
+				{Rule: "self.all(item, item.matches('^arn:aws'))"},
+			},
+			expectBreaking:    true,
+			breakingCount:     1,
+			checkBreakingType: XValidationAdded,
+		},
+		{
+			name: "CEL validation rule removed entirely",
+			oldRules: v1.ValidationRules{
+				{Rule: "self.all(item, item.matches('^arn:aws'))"},
+			},
+			expectBreaking:       false,
+			nonBreakingCount:     1,
+			checkNonBreakingType: XValidationRemoved,
+		},
+		{
+			// A rule's identity is its Rule expression; changing only the error message
+			// shouldn't be reported as a validation change.
+			name: "only the failure message changes",
+			oldRules: v1.ValidationRules{
+				{Rule: "self.size() < 10", Message: "too long"},
+			},
+			newRules: v1.ValidationRules{
+				{Rule: "self.size() < 10", Message: "way too long"},
+			},
+			expectBreaking: false,
+		},
+		{
+			name: "one rule added alongside an existing one",
+			oldRules: v1.ValidationRules{
+				{Rule: "self.size() < 10"},
+			},
+			newRules: v1.ValidationRules{
+				{Rule: "self.size() < 10"},
+				{Rule: "self.matches('^[a-z]+$')"},
+			},
+			expectBreaking:    true,
+			breakingCount:     1,
+			checkBreakingType: XValidationAdded,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldSchema := &v1.JSONSchemaProps{
+				Type:         "string",
+				XValidations: tt.oldRules,
+			}
+			newSchema := &v1.JSONSchemaProps{
+				Type:         "string",
+				XValidations: tt.newRules,
+			}
+
+			result := &Report{}
+			compareXValidations("root", oldSchema, newSchema, result)
+
+			if tt.expectBreaking {
+				assert.True(t, result.HasBreakingChanges(), "Expected breaking changes")
+				assert.Equal(t, tt.breakingCount, len(result.BreakingChanges), "Unexpected number of breaking changes")
+
+				if tt.checkBreakingType != "" && len(result.BreakingChanges) > 0 {
+					assert.Equal(t, tt.checkBreakingType, result.BreakingChanges[0].ChangeType,
+						"Unexpected breaking change type")
+				}
+			} else {
+				assert.False(t, result.HasBreakingChanges(), "Expected no breaking changes")
+			}
+
+			if tt.nonBreakingCount > 0 {
+				assert.Equal(t, tt.nonBreakingCount, len(result.NonBreakingChanges),
+					"Unexpected number of non-breaking changes")
+
+				if tt.checkNonBreakingType != "" {
+					assert.Equal(t, tt.checkNonBreakingType, result.NonBreakingChanges[0].ChangeType,
+						"Unexpected non-breaking change type")
+				}
+			} else {
+				assert.Empty(t, result.NonBreakingChanges, "Expected no non-breaking changes")
 			}
 		})
 	}

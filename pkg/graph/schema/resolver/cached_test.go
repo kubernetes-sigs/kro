@@ -44,6 +44,33 @@ func gvk(group, version, kind string) schema.GroupVersionKind {
 	return schema.GroupVersionKind{Group: group, Version: version, Kind: kind}
 }
 
+// TestCachedSchemaResolver_PutWriteThrough proves Put installs a schema served without a delegate fetch.
+func TestCachedSchemaResolver_PutWriteThrough(t *testing.T) {
+	m := &pushMockResolver{}
+	c, err := NewCachedSchemaResolver(m, 100)
+	require.NoError(t, err)
+
+	g := gvk("kro.run", "v1alpha1", "Widget")
+
+	// Prime the cache via a delegate fetch (the "stale" entry): 1 delegate call.
+	_, err = c.ResolveSchema(g)
+	require.NoError(t, err)
+	require.Equal(t, 1, m.count())
+
+	// Write-through an authoritative schema with a distinctive marker.
+	authoritative := &spec.Schema{SchemaProps: spec.SchemaProps{
+		Type:  []string{"object"},
+		Title: "authoritative",
+	}}
+	c.Put(g, authoritative)
+
+	// The next resolve must return the written schema and NOT call the delegate.
+	got, err := c.ResolveSchema(g)
+	require.NoError(t, err)
+	assert.Equal(t, "authoritative", got.Title, "Put should install the authoritative schema")
+	assert.Equal(t, 1, m.count(), "resolve after Put must be a cache hit, no delegate re-fetch")
+}
+
 // TestCachedSchemaResolver_Caching covers the cache-hit / cache-miss
 // mechanics in a single table — dedup on concurrent fetch, separate
 // GVKs each take a slot, repeated lookups don't pay a delegate call.

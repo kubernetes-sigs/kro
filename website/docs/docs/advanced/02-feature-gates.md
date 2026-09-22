@@ -27,14 +27,13 @@ Or pass the flag directly to the controller binary:
 
 ## Available Feature Gates
 
-| Feature Gate                               | Default | Stage | Since   | Description                                                                                  |
-| ------------------------------------------ | ------- | ----- | ------- | -------------------------------------------------------------------------------------------- |
-| `CELOmitFunction`                          | `false` | Alpha | v0.9.0  | Enables the `omit()` CEL function for conditional field omission in resource templates.      |
-| `InstanceConditionEvents`                  | `false` | Alpha | v0.9.0  | Emits Kubernetes Events on instance status condition transitions.                            |
-| `InstanceConditionMetrics`                 | `false` | Alpha | v0.9.3  | Exports per-instance condition status as Prometheus metrics.                                 |
-| `GraphKind`                                | `false` | Alpha | v0.10.0 | Starts the controller for the `Graph` API (`kro.run/v1alpha1`).                              |
-| `ExtendedCRDComparison`                    | `false` | Alpha | v0.10.0 | Checks additional, explicitly classified CRD schema changes.                                 |
-| `ConservativeCRDComparison`                | `false` | Alpha | v0.10.0 | Treats CRD schema changes without an explicit compatibility classification as breaking.      |
+| Feature Gate                       | Default | Stage | Since   | Description                                                                             |
+| ---------------------------------- | ------- | ----- | ------- | --------------------------------------------------------------------------------------- |
+| `CELOmitFunction`                  | `false` | Alpha | v0.9.0  | Enables the `omit()` CEL function for conditional field omission in resource templates. |
+| `InstanceConditionEvents`          | `false` | Alpha | v0.9.0  | Emits Kubernetes Events on instance status condition transitions.                       |
+| `InstanceConditionMetrics`         | `false` | Alpha | v0.9.3  | Exports per-instance condition status as Prometheus metrics.                            |
+| `GraphKind`                        | `false` | Alpha | v0.10.0 | Starts the controller for the `Graph` API (`kro.run/v1alpha1`).                         |
+| `ConservativeCRDComparison`        | `false` | Alpha | v0.10.0 | Enables conservative checks for additional and unclassified CRD schema changes.         |
 
 ### CELOmitFunction
 
@@ -99,27 +98,19 @@ full procedure.
 
 ### CRD compatibility checks
 
-By default, kro retains its original CRD compatibility checks. Enable
-`ExtendedCRDComparison` to classify additional schema changes,
-including map value schemas, enum constraints, formats, nullability,
-unknown-field preservation, Kubernetes list and map topology, and CEL
-validation rules. The comparator records safe relaxations as non-breaking and
-blocks changes that narrow accepted values or alter topology.
+By default, kro checks definitive schema changes such as adding or narrowing an
+enum constraint, removing nullable support, and removing unknown-field
+preservation.
 
-`ConservativeCRDComparison` controls the conservative fallback for
-schema fields that kro does not explicitly classify. When enabled, any change
-to one of those fields is considered breaking until kro implements a more
-specific check. This can block compatible changes, but prevents unsupported
-schema changes from passing unnoticed.
-
-The gates are independent. For more accurate checks without the conservative
-fallback, enable only `ExtendedCRDComparison`. For the most restrictive
-policy, enable both:
+Enable `ConservativeCRDComparison` to check additional schema facets,
+including map value schemas, formats, Kubernetes list and map topology, and CEL
+validation rules. The gate also treats changes to schema fields without an
+explicit compatibility classification as breaking. This can block compatible
+changes, but prevents unsupported schema changes from passing unnoticed.
 
 ```yaml
 config:
   featureGates:
-    ExtendedCRDComparison: true
     ConservativeCRDComparison: true
 ```
 

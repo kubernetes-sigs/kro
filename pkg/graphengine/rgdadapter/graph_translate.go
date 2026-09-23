@@ -20,13 +20,13 @@
 package rgdadapter
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/json"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
@@ -216,21 +216,12 @@ func copyRaw(raw []byte) *runtime.RawExtension {
 	return &runtime.RawExtension{Raw: append([]byte(nil), raw...)}
 }
 
-// templateWithDeletionPolicy returns the resource's template, carrying the
+// templateWithDeletionPolicy returns the resource's template having the
 // declared deletion policy as a metadata annotation on the manifest so it is
 // server-side-applied onto the managed object itself.
 //
-// The annotation has to travel on the object because neither the prune nor the
-// teardown path re-reads the RGD: both rediscover their candidates from live
-// cluster state, so the object is the only place the author's intent can be
-// found when the resource is about to be removed. Carrying it in the template
-// (rather than stamping it in the executor) also keeps it inside GraphSpec,
-// which is what the per-revision compile cache hashes: a policy change would
-// otherwise hit a stale compiled Program.
-//
 // Delete is the default and is represented by the annotation's ABSENCE, so
-// existing objects are untouched and flipping a resource back to Delete lets
-// SSA prune the annotation.
+// existing objects are untouched.
 func templateWithDeletionPolicy(res *v1alpha1.Resource) (*runtime.RawExtension, error) {
 	if res.DeletionPolicy != v1alpha1.DeletionPolicyDetach {
 		return copyRaw(res.Template.Raw), nil
@@ -251,11 +242,7 @@ func templateWithDeletionPolicy(res *v1alpha1.Resource) (*runtime.RawExtension, 
 	}
 	annotationMap, ok := annotations.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf(
-			"%w: resource %q: deletionPolicy needs to add an annotation to the template, but metadata.annotations is not a literal map; move the expression onto the individual annotation keys",
-			ErrUnsupported,
-			res.ID,
-		)
+		return nil, fmt.Errorf("%w: resource %q: metadata.annotations is not a map", ErrUnsupported, res.ID)
 	}
 	annotationMap[metadata.DeletionPolicyAnnotation] = string(v1alpha1.DeletionPolicyDetach)
 
@@ -267,8 +254,7 @@ func templateWithDeletionPolicy(res *v1alpha1.Resource) (*runtime.RawExtension, 
 }
 
 // annotatableMetadata returns the manifest's metadata map, creating it when
-// absent. A metadata stanza that is a CEL expression instead of a literal map
-// cannot be annotated, so it is rejected rather than silently overwritten.
+// absent.
 func annotatableMetadata(manifest map[string]any, id string) (map[string]any, error) {
 	meta, ok := manifest["metadata"]
 	if !ok || meta == nil {
@@ -278,11 +264,7 @@ func annotatableMetadata(manifest map[string]any, id string) (map[string]any, er
 	}
 	metaMap, ok := meta.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf(
-			"%w: resource %q: deletionPolicy needs to add an annotation to the template, but metadata is not a literal map; move the expression onto the individual metadata fields",
-			ErrUnsupported,
-			id,
-		)
+		return nil, fmt.Errorf("%w: resource %q: metadata is not a map", ErrUnsupported, id)
 	}
 	return metaMap, nil
 }

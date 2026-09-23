@@ -115,12 +115,12 @@ func TestResourceGraphDefinitionToGraph_DeletionPolicyUnannotatableTemplate(t *t
 		{
 			name:     "metadata is an expression",
 			template: `{"apiVersion":"v1","kind":"ConfigMap","metadata":"${schema.spec.meta}"}`,
-			wantErr:  "metadata is not a literal map",
+			wantErr:  "metadata is not a map",
 		},
 		{
 			name:     "metadata.annotations is an expression",
 			template: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"cm","annotations":"${schema.spec.anns}"}}`,
-			wantErr:  "metadata.annotations is not a literal map",
+			wantErr:  "metadata.annotations is not a map",
 		},
 	}
 

@@ -285,12 +285,11 @@ type Resource struct {
 	// forEach expansion shrinks).
 	//
 	// "Delete" (the default when unset) deletes the resource.
-	// "Detach" leaves the resource in the cluster and releases it: kro drops
-	// its own labels and annotations so the resource is no longer a member of
+	// "Detach" leaves the resource in the cluster and releases it from kro. It drops
+	// its labels and annotations so the resource is no longer a member of
 	// the instance and can later be adopted by another instance.
 	//
-	// Only supported on template resources. An externalRef is read-only and is
-	// never created or deleted by kro, so a policy on it has no meaning.
+	// Not supported on externalRef.
 	//
 	// This field is alpha. It may be superseded by the broader resource
 	// lifecycle field currently under design (KREP-014).
@@ -301,17 +300,15 @@ type Resource struct {
 }
 
 // DeletionPolicy controls whether kro deletes or releases a resource it
-// manages once that resource is no longer wanted.
+// manages once that resource is deleted.
 //
 // +kubebuilder:validation:Enum=Delete;Detach
 type DeletionPolicy string
 
 const (
-	// DeletionPolicyDelete deletes the resource. This is the behaviour when no
-	// policy is declared.
+	// DeletionPolicyDelete deletes the resource. This is the Default.
 	DeletionPolicyDelete DeletionPolicy = "Delete"
-	// DeletionPolicyDetach leaves the resource in the cluster and releases kro's
-	// claim on it by removing the kro-applied labels and annotations.
+	// DeletionPolicyDetach leaves the resource in the cluster.
 	DeletionPolicyDetach DeletionPolicy = "Detach"
 )
 

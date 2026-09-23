@@ -21,7 +21,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
-	applysetspec "github.com/kubernetes-sigs/kro/pkg/applyset"
 )
 
 func TestDeletionPolicyOf(t *testing.T) {
@@ -67,18 +66,16 @@ func TestDeletionPolicyOfNilObject(t *testing.T) {
 func TestReleaseKROMetadata(t *testing.T) {
 	obj := &mockObject{ObjectMeta: metav1.ObjectMeta{
 		Labels: map[string]string{
-			applysetspec.ApplysetPartOfLabel: "applyset-abc-v1",
-			OwnedLabel:                       "true",
-			KROVersionLabel:                  "v1.0.0",
-			NodeIDLabel:                      "deployment",
-			CollectionIndexLabel:             "0",
-			InstanceIDLabel:                  "uid",
-			InstanceNamespaceLabel:           "default",
-			ManagedByLabelKey:                ManagedByKROValue,
-			"app":                            "web",
+			OwnedLabel:             "true",
+			KROVersionLabel:        "v1.0.0",
+			NodeIDLabel:            "deployment",
+			CollectionIndexLabel:   "0",
+			InstanceIDLabel:        "uid",
+			InstanceNamespaceLabel: "default",
+			ManagedByLabelKey:      ManagedByKROValue,
+			"app":                  "web",
 		},
 		Annotations: map[string]string{
-			ApplyOrderAnnotation:     "2",
 			NodePathAnnotation:       "deployment",
 			DeletionPolicyAnnotation: "Detach",
 			"team":                   "platform",
@@ -109,8 +106,8 @@ func TestReleaseKROMetadataClearsEmptiedMaps(t *testing.T) {
 	}}
 
 	assert.True(t, ReleaseKROMetadata(obj))
-	assert.Nil(t, obj.GetLabels())
-	assert.Nil(t, obj.GetAnnotations())
+	assert.Empty(t, obj.GetLabels())
+	assert.Empty(t, obj.GetAnnotations())
 }
 
 func TestReleaseKROMetadataNoKROKeys(t *testing.T) {

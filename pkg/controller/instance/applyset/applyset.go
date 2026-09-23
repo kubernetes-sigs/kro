@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/dynamic"
 
+	applysetspec "github.com/kubernetes-sigs/kro/pkg/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -74,8 +75,8 @@ type Interface interface {
 	// DeleteOrphan deletes a single orphan candidate using a UID precondition.
 	DeleteOrphan(ctx context.Context, candidate OrphanCandidate) (DeleteOrphanResult, error)
 
-	// ReleaseOrphan relinquishes kro's claim on a single orphan candidate
-	// instead of deleting it, for a resource declared deletionPolicy: Detach.
+	// ReleaseOrphan when deletionPolicy is Detach, instead of removing the resource, kro
+	// releases it by removing all annotations and labels.
 	ReleaseOrphan(ctx context.Context, candidate OrphanCandidate) (ReleaseOrphanResult, error)
 }
 
@@ -562,22 +563,19 @@ func (a *ApplySet) DeleteOrphan(ctx context.Context, candidate OrphanCandidate) 
 	return DeleteOrphanResult{Pruned: &PruneResultItem{Object: candidate.Object}}, nil
 }
 
-// ReleaseOrphan relinquishes kro's claim on an orphan candidate instead of
-// deleting it. It strips the kro-applied labels and annotations, which drops
-// the ApplySet part-of label, so the object survives in the cluster but is no
-// longer a member: neither prune nor teardown can rediscover it (both list by
-// that label) and another instance may later adopt it.
+// ReleaseOrphan releases an Orphan instead of deleting it. Removes kro's
+// ApplySet part-of label and all other labels and annotations kro created.
 //
-// The write is an Update carrying the listed resourceVersion rather than a
-// patch, so it fails closed with a Conflict if the object changed since it was
-// listed. That is the same protection DeleteOrphan gets from its UID
-// precondition: without it a release could strip the labels off an object that
-// was deleted and recreated under the same name in the meantime.
+// This follows the same logic as DeleteOrphan. The Write event is an `Update`
+// instead of a Patch so conflict is handled appropriately.
 func (a *ApplySet) ReleaseOrphan(ctx context.Context, candidate OrphanCandidate) (ReleaseOrphanResult, error) {
 	obj := candidate.Object.DeepCopy()
-	if !metadata.ReleaseKROMetadata(obj) {
-		// Nothing kro-applied is left, so the object is already released and
-		// cannot be listed as a member again.
+	changed := metadata.ReleaseKROMetadata(obj)
+	if changedLabels, ok := a.releaseMembership(obj.GetLabels()); ok {
+		changed = true
+		obj.SetLabels(changedLabels)
+	}
+	if !changed {
 		return ReleaseOrphanResult{}, nil
 	}
 
@@ -607,6 +605,16 @@ func (a *ApplySet) ReleaseOrphan(ctx context.Context, candidate OrphanCandidate)
 		"gvr", candidate.GVR.String(),
 	)
 	return ReleaseOrphanResult{Released: true}, nil
+}
+
+// releaseMembership removes the applyset label for the right ID.
+func (a *ApplySet) releaseMembership(m map[string]string) (map[string]string, bool) {
+	l := len(m)
+	maps.DeleteFunc(m, func(k string, v string) bool {
+		return k == applysetspec.ApplysetPartOfLabel && v == a.applySetID
+	})
+
+	return m, l != len(m)
 }
 
 // listOrphans lists applyset members not in keepUIDs. This is the listing half

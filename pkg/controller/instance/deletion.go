@@ -43,11 +43,6 @@ func (c *Controller) reconcileDeletion(dcx *DeletionContext) error {
 		return err
 	}
 
-	// Resources declared deletionPolicy: Detach are released rather than
-	// deleted, and must leave the candidate set before the wave arithmetic
-	// below: they are never going away, so a detached resource left in the set
-	// would keep len(candidates) > 0 forever and the finalizer would never come
-	// off.
 	candidates, err = c.releaseDetachedResources(dcx, applier, candidates)
 	if err != nil {
 		dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
@@ -110,20 +105,8 @@ func (c *Controller) discoverDeletionInventory(
 	return candidates, applier, nil
 }
 
-// releaseDetachedResources releases every candidate declared
-// deletionPolicy: Detach and returns the candidates that still have to be
-// deleted. Releasing strips kro's labels, so a released resource stays in the
-// cluster and is not listed as a member on any later cycle.
-//
-// The policy is read off the live object: deletion rebuilds its inventory from
-// ApplySet metadata alone and never evaluates the graph or its CEL, so the
-// annotation kro applied alongside the resource is the only record of the
-// author's intent available here.
-//
-// An error is returned if any release failed, deliberately keeping the
-// finalizer in place: dropping it with a release outstanding would leave an
-// object behind still labelled as a member of an instance that no longer
-// exists.
+// releaseDetachedResources go through all resources and based on
+// the deletion policy, detach them.
 func (c *Controller) releaseDetachedResources(
 	dcx *DeletionContext,
 	applier *applyset.ApplySet,

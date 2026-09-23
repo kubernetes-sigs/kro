@@ -88,12 +88,11 @@ spec:
                         forEach expansion shrinks).
 
                         "Delete" (the default when unset) deletes the resource.
-                        "Detach" leaves the resource in the cluster and releases it: kro drops
-                        its own labels and annotations so the resource is no longer a member of
+                        "Detach" leaves the resource in the cluster and releases it from kro. It drops
+                        its labels and annotations so the resource is no longer a member of
                         the instance and can later be adopted by another instance.
 
-                        Only supported on template resources. An externalRef is read-only and is
-                        never created or deleted by kro, so a policy on it has no meaning.
+                        Not supported on externalRef.
 
                         This field is alpha. It may be superseded by the broader resource
                         lifecycle field currently under design (KREP-014).

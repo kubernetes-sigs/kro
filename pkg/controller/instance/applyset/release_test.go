@@ -38,7 +38,7 @@ var configMapGVR = schema.GroupVersionResource{Version: "v1", Resource: "configm
 // managed resource plus a label and an annotation of the author's own.
 func releasableOrphan(applySetID string) *unstructured.Unstructured {
 	cm := newConfigMap("orphan-cm", "default")
-	cm.SetUID(types.UID("orphan-uid"))
+	cm.SetUID("orphan-uid")
 	cm.SetResourceVersion("7")
 	cm.SetLabels(map[string]string{
 		ApplysetPartOfLabel:      applySetID,
@@ -147,8 +147,6 @@ func TestReleaseOrphanConflict(t *testing.T) {
 	assert.False(t, result.Released)
 }
 
-// A resource somebody else already deleted is not an error: the outcome the
-// release was after (kro no longer claiming it) already holds.
 func TestReleaseOrphanNotFound(t *testing.T) {
 	ctx := t.Context()
 	parent := releaseTestParent()
@@ -178,8 +176,6 @@ func TestReleaseOrphanNotFound(t *testing.T) {
 	assert.False(t, result.Conflict)
 }
 
-// An object carrying nothing of kro's is already released; the release must not
-// issue a pointless write against it.
 func TestReleaseOrphanNoKROMetadata(t *testing.T) {
 	ctx := t.Context()
 	parent := releaseTestParent()

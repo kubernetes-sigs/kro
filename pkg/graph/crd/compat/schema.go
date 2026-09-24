@@ -154,6 +154,8 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps, conservative
 		compareTopology(path, oldSchema, newSchema, result)
 		compareValidationRules(path, oldSchema, newSchema, result)
 		compareUnclassifiedFields(path, oldSchema, newSchema, result)
+	} else if path == instanceNameSchemaPath {
+		compareValidationRules(path, oldSchema, newSchema, result)
 	}
 
 	return result
@@ -178,8 +180,29 @@ func compareProperties(
 	result *Report,
 	conservativeComparison bool,
 ) {
+	// Kubernetes supplies metadata.name even when the generated schema does not
+	// declare it. Treat an absent root metadata.name schema as an unconstrained
+	// string so compatibility reflects the effect of adding or removing name
+	// constraints instead of reporting an ordinary property change.
+	if path == instanceMetadataSchemaPath {
+		oldName, oldHasName := oldSchema.Properties["name"]
+		newName, newHasName := newSchema.Properties["name"]
+		if oldHasName || newHasName {
+			if !oldHasName {
+				oldName = v1.JSONSchemaProps{Type: "string"}
+			}
+			if !newHasName {
+				newName = v1.JSONSchemaProps{Type: "string"}
+			}
+			appendReport(result, compare(instanceNameSchemaPath, &oldName, &newName, conservativeComparison))
+		}
+	}
+
 	// First, check for removed properties (breaking changes)
 	for propName, oldProp := range oldSchema.Properties {
+		if path == instanceMetadataSchemaPath && propName == "name" {
+			continue
+		}
 		propPath := path + ".properties." + propName
 
 		// check if property still exists
@@ -206,6 +229,9 @@ func compareProperties(
 	newRequiredSet := toStringSet(newSchema.Required)
 
 	for propName, newProp := range newSchema.Properties {
+		if path == instanceMetadataSchemaPath && propName == "name" {
+			continue
+		}
 		if _, exists := oldSchema.Properties[propName]; !exists {
 			propPath := path + ".properties." + propName
 
@@ -223,6 +249,11 @@ func compareProperties(
 		}
 	}
 }
+
+const (
+	instanceMetadataSchemaPath = ".properties.metadata"
+	instanceNameSchemaPath     = instanceMetadataSchemaPath + ".properties.name"
+)
 
 // compareRequiredFields checks for changes to required fields, it only considers
 // existing properties, since new properties are handled in compareProperties.

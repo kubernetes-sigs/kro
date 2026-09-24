@@ -727,15 +727,31 @@ func (c *Controller) pruneGraphEngineOrphans(
 
 	conflicts := 0
 	for _, candidate := range candidates {
-		res, derr := applier.DeleteOrphan(ctx, candidate)
-		if derr != nil {
-			return pruned, false, fmt.Errorf("delete orphan: %w", derr)
-		}
-		if res.Pruned != nil {
-			pruned = true
-		}
-		if res.Conflict {
-			conflicts++
+		switch p := metadata.DeletionPolicyOf(candidate.Object); p {
+		case v1alpha1.DeletionPolicyDetach:
+			res, rerr := applier.ReleaseOrphan(ctx, candidate)
+			if rerr != nil {
+				return pruned, false, fmt.Errorf("release orphan: %w", rerr)
+			}
+			if res.Released {
+				pruned = true
+			}
+			if res.Conflict {
+				conflicts++
+			}
+		case v1alpha1.DeletionPolicyDelete:
+			res, derr := applier.DeleteOrphan(ctx, candidate)
+			if derr != nil {
+				return pruned, false, fmt.Errorf("delete orphan: %w", derr)
+			}
+			if res.Pruned != nil {
+				pruned = true
+			}
+			if res.Conflict {
+				conflicts++
+			}
+		default:
+			return false, false, fmt.Errorf("unknown deletion policy: %s", p)
 		}
 	}
 	if conflicts > 0 {

@@ -1,0 +1,6 @@
+apiVersion: kro.run/v1alpha1
+kind: CheckDeletionPolicyApp
+metadata:
+  name: test-instance
+spec:
+  name: demo

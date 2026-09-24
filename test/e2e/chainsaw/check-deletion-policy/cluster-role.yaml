@@ -1,0 +1,31 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kro:controller:check-deletion-policy
+  labels:
+    rbac.kro.run/aggregate-to-controller: "true"
+rules:
+  - apiGroups:
+    - "kro.run"
+    resources:
+    - "checkdeletionpolicyapps"
+    - "checkdeletionpolicyapps/status"
+    verbs:
+    - "create"
+    - "get"
+    - "list"
+    - "watch"
+    - "update"
+    - "patch"
+  - apiGroups:
+    - ""
+    resources:
+    - configmaps
+    verbs:
+    - "create"
+    - "get"
+    - "list"
+    - "watch"
+    - "update"
+    - "patch"
+    - "delete"

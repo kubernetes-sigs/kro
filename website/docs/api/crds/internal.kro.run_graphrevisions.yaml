@@ -100,6 +100,26 @@ spec:
                             Each resource can either be created using a template or reference an existing resource.
                             Resources can depend on each other through CEL expressions, creating a dependency graph.
                           properties:
+                            deletionPolicy:
+                              description: |-
+                                DeletionPolicy controls what happens to this resource when the instance
+                                that owns it is deleted, or when the resource leaves the desired set
+                                (its node is removed from the graph, its includeWhen turns false, or a
+                                forEach expansion shrinks).
+
+                                "Delete" (the default when unset) deletes the resource.
+                                "Detach" leaves the resource in the cluster and releases it from kro. It drops
+                                its labels and annotations so the resource is no longer a member of
+                                the instance and can later be adopted by another instance.
+
+                                Not supported on externalRef.
+
+                                This field is alpha. It may be superseded by the broader resource
+                                lifecycle field currently under design (KREP-014).
+                              enum:
+                              - Delete
+                              - Detach
+                              type: string
                             externalRef:
                               description: |-
                                 ExternalRef references an existing resource in the cluster instead of creating one.
@@ -213,6 +233,9 @@ spec:
                               provided
                             rule: (has(self.template) && !has(self.externalRef)) ||
                               (!has(self.template) && has(self.externalRef))
+                          - message: deletionPolicy is only supported on template
+                              resources
+                            rule: '!has(self.deletionPolicy) || has(self.template)'
                         type: array
                       schema:
                         description: |-

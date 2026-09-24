@@ -1,0 +1,7 @@
+# Asserted with `error`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-retained
+  labels:
+    app.kubernetes.io/managed-by: kro

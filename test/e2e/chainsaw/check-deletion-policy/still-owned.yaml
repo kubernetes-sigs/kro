@@ -1,0 +1,8 @@
+# Asserted with `error`: the ownership label must be gone, or the released
+# object is still an ApplySet member and prune would find it again.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-retained
+  labels:
+    kro.run/owned: "true"

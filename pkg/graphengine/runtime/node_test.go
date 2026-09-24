@@ -64,12 +64,13 @@ func setFirst(rt *Runtime, id string) {
 func TestNode_IsIgnored(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name     string
-		graph    *expv1alpha1.Graph
-		populate func(rt *Runtime)
-		assertID string // node ID to call IsIgnored on; "" → last node
-		want     bool
-		wantErr  string
+		name       string
+		graph      *expv1alpha1.Graph
+		populate   func(rt *Runtime)
+		assertID   string // node ID to call IsIgnored on; "" → last node
+		want       bool
+		wantErr    string
+		wantErrNot error
 	}{
 		{
 			name: "no includeWhen and no ignored deps → not ignored",
@@ -127,14 +128,29 @@ func TestNode_IsIgnored(t *testing.T) {
 			wantErr:  "want bool",
 		},
 		{
-			name: "includeWhen referencing a missing sub-field surfaces data-pending",
+			name: "includeWhen referencing a missing sub-field on a static def is a hard error",
 			graph: generator.NewGraph("g",
 				generator.WithDef("seed", map[string]any{"k": "v"}),
 				generator.WithDef("cfg", map[string]any{"flag": "${'literal'}"}),
 				generator.WithDef("guarded", map[string]any{"x": "y"}),
 				generator.WithIncludeWhen("${cfg.flag.bogus}"),
 			),
-			populate: func(rt *Runtime) { setFirst(rt, "cfg") },
+			populate:   func(rt *Runtime) { setFirst(rt, "cfg") },
+			assertID:   "guarded",
+			wantErr:    "no such",
+			wantErrNot: ErrDataPending,
+		},
+		{
+			name: "includeWhen over an unobserved template node stays data-pending",
+			graph: generator.NewGraph("g",
+				generator.WithTemplate("cm", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "cm"},
+					"data":     map[string]any{"ready": "no"},
+				}),
+				generator.WithDef("guarded", map[string]any{"x": "y"}),
+				generator.WithIncludeWhen("${cm.data.ready == 'yes'}"),
+			),
 			assertID: "guarded",
 			wantErr:  ErrDataPending.Error(),
 		},
@@ -155,6 +171,9 @@ func TestNode_IsIgnored(t *testing.T) {
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErr)
+				if tc.wantErrNot != nil {
+					assert.NotErrorIs(t, err, tc.wantErrNot)
+				}
 				return
 			}
 			require.NoError(t, err)

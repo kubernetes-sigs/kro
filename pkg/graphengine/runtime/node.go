@@ -159,7 +159,7 @@ func (n *Node) computeIgnored() (bool, error) {
 	for _, expr := range n.spec.IncludeWhen {
 		v, err := expr.Eval(n.rt.scope)
 		if err != nil {
-			if IsCELDataPending(err) {
+			if IsCELDataPending(err) && n.rt.referencesObservableNode(expr) {
 				return false, fmt.Errorf("node %q: includeWhen %q: %w (%w)", n.spec.ID, expr.UserExpression(), err, ErrDataPending)
 			}
 			return false, fmt.Errorf("node %q: includeWhen %q: %w", n.spec.ID, expr.UserExpression(), err)

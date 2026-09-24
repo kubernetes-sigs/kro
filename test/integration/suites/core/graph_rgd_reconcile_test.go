@@ -193,7 +193,7 @@ func ensureTestInstanceCRD(t environment.TestingT, env *environment.Environment,
 	if rgd.Spec.Schema != nil && rgd.Spec.Schema.Scope == krov1alpha1.ResourceScopeCluster {
 		scope = apiextensionsv1.ClusterScoped
 	}
-	crdObj := crd.SynthesizeCRD(
+	crdObj, err := crd.SynthesizeCRD(
 		rgd.Spec.Schema.Group,
 		rgd.Spec.Schema.APIVersion,
 		rgd.Spec.Schema.Kind,
@@ -203,6 +203,9 @@ func ensureTestInstanceCRD(t environment.TestingT, env *environment.Environment,
 		scope,
 		rgd.Spec.Schema,
 	)
+	if err != nil {
+		t.Fatalf("synthesize instance crd: %v", err)
+	}
 	ctx := env.Context()
 	if ctx == nil {
 		ctx = context.Background()

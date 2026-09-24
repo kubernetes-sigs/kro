@@ -212,7 +212,7 @@ func synthesizeInstanceCRD(rgd *v1alpha1.ResourceGraphDefinition) (*extv1.Custom
 	if rgd.Spec.Schema.Scope == v1alpha1.ResourceScopeCluster {
 		crdScope = extv1.ClusterScoped
 	}
-	instanceCRD := crd.SynthesizeCRD(
+	instanceCRD, err := crd.SynthesizeCRD(
 		rgd.Spec.Schema.Group,
 		rgd.Spec.Schema.APIVersion,
 		rgd.Spec.Schema.Kind,
@@ -222,6 +222,9 @@ func synthesizeInstanceCRD(rgd *v1alpha1.ResourceGraphDefinition) (*extv1.Custom
 		crdScope,
 		rgd.Spec.Schema,
 	)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("failed to synthesize instance CRD: %w", err)
+	}
 	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
 	if err != nil {
 		return nil, nil, "", err

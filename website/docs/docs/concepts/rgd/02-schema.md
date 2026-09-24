@@ -429,6 +429,30 @@ schema:
 ```
 The labels and annotations you define here will be applied to the CRD itself (not to instances of the CRD).
 
+#### Validating Instance Names
+
+Use `metadata.nameValidation` to add OpenAPI constraints to the names of
+instances created from the generated CRD. The value uses marker-only
+SimpleSchema syntax; the `string` type is implicit.
+
+```kro
+schema:
+  apiVersion: v1alpha1
+  kind: Application
+  metadata:
+    nameValidation: maxLength=30 pattern="^[a-z][a-z0-9-]*$"
+```
+
+Supported markers are `minLength`, `maxLength`, `pattern`, `enum`, and the
+field-scoped `validation` CEL marker. Type declarations, `required`, and
+defaults are not supported. These rules supplement Kubernetes' built-in name
+validation; they cannot make an otherwise invalid Kubernetes name valid.
+
+Kubernetes applies the rules to the final name, including a name generated
+from `metadata.generateName`. A limit of `maxLength=30` permits exactly 30
+characters, but it does not guarantee that names derived for child resources
+by appending text will fit those resources' limits.
+
 ### 2. Instance Validation
 
 When users create instances, Kubernetes validates them against the generated CRD schema before kro processes them. This means:

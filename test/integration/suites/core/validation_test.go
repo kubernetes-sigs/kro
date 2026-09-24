@@ -101,6 +101,30 @@ var _ = Describe("Validation", func() {
 		})
 	})
 
+	Context("Instance name validation", func() {
+		It("should report malformed markers and CEL rejected by the API server", func(ctx SpecContext) {
+			tests := []struct {
+				name        string
+				validation  string
+				errorString string
+			}{
+				{name: "malformed-marker", validation: "maxLength=invalid", errorString: "failed to parse maxLength"},
+				{name: "invalid-cel", validation: `validation="self.notAFunction()"`, errorString: "notAFunction"},
+			}
+
+			for _, tt := range tests {
+				By(tt.name)
+				rgd := generator.NewResourceGraphDefinition("test-name-validation-"+tt.name,
+					generator.WithSchema("InvalidNameValidation"+strings.ReplaceAll(tt.name, "-", ""), "v1alpha1", map[string]any{}, nil),
+				)
+				rgd.Spec.Schema.Metadata = &krov1alpha1.CRDMetadata{NameValidation: tt.validation}
+				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+				expectRGDInactiveWithError(ctx, rgd, tt.errorString)
+				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+			}
+		})
+	})
+
 	Context("Resource IDs", func() {
 
 	})

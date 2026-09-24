@@ -29,6 +29,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	celunstructured "github.com/kubernetes-sigs/kro/pkg/cel/unstructured"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
@@ -260,6 +261,40 @@ func New(prog *compiler.Program, g *expv1alpha1.Graph, opts ...Option) *Runtime 
 func (r *Runtime) ApplyOrder(nodeID string) (int, bool) {
 	o, ok := r.applyOrders[nodeID]
 	return o, ok
+}
+
+// referencesObservableNode reports whether expr reads a value that can still
+// arrive later in this reconcile. It is false only when every reference is
+// provably static, in which case a data-pending error will recur identically
+// forever and the caller must treat it as a user error. Anything that cannot be
+// proven static counts as observable.
+func (r *Runtime) referencesObservableNode(expr *krocel.Expression) bool {
+	for _, ref := range expr.References {
+		if !r.isStaticNode(ref, map[string]struct{}{}) {
+			return true
+		}
+	}
+	return false
+}
+
+// isStaticNode reports whether nodeID's published value is fixed for the whole
+// reconcile: a Def node renders from its literal payload plus the nodes it
+// reads, so it is static only when every node it reaches is also a static Def.
+func (r *Runtime) isStaticNode(nodeID string, seen map[string]struct{}) bool {
+	n, ok := r.byID[nodeID]
+	if !ok || n.spec.Kind != compiler.NodeKindDef {
+		return false
+	}
+	if _, ok := seen[nodeID]; ok {
+		return true
+	}
+	seen[nodeID] = struct{}{}
+	for depID := range n.deps {
+		if !r.isStaticNode(depID, seen) {
+			return false
+		}
+	}
+	return true
 }
 
 // Program returns the compiled Program backing this Runtime.

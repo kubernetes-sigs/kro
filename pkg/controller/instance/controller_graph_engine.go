@@ -294,14 +294,12 @@ func (c *Controller) reconcileViaGraphEngine(
 	// so the instance retries without counting as a reconcile-level
 	// infrastructural error.
 	if applyErr != nil {
-		// A soft ErrNotReady (a node waiting on data/readiness) is requeued with
-		// a capped exponential delay keyed per-instance, so a never-resolving
-		// reference decays to a slow poll instead of a flat-interval hammer. Any
-		// other apply error keeps the flat DefaultRequeueDuration behavior.
-		if errors.Is(applyErr, executor.ErrNotReady) {
-			return c.notReadyRequeue(instanceKey(inst), applyErr)
-		}
-		return c.delayedRequeue(applyErr)
+		// Requeued with a capped exponential delay keyed per-instance, so a
+		// never-resolving apply — a node waiting on data or readiness, or a
+		// permanent author error such as an unsatisfiable includeWhen — decays to
+		// a slow poll instead of a flat-interval hammer. The first delay is the
+		// base, so a transient failure retries as promptly as before.
+		return c.backoffRequeue(instanceKey(inst), applyErr)
 	}
 	// Clean converge: end the not-ready backoff streak so a fixed reference
 	// returns to fast requeues on its next stall.
@@ -315,12 +313,12 @@ func instanceKey(inst *unstructured.Unstructured) client.ObjectKey {
 	return client.ObjectKey{Namespace: inst.GetNamespace(), Name: inst.GetName()}
 }
 
-// notReadyRequeue returns the soft not-ready requeue for key: a capped
+// backoffRequeue returns the apply-failure requeue for key: a capped
 // exponential delay from the per-instance backoff tracker. When the operator
 // disabled delayed requeues (DefaultRequeueDuration==0), it honors that with
 // requeue.None and does not force a timer — child watch events still drive the
 // next cycle.
-func (c *Controller) notReadyRequeue(key client.ObjectKey, err error) error {
+func (c *Controller) backoffRequeue(key client.ObjectKey, err error) error {
 	if c.reconcileConfig.DefaultRequeueDuration == 0 {
 		return requeue.None(err)
 	}

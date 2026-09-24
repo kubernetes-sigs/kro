@@ -128,6 +128,19 @@ func (c *CachedSchemaResolver) InvalidateGroupKind(gk schema.GroupKind) {
 	}
 }
 
+// Put write-through installs an authoritative schema for gvk, bumping the epoch
+// under the lock so an in-flight stale fetch cannot clobber it.
+func (c *CachedSchemaResolver) Put(gvk schema.GroupVersionKind, sch *spec.Schema) {
+	if sch == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.epochs[gvk.GroupKind()]++
+	c.cache.Add(gvk, sch)
+	metrics.SchemaResolverCacheSize.Set(float64(c.cache.Len()))
+}
+
 // ResolveSchema returns the schema for gvk, hitting the cache when
 // possible. Concurrent misses for the same gvk collapse to one
 // delegate call via singleflight.

@@ -787,4 +787,100 @@ var _ = Describe("Conditions", func() {
 		waitForInstanceActive(ctx, namespace, name, instance)
 	})
 
+	It("should fail an instance whose includeWhen reads a spec field it omitted", func(ctx SpecContext) {
+		name := fmt.Sprintf("test-incl-missing-%s", rand.String(4))
+		rgd := generator.NewResourceGraphDefinition(name,
+			generator.WithSchema(
+				"TestInclMissingSpecKey", "v1alpha1",
+				map[string]any{
+					"name":    "string",
+					"optFlag": "boolean",
+				},
+				nil,
+			),
+			generator.WithResource("cmIndep", map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name": "${schema.spec.name}-indep",
+				},
+				"data": map[string]any{"a": "indep"},
+			}, nil, nil),
+			generator.WithResource("cmGated", map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name": "${schema.spec.name}-gated",
+				},
+				"data": map[string]any{"b": "gated"},
+			}, nil, []string{"${schema.spec.optFlag}"}),
+		)
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		waitForRGDActive(ctx, rgd.Name)
+
+		instance := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": fmt.Sprintf("%s/v1alpha1", krov1alpha1.KRODomainName),
+				"kind":       "TestInclMissingSpecKey",
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": namespace,
+				},
+				// optFlag deliberately omitted.
+				"spec": map[string]any{"name": name},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			got := instance.DeepCopy()
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      name,
+				Namespace: namespace,
+			}, got)).To(Succeed())
+
+			state, found, err := unstructured.NestedString(got.Object, "status", "state")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(state).To(Equal("ERROR"))
+
+			conditions, found, err := unstructured.NestedSlice(got.Object, "status", "conditions")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+
+			var readyMessage string
+			for _, raw := range conditions {
+				c, ok := raw.(map[string]any)
+				g.Expect(ok).To(BeTrue())
+				if c["type"] == "Ready" {
+					g.Expect(c["status"]).To(Equal("False"))
+					readyMessage, _ = c["message"].(string)
+				}
+			}
+			g.Expect(readyMessage).To(ContainSubstring("schema.spec.optFlag"))
+			g.Expect(readyMessage).To(ContainSubstring("no such key"))
+			g.Expect(readyMessage).ToNot(ContainSubstring("data pending"))
+		}, 60*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			got := instance.DeepCopy()
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      name,
+				Namespace: namespace,
+			}, got)).To(Succeed())
+			g.Expect(unstructured.SetNestedField(got.Object, true, "spec", "optFlag")).To(Succeed())
+			g.Expect(env.Client.Update(ctx, got)).To(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+		gated := &corev1.ConfigMap{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-gated",
+				Namespace: namespace,
+			}, gated)).To(Succeed())
+		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+		waitForInstanceActive(ctx, namespace, name, instance)
+	})
+
 })

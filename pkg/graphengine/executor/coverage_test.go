@@ -318,15 +318,17 @@ func TestApply_SoftAndWatchErrors(t *testing.T) {
 			graph: generator.NewGraph("g",
 				generator.WithNamespace("default"),
 				generator.WithDef("seed", map[string]any{"k": "v"}),
-				// dyn field resolves to a string; the sub-field access is a
-				// data-pending CEL error at runtime, so includeWhen is soft.
-				generator.WithDef("cfg", map[string]any{"flag": "${'literal'}"}),
+				generator.WithTemplate("src", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "src"},
+					"data":     map[string]any{"k": "v"},
+				}),
 				generator.WithTemplate("cm", map[string]any{
 					"apiVersion": "v1", "kind": "ConfigMap",
 					"metadata": map[string]any{"name": "cm"},
 					"data":     map[string]any{"k": "v"},
 				}),
-				generator.WithIncludeWhen("${cfg.flag.bogus != ''}"),
+				generator.WithIncludeWhen("${src.data.bogus != ''}"),
 			),
 			watcher:    watchrouter.NoopWatcher{},
 			wantNotRdy: true,

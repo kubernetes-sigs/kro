@@ -38,7 +38,7 @@ func notReadyErr() error {
 }
 
 // TestNotReadyRequeueBacksOffThenResets drives the soft not-ready return site
-// (notReadyRequeue) through several consecutive ErrNotReady cycles for the same
+// (backoffRequeue) through several consecutive ErrNotReady cycles for the same
 // instance and asserts the RequeueAfter delay grows (capped exponential), then
 // that a reset (clean reconcile) restarts the streak at the base. Unit guard
 // for the metric-flood defect: a never-resolving reference must not requeue at
@@ -53,7 +53,7 @@ func TestNotReadyRequeueBacksOffThenResets(t *testing.T) {
 	// Consecutive not-ready reconciles back off from the configured base: 3s, 6s, 12s, 24s.
 	want := []time.Duration{3 * time.Second, 6 * time.Second, 12 * time.Second, 24 * time.Second}
 	for i, w := range want {
-		err := c.notReadyRequeue(k, notReadyErr())
+		err := c.backoffRequeue(k, notReadyErr())
 		require.Truef(t, requeue.IsRequeueError(err), "attempt %d must be a soft requeue", i)
 		ra, ok := err.(*requeue.RequeueNeededAfter)
 		require.Truef(t, ok, "attempt %d must be RequeueNeededAfter, got %T", i, err)
@@ -64,7 +64,7 @@ func TestNotReadyRequeueBacksOffThenResets(t *testing.T) {
 	c.backoff.Reset(k)
 
 	// A subsequent stall starts over at the base, not where it left off.
-	err := c.notReadyRequeue(k, notReadyErr())
+	err := c.backoffRequeue(k, notReadyErr())
 	ra, ok := err.(*requeue.RequeueNeededAfter)
 	require.True(t, ok)
 	assert.Equal(t, 3*time.Second, ra.Duration(), "backoff must restart at base after a clean reconcile")
@@ -81,7 +81,7 @@ func TestNotReadyRequeueCapsAtMax(t *testing.T) {
 
 	var last time.Duration
 	for range 40 {
-		err := c.notReadyRequeue(k, notReadyErr())
+		err := c.backoffRequeue(k, notReadyErr())
 		ra, ok := err.(*requeue.RequeueNeededAfter)
 		require.True(t, ok)
 		last = ra.Duration()
@@ -99,7 +99,7 @@ func TestNotReadyRequeueDisabledHonorsNone(t *testing.T) {
 	c.ensureBackoff()
 	k := backoffKey("default", "disabled")
 
-	err := c.notReadyRequeue(k, notReadyErr())
+	err := c.backoffRequeue(k, notReadyErr())
 	_, isAfter := err.(*requeue.RequeueNeededAfter)
 	assert.False(t, isAfter, "disabled requeues must not force a timed requeue")
 	_, isNone := err.(*requeue.NoRequeue)

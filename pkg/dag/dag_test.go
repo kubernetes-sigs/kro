@@ -17,6 +17,7 @@ package dag
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -56,6 +57,152 @@ func TestDAGAddEdge(t *testing.T) {
 
 	if err := d.AddDependencies("A", []string{"A"}); err == nil {
 		t.Error("Expected error when adding self reference, but got nil")
+	}
+}
+
+func TestDAGAddDependenciesCycleRollback(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	for i, v := range []string{"A", "B", "C", "D"} {
+		if err := d.AddVertex(v, i); err != nil {
+			t.Fatalf("error from AddVertex(%s, %d): %v", v, i, err)
+		}
+	}
+	if err := d.AddDependencies("B", []string{"A"}); err != nil {
+		t.Fatalf("adding dependencies: %v", err)
+	}
+	if err := d.AddDependencies("C", []string{"B"}); err != nil {
+		t.Fatalf("adding dependencies: %v", err)
+	}
+	if err := d.AddDependencies("A", []string{"D"}); err != nil {
+		t.Fatalf("adding dependencies: %v", err)
+	}
+
+	cerr := AsCycleError[string](d.AddDependencies("A", []string{"C"}))
+	if cerr == nil {
+		t.Fatal("expected a CycleError")
+	}
+	if want := []string{"A", "C", "B", "A"}; !slices.Equal(cerr.Cycle, want) {
+		t.Errorf("got cycle %v, want %v", cerr.Cycle, want)
+	}
+
+	// The rejected dependency must be rolled back.
+	if _, exists := d.Vertices["A"].DependsOn["C"]; exists {
+		t.Error("rejected dependency A->C was not rolled back")
+	}
+
+	// Pre-existing dependencies of A must survive the rollback.
+	if _, exists := d.Vertices["A"].DependsOn["D"]; !exists {
+		t.Error("rollback removed pre-existing dependency A->D")
+	}
+
+	// Valid additions must still be accepted afterwards.
+	if err := d.AddDependencies("B", []string{"D"}); err != nil {
+		t.Errorf("valid dependency rejected after rollback: %v", err)
+	}
+}
+
+func TestDAGAddDependenciesCycleSeedOrderIndependent(t *testing.T) {
+	// Some callers build the dependency list from a map (for example
+	// simpleschema's Struct.Deps), so its order can change between calls.
+	cycleFor := func(deps []string) []string {
+		d := NewDirectedAcyclicGraph[string]()
+		for i, v := range []string{"A", "B", "C"} {
+			if err := d.AddVertex(v, i); err != nil {
+				t.Fatalf("AddVertex(%s): %v", v, err)
+			}
+		}
+		for _, v := range []string{"B", "C"} {
+			if err := d.AddDependencies(v, []string{"A"}); err != nil {
+				t.Fatalf("AddDependencies(%s): %v", v, err)
+			}
+		}
+		cerr := AsCycleError[string](d.AddDependencies("A", deps))
+		if cerr == nil {
+			t.Fatal("expected a CycleError")
+		}
+		return cerr.Cycle
+	}
+
+	want := []string{"A", "C", "A"}
+	for _, deps := range [][]string{{"B", "C"}, {"C", "B"}} {
+		if got := cycleFor(deps); !slices.Equal(got, want) {
+			t.Errorf("deps %v: got cycle %v, want %v", deps, got, want)
+		}
+	}
+}
+
+func TestDAGAddDependenciesCycleErrorDeterministic(t *testing.T) {
+	// Map iteration order varies between iterations of the same loop. The
+	// reported cycle must not: an unstable cycle string churns every surface
+	// that repeats the error. Rebuild the same graph many times and require
+	// one message.
+	var first string
+	for range 200 {
+		d := NewDirectedAcyclicGraph[string]()
+		for i, v := range []string{"A", "B", "C", "D"} {
+			if err := d.AddVertex(v, i); err != nil {
+				t.Fatalf("AddVertex(%s): %v", v, err)
+			}
+		}
+		for from, deps := range map[string][]string{"B": {"A"}, "C": {"A"}, "D": {"B", "C"}} {
+			if err := d.AddDependencies(from, deps); err != nil {
+				t.Fatalf("AddDependencies(%s): %v", from, err)
+			}
+		}
+
+		err := d.AddDependencies("A", []string{"D"})
+		if err == nil {
+			t.Fatal("expected a cycle error")
+		}
+		if first == "" {
+			first = err.Error()
+		} else if err.Error() != first {
+			t.Fatalf("cycle message is not stable: got %q after %q", err.Error(), first)
+		}
+	}
+}
+
+func TestDAGAddDependenciesErrorRollback(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	for i, v := range []string{"A", "B", "C"} {
+		if err := d.AddVertex(v, i); err != nil {
+			t.Fatalf("AddVertex(%s): %v", v, err)
+		}
+	}
+	if err := d.AddDependencies("A", []string{"B"}); err != nil {
+		t.Fatalf("AddDependencies: %v", err)
+	}
+
+	for name, deps := range map[string][]string{
+		"missing vertex": {"C", "X"},
+		"self reference": {"C", "A"},
+	} {
+		if err := d.AddDependencies("A", deps); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+		if _, exists := d.Vertices["A"].DependsOn["C"]; exists {
+			t.Errorf("%s: A->C was not rolled back", name)
+		}
+		if _, exists := d.Vertices["A"].DependsOn["B"]; !exists {
+			t.Errorf("%s: rollback removed pre-existing A->B", name)
+		}
+	}
+}
+
+func TestDAGAddDependenciesDuplicates(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	for i, v := range []string{"A", "B"} {
+		if err := d.AddVertex(v, i); err != nil {
+			t.Fatalf("AddVertex(%s): %v", v, err)
+		}
+	}
+	for range 2 {
+		if err := d.AddDependencies("A", []string{"B", "B"}); err != nil {
+			t.Fatalf("AddDependencies: %v", err)
+		}
+	}
+	if got := len(d.Vertices["A"].DependsOn); got != 1 {
+		t.Errorf("got %d dependencies, want 1", got)
 	}
 }
 

@@ -213,30 +213,109 @@ func (d *DirectedAcyclicGraph[T]) AddDependencies(from T, dependencies []T) erro
 		return fmt.Errorf("node %v does not exist", from)
 	}
 
+	added := make([]T, 0, len(dependencies))
+	rollback := func() {
+		for _, dependency := range added {
+			delete(fromNode.DependsOn, dependency)
+		}
+	}
 	for _, dependency := range dependencies {
-		_, toExists := d.Vertices[dependency]
-		if !toExists {
+		if _, toExists := d.Vertices[dependency]; !toExists {
+			rollback()
 			return fmt.Errorf("node %v does not exist", dependency)
 		}
 		if from == dependency {
+			rollback()
 			return fmt.Errorf("self references are not allowed")
 		}
-		fromNode.DependsOn[dependency] = struct{}{}
+		if _, exists := fromNode.DependsOn[dependency]; !exists {
+			fromNode.DependsOn[dependency] = struct{}{}
+			added = append(added, dependency)
+		}
 	}
 
-	// Check if the graph is still a DAG
-	hasCycle, cycle := d.hasCycle()
-	if hasCycle {
-		// Ehmmm, we have a cycle, let's remove the edge we just added
-		for _, dependency := range dependencies {
-			delete(fromNode.DependsOn, dependency)
-		}
+	// Every new dependency from->dep closes a cycle iff `from` is
+	// already reachable from `dep` along DependsOn edges. Only entries added
+	// by this call are rolled back on error, so pre-existing dependencies
+	// are preserved.
+	if path, closes := d.findPath(added, from); closes {
+		rollback()
+		cycle := make([]T, 0, len(path)+1)
+		cycle = append(cycle, from)
+		cycle = append(cycle, path...)
 		return &CycleError[T]{
 			Cycle: cycle,
 		}
 	}
 
 	return nil
+}
+
+// findPath reports whether vertex `to` is reachable from any vertex in `from`
+// along DependsOn edges and returns one such path.
+func (d *DirectedAcyclicGraph[T]) findPath(from []T, to T) ([]T, bool) {
+	visited := make(map[T]struct{}, len(from))
+	stack := make([]T, 0, len(from))
+	for _, start := range from {
+		if _, seen := visited[start]; !seen {
+			visited[start] = struct{}{}
+			stack = append(stack, start)
+		}
+	}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for neighbor := range d.Vertices[node].DependsOn {
+			if neighbor == to {
+				// A dependency closes a cycle: build the deterministic path.
+				return d.findSortedPath(from, to)
+			}
+			if _, seen := visited[neighbor]; !seen {
+				visited[neighbor] = struct{}{}
+				stack = append(stack, neighbor)
+			}
+		}
+	}
+	return nil, false
+}
+
+// findSortedPath returns a deterministic path from a vertex in `from` to
+// vertex `to`. It runs only on the cycle-closing call.
+func (d *DirectedAcyclicGraph[T]) findSortedPath(from []T, to T) ([]T, bool) {
+	visited := make(map[T]struct{}, len(from))
+	parent := make(map[T]T, len(from))
+	stack := make([]T, 0, len(from))
+	for _, start := range slices.Sorted(slices.Values(from)) {
+		if _, seen := visited[start]; !seen {
+			visited[start] = struct{}{}
+			// parent[start] == start marks the start of a path.
+			parent[start] = start
+			stack = append(stack, start)
+		}
+	}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, neighbor := range slices.Sorted(maps.Keys(d.Vertices[node].DependsOn)) {
+			if neighbor == to {
+				path := []T{to}
+				for cur := node; ; cur = parent[cur] {
+					path = append(path, cur)
+					if parent[cur] == cur {
+						break
+					}
+				}
+				slices.Reverse(path)
+				return path, true
+			}
+			if _, seen := visited[neighbor]; !seen {
+				visited[neighbor] = struct{}{}
+				parent[neighbor] = node
+				stack = append(stack, neighbor)
+			}
+		}
+	}
+	return nil, false
 }
 
 // TopologicalSort returns the vertexes of the graph, respecting topological ordering first,

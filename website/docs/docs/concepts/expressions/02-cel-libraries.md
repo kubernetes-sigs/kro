@@ -53,6 +53,8 @@ id: ${"%x".format([hash.fnv64a(schema.spec.name + "-" + schema.spec.namespace)])
 encoded: ${base64.encode(hash.fnv64a(schema.metadata.uid))}
 ```
 
+See [Restart on ConfigMap/Secret Change](./03-dependencies-ordering.md#pattern-restart-on-configmapsecret-change) for using this to trigger a rollout when a ConfigMap changes.
+
 ### JSON
 
 Parse and serialize JSON strings.

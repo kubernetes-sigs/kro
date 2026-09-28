@@ -1,0 +1,10 @@
+apiVersion: kro.run/v1alpha1
+kind: ConfigMapChecksumRestart
+metadata:
+  name: test-app
+spec:
+  name: test-app
+  image: nginx
+  config:
+    LOG_LEVEL: "info"
+    FEATURE_FLAG_X: "false"

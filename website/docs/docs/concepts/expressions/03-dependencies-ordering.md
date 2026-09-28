@@ -201,6 +201,39 @@ All three resources only reference `${schema.spec.name}`, meaning they have no d
 Real-world RGDs typically combine multiple patterns. A complex application might have parallel branches (independent microservices), a diamond (services converging into a gateway), and linear chains (each service with its own config → deployment → service sequence). kro handles any valid DAG structure - these patterns are just common building blocks.
 :::
 
+### Pattern: Restart on ConfigMap/Secret Change
+
+Kubernetes only restarts pods when the pod template changes, so a `Deployment` reading a `ConfigMap` via `envFrom` won't restart when the ConfigMap's data changes. Stamping a hash of the data onto the pod template (Helm's `checksum/config` trick) fixes this, using the [Hash](./02-cel-libraries.md#hash) and [JSON](./02-cel-libraries.md#json) libraries:
+
+```kro
+resources:
+  - id: config
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: app-config
+      data:
+        LOG_LEVEL: ${schema.spec.logLevel}
+
+  - id: deployment
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      spec:
+        template:
+          metadata:
+            annotations:
+              checksum/config: ${"%x".format([hash.sha256(json.marshal(config.data))])}
+          spec:
+            containers:
+              - envFrom:
+                  - configMapRef:
+                      name: ${config.metadata.name}
+```
+
+The annotation depends on `config`, so kro re-evaluates it every reconcile: when `config.data` changes, `checksum/config` changes, and the Deployment rolls its pods. The same works for `Secret`s and `StatefulSet`s. See [`examples/kubernetes/configmap-checksum-restart`](https://github.com/kubernetes-sigs/kro/tree/main/examples/kubernetes/configmap-checksum-restart) for a runnable version.
+
 ## Topological Order
 
 kro computes a topological order - the sequence resources can be processed such that all dependencies are satisfied.

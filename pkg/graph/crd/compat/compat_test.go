@@ -20,7 +20,44 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+
+	"github.com/kubernetes-sigs/kro/pkg/features"
 )
+
+func TestCompareVersionsConservativeComparisonOption(t *testing.T) {
+	oldVersions := []v1.CustomResourceDefinitionVersion{{
+		Name: "v1",
+		Schema: &v1.CustomResourceValidation{OpenAPIV3Schema: &v1.JSONSchemaProps{
+			Type: "integer", Format: "int32",
+		}},
+	}}
+	newVersions := []v1.CustomResourceDefinitionVersion{{
+		Name: "v1",
+		Schema: &v1.CustomResourceValidation{OpenAPIV3Schema: &v1.JSONSchemaProps{
+			Type: "integer", Format: "int64",
+		}},
+	}}
+
+	for _, tc := range []struct {
+		name         string
+		gateEnabled  bool
+		conservative bool
+	}{
+		{name: "enable with gate off", gateEnabled: false, conservative: true},
+		{name: "disable with gate on", gateEnabled: true, conservative: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setFeatureGate(t, features.ConservativeCRDComparison, tc.gateEnabled)
+
+			got, err := CompareVersions(oldVersions, newVersions, WithConservativeComparison(tc.conservative))
+			require.NoError(t, err)
+			want := Compare(oldVersions[0].Schema.OpenAPIV3Schema, newVersions[0].Schema.OpenAPIV3Schema,
+				WithConservativeComparison(tc.conservative))
+			assert.Equal(t, want, got)
+			assert.Equal(t, tc.conservative, got.HasBreakingChanges())
+		})
+	}
+}
 
 func TestCompareVersions(t *testing.T) {
 	tests := []struct {

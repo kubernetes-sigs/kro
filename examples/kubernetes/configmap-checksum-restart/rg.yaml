@@ -1,0 +1,49 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: configmapchecksumrestarts.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ConfigMapChecksumRestart
+    spec:
+      name: string
+      image: string | default="nginx"
+      config: "map[string]string"
+    status:
+      deploymentConditions: ${deployment.status.conditions}
+
+  resources:
+    - id: config
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.name}-config
+        data: ${schema.spec.config}
+
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.spec.name}
+              annotations:
+                # Changes when config.data changes, triggering a rollout
+                checksum/config: ${"%x".format([hash.sha256(json.marshal(config.data))])}
+            spec:
+              containers:
+                - name: ${schema.spec.name}
+                  image: ${schema.spec.image}
+                  envFrom:
+                    - configMapRef:
+                        name: ${config.metadata.name}

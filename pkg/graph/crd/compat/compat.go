@@ -24,7 +24,8 @@ import (
 // CompareVersions compares CRD versions and returns a compatibility report.
 // This is a convenience wrapper that extracts schemas from version slices.
 // It expects exactly one version in each slice.
-func CompareVersions(oldVersions, newVersions []v1.CustomResourceDefinitionVersion) (*Report, error) {
+// Comparison options, including WithConservativeComparison, are passed to Compare.
+func CompareVersions(oldVersions, newVersions []v1.CustomResourceDefinitionVersion, options ...CompareOption) (*Report, error) {
 	if len(oldVersions) != 1 || len(newVersions) != 1 {
 		return nil, fmt.Errorf("expected exactly one version in each CRD, got %d old and %d new versions",
 			len(oldVersions), len(newVersions))
@@ -57,7 +58,7 @@ func CompareVersions(oldVersions, newVersions []v1.CustomResourceDefinitionVersi
 	}
 
 	// Compare schemas first
-	report := Compare(oldVersion.Schema.OpenAPIV3Schema, newVersion.Schema.OpenAPIV3Schema)
+	report := Compare(oldVersion.Schema.OpenAPIV3Schema, newVersion.Schema.OpenAPIV3Schema, options...)
 
 	// Check version metadata changes that could break kro
 	// Served going from true to false would break API access

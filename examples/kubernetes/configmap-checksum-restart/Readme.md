@@ -2,9 +2,8 @@
 
 This example creates a ResourceGraphDefinition called `ConfigMapChecksumRestart`
 that groups a `ConfigMap` and a `Deployment`, and restarts the Deployment's
-pods whenever the ConfigMap's data changes. See
-[Dependencies & Ordering](../../../website/docs/docs/concepts/expressions/03-dependencies-ordering.md#pattern-restart-on-configmapsecret-change)
-for how it works.
+pods whenever the ConfigMap's data changes. See the
+[FAQ](../../../website/docs/docs/faq.md) for how it works.
 
 ### Create ResourceGraphDefinition called ConfigMapChecksumRestart
 

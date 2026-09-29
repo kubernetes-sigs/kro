@@ -329,13 +329,12 @@ func buildStatusEnvForNodes(rt *runtime.Runtime, includeRuntime bool) (*cel.Env,
 // expressions share the same execution bound as graph expressions rather than
 // running unbounded.
 func compileCEL(env *cel.Env, expr string, costLimit uint64) (cel.Program, error) {
-	parsed, issues := env.Parse(expr)
-	if issues != nil && issues.Err() != nil {
-		return nil, fmt.Errorf("parse %q: %w", expr, issues.Err())
-	}
-	checked, issues := env.Check(parsed)
-	if issues != nil && issues.Err() != nil {
-		return nil, fmt.Errorf("check %q: %w", expr, issues.Err())
+	// ParseAndCheck applies the KREP-025 time-operator rewrite between
+	// parse and check, so status/condition expressions solve like graph
+	// expressions.
+	checked, err := krocel.ParseAndCheck(env, expr)
+	if err != nil {
+		return nil, fmt.Errorf("compile %q: %w", expr, err)
 	}
 	prog, err := env.Program(checked, krocel.ProgramOptions(costLimit)...)
 	if err != nil {

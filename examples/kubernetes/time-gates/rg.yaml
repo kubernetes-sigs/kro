@@ -1,0 +1,38 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: time-gates.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: TimeGates
+    spec:
+      # RFC3339 timestamps controlling the gates below.
+      openAt: string
+      expiresAt: string
+    status:
+      inWindow: ${gates.data.inWindow}
+  resources:
+    - id: gates
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.metadata.name}-gates
+        data:
+          # Fixed delay from instance creation: flips to "true" one minute
+          # after the instance is created. creationTimestamp is a native
+          # timestamp, so no timestamp() wrapper is needed.
+          afterAMin: ${string(time.now() >= schema.metadata.creationTimestamp + duration("1m"))}
+
+          # Spec-driven open gate. Operand order does not matter.
+          opened: ${string(timestamp(schema.spec.openAt) <= time.now())}
+
+          # Age gate: how long the instance has existed.
+          olderThanFiveMins: ${string(time.now() - schema.metadata.creationTimestamp > duration("5m"))}
+
+          # Remaining-time gate: time left until expiry.
+          expiringWithinAnHour: ${string(timestamp(schema.spec.expiresAt) - time.now() < duration("1h"))}
+
+          # Window gate: open AND not yet expired.
+          inWindow: ${string(timestamp(schema.spec.openAt) <= time.now() && time.now() < timestamp(schema.spec.expiresAt))}

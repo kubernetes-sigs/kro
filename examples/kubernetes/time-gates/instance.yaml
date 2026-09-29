@@ -1,0 +1,9 @@
+apiVersion: kro.run/v1alpha1
+kind: TimeGates
+metadata:
+  name: time-gates-demo
+spec:
+  # openAt is in the past, so `opened` is "true" immediately; watch
+  # `afterAMin` and `olderThanFiveMins` flip as the instance ages.
+  openAt: "2026-01-01T00:00:00Z"
+  expiresAt: "2030-01-01T00:00:00Z"

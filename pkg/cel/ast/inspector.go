@@ -502,7 +502,10 @@ func (a *Inspector) listExpressionToString(ast *celast.AST, expr celast.Expr) st
 }
 
 func isInternalIdentifier(name string) bool {
-	return name == "@result" ||
+	// "time" is the KREP-025 time-library variable (time.now()); it is
+	// runtime-provided vocabulary, not a resource dependency.
+	return name == "time" ||
+		name == "@result" ||
 		strings.HasPrefix(name, "$$") ||
 		strings.HasPrefix(name, "@__")
 }

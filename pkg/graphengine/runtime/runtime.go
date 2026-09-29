@@ -29,6 +29,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	celunstructured "github.com/kubernetes-sigs/kro/pkg/cel/unstructured"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
@@ -136,6 +137,14 @@ func New(prog *compiler.Program, g *expv1alpha1.Graph, opts ...Option) *Runtime 
 	}
 	for _, opt := range opts {
 		opt(rt)
+	}
+	// Seed the KREP-025 `time` variable with a per-reconcile clock so every
+	// time.now() in this Runtime observes the same instant and comparison
+	// flips funnel into one requeue decision. A child (subgraph) Runtime
+	// inherits its parent's clock through WithSeedScope, so the seed is only
+	// created when absent.
+	if _, ok := rt.scope[library.TimeVarName]; !ok {
+		rt.scope[library.TimeVarName] = library.NewTimeValue(time.Now())
 	}
 	if prog == nil {
 		return rt
@@ -278,6 +287,30 @@ func (r *Runtime) Node(id string) *Node { return r.byID[id] }
 // Scope returns the current scope map. The map is live — mutating it
 // affects subsequent Resolve calls. Most callers should use Set instead.
 func (r *Runtime) Scope() map[string]any { return r.scope }
+
+// timeRequeueBuffer pads a time-solved requeue so the gate has actually
+// flipped when the next reconcile evaluates it.
+const timeRequeueBuffer = time.Second
+
+// TimeRequeueAfter reports the delay until the earliest future instant at
+// which a time.now() comparison evaluated this reconcile flips its result
+// (KREP-025 requeue solving). ok is false when no evaluated comparison has a
+// future flip.
+func (r *Runtime) TimeRequeueAfter() (time.Duration, bool) {
+	tv, ok := r.scope[library.TimeVarName].(*library.TimeVal)
+	if !ok {
+		return 0, false
+	}
+	flip, ok := tv.EarliestFlip()
+	if !ok {
+		return 0, false
+	}
+	d := time.Until(flip) + timeRequeueBuffer
+	if d < timeRequeueBuffer {
+		d = timeRequeueBuffer
+	}
+	return d, true
+}
 
 // Set publishes value under id in the scope so downstream nodes can read
 // it via CEL expressions like ${id.field}. Template, Ref, and overridden Def

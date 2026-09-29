@@ -20,6 +20,8 @@ import (
 
 	"github.com/google/cel-go/cel"
 
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
+
 	"github.com/kubernetes-sigs/kro/pkg/cel/conversion"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
@@ -36,6 +38,9 @@ const (
 func ProgramOptions(costLimit uint64) []cel.ProgramOption {
 	opts := []cel.ProgramOption{
 		cel.InterruptCheckFrequency(DefaultInterruptCheckFrequency),
+		// Route kro time values on the right of standard operators
+		// (library/time_dispatch.go).
+		library.TimeOperatorDecorator(),
 	}
 	if costLimit > 0 {
 		opts = append(opts, cel.CostLimit(costLimit))

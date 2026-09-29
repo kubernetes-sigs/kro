@@ -47,7 +47,7 @@ var (
 		// Project namespace.
 		"graph", "graphengine", "kro",
 		// CEL / runtime identifiers we wire in.
-		"each", "item", "items", "object", "self", "this", "context",
+		"each", "item", "items", "object", "self", "this", "context", "time",
 	).Union(celReservedSymbols)
 )
 

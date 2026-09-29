@@ -112,3 +112,40 @@ sidebar_position: 100
    if so the example has to be modified to support your configuration.
    For more detailed information about ArgoCD resource tracking, please see the
    [ArgoCD documentation](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/).
+
+8. **How do I restart a Deployment when a ConfigMap or Secret it uses changes?**
+
+   Hash the ConfigMap's data into a pod template annotation with the `hash`
+   and `json` CEL libraries. The annotation is re-evaluated every reconcile,
+   so a data change changes the hash, which changes the pod template and
+   triggers a rollout - the same trick as Helm's `checksum/config` annotation.
+
+   ```kro
+   resources:
+     - id: config
+       template:
+         apiVersion: v1
+         kind: ConfigMap
+         metadata:
+           name: app-config
+         data:
+           LOG_LEVEL: ${schema.spec.logLevel}
+
+     - id: deployment
+       template:
+         apiVersion: apps/v1
+         kind: Deployment
+         spec:
+           template:
+             metadata:
+               annotations:
+                 checksum/config: ${"%x".format([hash.sha256(json.marshal(config.data))])}
+             spec:
+               containers:
+                 - envFrom:
+                     - configMapRef:
+                         name: ${config.metadata.name}
+   ```
+
+   See [`configmap-checksum-restart`](https://github.com/kubernetes-sigs/kro/tree/main/examples/kubernetes/configmap-checksum-restart)
+   for a runnable example.

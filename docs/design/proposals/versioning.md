@@ -1,268 +1,324 @@
-# KRO: Versioning and Rollouts
+# KREP-009: Versioning and Rollouts for ResourceGraphDefinitions
 
-# Problem Statement
+Authors: @barney-s (original), @jakobmoellerdev
 
-As the KRO project matures, platform teams (RGD authors) need a structured way to evolve their \`ResourceGraphDefinition\` (RGD) resources over time. Currently, any change to an RGD in a cluster is immediately propagated to all existing instances across all namespaces upon their next reconciliation. This "rollout-on-reconcile" behavior is fast but lacks the control necessary for some production environments. The goal is to allow RGD authors to introduce changes while giving control over how the changes are safely rolled out in the cluster. This aligns with GitOps principles, where version pinning and controlled automation are crucial for stability.
+## Summary
 
-# Background
+kro separates two kinds of versions, both owned by a single
+ResourceGraphDefinition (RGD): **graph versions** (which immutable
+`GraphRevision` an instance is reconciled with, and how new revisions roll out)
+and **API versions** (the served/stored versions of the generated CRD,
+including conversion and storage version migration between them).
 
-To understand the scope of the problems to be addressed, we need to understand a few things that will be used as inputs in the proposal.
+## Problem statement
 
-## What can change in an RGD
+Platform teams (RGD authors) need to evolve their RGDs over time. Today any
+change to an RGD is propagated to every instance on its next reconcile. This is
+fast, but lacks the control production environments need:
 
-When we say an RGD author makes a change, it could mean one or more of the following:
+- **No controlled rollouts.** All instances pick up a change at once.
+- **No version pinning.** Instance authors cannot stay on a known-good graph
+  while a new one is validated.
+- **No path for breaking schema changes.** `spec.schema.apiVersion` is
+  immutable, so the only way to introduce a breaking schema change is a new
+  kind (a new RGD), which forces delete/recreate of instances.
+- **GitOps friction.** The effective state of an instance changes without any
+  change to its own manifest, and migrating to a new kind cannot be expressed
+  as an in-place, declarative change.
 
-1. **Resource Adjustments:** Changes to `.spec.resources`:  
-   1. Resources are added.  
-   2. Resources are removed.  
-   3. Resources are modified (e.g., changing a container image, updating a label).  
-2. **Schema Evolution:** Changes to the `.spec.schema`:  
-   1. Backward-compatible changes:  
-      1. A new optional field is added.  
-      2. A new field with a default value is added.  
-      3. A default value is removed  
-   2. Backward-incompatible changes:  
-      1. A field is removed.  
-      2. Adding/Changing defaults.  
-      3. ~~A field is renamed. This is done by removing the old field and adding a new field.~~  
-3. **CEL Environment Dependency:** The version of KRO determines the available CEL environments and functions.  
-   1. An RGD author could change the CEL snippets used in RGD that require a different CEL environment.  
-   2. KRO authors could fix CEL functions that would cause behavioural changes in the resulting resources.
+A concrete example from production users: a platform team manages ~80 clusters
+through a cluster-provisioning RGD composing ACK resources. They need to ship a
+breaking schema change (e.g. a new required field) and migrate the existing
+cluster CRs progressively (dev → staging → prod) via GitOps, serving the old
+and new API version side by side, and retiring the old version once every CR
+has moved. Creating a parallel kind (`EKSClusterV2`) and re-creating 80 CRs is
+not acceptable at that scale.
 
-## Challenges in current model
+### What can change in an RGD
 
-Key challenges with the current model include:
+1. **Resources** (`spec.resources`): resources added, removed or modified.
+   These change *behavior* but not the API.
+2. **Schema** (`spec.schema`): changes to the generated CRD. These are either
+   compatible (a new optional field, a relaxed constraint) or breaking (a
+   removed field, a newly required field, a tightened constraint).
+3. **CEL environment**: the kro version determines the available CEL
+   functions and their semantics, so upgrading kro can change the output of an
+   unchanged graph.
 
-* **Lack of Controlled Rollouts:** There is no mechanism to gradually roll out RGD changes. All instances are updated at once, which is risky.  
-* **No Version Pinning**: Application teams (instance authors) cannot pin their instances to a specific, known-good version of an RGD. This makes them vulnerable to breaking changes introduced by the platform team and complicates bug remediation.  
-* **Handling Breaking Changes:** There is no formal process for managing backward-incompatible changes to an RGD's schema or resource composition.  
-* **GitOps Integration:** The current model complicates GitOps workflows. GitOps relies on declarative state, but the effective state of an instance can change implicitly due to an RGD update, without any change to the instance's own manifest in git.
+Class 1 and class 3 are about *which graph* evaluates an instance. Class 2 is
+about *which API* the instance is expressed in. This proposal handles them with
+separate mechanisms.
 
-## Common questions
+## Current state
 
-1. How should modifications to the ResourceGraphDefinition itself be managed ?  
-2. Should RGDs explicitly reference a specific kro-cel environment version ?  
-3. **Rollout Authority:** Who retains control over the rollout process: the infrastructure team (RGD author) or the application teams (instance authors)?  
-4. **Rollout Methodologies:** What distinct rollout strategies should be supported (e.g., granular rollouts by namespace or label)?
+Since this KREP was first drafted, a large part of the foundation has landed.
 
-# Proposal
+| Area | State on `main` | Where |
+| --- | --- | --- |
+| Graph history | Every accepted RGD spec change issues an immutable, cluster-scoped `GraphRevision` (KREP-013), keyed by a hash of the full RGD spec. | `api/internal.kro.run/v1alpha1/graphrevision_types.go`, `pkg/graph/revisions/registry.go` |
+| Revision selection | Instances always resolve the latest revision. A point lookup `GetGraphRevision(revision)` exists but is unused. | `pkg/controller/instance/controller_graph_engine.go`, `pkg/graph/revisions/resolver.go` |
+| Revision retention | `--rgd-max-graph-revisions` (default 5) keeps the N newest revisions. | `pkg/controller/resourcegraphdefinition/controller_reconcile.go` |
+| Schema compatibility | Every CRD update is diffed; breaking changes set `KindReady=False` unless the RGD carries `kro.run/allow-breaking-changes: "true"`. The `ConservativeCRDComparison` feature gate adds stricter checks. | `pkg/graph/crd/compat`, `pkg/client/crd.go` |
+| Generated CRD | Exactly one version, served and storage, no conversion. `status.storedVersions` is never touched by kro. | `pkg/graph/crd/crd.go` |
+| Schema identity | `apiVersion`, `kind`, `group`, `plural` and `scope` are immutable via CEL validation rules. | `api/v1alpha1/resourcegraphdefinition_types.go` |
+| Instance watches | The dynamic controller registers one handler per parent GVR; it is only deregistered when the RGD is deleted. | `pkg/dynamiccontroller/dynamic_controller.go` |
 
-We may have to pick one or more mechanisms based on the changes needed.
+On the Kubernetes side:
 
-* We propose using the [Replicaset pattern](https://docs.google.com/document/d/1-9lWOJEDDN2Qsl6KVfrEbEZHgLm6Twk06L6-OsVJuho/edit?resourcekey=0-lLY3WBJ-0vlHfi5l0nypxg&tab=t.0#heading=h.mva37kvbhn51) for non-breaking schema changes. This allows authors to make changes without worrying about breaking users. Also allows users to select which version of RGD to use.  
-* For breaking schema changes or behavioural changes, we recommend creating  a [new RGD with a different CRD](#new-rgd-for-the-change). We shall support migration tooling for such use cases. A Cli helper `kro migrate` can be added.
+- **Storage version migration is built in.** KEP-4192 moved the Storage
+  Version Migrator into kube-controller-manager: alpha in 1.30, beta in 1.35
+  (disabled by default), GA in 1.37 with `storagemigration.k8s.io/v1` enabled
+  by default ([KEP-4192](https://www.kubernetes.dev/resources/keps/4192/),
+  [docs](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/storage-version-migration/)).
+- It is **not triggered automatically**: someone must create a
+  `StorageVersionMigration` object for a group/resource.
+- It only **rewrites stored objects into the current storage version**; it does
+  not convert fields itself. Conversion is still either `None` (only
+  `apiVersion` is rewritten) or `Webhook`.
+- On success it trims the CRD's `status.storedVersions` to the storage version,
+  which is the precondition for removing an old version from a CRD without
+  data loss.
 
-# Design Options
+## Proposal
 
-This section outlines various design options for implementing versioning. The discussion of these approaches aims to provide a better understanding of the available solutions, enabling a robust discussion that will inform the final design proposal.
+### Overview
 
-## Representing RGD changes
-
-In Kubernetes, RGD is an object. When any change is made to an RGD, we lose the previous configuration. There is no notion of the history of an object. Only the current view exists. 
-
-To deal with this we have these options:
-
-* **Single canonical RGD**: Only one instance of RGD exists, latest.  
-* **Different RGD for each change**: Each change requires a new RGD and Instance CRD.  
-* **Replicaset pattern**: Replicas automatically created and instances pinned to a replica  
-* **Sections with RGD for each iteration number:** Schema and Resources are defined per iteration. Instances are pinned to a section.
-
-## Replicaset Pattern
-
-Introduce a new `ResourceGraphDefinitionReplica` CRD that is a point-in-time snapshot of a RGD.  This is automatically created and managed by KRO reconciler. Instances reconcile against a specific version of the replica.  
-**Mechanism**
-
-* Crucially, every modification to the RGD specification automatically triggers the creation of a new `ResourceGraphDefinitionReplica` by the KRO.   
-* Instance reconciliation picks current `ResourceGraphDefinitionReplica` during first reconciliation and is pinned to that replica (via annotation).  
-* We can have a mode where pinning is not done and all instances are updated to the latest replica always.  
-* To mimic existing behavior we can set the history depth to 1 and enable no pinning mode where instances are always updated to the latest replica.
-
-**Migration**
-
-* **User-Controlled Opt-in:** Users have control over when they migrate their instance to a new version. Instance can be moved to a different version/replica by changing the annotation.  
-* **Automated Migration:** A mechanism can be built to automate the migration process that changes the annotation. No special handling of resource migration is required since we are dealing with the same instance object.
-
-**Pros**
-
-* **Easy rollback**: This automated process ensures that a historical record of all RGD spec versions is maintained. Each `ResourceGraphDefinitionReplica` essentially represents a snapshot of the RGD at a particular point in time, encapsulating all the details of that specific version. This automatic generation is fundamental to enabling versioning and allowing for the tracking and potential rollback to previous configurations.  
-* **Version Pinning:** During its initial reconciliation cycle, an instance will identify and select a `ResourceGraphDefinitionReplica` to which it will be "pinned." This pinning is achieved through an annotation applied to the instance. The primary purpose of this pinning is to ensure stability and predictability. Once an instance is pinned to a particular replica, it will continue to operate based on the definition provided by that specific `ResourceGraphDefinitionReplica`, even if newer replicas are subsequently created. This behavior is critical for preventing unexpected disruptions to running instances due to RGD spec changes. It allows for a controlled rollout of new RGD versions, where existing instances continue to use their original, validated configurations.  
-* **Velocity:** While the default behavior emphasizes pinning for stability, the system also offers a configurable mode where this pinning is deliberately *not* performed. In this alternative mode, all instances are designed to continuously update themselves to the latest available `ResourceGraphDefinitionReplica`. This dynamic updating ensures that instances are always running with the most current RGD specification. This mode would be particularly useful in environments where rapid adoption of the latest RGD definitions is paramount, or for stateless services that can tolerate frequent configuration updates without significant impact. The choice between pinning and continuous updates provides flexibility, allowing users to select the behavior that best suits their application's requirements and deployment strategy.  
-* **No Concept of immediate rollout**: Any change to a RGD results in a new replica. So automated rollout does not happen.
-
-**Cons**
-
-* **Breaking schema change handling:** If the schema has a breaking change across versions,  it would require conversion webhooks to be defined. There is no mechanism to do it in KRO.  
-* 
-
-## Single Canonical RGD
-
-This approach maintains the current model where only one version of the RGD exists, which is always the most recently applied one. This simplifies reasoning, mirroring how most Kubernetes resources function, as changes are immediately visible across all RGD instances. The RGD contains a single schema definition and a single resources section.
-
-**Mechanism**
-
-* **Resource Updates:** Changes (additions, removals, modifications) are directly updated within the RGD's resource section.  
-* **Schema Compatibility:** Only backward-compatible schema changes are allowed.  
-* **Automatic Rollout:** When the RGD is modified, these changes are automatically rolled out across all instances upon reconciliation.
-
-**Pros**
-
-* **Simplicity:** This is the most straightforward method for managing RGD changes, easy to understand and implement.  
-* **Single Source of Truth:** Maintains one definitive source for the RGD definition.  
-* **Automatic Propagation:** Changes are automatically propagated, which is beneficial for rapid updates.
-
-**Cons**
-
-* **Uncontrolled Rollouts:** All instances update simultaneously, which can be risky, especially for critical applications. Users cannot pin to a specific version to avoid a buggy rollout.  
-* **Irreversible Changes:** This model has a "unidirectional and irreversible" change model, which can be a drawback for rollbacks.  
-* **Breaking schema change handling:** Handling backward-incompatible schema changes is challenging and likely necessitates downtime or complex migrations.  
-* **No Version Pinning**: Since changes are immediately rolled out, there is no way to pin instances to a specific revision of RGD.
-
-## RGD with version sections
-
-This approach integrates versioning directly into a single RGD (Resource Group Definition) resource. A single RGD exists for multiple versions with sections within the RGD.
-
-**Mechanism**
-
-* The RGD `spec` will include a map or list of versions (e.g., `v1`, `v2`).  
-* Each version will have its own schema and set of resources, as shown in the example below:
-
+```mermaid
+flowchart LR
+  RGD -->|spec hash change| GR[GraphRevision N<br/>resources + hub schema]
+  RGD -->|schema.apiVersion + previousVersions| CRD[Generated CRD<br/>1 storage version, n served]
+  Instance -->|status.graphRevision| GR
+  Instance -->|stored and served as| CRD
 ```
+
+- **Phase 1 – graph versions.** Instances are pinned to a `GraphRevision`, and
+  the RGD declares a rollout strategy that decides when instances move to a
+  newer revision. This covers resource changes, compatible schema changes and
+  CEL environment changes.
+- **Phase 2 – API versions.** The RGD can serve several API versions of the
+  same kind. `spec.schema` is always the hub (storage) version; older versions
+  are kept as served spokes until all stored objects have been migrated. This
+  covers breaking schema changes without a new kind.
+
+A single RGD stays the only owner of its group/kind in both phases.
+
+### Phase 1: revision pinning and rollout strategy
+
+#### API
+
+```yaml
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: webapp
 spec:
-   - version: v1
-     schema:
-        # schema for v1...
-     resources:
-        # resources for v1...
-   - name: v2
-     schema:
-       # schema for v2...
-     resources:
-       # resources for v2...
-  servedVersion: v2
+  rollout:
+    strategy: Manual   # Latest (default) | Manual
+  schema: ...
+  resources: ...
 ```
 
-* When a new version is added to the RGD, the KRO controller will create a new version of the corresponding Custom Resource Definition (CRD) (e.g., `MyWebApp/v2`).  
-* Instances are not automatically migrated. Users must explicitly change their instance's `apiVersion` (e.g., from `my.api/v1` to `my.api/v2`) to opt into the new version.  
-* This option requires supporting a "migrate" lifecycle for instances and an "adoption" functionality for new instances.  
-* Changes within a version are immediately applied across instances using that version.
+- `spec.rollout.strategy`:
+  - `Latest` (default): today's behavior. Every instance is reconciled with
+    the latest active revision.
+  - `Manual`: a new instance is pinned to the latest active revision when it is
+    first reconciled. An existing instance stays on its revision until it is
+    explicitly moved.
+  - `External` is reserved for a later extension where an external controller
+    (or KREP-006 propagation control) moves instances.
+- Instance annotation `kro.run/graph-revision`:
+  - `"<n>"` pins the instance to revision `n`, regardless of strategy.
+  - `"latest"` makes the instance follow the latest revision, regardless of
+    strategy.
+  - Absent: the RGD's strategy decides.
+- Instance status:
+  - `status.graphRevision`: the revision the instance was last reconciled
+    with.
+  - `status.targetGraphRevision`: the revision the instance should be on,
+    derived from the annotation and strategy. A difference between the two
+    means a rollout is in progress for this instance.
 
-**Migration**
+The pin is expressed in an annotation owned by the instance author (or by a
+rollout tool acting on their behalf), while the observed state lives in
+status. kro never writes the annotation, so there is a single writer.
 
-* **User-Controlled Opt-in:** Users have control over when they migrate their instance to a new version.  
-* **Automated Migration:** A mechanism can be built to automate the migration process. This would involve creating a new instance object at the new version, copying relevant fields, and deleting the old one. This requires careful handling of resource adoption and state.
+#### Behavior
 
-**Pros**
+- The instance controller resolves its graph with
+  `GetGraphRevision(targetGraphRevision)` instead of `GetLatestRevision()`.
+- A target revision that does not exist or failed compilation sets the
+  instance's `Ready` condition to `False` with reason
+  `GraphRevisionUnavailable`; the instance is not reconciled against another
+  revision implicitly.
+- **Retention.** Revision garbage collection never deletes a revision that is
+  the `status.graphRevision` or `status.targetGraphRevision` of any instance.
+  `--rgd-max-graph-revisions` becomes the minimum number of retained
+  revisions rather than a hard cap.
+- **Schema defaults.** CRD defaults are applied by the API server to every
+  object of the kind, so pinning cannot hide a default change within one API
+  version. Under `Manual`, a schema change classified as `DEFAULT_CHANGED` is
+  rejected with `KindReady=False`; the author has to introduce a new API
+  version (Phase 2) instead.
+- **CEL environment.** Each `GraphRevision` records the kro CEL environment
+  version it was compiled with in its status, so a kro upgrade that changes
+  evaluation of an unchanged revision is visible (see #643).
 
-* **Controlled Rollouts:** Users can adopt new versions at their own pace. Provides fine-grained control over when instances adopt new versions, crucial for critical systems or phased rollouts.  
-* **Version Pinning**: Instances are by default pinned to a specific RGD. Migration is explicit.  
-* **Clear Separation:** Versions are clearly defined and managed within a single RGD.  
-* **GitOps Friendly:** Users can pin their instance to a specific version in their Git repository.  
-* **No Impact on Existing Instances:** Introducing a new version has no effect on consumers of older versions.
+### Phase 2: multiple API versions (hub and spoke)
 
-**Cons**
+#### API
 
-* **Increased Complexity:** The RGD resource becomes more complex.  
-* **Breaking schema change handling:** If the schema has a breaking change across versions,  it would require conversion webhooks to be defined. There is no mechanism to do it in KRO.  
-* **CRD Management:** The controller needs to manage the lifecycle of multiple CRD versions.  
-* **Migration Tooling:** Requires building robust mechanisms for instance migration and adoption.  
-* Changes within a version are immediately applied across instances using that version.  
-* **KRM Object size limitation**: With multiple versions in the same RGD, it is more likely to hit the KRM object size limitations.   
-* **Immediate rollout within version**: Changes within a version are immediately rolled out with no control.  
-* **Instance Migration for Minor Changes:** Instances need to be migrated to the new CRD even for minor changes in the RGD.  
-* **Resource Abandonment and Adoption:** Resources managed by the old CRD must be abandoned and then adopted by the new CRD.
+```yaml
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: webapp
+spec:
+  schema:
+    apiVersion: v1beta1           # hub: storage version, graph is evaluated here
+    kind: WebApp
+    spec:
+      image: string
+      tag: string | default="latest"
+    previousVersions:
+      - apiVersion: v1alpha1
+        served: true
+        deprecated: true
+        deprecationWarning: "webapps.kro.run/v1alpha1 is deprecated; use v1beta1"
+        spec:
+          image: string
+  resources: ...
+```
 
-## New RGD for the change {#new-rgd-for-the-change}
+- `spec.schema` is always the **hub**: the storage version, and the only
+  version the resource graph is written and evaluated against. Resources are
+  never duplicated per version.
+- `spec.schema.apiVersion` may only move **forward** in Kubernetes version
+  priority (`v1alpha1` → `v1beta1` → `v1`). The current `self == oldSelf` rule
+  is replaced by a rule allowing only higher-priority values; `kind`, `group`,
+  `plural` and `scope` stay immutable.
+- `spec.schema.previousVersions[]` lists older versions as **spokes**, each with
+  only its schema (`spec`, `status` in SimpleSchema), `served`, `deprecated`
+  and an optional `deprecationWarning`.
+- When the hub moves forward, the previous hub must be added to
+  `previousVersions` in the same update; otherwise the update is rejected,
+  because the version may still be stored.
 
-This approach treats each version of a definition as a completely distinct ResourceGraphDefinition resource.
+#### Conversion
 
-**Mechanism**
+- **Phase 2a – `None`.** The generated CRD uses conversion strategy `None`.
+  This is allowed only if the compat package (`CompareVersions`, extended to
+  compare across versions instead of only across edits of one version) reports
+  the spoke → hub change as non-breaking. Otherwise the RGD reports
+  `KindReady=False` naming the offending fields.
+- **Phase 2b – CEL conversion (feature gate `CRDConversion`).** Spokes may
+  declare `conversion.toHub` and `conversion.fromHub` field mappings as CEL
+  expressions. kro serves a conversion webhook that evaluates them, and sets
+  strategy `Webhook` on the generated CRD. This KREP describes the API; the
+  webhook serving model (certificates, availability) is detailed in the
+  implementation PR.
 
-* To create a new version, the platform team generates a new RGD resource with a versioned name (e.g., `my-web-app-v1`, `my-web-app-v2`).  
-* Each RGD (e.g., `my-web-app-v2`) defines its own Custom Resource Definition (CRD) (e.g., `MyWebAppV2`), with the CRD name itself being versioned.  
-* Existing instances of the older RGD are entirely unaffected by the new version.  
-* Users must create new instances using the new CRD to adopt the updated version.  
-* This necessitates a well-defined migration strategy. This involves supporting a lifecycle for migrating an instance from one RGD/CRD to another, including the adoption of underlying resources.
+#### Instance reconciliation
 
-**Migration**
+- The instance controller watches the hub GVR only; the API server converts
+  objects written in spoke versions.
+- When the hub changes, the dynamic controller deregisters the old parent GVR
+  and registers the new one.
+- A graph revision always carries the hub schema it was issued with, so
+  Phase 1 pinning keeps working across hub changes.
 
-* **User-Controlled Opt-in:** Users have control over when they migrate their instance to a new version.  
-* **Automated Migration:** A mechanism can be built to automate the migration process. This would involve creating a new instance object at the new version, copying relevant fields, and deleting the old one. This requires careful handling of resource adoption and state.
+#### Migration lifecycle
 
-**Pros**
+The RGD controller drives the migration of stored objects:
 
-* **Clear Separation:** Each version exists as a distinct, immutable resource, offering a very clean and easily understandable structure.  
-* **No Impact on Existing Instances:** Introducing a new version has no effect on consumers of older versions.  
-* **Version Pinning**: Instances are by default pinned to a specific RGD. Migration is explicit.  
-* **Controlled Rollouts:** Users can adopt new versions at their own pace. Provides fine-grained control over when instances adopt new versions, crucial for critical systems or phased rollouts.  
-* **GitOps Friendly:** Users can pin their instance to a specific version in their Git repository.  
-* **Breaking schema change handling:** Since new CRD is created there is no concept of breaking changes in schema. It's a new CRD that we need to migrate to.
+1. Apply the CRD with the new hub as storage version; spokes stay served.
+2. If `storagemigration.k8s.io/v1` is discoverable, create a
+   `StorageVersionMigration` for the instance group/resource and wait for its
+   `Succeeded` condition. The API server trims `status.storedVersions`.
+3. Otherwise (clusters before 1.37, or with the API disabled), kro rewrites
+   every instance with a no-op update through its existing informer and then
+   patches `status.storedVersions` to the hub version itself. This requires
+   `customresourcedefinitions/status` RBAC.
+4. Once a spoke is no longer in `status.storedVersions`, it may be set to
+   `served: false` or removed from `previousVersions`.
 
-**Cons:**
+Removing a spoke that is still listed in `status.storedVersions` or still
+referenced by a pinned revision is rejected: the RGD reports
+`KindReady=False` with reason `VersionRemovalBlocked`, and the CRD keeps the
+version.
 
-* **Resource Proliferation:** This method can lead to a significant increase in the number of RGD and CRD resources within the cluster.  
-* **Discovery Challenges:** Users may find it more difficult to discover the latest or recommended version of a definition, potentially requiring a new grouping mechanism.  
-* **Migration Tooling:** Substantial effort may be required to develop tooling that supports instance migration and resource adoption.  
-* **Impractical for Velocity for small changes:** This approach essentially makes an RGD immutable. A new RGD is created for every change, using a different Instance CRD. This can be impractical for RGD authors or organizations that prioritize rapid development.  
-* **Instance Migration for Minor Changes:** Instances need to be migrated to the new CRD even for minor changes in the RGD. Making easy things harder.  
-* **Resource Abandonment and Adoption:** Resources managed by the old CRD must be abandoned and then adopted by the new CRD.  
-* **Immediate rollout within version**: Changes within a version are immediately rolled out with no control.
+## Other solutions considered
 
-## Rollouts
+- **Single canonical RGD (status quo).** One schema, one resource set, every
+  change rolled out on the next reconcile. Simple, but offers no pinning, no
+  controlled rollout and no path for breaking changes.
+- **New RGD per change.** Every breaking change creates a new RGD with a new
+  kind (`WebAppV2`). Clear isolation, but multiplies kinds, requires
+  delete/recreate of instances plus resource adoption, and cannot be expressed
+  as an in-place GitOps change. Rejected.
+- **RGD with version sections.** Each version carries its own schema *and*
+  resources, and instances opt in by switching `apiVersion`. This conflicts
+  with how CRD versions work: versions are views of the same stored object, an
+  object does not remember the version it was written in, so `apiVersion`
+  cannot be used to select behavior. It also duplicates resources and grows
+  the RGD towards object size limits. Rejected; the multi-version idea is kept
+  in Phase 2, with schemas only.
+- **ReplicaSet pattern.** Automatic immutable snapshots of every RGD change,
+  with instances pinned to a snapshot. Adopted: this is `GraphRevision`
+  (KREP-013), and Phase 1 adds the pinning on top of it.
 
-Regardless of the chosen versioning strategy, it's critical to define who controls the rollout:
+## Scoping
 
-* **Infrastructure Team (RGD Author):** This team is responsible for defining and maintaining the RGD. They would have the authority to initiate and manage rollouts of RGD changes. This is suitable for scenarios where changes are broad and impact many users.  
-* **User Teams (Instance Author):** These teams create and manage instances of the RGD. They would control when their specific instances adopt new versions, empowering them with autonomy over their deployments.
+#### What is in scope for this proposal?
 
-### Rollout Patterns
+- Phase 1: rollout strategy, revision pinning, revision-aware status,
+  retention of referenced revisions.
+- Phase 2a: multi-version CRDs with hub/spoke schemas, conversion `None`,
+  storage version migration and safe version removal.
+- Phase 2b: API design for CEL-based conversion.
 
-To accommodate diverse deployment needs, the following rollout patterns can be supported:
+#### What is not in scope?
 
-* **Rollout by Namespace:** This allows for rolling out changes to instances within specific Kubernetes namespaces, useful for phased rollouts across different environments or teams.  
-* **Rollout by Labels:** This enables targeted rollouts based on labels applied to instances, providing flexibility for canary deployments, A/B testing, or rolling out to a subset of instances based on specific criteria.
+- Automatic rollback to a previous revision.
+- Leveled/percentage rollouts (KREP-005, KREP-006); they build on Phase 1.
+- Migrating instances between different RGDs or kinds.
 
-### Other Considerations
+## Testing strategy
 
-* **CEL Environment:** How should changes in the CEL environment, tied to the KRO controller version, be handled? Should a field be added to the RGD spec to specify a required `kro-cel-env` version, allowing the controller to report unmet dependencies?
+#### Requirements
 
-# Scope
+- kind clusters on Kubernetes 1.37 (in-tree storage version migration) and
+  1.36 (kro fallback path).
+- Chainsaw fixtures with a two-version RGD and pinned/unpinned instances.
 
-This proposal outlines a comprehensive strategy for versioning ResourceGraphDefinitions (RGDs), encompassing both schemas and resources, and defining mechanisms for controlled rollouts of RGD changes. The goal is to optimize the user experience for both platform teams (RGD authors) and application teams (instance authors).
+#### Test plan
 
-Key enhancements delineated in this proposal include:
+- **Unit tests**
+  - Target revision resolution from annotation and strategy.
+  - Revision GC keeps referenced revisions.
+  - Forward-only `apiVersion` validation rule.
+  - Cross-version compat classification for conversion `None`.
+  - CRD synthesis with a hub and spokes.
+- **Integration (envtest)**
+  - Instance controller reconciles pinned instances against older revisions.
+  - Hub change re-registers the dynamic controller.
+- **E2E (chainsaw)**
+  1. `Manual` strategy: change resources, verify existing instances keep
+     `status.graphRevision`, new instances get the new revision, and moving the
+     annotation rolls one instance forward.
+  2. Move the hub from `v1alpha1` to `v1beta1` with conversion `None`; verify
+     both versions are served and instances written as `v1alpha1` are
+     readable as `v1beta1`.
+  3. Verify storage version migration trims `status.storedVersions` (1.37
+     via `StorageVersionMigration`, 1.36 via kro).
+  4. Attempt to remove a still-stored spoke; verify `VersionRemovalBlocked`.
 
-* **RGD Structure Modification**: Adapting the RGD schema to incorporate a versioned list, where each version maintains its discrete schema and resources.  
-* **Instance Reconciliation Logic Update**: Modifying the instance reconciliation process to align with the specific version defined within the instance's spec.  
-* **RGD Controller Management**: Empowering the RGD controller to effectively manage multi-version Custom Resource Definitions (CRDs) in accordance with the RGD specification.  
-* **Version Pinning Mechanism**: Establishing spec.version within the instance as the primary mechanism for version pinning and enabling user-driven rollouts.
+## Related
 
-# Out of Scope
-
-Conversely, this proposal explicitly excludes the following aspects:
-
-* **Automated Instance Migration**: This proposal does not cover a controller for automatic instance migration between versions. Such migrations will remain user-initiated, enabled by updates to the spec.version field.  
-* **Advanced Rollout Strategies**: The development of a dedicated controller for sophisticated rollout methodologies (e.g., canary rollouts based on namespace or labels) is outside the current scope. However, this proposal establishes the essential foundational versioning mechanism upon which such advanced tooling could be built.  
-* **Cross-RGD Resource Adoption**: Logic related to migrating or adopting resources between instances affiliated with distinct RGDs is not included.
-
-# Testing Strategy Requirements
-
-* A functional Kubernetes cluster, configured for deploying the modified KRO controller.  
-* A suite of e2e test fixtures using chainsaw  
-  1. Multi version RGD manifest(s).  
-  2. Multiple instance manifests, each precisely targeting a distinct RGD version.  
-* Kind cluster with several namespaces should suffice for testing
-
-# Test Plan
-
-The testing will proceed according to the following plan:
-
-* **Unit Tests:**  
-  1. Implement unit tests for the RGD controller logic to validate the accurate generation of CRDs for multi-version RGDs.  
-  2. Develop unit tests for the instance reconciliation logic, ensuring it correctly selects the appropriate schema and resources based on the instance's spec.version.  
-* **Integration Tests:**  
-  1. Create an RGD containing two distinct versions, v1 and v2.  
-  2. **Test 1:** Instantiate an instance specifying v1. Verify the correct creation of v1 resources.  
-  3. **Test 2:** Instantiate an instance specifying v2. Verify the correct creation of v2 resources.  
-  4. **Test 3:** Update the v1 instance to v2. Confirm that the underlying resources are accurately modified or migrated to align with the v2 definition.  
-  5. **Test 4:** Create an instance without a specified version. Verify that it defaults to the RGD's designated default or storage version.  
-  6. **Test 5:** Augment the RGD by adding a v3. Confirm that existing v1 and v2 instances remain unaffected until their spec.version is explicitly altered.
+- Supersedes #935
+- #482 Allow ResourceGraphDefinition authors to maintain several versions
+- #188 Track ResourceGroup changes and opt-in updates
+- #643 CEL versioning
+- #648 `apiVersion` and `group` in `spec.schema`
+- #883 Versioning and rollout of changes to ResourceGraphDefinitions
+- #1051 Earlier implementation attempt
+- [KREP-013 Graph Revisions](graph-revisions.md)

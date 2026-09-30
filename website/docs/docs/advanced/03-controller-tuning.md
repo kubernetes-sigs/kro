@@ -86,8 +86,17 @@ More workers increase throughput but also increase concurrent API server load.
 |---------|---------|-------------|
 | `config.dynamicControllerDefaultResyncPeriod` | 36000 | Seconds between full resyncs (10 hours) |
 | `config.dynamicControllerDefaultQueueMaxRetries` | 20 | Retries before dropping an item |
+| `config.watchSyncTimeout` | `30s` | Maximum time a reconcile waits for a newly started resource watch to finish its initial list |
 
 The resync period triggers reconciliation for all resources periodically, even without changes. This catches any drift that might have been missed.
+
+The watch sync timeout bounds how long a single reconcile blocks while the first
+watch on a resource kind lists that kind's existing objects. If a resource has
+very many objects (tens of thousands), its initial list can take longer than the
+default; raise `config.watchSyncTimeout` (also available as the
+`--watch-sync-timeout` flag) so the watch can establish. When the timeout is hit
+the reconcile proceeds without drift detection for that resource and retries on
+the next reconcile.
 
 ### Instance Requeues
 

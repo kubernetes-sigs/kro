@@ -158,6 +158,9 @@ config:
   dynamicControllerDefaultResyncPeriod: 36000
   # The maximum number of retries for an item in the queue will be retried before being dropped
   dynamicControllerDefaultQueueMaxRetries: 20
+  # Maximum time a reconcile waits for a newly started resource watch to finish its initial list
+  # before proceeding without it for that reconcile. Increase for resources with very many objects.
+  watchSyncTimeout: 30s
   # Minimum retry delay before requeueing a dynamic controller item
   dynamicControllerRateLimiterMinDelay: 200ms
   # Maximum retry delay before requeueing a dynamic controller item

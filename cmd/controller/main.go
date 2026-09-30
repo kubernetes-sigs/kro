@@ -85,6 +85,7 @@ func main() {
 		// reconciler parameters
 		instanceRequeueInterval time.Duration
 		resyncPeriod            int
+		watchSyncTimeout        time.Duration
 		queueMaxRetries         int
 		gracefulShutdownTimeout time.Duration
 		// var dynamicControllerDefaultResyncPeriod int
@@ -168,6 +169,9 @@ func main() {
 		"interval at which the controller will re list resources even with no changes, in seconds.")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
 		"maximum number of retries for an item in the queue will be retried before being dropped")
+	flag.DurationVar(&watchSyncTimeout, "watch-sync-timeout", 30*time.Second,
+		"Maximum time a reconcile waits for a newly started resource watch to finish its initial list "+
+			"before proceeding without it for that reconcile. Increase for resources with very many objects.")
 	// qps and burst
 	flag.Float64Var(&qps, "client-qps", 100, "The number of queries per second to allow")
 	flag.IntVar(&burst, "client-burst", 150,
@@ -271,13 +275,14 @@ func main() {
 	}
 
 	dc := dynamiccontroller.NewDynamicController(rootLogger, dynamiccontroller.Config{
-		Workers:         dynamicControllerConcurrentReconciles,
-		ResyncPeriod:    time.Duration(resyncPeriod) * time.Second,
-		QueueMaxRetries: queueMaxRetries,
-		MinRetryDelay:   minRetryDelay,
-		MaxRetryDelay:   maxRetryDelay,
-		RateLimit:       rateLimit,
-		BurstLimit:      burstLimit,
+		Workers:          dynamicControllerConcurrentReconciles,
+		ResyncPeriod:     time.Duration(resyncPeriod) * time.Second,
+		QueueMaxRetries:  queueMaxRetries,
+		MinRetryDelay:    minRetryDelay,
+		MaxRetryDelay:    maxRetryDelay,
+		RateLimit:        rateLimit,
+		BurstLimit:       burstLimit,
+		WatchSyncTimeout: watchSyncTimeout,
 	}, set.Metadata(), set.RESTMapper())
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
@@ -371,6 +376,7 @@ func main() {
 			rgdMaxCollectionSize,
 			applyConcurrency,
 			controllerSA,
+			watchSyncTimeout,
 		); err != nil {
 			setupLog.Error(err, "unable to set up Graph controller")
 			os.Exit(1)

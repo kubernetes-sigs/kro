@@ -862,6 +862,24 @@ func TestRegister_EnsureWatchSyncError(t *testing.T) {
 	assert.Contains(t, err.Error(), "cache sync timeout")
 }
 
+func TestNewDynamicController_WatchSyncTimeout(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	// Explicit value is passed through to the watch manager.
+	cfg := testConfig()
+	cfg.WatchSyncTimeout = 90 * time.Second
+	dc := NewDynamicController(noopLogger(), cfg, client, mapper)
+	assert.Equal(t, 90*time.Second, dc.watches.SyncTimeout)
+
+	// Zero leaves the manager on its own default.
+	cfg.WatchSyncTimeout = 0
+	dc = NewDynamicController(noopLogger(), cfg, client, mapper)
+	assert.Equal(t, time.Duration(0), dc.watches.SyncTimeout)
+}
+
 func TestGetInformer_ReturnsNil_ForMissingWatch(t *testing.T) {
 	// Verify that GetInformer returns nil when no watch exists, and
 	// non-nil when a watch is active. This is the condition the nil

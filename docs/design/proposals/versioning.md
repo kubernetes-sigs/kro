@@ -124,11 +124,11 @@ spec:
   - `Manual`: a new instance is pinned to the latest active revision when it is
     first reconciled. An existing instance stays on its revision until it is
     explicitly moved.
-  - `External` is reserved for a later extension where an external controller
+  - `External`: reserved for a later extension where an external controller
     (or KREP-006 propagation control) moves instances.
 - Instance annotation `kro.run/graph-revision`:
-  - `"<n>"` pins the instance to revision `n`, regardless of strategy.
-  - `"latest"` makes the instance follow the latest revision, regardless of
+  - `"<n>"`: pins the instance to revision `n`, regardless of strategy.
+  - `"latest"`: makes the instance follow the latest revision, regardless of
     strategy.
   - Absent: the RGD's strategy decides.
 - Instance status:
@@ -199,9 +199,22 @@ spec:
 - `spec.schema.previousVersions[]` lists older versions as **spokes**, each with
   only its schema (`spec`, `status` in SimpleSchema), `served`, `deprecated`
   and an optional `deprecationWarning`.
+- Spokes are schema-only. A spoke's schema may only be changed in ways the
+  compat package classifies as non-breaking; behavior lives exclusively in the
+  hub's resources and is fixed forward through new revisions or new versions.
+  There is no backporting of behavior to a spoke.
 - When the hub moves forward, the previous hub must be added to
   `previousVersions` in the same update; otherwise the update is rejected,
   because the version may still be stored.
+- Spoke schemas are declared in the RGD rather than inferred from the cluster:
+  on a fresh cluster there is no existing CRD to infer from, while GitOps may
+  still apply manifests written against the old version. To catch copy errors,
+  kro validates each spoke against the schema the existing CRD currently
+  serves for that version (using `compat.Compare` with the served version as
+  the old side). A breaking difference, e.g. a dropped field, sets
+  `KindReady=False` with reason `SpokeSchemaMismatch`. If the version is not
+  yet served in the cluster, there is nothing to validate against and the
+  declared schema is accepted.
 
 #### Conversion
 
@@ -223,8 +236,11 @@ spec:
   objects written in spoke versions.
 - When the hub changes, the dynamic controller deregisters the old parent GVR
   and registers the new one.
-- A graph revision always carries the hub schema it was issued with, so
-  Phase 1 pinning keeps working across hub changes.
+- A graph revision always carries the hub schema it was issued with. An
+  instance pinned to a revision whose hub is now a spoke is fetched in that
+  revision's `apiVersion` (the API server converts it), so the pinned graph
+  sees the schema shape it was compiled against. This is why a spoke must stay
+  served while any pinned revision uses it.
 
 #### Migration lifecycle
 
@@ -234,17 +250,23 @@ The RGD controller drives the migration of stored objects:
 2. If `storagemigration.k8s.io/v1` is discoverable, create a
    `StorageVersionMigration` for the instance group/resource and wait for its
    `Succeeded` condition. The API server trims `status.storedVersions`.
-3. Otherwise (clusters before 1.37, or with the API disabled), kro rewrites
-   every instance with a no-op update through its existing informer and then
-   patches `status.storedVersions` to the hub version itself. This requires
-   `customresourcedefinitions/status` RBAC.
+3. Otherwise (clusters before 1.37, or with the API disabled), kro performs
+   the same migration itself: it issues a no-op update for every instance
+   listed at the start of the pass, using its existing informer cache. Any
+   write makes the API server re-encode the object in the current storage
+   version, which is exactly what the in-tree migrator does. Conflicts are
+   ignored, since a conflicting write has already re-encoded the object. Only
+   after the pass completes does kro patch `status.storedVersions` to the hub
+   version. This requires `customresourcedefinitions/status` RBAC.
 4. Once a spoke is no longer in `status.storedVersions`, it may be set to
    `served: false` or removed from `previousVersions`.
 
 Removing a spoke that is still listed in `status.storedVersions` or still
-referenced by a pinned revision is rejected: the RGD reports
-`KindReady=False` with reason `VersionRemovalBlocked`, and the CRD keeps the
-version.
+used by a pinned revision is rejected: the RGD reports `KindReady=False` with
+reason `VersionRemovalBlocked`, and the CRD keeps the version. The
+`storedVersions` check is a single read of the CRD; the pinned-revision check
+uses an informer-cache index on instances' `status.graphRevision`, so neither
+requires listing instances from the API server.
 
 ## Other solutions considered
 

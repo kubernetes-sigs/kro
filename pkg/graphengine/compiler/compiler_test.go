@@ -16,6 +16,7 @@ package compiler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -25,8 +26,10 @@ import (
 	memory "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/testutil/generator"
 	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
@@ -417,30 +420,27 @@ func TestCompile(t *testing.T) {
 			wantErr: "references its own id",
 		},
 		{
-			// Finding 4: an optional<bool> condition becomes a runtime error
-			// when empty (optional.none()); reject it at compile time with a
-			// hint to collapse it to a concrete bool.
-			name: "readyWhen returning optional<bool> is rejected",
+			name: "readyWhen returning optional<bool> is accepted",
 			graph: generator.NewGraph("g",
 				generator.WithTemplate("cm", configMap("source")),
-				// optional.of(true) is optional_type(bool) with no collapse.
-				generator.WithReadyWhen("${optional.of(true)}"),
+				generator.WithReadyWhen("${cm.?immutable}"),
 			),
-			wantErr: "optional<bool>",
+			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
+				require.Len(t, prog.Nodes["cm"].ReadyWhen, 1)
+			},
 		},
 		{
-			// Finding 4: same rejection for includeWhen.
-			name: "includeWhen returning optional<bool> is rejected",
+			name: "includeWhen returning optional<bool> is accepted",
 			graph: generator.NewGraph("g",
 				generator.WithTemplate("cm", configMap("source")),
 				generator.WithDef("guarded", map[string]any{"k": "v"}),
 				generator.WithIncludeWhen("${optional.of(true)}"),
 			),
-			wantErr: "orValue(false)",
+			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
+				require.Len(t, prog.Nodes["guarded"].IncludeWhen, 1)
+			},
 		},
 		{
-			// Finding 4: the .orValue(false) escape hatch collapses to a
-			// concrete bool and still compiles.
 			name: "readyWhen optional collapsed with orValue is accepted",
 			graph: generator.NewGraph("g",
 				generator.WithTemplate("cm", configMap("source")),
@@ -451,12 +451,10 @@ func TestCompile(t *testing.T) {
 			},
 		},
 		{
-			name: "readyWhen returning optional<bool> is accepted (via ?-accessor or optional macros)",
+			name: "readyWhen returning an optional bool constant is accepted",
 			graph: generator.NewGraph("g",
 				generator.WithTemplate("cm", configMap("source")),
-				// optional.of(true) returns optional_type(bool), exercising
-				// the IsBoolOrOptionalBool branch.
-				generator.WithReadyWhen("${optional.of(true).orValue(true)}"),
+				generator.WithReadyWhen("${optional.of(true)}"),
 			),
 			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
 				require.Len(t, prog.Nodes["cm"].ReadyWhen, 1)
@@ -752,6 +750,39 @@ func TestCompile(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, prog)
 			tc.after(t, prog, tc.graph)
+		})
+	}
+}
+
+func TestCompile_ConditionRestrictions(t *testing.T) {
+	// Feature gates are process-global; keep these cases serial.
+	for _, omitEnabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CELOmitFunction=%t", omitEnabled), func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.CELOmitFunction, omitEnabled)
+			omitErr := "omit() can only be used in resource template expressions"
+			if !omitEnabled {
+				omitErr = "omit() requires the CELOmitFunction feature gate to be enabled"
+			}
+			for _, tc := range []struct {
+				expr    string
+				wantErr string
+			}{
+				{expr: "${optional.of('true')}", wantErr: "must return bool"},
+				{expr: "${null}", wantErr: "must return bool"},
+				{expr: "${omit()}", wantErr: omitErr},
+			} {
+				for _, kind := range []string{"includeWhen", "readyWhen"} {
+					t.Run(kind+"/"+tc.expr, func(t *testing.T) {
+						condition := generator.WithIncludeWhen(tc.expr)
+						if kind == "readyWhen" {
+							condition = generator.WithReadyWhen(tc.expr)
+						}
+						g := generator.NewGraph("g", generator.WithTemplate("cm", configMap("cm")), condition)
+						_, err := newTestCompiler(t).Compile(g)
+						require.ErrorContains(t, err, tc.wantErr)
+					})
+				}
+			}
 		})
 	}
 }

@@ -28,7 +28,9 @@
 //  3. WatchesRawSource(dc.Source()) on the Graph builder wires the
 //     coordinator's enqueue callback into the controller-runtime queue.
 //  4. The Graph reconciler calls ForGraph(key) at the top of every
-//     reconcile, Watch() per node, and Done(true)/Done(false) at the end.
+//     reconcile, Watch() per node, and Done(true) once the executor walk
+//     completes — on every apply outcome, so a persistently failing Graph
+//     keeps its informers instead of rebuilding them each retry.
 //  5. On Graph deletion the reconciler calls RemoveGraph(key) so the
 //     coordinator drops every retention.
 package watchrouter

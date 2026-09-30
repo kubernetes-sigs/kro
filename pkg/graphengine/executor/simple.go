@@ -222,7 +222,9 @@ var _ Interface = (*Simple)(nil)
 // first one is returned at the end wrapped in ErrNotReady, except that a
 // field-manager conflict takes precedence so it is never hidden behind a
 // node that is merely still converging. Hard errors (apply failure, type
-// errors, etc.) still abort immediately.
+// errors, etc.) do not abort the walk either: they are collected per node
+// and joined after the walk, so the declared watch set is complete on a
+// hard error too (the Graph reconciler commits it in every case).
 //
 // Dependency-readiness gating runs before inclusion: an applied-but-not-ready,
 // blocked, or unresolved hard dependency leaves the dependent Unresolved (never

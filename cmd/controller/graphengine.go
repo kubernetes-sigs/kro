@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
 	"k8s.io/client-go/kubernetes"
@@ -52,8 +53,11 @@ func setupGraphController(
 	maxCollectionSize int,
 	applyConcurrency int,
 	controllerServiceAccount string,
+	watchSyncTimeout time.Duration,
 ) error {
-	router := watchrouter.NewRouter(logger.WithName("graph-watch-router"), watchrouter.Config{}, metaClient)
+	router := watchrouter.NewRouter(logger.WithName("graph-watch-router"), watchrouter.Config{
+		SyncTimeout: watchSyncTimeout,
+	}, metaClient)
 	if err := mgr.Add(router); err != nil {
 		return fmt.Errorf("add graph watch router: %w", err)
 	}

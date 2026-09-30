@@ -95,6 +95,8 @@ spec:
               value: {{ .Values.config.dynamicControllerRateLimiterMinDelay | quote }}
             - name: KRO_DYNAMIC_CONTROLLER_RATE_LIMITER_MAX_DELAY
               value: {{ .Values.config.dynamicControllerRateLimiterMaxDelay | quote }}
+            - name: KRO_WATCH_SYNC_TIMEOUT
+              value: {{ .Values.config.watchSyncTimeout | quote }}
             - name: KRO_GRACEFUL_SHUTDOWN_TIMEOUT
               value: {{ .Values.config.gracefulShutdownTimeout | quote }}
             - name: KRO_INSTANCE_REQUEUE_INTERVAL
@@ -167,6 +169,8 @@ spec:
             - "$(KRO_DYNAMIC_CONTROLLER_RATE_LIMITER_MIN_DELAY)"
             - --dynamic-controller-rate-limiter-max-delay
             - "$(KRO_DYNAMIC_CONTROLLER_RATE_LIMITER_MAX_DELAY)"
+            - --watch-sync-timeout
+            - "$(KRO_WATCH_SYNC_TIMEOUT)"
             - --client-qps
             - "$(KRO_CLIENT_QPS)"
             - --client-burst

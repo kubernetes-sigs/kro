@@ -108,6 +108,10 @@ type Config struct {
 	BurstLimit int
 	// QueueShutdownTimeout is the maximum time to wait for the queue to drain before shutting down.
 	QueueShutdownTimeout time.Duration
+	// WatchSyncTimeout caps how long a reconcile waits for a newly started
+	// informer's initial list to populate its cache before giving up on the
+	// watch for that reconcile. Zero uses the watch manager's default (30s).
+	WatchSyncTimeout time.Duration
 }
 
 // Handler is used to actually perform the reconciliation logic for an instance GVR and will operate
@@ -188,6 +192,9 @@ func NewDynamicController(
 
 	// WatchManager routes all informer events through the coordinator.
 	dc.watches = newWatchManager(kubeClient, config.ResyncPeriod, dc.routeChildEvent, logger)
+	if config.WatchSyncTimeout > 0 {
+		dc.watches.SyncTimeout = config.WatchSyncTimeout
+	}
 
 	// Initialize coordinator eagerly so it's never nil.
 	dc.coordinator = NewWatchCoordinator(dc.watches, dc.enqueueInstance, logger)

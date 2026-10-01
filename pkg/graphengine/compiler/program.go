@@ -113,6 +113,10 @@ type Node struct {
 	// reconciliation, so the self-watch is redundant.
 	SelfWatchExempt bool
 
+	// StatusReplace selects replacement Update for the adapter's author-status
+	// patch, explicitly opted in via WithStatusReplace.
+	StatusReplace bool
+
 	// Object is the parsed payload as an unstructured object:
 	//   Template: the user-authored manifest
 	//   Ref:            the ExternalRef projected as {apiVersion, kind, metadata}

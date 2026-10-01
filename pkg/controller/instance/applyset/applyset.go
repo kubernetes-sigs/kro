@@ -37,6 +37,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/dynamic"
+
+	applysetspec "github.com/kubernetes-sigs/kro/pkg/applyset"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // Compile-time check that ApplySet implements Interface.
@@ -71,6 +74,10 @@ type Interface interface {
 
 	// DeleteOrphan deletes a single orphan candidate using a UID precondition.
 	DeleteOrphan(ctx context.Context, candidate OrphanCandidate) (DeleteOrphanResult, error)
+
+	// ReleaseOrphan when deletionPolicy is Detach, instead of removing the resource, kro
+	// releases it by removing all annotations and labels.
+	ReleaseOrphan(ctx context.Context, candidate OrphanCandidate) (ReleaseOrphanResult, error)
 }
 
 // Resource is an input to Apply.
@@ -554,6 +561,60 @@ func (a *ApplySet) DeleteOrphan(ctx context.Context, candidate OrphanCandidate) 
 		"gvr", candidate.GVR.String(),
 	)
 	return DeleteOrphanResult{Pruned: &PruneResultItem{Object: candidate.Object}}, nil
+}
+
+// ReleaseOrphan releases an Orphan instead of deleting it. Removes kro's
+// ApplySet part-of label and all other labels and annotations kro created.
+//
+// This follows the same logic as DeleteOrphan. The Write event is an `Update`
+// instead of a Patch so conflict is handled appropriately.
+func (a *ApplySet) ReleaseOrphan(ctx context.Context, candidate OrphanCandidate) (ReleaseOrphanResult, error) {
+	obj := candidate.Object.DeepCopy()
+	changed := metadata.ReleaseKROMetadata(obj)
+	if changedLabels, ok := a.releaseMembership(obj.GetLabels()); ok {
+		changed = true
+		obj.SetLabels(changedLabels)
+	}
+	if !changed {
+		return ReleaseOrphanResult{}, nil
+	}
+
+	var ri dynamic.ResourceInterface = a.client.Resource(candidate.GVR)
+	if obj.GetNamespace() != "" {
+		ri = a.client.Resource(candidate.GVR).Namespace(obj.GetNamespace())
+	}
+
+	if _, err := ri.Update(ctx, obj, metav1.UpdateOptions{FieldManager: FieldManager}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ReleaseOrphanResult{}, nil
+		}
+		if apierrors.IsConflict(err) {
+			a.log.V(2).Info("skipped release due to a concurrent change",
+				"name", obj.GetName(),
+				"namespace", obj.GetNamespace(),
+				"gvr", candidate.GVR.String(),
+			)
+			return ReleaseOrphanResult{Conflict: true}, nil
+		}
+		return ReleaseOrphanResult{}, fmt.Errorf("release %s/%s: %w", obj.GetNamespace(), obj.GetName(), err)
+	}
+
+	a.log.V(2).Info("released resource (deletionPolicy: Detach)",
+		"name", obj.GetName(),
+		"namespace", obj.GetNamespace(),
+		"gvr", candidate.GVR.String(),
+	)
+	return ReleaseOrphanResult{Released: true}, nil
+}
+
+// releaseMembership removes the applyset label for the right ID.
+func (a *ApplySet) releaseMembership(m map[string]string) (map[string]string, bool) {
+	l := len(m)
+	maps.DeleteFunc(m, func(k string, v string) bool {
+		return k == applysetspec.ApplysetPartOfLabel && v == a.applySetID
+	})
+
+	return m, l != len(m)
 }
 
 // listOrphans lists applyset members not in keepUIDs. This is the listing half

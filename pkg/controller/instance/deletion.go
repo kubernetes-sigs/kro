@@ -43,6 +43,12 @@ func (c *Controller) reconcileDeletion(dcx *DeletionContext) error {
 		return err
 	}
 
+	candidates, err = c.releaseDetachedResources(dcx, applier, candidates)
+	if err != nil {
+		dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
+		return dcx.delayedRequeue(err)
+	}
+
 	if len(candidates) == 0 {
 		return c.removeFinalizer(dcx)
 	}
@@ -97,6 +103,34 @@ func (c *Controller) discoverDeletionInventory(
 		return nil, nil, fmt.Errorf("list deletion inventory: %w", err)
 	}
 	return candidates, applier, nil
+}
+
+// releaseDetachedResources go through all resources and based on
+// the deletion policy, detach them.
+func (c *Controller) releaseDetachedResources(
+	dcx *DeletionContext,
+	applier *applyset.ApplySet,
+	candidates []applyset.OrphanCandidate,
+) ([]applyset.OrphanCandidate, error) {
+	remaining := make([]applyset.OrphanCandidate, 0, len(candidates))
+	var conflicts int
+	for _, candidate := range candidates {
+		if metadata.DeletionPolicyOf(candidate.Object) != v1alpha1.DeletionPolicyDetach {
+			remaining = append(remaining, candidate)
+			continue
+		}
+		result, err := applier.ReleaseOrphan(dcx.Ctx, candidate)
+		if err != nil {
+			return nil, fmt.Errorf("release detached resource: %w", err)
+		}
+		if result.Conflict {
+			conflicts++
+		}
+	}
+	if conflicts > 0 {
+		return nil, fmt.Errorf("release of %d detached resource(s) hit concurrent changes, retrying", conflicts)
+	}
+	return remaining, nil
 }
 
 const fallbackDeletionOrder = 0

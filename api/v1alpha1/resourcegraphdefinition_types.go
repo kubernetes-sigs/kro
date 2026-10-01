@@ -142,13 +142,19 @@ type Schema struct {
 	// +listType=set
 	Categories []string `json:"categories,omitempty"`
 
-	// Metadata to apply to the generated CRD
+	// Metadata configures instance name validation and metadata applied to the generated CRD.
 	// +kubebuilder:validation:Optional
 	Metadata *CRDMetadata `json:"metadata,omitempty"`
 }
 
-// CRDMetadata defines metadata to be applied to the generated CRD.
+// CRDMetadata configures instance name validation and metadata applied to the generated CRD.
 type CRDMetadata struct {
+	// NameValidation constrains instance metadata.name using marker-only SimpleSchema syntax.
+	// Supported markers are minLength, maxLength, pattern, enum, and validation.
+	// Example: "maxLength=30 pattern=^[a-z].*$"
+	// +kubebuilder:validation:Optional
+	NameValidation string `json:"nameValidation,omitempty"`
+
 	// Labels to apply to the generated CRD
 	// +kubebuilder:validation:Optional
 	Labels map[string]string `json:"labels,omitempty"`

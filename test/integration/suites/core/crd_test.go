@@ -16,6 +16,7 @@ package core_test
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -57,6 +58,54 @@ var _ = Describe("CRD", func() {
 	})
 
 	Context("CRD Creation", func() {
+		DescribeTable("should validate instance metadata.name for both CRD scopes",
+			func(ctx SpecContext, scope krov1alpha1.ResourceScope) {
+				suffix := strings.ToLower(string(scope))
+				kind := "NameValidation" + string(scope)
+				rgd := generator.NewResourceGraphDefinition("test-name-validation-"+suffix,
+					generator.WithSchema(kind, "v1alpha1", map[string]any{}, nil),
+				)
+				rgd.Spec.Schema.Scope = scope
+				rgd.Spec.Schema.Metadata = &krov1alpha1.CRDMetadata{
+					NameValidation: `maxLength=30 validation="self.startsWith('a')"`,
+				}
+				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+				DeferCleanup(func(ctx SpecContext) {
+					Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+				})
+
+				Eventually(func(g Gomega, ctx SpecContext) {
+					g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
+					g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+				}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+				newInstance := func(name, generateName string) *unstructured.Unstructured {
+					instance := &unstructured.Unstructured{Object: map[string]any{
+						"apiVersion": "kro.run/v1alpha1",
+						"kind":       kind,
+						"metadata":   map[string]any{},
+						"spec":       map[string]any{},
+					}}
+					instance.SetName(name)
+					instance.SetGenerateName(generateName)
+					if scope == krov1alpha1.ResourceScopeNamespaced {
+						instance.SetNamespace(namespace)
+					}
+					return instance
+				}
+
+				valid := newInstance(strings.Repeat("a", 30), "")
+				Expect(env.Client.Create(ctx, valid)).To(Succeed())
+				Expect(env.Client.Delete(ctx, valid)).To(Succeed())
+				Expect(env.Client.Create(ctx, newInstance(strings.Repeat("a", 31), ""))).ToNot(Succeed())
+				Expect(env.Client.Create(ctx, newInstance("blocked", ""))).ToNot(Succeed())
+				Expect(env.Client.Create(ctx, newInstance("Invalid_Name", ""))).ToNot(Succeed())
+				Expect(env.Client.Create(ctx, newInstance("", strings.Repeat("a", 25)+"-"))).ToNot(Succeed())
+			},
+			Entry("namespaced", krov1alpha1.ResourceScopeNamespaced),
+			Entry("cluster scoped", krov1alpha1.ResourceScopeCluster),
+		)
+
 		It("should create CRD when ResourceGraphDefinition is created", func(ctx SpecContext) {
 			// Create a simple ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd",

@@ -23,13 +23,22 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
 )
 
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
 // with the provided spec and status schemas.
 // scope must be either extv1.NamespaceScoped or extv1.ClusterScoped; defaults to NamespaceScoped.
-func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, scope extv1.ResourceScope, rgSchema *v1alpha1.Schema) *extv1.CustomResourceDefinition {
-	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), scope, rgSchema)
+func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, scope extv1.ResourceScope, rgSchema *v1alpha1.Schema) (*extv1.CustomResourceDefinition, error) {
+	var nameSchema *extv1.JSONSchemaProps
+	if rgSchema != nil && rgSchema.Metadata != nil && rgSchema.Metadata.NameValidation != "" {
+		var err error
+		nameSchema, err = simpleschema.StringSchemaFromMarkers(rgSchema.Metadata.NameValidation)
+		if err != nil {
+			return nil, fmt.Errorf("invalid metadata.nameValidation: %w", err)
+		}
+	}
+	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride, nameSchema), scope, rgSchema), nil
 }
 
 func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope extv1.ResourceScope, rgSchema *v1alpha1.Schema) *extv1.CustomResourceDefinition {
@@ -88,7 +97,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope
 	}
 }
 
-func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool) *extv1.JSONSchemaProps {
+func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, nameSchema *extv1.JSONSchemaProps) *extv1.JSONSchemaProps {
 	if status.Properties == nil {
 		status.Properties = make(map[string]extv1.JSONSchemaProps)
 	}
@@ -103,6 +112,11 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
 		}
 	}
 
+	metadataSchema := extv1.JSONSchemaProps{Type: "object"}
+	if nameSchema != nil {
+		metadataSchema.Properties = map[string]extv1.JSONSchemaProps{"name": *nameSchema}
+	}
+
 	return &extv1.JSONSchemaProps{
 		Type:     "object",
 		Required: []string{},
@@ -113,11 +127,9 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
 			"kind": {
 				Type: "string",
 			},
-			"metadata": {
-				Type: "object",
-			},
-			"spec":   spec,
-			"status": status,
+			"metadata": metadataSchema,
+			"spec":     spec,
+			"status":   status,
 		},
 	}
 }

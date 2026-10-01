@@ -23,10 +23,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
@@ -146,5 +148,109 @@ var _ = Describe("ResourcePruning", func() {
 			Name:      name + "-gate",
 			Namespace: namespace,
 		}, &corev1.ConfigMap{})).To(Succeed(), "still-declared resource must not be pruned")
+	})
+
+	It("prunes retired collection members while a dependent node is unresolved", func(ctx SpecContext) {
+		// An empty collection completes, but summary cannot read its first item.
+		rgd := generator.NewResourceGraphDefinition("test-partial-pruning",
+			generator.WithSchema("TestPartialPruning", "v1alpha1",
+				map[string]any{"name": "string", "values": "[]string"}, nil),
+			generator.WithResourceCollection("cms", map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": "${schema.spec.name}-cp-${v}"},
+				"data":       map[string]any{"value": "${v}"},
+			}, []krov1alpha1.ForEachDimension{{"v": "${schema.spec.values}"}}, nil, nil),
+			generator.WithResource("summary", map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": "${schema.spec.name}-summary"},
+				"data":       map[string]any{"first": "${cms[0].metadata.name}"},
+			}, nil, nil),
+		)
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+		waitForRGDActive(ctx, rgd.Name)
+
+		name := "partial-pruning"
+		instance := newInstance("TestPartialPruning", name, namespace, map[string]any{
+			"name":   name,
+			"values": []any{"a1", "a2"},
+		})
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			_ = env.Client.Delete(ctx, instance)
+		})
+		key := types.NamespacedName{Name: name, Namespace: namespace}
+		getCM := func(suffix string) (*corev1.ConfigMap, error) {
+			cm := &corev1.ConfigMap{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: name + suffix, Namespace: namespace}, cm)
+			return cm, err
+		}
+		setValues := func(values []string) {
+			Eventually(func(g Gomega) {
+				g.Expect(env.Client.Get(ctx, key, instance)).To(Succeed())
+				g.Expect(unstructured.SetNestedStringSlice(instance.Object, values, "spec", "values")).To(Succeed())
+				g.Expect(env.Client.Update(ctx, instance)).To(Succeed())
+			}, 20*time.Second, time.Second).Should(Succeed())
+		}
+
+		By("converging with two collection members and a resolved summary")
+		waitForInstanceState(ctx, instance, name, namespace, "ACTIVE")
+		uids := map[string]types.UID{}
+		for _, suffix := range []string{"-cp-a1", "-cp-a2", "-summary"} {
+			cm, err := getCM(suffix)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cm.UID).NotTo(BeEmpty())
+			uids[suffix] = cm.UID
+		}
+		summary, err := getCM("-summary")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(summary.Data).To(HaveKeyWithValue("first", name+"-cp-a1"))
+
+		By("retiring the entire collection while preserving the data-pending summary")
+		setValues([]string{})
+		for _, suffix := range []string{"-cp-a1", "-cp-a2"} {
+			Eventually(func(g Gomega) {
+				_, err := getCM(suffix)
+				g.Expect(env.Client.Get(ctx, key, instance)).To(Succeed())
+				g.Expect(apierrors.IsNotFound(err)).To(BeTrue(),
+					"retired collection member %s was not pruned (err=%v); instance conditions: %s",
+					name+suffix, err, instanceConditions(instance))
+			}, 60*time.Second, 2*time.Second).Should(Succeed())
+		}
+		summary, err = getCM("-summary")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(summary.UID).To(Equal(uids["-summary"]), "unresolved owner must keep its original resource")
+
+		// Status is persisted after pruning, so wait for this generation's result.
+		Eventually(func(g Gomega) {
+			g.Expect(env.Client.Get(ctx, key, instance)).To(Succeed())
+			state, _, err := unstructured.NestedString(instance.Object, "status", "state")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(state).To(Equal("IN_PROGRESS"), instanceConditions(instance))
+			condition := findInstanceConditionByType(instance, "ResourcesReady")
+			g.Expect(condition).NotTo(BeNil())
+			g.Expect(condition["status"]).To(Equal("False"))
+			g.Expect(condition["observedGeneration"]).To(Equal(instance.GetGeneration()))
+			g.Expect(condition["message"]).To(And(ContainSubstring("summary"), ContainSubstring("data pending")))
+			g.Expect(applyset.ValidateParentInventory(instance)).To(Succeed())
+			g.Expect(instance.GetAnnotations()[applyset.ApplySetGKsAnnotation]).To(ContainSubstring("ConfigMap"))
+		}, 20*time.Second, time.Second).Should(Succeed())
+
+		By("recovering with one recreated collection member and the same summary")
+		setValues([]string{"a1"})
+		waitForInstanceState(ctx, instance, name, namespace, "ACTIVE")
+		recreated, err := getCM("-cp-a1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(recreated.UID).NotTo(Equal(uids["-cp-a1"]))
+		_, err = getCM("-cp-a2")
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		summary, err = getCM("-summary")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(summary.UID).To(Equal(uids["-summary"]))
+		Expect(summary.Data).To(HaveKeyWithValue("first", name+"-cp-a1"))
 	})
 })

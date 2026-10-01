@@ -142,6 +142,18 @@ func (c *Compiler) InvalidateSchema(gk k8sschema.GroupKind) {
 	}
 }
 
+// PutSchema write-through installs an authoritative schema for gvk into the
+// resolver cache and resets the REST mapper. No-op without a cached resolver.
+func (c *Compiler) PutSchema(gvk k8sschema.GroupVersionKind, sch *spec.Schema) {
+	if c.resolverCache == nil {
+		return
+	}
+	c.resolverCache.Put(gvk, sch)
+	if c.deferredMapper != nil {
+		c.deferredMapper.Reset()
+	}
+}
+
 // CompileOption customizes a single CompileWithOptions call.
 type CompileOption func(*compileOptions)
 

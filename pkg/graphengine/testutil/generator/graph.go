@@ -146,6 +146,18 @@ func WithIncludeWhen(exprs ...string) GraphOption {
 	}
 }
 
+// WithExternalFields appends externalFields dotted paths to the most
+// recently added node. No-op if no node has been added yet.
+func WithExternalFields(paths ...string) GraphOption {
+	return func(g *expv1alpha1.Graph) {
+		if len(g.Spec.Nodes) == 0 {
+			return
+		}
+		last := &g.Spec.Nodes[len(g.Spec.Nodes)-1]
+		last.ExternalFields = append(last.ExternalFields, paths...)
+	}
+}
+
 func appendNode(make func() expv1alpha1.Node) GraphOption {
 	return func(g *expv1alpha1.Graph) {
 		g.Spec.Nodes = append(g.Spec.Nodes, make())

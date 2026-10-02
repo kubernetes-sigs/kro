@@ -636,6 +636,7 @@ func (ctx *CompilationContext) analyzeNodeRefs(n *Node, inspector *ast.Inspector
 		ctx.analyzeForEach,
 		ctx.analyzeIncludeWhen,
 		ctx.analyzeReadyWhen,
+		ctx.analyzeExternalFields,
 	} {
 		capt, err := analyze(n, inspector)
 		if err != nil {
@@ -765,6 +766,51 @@ func (ctx *CompilationContext) analyzeReadyWhen(n *Node, inspector *ast.Inspecto
 			if d != n.ID {
 				return nil, fmt.Errorf("readyWhen[%d] (%q) may only reference the node itself, found %q", i, expr.UserExpression(), d)
 			}
+		}
+	}
+	return nil, nil
+}
+
+// analyzeExternalFields validates each externalFields dotted path against the
+// node's literal template structure (Object, pre-CEL-substitution but
+// structurally complete): every path must resolve to an existing key, and no
+// path may traverse through a list (SSA's associative-list merge-key
+// semantics make releasing ownership of one list element ambiguous, so v1
+// only supports addressing map keys). It carries no CEL deps or captures, so
+// it always returns (nil, err).
+func (ctx *CompilationContext) analyzeExternalFields(n *Node, _ *ast.Inspector) ([]string, error) {
+	if len(n.ExternalFields) == 0 {
+		return nil, nil
+	}
+	if n.Kind != NodeKindTemplate {
+		return nil, fmt.Errorf("externalFields is only supported on a template node, found on %s node %q", n.Kind, n.ID)
+	}
+	for i, path := range n.ExternalFields {
+		if path == "" {
+			return nil, fmt.Errorf("externalFields[%d]: empty path", i)
+		}
+		segments := strings.Split(path, ".")
+		var cur map[string]any
+		if n.Object != nil {
+			cur = n.Object.Object
+		}
+		for j, seg := range segments {
+			seen := strings.Join(segments[:j+1], ".")
+			val, ok := cur[seg]
+			if !ok {
+				return nil, fmt.Errorf("externalFields[%d] (%q): %q not found in template", i, path, seen)
+			}
+			if j == len(segments)-1 {
+				break
+			}
+			next, ok := val.(map[string]any)
+			if !ok {
+				if _, isList := val.([]any); isList {
+					return nil, fmt.Errorf("externalFields[%d] (%q): %q is a list; externalFields cannot address into a list", i, path, seen)
+				}
+				return nil, fmt.Errorf("externalFields[%d] (%q): %q is not an object, cannot continue path", i, path, seen)
+			}
+			cur = next
 		}
 	}
 	return nil, nil

@@ -229,6 +229,7 @@ type ForEachDimension map[string]string
 // Resources can depend on each other through CEL expressions, creating a dependency graph.
 //
 // +kubebuilder:validation:XValidation:rule="(has(self.template) && !has(self.externalRef)) || (!has(self.template) && has(self.externalRef))",message="exactly one of template or externalRef must be provided"
+// +kubebuilder:validation:XValidation:rule="!has(self.externalFields) || has(self.template)",message="externalFields may only be set when template is used"
 type Resource struct {
 	// ID is a unique identifier for this resource within the ResourceGraphDefinition.
 	// It is used to reference this resource in CEL expressions from other resources.
@@ -269,6 +270,18 @@ type Resource struct {
 	//
 	// +kubebuilder:validation:Optional
 	IncludeWhen []string `json:"includeWhen,omitempty"`
+	// ExternalFields is a list of dotted paths (e.g. "spec.selector") into this
+	// resource's template that kro hands off to an external controller once
+	// one actually takes them over. kro sets each field's initial value on
+	// creation and keeps reconciling it normally (reverting hand-edits, same
+	// as any other field) until a write from a DIFFERENT field manager is
+	// observed on that exact path — only then does kro stop including it in
+	// future applies, so the external controller's value is never reset. kro
+	// still deletes the whole resource on prune. Paths must resolve to an
+	// existing key in the literal template and may not cross into a list.
+	//
+	// +kubebuilder:validation:Optional
+	ExternalFields []string `json:"externalFields,omitempty"`
 	// ForEach expands this resource into a collection of resources.
 	// Each entry binds a variable name to a CEL expression that evaluates to an array.
 	// kro creates one resource instance for each element in the array.

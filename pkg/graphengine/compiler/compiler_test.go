@@ -472,6 +472,40 @@ func TestCompile(t *testing.T) {
 			wantErr: "may only reference the node itself",
 		},
 		{
+			name: "externalFields on an existing map-key path is accepted",
+			graph: generator.NewGraph("g",
+				generator.WithTemplate("cm", configMap("source")),
+				generator.WithExternalFields("data.key"),
+			),
+			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
+				assert.Equal(t, []string{"data.key"}, prog.Nodes["cm"].ExternalFields)
+			},
+		},
+		{
+			name: "externalFields referencing an unknown path is rejected",
+			graph: generator.NewGraph("g",
+				generator.WithTemplate("cm", configMap("source")),
+				generator.WithExternalFields("data.missing"),
+			),
+			wantErr: `"data.missing" not found in template`,
+		},
+		{
+			name: "externalFields crossing into a list is rejected",
+			graph: generator.NewGraph("g",
+				generator.WithTemplate("p", pod("source")),
+				generator.WithExternalFields("spec.containers.image"),
+			),
+			wantErr: "is a list; externalFields cannot address into a list",
+		},
+		{
+			name: "externalFields on a non-template node is rejected",
+			graph: generator.NewGraph("g",
+				generator.WithDef("guarded", map[string]any{"k": "v"}),
+				generator.WithExternalFields("k"),
+			),
+			wantErr: "externalFields is only supported on a template node",
+		},
+		{
 			name: "forEach on a ref node is rejected (refs don't render templates)",
 			graph: generator.NewGraph("g",
 				generator.WithDef("src", map[string]any{"names": []any{"a"}}),

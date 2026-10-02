@@ -337,6 +337,11 @@ func (in *Node) DeepCopyInto(out *Node) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.ExternalFields != nil {
+		in, out := &in.ExternalFields, &out.ExternalFields
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.ForEach != nil {
 		in, out := &in.ForEach, &out.ForEach
 		*out = make([]ForEachDimension, len(*in))
@@ -378,6 +383,11 @@ func (in *Resource) DeepCopyInto(out *Resource) {
 	}
 	if in.IncludeWhen != nil {
 		in, out := &in.IncludeWhen, &out.IncludeWhen
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.ExternalFields != nil {
+		in, out := &in.ExternalFields, &out.ExternalFields
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}

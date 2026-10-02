@@ -167,13 +167,20 @@ func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {
 		return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: template and externalRef are both set", ErrUnsupported, res.ID)
 	case hasTemplate:
 		return v1alpha1.Node{
-			ID:          res.ID,
-			Template:    copyRaw(res.Template.Raw),
-			ReadyWhen:   copyStrings(res.ReadyWhen),
-			IncludeWhen: copyStrings(res.IncludeWhen),
-			ForEach:     copyForEach(res.ForEach),
+			ID:             res.ID,
+			Template:       copyRaw(res.Template.Raw),
+			ReadyWhen:      copyStrings(res.ReadyWhen),
+			IncludeWhen:    copyStrings(res.IncludeWhen),
+			ExternalFields: copyStrings(res.ExternalFields),
+			ForEach:        copyForEach(res.ForEach),
 		}, nil
 	case hasRef:
+		if len(res.ExternalFields) > 0 {
+			return v1alpha1.Node{}, fmt.Errorf(
+				"%w: resource %q: externalFields is not supported on externalRef (kro does not create or own the referenced resource)",
+				ErrUnsupported, res.ID,
+			)
+		}
 		// A selector externalRef is a read-only COLLECTION of external
 		// objects: name is absent (mutually exclusive with selector at the
 		// API level), and the compiler/executor treat the node as a

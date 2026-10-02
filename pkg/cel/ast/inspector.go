@@ -17,6 +17,7 @@ package ast
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/google/cel-go/cel"
 	celast "github.com/google/cel-go/common/ast"
@@ -172,10 +173,7 @@ func (a *Inspector) inspectExpr(ast *celast.AST, expr celast.Expr, path string) 
 		return a.inspectIdent(expr, path)
 	case celast.SelectKind:
 		s := expr.AsSelect()
-		newPath := s.FieldName()
-		if path != "" {
-			newPath = newPath + "." + path
-		}
+		newPath := joinField(s.FieldName(), path)
 		return a.inspectExpr(ast, s.Operand(), newPath)
 	case celast.CallKind:
 		return a.inspectCall(ast, expr.AsCall(), path)
@@ -220,20 +218,14 @@ func (a *Inspector) inspectIdent(expr celast.Expr, path string) ExpressionInspec
 	}
 
 	if _, ok := a.resources[name]; ok {
-		full := name
-		if path != "" {
-			full += "." + path
-		}
+		full := joinField(name, path)
 		return ExpressionInspection{
 			ResourceDependencies: []ResourceDependency{{ID: name, Path: full}},
 		}
 	}
 
 	if !isInternalIdentifier(name) {
-		full := name
-		if path != "" {
-			full += "." + path
-		}
+		full := joinField(name, path)
 		return ExpressionInspection{
 			UnknownResources: []UnknownResource{{ID: name, Path: full}},
 		}
@@ -245,6 +237,10 @@ func (a *Inspector) inspectIdent(expr celast.Expr, path string) ExpressionInspec
 // inspectCall analyzes a function or method invocation.
 //
 // Responsibilities:
+//   - Handle index (_[_]), optional-select (_?._), and optional-index (_[?_])
+//     operators as field-access analogues of SelectKind: when the key argument
+//     is a string literal, append it to the accumulated path and recurse into
+//     the operand so the full access path is preserved.
 //   - Recursively inspect all argument expressions.
 //   - For member functions, inspect the target expression and record a synthetic
 //     function name of the form "<target>.<method>".
@@ -259,6 +255,33 @@ func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path stri
 	out := ExpressionInspection{}
 
 	fn := call.FunctionName()
+
+	// Index, optional-select and optional-index operators are semantically
+	// field access (like SelectKind) — when the key/field argument is a
+	// string literal constant, append it to path and recurse into the
+	// operand so the full access path is preserved.  For non-literal keys
+	// (dynamic index), fall through to the default treatment which inspects
+	// the operand with an empty path.
+	if fn == "_[_]" || fn == "_?._" || fn == "_[?_]" {
+		args := call.Args()
+		if len(args) == 2 {
+			keyExpr := args[1]
+			if keyExpr.Kind() == celast.LiteralKind {
+				if s, ok := keyExpr.AsLiteral().Value().(string); ok {
+					newPath := joinField(s, path)
+					return a.inspectExpr(ast, args[0], newPath)
+				}
+			}
+		}
+		// Dynamic key / non-string literal: inspect the operand with
+		// the caller's path (stops extending, but doesn't discard what
+		// the caller already accumulated) and inspect remaining args
+		// for any resource references they might contain.
+		for _, arg := range call.Args() {
+			out.merge(a.inspectExpr(ast, arg, path))
+		}
+		return out
+	}
 
 	for _, arg := range call.Args() {
 		out.merge(a.inspectExpr(ast, arg, ""))
@@ -505,4 +528,43 @@ func isInternalIdentifier(name string) bool {
 	return name == "@result" ||
 		strings.HasPrefix(name, "$$") ||
 		strings.HasPrefix(name, "@__")
+}
+
+// isSimpleIdentifier reports whether s is a valid bare identifier (e.g. [a-zA-Z_][a-zA-Z0-9_]*).
+func isSimpleIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if i == 0 {
+			if !unicode.IsLetter(r) && r != '_' {
+				return false
+			}
+		} else {
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// joinField formats the field access into path. If field is a simple identifier,
+// it uses dot-notation ("field" or "field.suffix"). If it contains dots or special
+// characters, bracket notation is used so the path remains unambiguous (e.g. `["app.properties"]` or `["app.properties"].suffix`).
+func joinField(field, suffix string) string {
+	var prefix string
+	if isSimpleIdentifier(field) {
+		prefix = field
+	} else {
+		prefix = fmt.Sprintf("[%q]", field)
+	}
+
+	if suffix == "" {
+		return prefix
+	}
+	if strings.HasPrefix(suffix, "[") {
+		return prefix + suffix
+	}
+	return prefix + "." + suffix
 }

@@ -386,6 +386,7 @@ Two capabilities are specific to Graph `ref` nodes:
 ## Next Steps
 
 - **[Collections](./03-collections.md)** - Learn about forEach iteration and collection patterns
+- **[External Fields](./05-external-fields.md)** - Hand off specific fields of a resource kro *does* create to another controller (HPA, Argo Rollouts, …)
 - **[CEL Expressions](../expressions/01-cel-expressions.md)** - Learn more about the `?` operator and list functions
 - **[Dependencies & Ordering](../expressions/03-dependencies-ordering.md)** - Understand how external refs affect dependency graphs
 - **[Graph Nodes](../graph/02-nodes.md)** - The `ref` node kind and its siblings

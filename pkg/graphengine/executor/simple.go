@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/structured-merge-diff/v6/fieldpath"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/applyset"
@@ -740,6 +741,9 @@ func (s *Simple) applyScalarTemplate(ctx context.Context, w watchrouter.Watcher,
 			return applied, fmt.Errorf("template %s %q owned by a peer kro Graph's template manager; refusing to co-manage: %w (%w)",
 				obj.GetKind(), client.ObjectKeyFromObject(obj), ErrFieldManagerConflict, ErrNotReady)
 		}
+		if current != nil {
+			releaseHandedOffFields(obj, current, n.Spec().ExternalFields)
+		}
 		if err := s.applyTemplateObject(ctx, obj, rt.Graph().GetUID()); err != nil {
 			// A peer-Graph field conflict is soft not-ready (wrapped with
 			// ErrNotReady) so the node gates its dependents and the reconcile
@@ -1023,6 +1027,9 @@ func (s *Simple) applyCollectionItem(ctx context.Context, rt *runtime.Runtime, n
 		return nil
 	}
 
+	if current != nil {
+		releaseHandedOffFields(obj, current, n.Spec().ExternalFields)
+	}
 	if err := s.applyTemplateObject(ctx, obj, rt.Graph().GetUID()); err != nil {
 		// A peer-Graph field conflict is never tolerated as an update-rejection:
 		// record it as a soft failure so the collection is held not-ready and the
@@ -2161,6 +2168,76 @@ func isForeignGraphTemplateManager(manager, self, selfGraph string) bool {
 // ownership in the read-then-write window and then get force-stolen on stale
 // evidence (reviewer finding 3909839245). Basing the decision on the causes of
 // the apply that actually failed evaluates ownership as-of that apply.
+// releaseHandedOffFields omits each externalFields path (already validated at
+// compile time — compiler.analyzeExternalFields — to exist and not cross a
+// list) from obj, but ONLY once current's managedFields shows some manager
+// OTHER than kro's own template managers actively claiming that path.
+//
+// Omitting a path from an SSA manifest before any foreign manager claims it
+// would not just release kro's ownership — since kro would then be the ONLY
+// manager that ever mentioned the field, the API server deletes it outright.
+// That turns "hand this field off" into "delete the initial value moments
+// after create" the instant kro's own next reconcile runs (which happens
+// almost immediately, well before any external controller gets a chance to
+// act). So until a foreign owner shows up, kro keeps including the path in
+// every apply exactly like a normal field — reverting hand-edits, same as
+// any other field it owns. Once an external controller actually writes to
+// the field (an Update/Patch/Apply all register a managedFields entry), kro
+// stops including it: the field now has a real external owner keeping it
+// alive, so releasing kro's claim no longer deletes it.
+//
+// current == nil (create path) is a no-op here regardless: foreignFieldOwner
+// always returns "" for a nil object, so every path stays in obj and the
+// resource is created with its full initial values.
+func releaseHandedOffFields(obj, current *unstructured.Unstructured, paths []string) {
+	for _, p := range paths {
+		if foreignFieldOwner(current, p) == "" {
+			continue
+		}
+		unstructured.RemoveNestedField(obj.Object, strings.Split(p, ".")...)
+	}
+}
+
+// foreignFieldOwner returns the manager name of a managedFields entry — other
+// than one of kro's own template field managers (FieldManager, or any
+// templateFieldManagerPrefix identity) — that claims the dotted path on
+// current, or "" if no such entry exists (including when current is nil).
+// Each entry's FieldsV1 is the structured-merge-diff fieldpath.Set
+// serialization k8s itself uses to track field ownership, so parsing it is
+// the only reliable way to answer "does anyone besides kro manage this exact
+// field" — a manager simply being present on the object says nothing about
+// which fields it touches.
+func foreignFieldOwner(current *unstructured.Unstructured, path string) string {
+	if current == nil {
+		return ""
+	}
+	segments := strings.Split(path, ".")
+	parts := make([]any, len(segments))
+	for i, s := range segments {
+		parts[i] = s
+	}
+	want, err := fieldpath.MakePath(parts...)
+	if err != nil {
+		return ""
+	}
+	for _, mf := range current.GetManagedFields() {
+		if mf.Manager == FieldManager || strings.HasPrefix(mf.Manager, templateFieldManagerPrefix) {
+			continue
+		}
+		if mf.FieldsV1 == nil {
+			continue
+		}
+		var set fieldpath.Set
+		if err := set.FromJSON(mf.FieldsV1.GetRawReader()); err != nil {
+			continue
+		}
+		if set.Has(want) {
+			return mf.Manager
+		}
+	}
+	return ""
+}
+
 func (s *Simple) applyTemplateObject(ctx context.Context, obj *unstructured.Unstructured, parentUID types.UID) error {
 	if !s.ConflictDetection {
 		return s.ssaApply(ctx, obj, FieldManager, true)

@@ -213,16 +213,16 @@ var _ Interface = (*Simple)(nil)
 // the next change either way, but the watch must exist first or the
 // event gets dropped.
 //
-// Soft errors (ErrDataPending from Resolve, ErrWaitingForReadiness from
-// CheckReadiness) do NOT abort the walk. The reconciler relies on every
-// reachable node getting its watch declared so drift detection stays
-// authoritative — bailing early on a not-ready upstream node would
-// leave downstream nodes' watches missing, and the next reconcile
-// would lose drift events on them. Soft errors are remembered and the
-// first one is returned at the end wrapped in ErrNotReady, except that a
-// field-manager conflict takes precedence so it is never hidden behind a
-// node that is merely still converging. Hard errors (apply failure, type
-// errors, etc.) still abort immediately.
+// Neither soft errors (ErrDataPending from Resolve, ErrWaitingForReadiness
+// from CheckReadiness) nor hard errors (apply failure, type errors, etc.)
+// abort the walk. The reconciler relies on every reachable node getting its
+// watch declared so drift detection stays authoritative — bailing early on a
+// failing upstream node would leave downstream nodes' watches missing, and
+// the next reconcile would lose drift events on them. Soft errors are
+// remembered and the first one is returned at the end wrapped in
+// ErrNotReady, except that a field-manager conflict takes precedence so it is
+// never hidden behind a node that is merely still converging. Hard errors are
+// joined and returned after the walk, dominating any soft signal.
 //
 // Dependency-readiness gating runs before inclusion: an applied-but-not-ready,
 // blocked, or unresolved hard dependency leaves the dependent Unresolved (never

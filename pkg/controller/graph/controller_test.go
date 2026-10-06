@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	metafake "k8s.io/client-go/metadata/fake"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -67,6 +68,20 @@ func (f *fakeExecutor) Delete(_ context.Context, resources []expv1alpha1.Managed
 func (f *fakeExecutor) Release(_ context.Context, contributions []executor.Contribution) error {
 	f.releaseCalls = append(f.releaseCalls, contributions)
 	return f.releaseErr
+}
+
+// watchingExecutor registers one watch the way the real executor does
+// (before touching the cluster) and then fails apply with applyErr.
+type watchingExecutor struct {
+	fakeExecutor
+	watch watchrouter.WatchRequest
+}
+
+func (w *watchingExecutor) Apply(_ context.Context, _ *krotruntime.Runtime, wt watchrouter.Watcher) (executor.ApplyResult, error) {
+	if err := wt.Watch(w.watch); err != nil {
+		return executor.ApplyResult{}, err
+	}
+	return w.applyResult, w.applyErr
 }
 
 // patchErrClient is a fake client that fails Patch (and optionally Get)
@@ -1056,4 +1071,42 @@ func TestTrackSchemaDependencies_DynamicGVKAndMalformedNodes(t *testing.T) {
 	assert.Contains(t, sw.GraphsForGroupKind(schema.GroupKind{Group: "custom.io", Kind: "CustomApp"}), key)
 	assert.Contains(t, sw.GraphsForGroupKind(schema.GroupKind{Group: "refgroup.io", Kind: "RefApp"}), key)
 	assert.Contains(t, sw.DynamicGraphs(), key)
+}
+
+// TestReconcileHardApplyErrorKeepsWatches is the #1464 regression: a hard
+// apply failure on a Graph that never applied cleanly used to discard the
+// cycle's watches, stopping the informer it had just started. The retry
+// restarted it, re-LISTed the whole resource type, and replayed Add events
+// for existing watched objects, which enqueued the Graph past the error
+// backoff (a hot loop). The watch set and the informer must survive.
+func TestReconcileHardApplyErrorKeepsWatches(t *testing.T) {
+	g := graph("g", withFinalizer)
+	cl := newClient(t, g)
+	router := watchrouter.NewRouter(logr.Discard(), watchrouter.Config{EventBuffer: 8},
+		metafake.NewSimpleMetadataClient(metafake.NewTestScheme()))
+	t.Cleanup(router.Manager().Shutdown)
+
+	gvr := schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
+	r := &Reconciler{
+		Client:   cl,
+		Compiler: &fakeCompiler{program: &compiler.Program{Nodes: map[string]*compiler.Node{"ext": {}}}},
+		Registry: registry.New(),
+		Executor: &watchingExecutor{
+			fakeExecutor: fakeExecutor{applyErr: errors.New(`apply "cm": namespaces "does-not-exist" not found`)},
+			watch:        watchrouter.WatchRequest{NodeID: "ext", GVR: gvr, Name: "ext", Namespace: "default"},
+		},
+		Router: router,
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "g"}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	require.Error(t, err)
+	informer := router.Manager().GetInformer(gvr)
+	require.NotNil(t, informer, "a hard apply failure must not release the informer its walk started")
+	assert.Equal(t, 1, router.Coordinator().GraphCount(), "the Graph must stay routable after a hard failure")
+
+	_, err = r.Reconcile(context.Background(), req)
+	require.Error(t, err)
+	assert.Same(t, informer, router.Manager().GetInformer(gvr),
+		"a retry must reuse the running informer, not restart it")
 }

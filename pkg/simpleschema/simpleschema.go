@@ -15,6 +15,8 @@
 package simpleschema
 
 import (
+	"fmt"
+
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
@@ -32,4 +34,38 @@ func ToOpenAPISpec(obj map[string]any, customTypes map[string]any) (*extv1.JSONS
 		return nil, err
 	}
 	return t.buildSchema(obj)
+}
+
+// StringSchemaFromMarkers converts marker-only SimpleSchema syntax into an
+// OpenAPI string schema. It is intended for fields whose type is fixed by the
+// caller, such as metadata.name.
+func StringSchemaFromMarkers(value string) (*extv1.JSONSchemaProps, error) {
+	markers, err := ParseMarkers(value)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, marker := range markers {
+		switch marker.MarkerType {
+		case MarkerTypeMinLength, MarkerTypeMaxLength, MarkerTypePattern,
+			MarkerTypeEnum, MarkerTypeValidation:
+		default:
+			return nil, fmt.Errorf("marker %q is not supported for metadata.name validation", marker.Key)
+		}
+	}
+
+	schema := &extv1.JSONSchemaProps{Type: schemaTypeString}
+	if err := applyMarkers(schema, markers, "name", &extv1.JSONSchemaProps{}); err != nil {
+		return nil, err
+	}
+	if schema.MinLength != nil && *schema.MinLength < 0 {
+		return nil, fmt.Errorf("minLength must not be negative")
+	}
+	if schema.MaxLength != nil && *schema.MaxLength < 0 {
+		return nil, fmt.Errorf("maxLength must not be negative")
+	}
+	if schema.MinLength != nil && schema.MaxLength != nil && *schema.MinLength > *schema.MaxLength {
+		return nil, fmt.Errorf("minLength must not exceed maxLength")
+	}
+	return schema, nil
 }

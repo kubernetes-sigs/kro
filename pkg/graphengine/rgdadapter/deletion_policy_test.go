@@ -17,6 +17,7 @@ package rgdadapter
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,10 +29,46 @@ import (
 	"k8s.io/client-go/restmapper"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
+
+func TestMain(m *testing.M) {
+	// Enable DeletionPolicy by default for all rgdadapter tests.
+	// Tests that verify gate-off behavior disable it locally.
+	_ = features.FeatureGate.Set("DeletionPolicy=true")
+	os.Exit(m.Run())
+}
+
+// With the gate off the field is rejected outright and a template that does
+// not use it is passed through byte for byte. Not parallel: it flips the gate.
+func TestResourceGraphDefinitionToGraph_DeletionPolicyGateDisabled(t *testing.T) {
+	require.NoError(t, features.FeatureGate.Set("DeletionPolicy=false"))
+	t.Cleanup(func() {
+		require.NoError(t, features.FeatureGate.Set("DeletionPolicy=true"))
+	})
+
+	template := `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"cm","annotations":"${schema.spec.anns}"}}`
+
+	for _, policy := range []v1alpha1.DeletionPolicy{v1alpha1.DeletionPolicyOrphaned, v1alpha1.DeletionPolicyDelete} {
+		_, err := ResourceGraphDefinitionToGraph(rgdWithResource(&v1alpha1.Resource{
+			ID:             "cm",
+			DeletionPolicy: policy,
+			Template:       apimachineryruntime.RawExtension{Raw: []byte(template)},
+		}))
+		require.ErrorIs(t, err, ErrUnsupported)
+		assert.Contains(t, err.Error(), "DeletionPolicy feature gate")
+	}
+
+	g, err := ResourceGraphDefinitionToGraph(rgdWithResource(&v1alpha1.Resource{
+		ID:       "cm",
+		Template: apimachineryruntime.RawExtension{Raw: []byte(template)},
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, template, string(g.Spec.Nodes[0].Template.Raw))
+}
 
 // The deletion policy has to reach the managed object as an annotation: the
 // prune and teardown paths rediscover their candidates from live cluster state
@@ -187,57 +224,93 @@ func TestResourceGraphDefinitionToGraph_DeletionPolicyAddsMissingMetadata(t *tes
 }
 
 // An annotations map built by a single CEL expression cannot be edited
-// statically, so the policy is merged in at resolve time and must survive it.
-func TestBuildRuntimeForInstance_DeletionPolicyMergesIntoAnnotationsExpression(t *testing.T) {
-	rgd := &v1alpha1.ResourceGraphDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "webapp"},
-		Spec: v1alpha1.ResourceGraphDefinitionSpec{
-			Schema: &v1alpha1.Schema{
-				APIVersion: "v1alpha1",
-				Kind:       "WebApp",
-				Spec:       apimachineryruntime.RawExtension{Raw: []byte(`{"anns":"map[string]string"}`)},
+// statically, so the declared policy is enforced at resolve time: merged in
+// when Orphaned, filtered out otherwise so an instance cannot smuggle it in.
+func TestBuildRuntimeForInstance_DeletionPolicyInAnnotationsExpression(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy v1alpha1.DeletionPolicy
+		anns   map[string]any
+		want   map[string]string
+	}{
+		{
+			name:   "orphaned wins over the expression's value",
+			policy: v1alpha1.DeletionPolicyOrphaned,
+			anns: map[string]any{
+				"team":                            "platform",
+				metadata.DeletionPolicyAnnotation: "Delete",
 			},
-			Resources: []*v1alpha1.Resource{{
-				ID:             "cm",
-				DeletionPolicy: v1alpha1.DeletionPolicyOrphaned,
-				Template: rawResource(map[string]any{
-					"apiVersion": "v1",
-					"kind":       "ConfigMap",
-					"metadata": map[string]any{
-						"name":        "cm",
-						"namespace":   "default",
-						"annotations": "${schema.spec.anns}",
-					},
-				}),
-			}},
+			want: map[string]string{
+				"team":                            "platform",
+				metadata.DeletionPolicyAnnotation: "Orphaned",
+			},
+		},
+		{
+			name:   "delete drops a policy supplied by the expression",
+			policy: v1alpha1.DeletionPolicyDelete,
+			anns: map[string]any{
+				"team":                            "platform",
+				metadata.DeletionPolicyAnnotation: "Orphaned",
+			},
+			want: map[string]string{"team": "platform"},
+		},
+		{
+			name: "unset drops a policy supplied by the expression",
+			anns: map[string]any{
+				"team":                            "platform",
+				metadata.DeletionPolicyAnnotation: "Orphaned",
+			},
+			want: map[string]string{"team": "platform"},
 		},
 	}
-	instance := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "kro.run/v1alpha1",
-		"kind":       "WebApp",
-		"metadata":   map[string]any{"name": "demo", "namespace": "default"},
-		"spec": map[string]any{"anns": map[string]any{
-			"team":                            "platform",
-			metadata.DeletionPolicyAnnotation: "Delete",
-		}},
-	}}
 
-	fakeResolver, disco := testk8s.NewFakeResolver()
-	rm := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disco))
-	rt, _, err := BuildRuntimeForInstance(rgd, instance, compiler.NewCompilerWithDependencies(fakeResolver, rm))
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := &v1alpha1.ResourceGraphDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: "webapp"},
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{
+						APIVersion: "v1alpha1",
+						Kind:       "WebApp",
+						Spec:       apimachineryruntime.RawExtension{Raw: []byte(`{"anns":"map[string]string"}`)},
+					},
+					Resources: []*v1alpha1.Resource{{
+						ID:             "cm",
+						DeletionPolicy: tt.policy,
+						Template: rawResource(map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name":        "cm",
+								"namespace":   "default",
+								"annotations": "${schema.spec.anns}",
+							},
+						}),
+					}},
+				},
+			}
+			instance := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "kro.run/v1alpha1",
+				"kind":       "WebApp",
+				"metadata":   map[string]any{"name": "demo", "namespace": "default"},
+				"spec":       map[string]any{"anns": tt.anns},
+			}}
 
-	schemaObjs, err := rt.Node(SchemaNodeID).Resolve()
-	require.NoError(t, err)
-	rt.Set(SchemaNodeID, schemaObjs[0].Object)
+			fakeResolver, disco := testk8s.NewFakeResolver()
+			rm := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disco))
+			rt, _, err := BuildRuntimeForInstance(rgd, instance, compiler.NewCompilerWithDependencies(fakeResolver, rm))
+			require.NoError(t, err)
 
-	objs, err := rt.Node("cm").Resolve()
-	require.NoError(t, err)
-	require.Len(t, objs, 1)
-	assert.Equal(t, map[string]string{
-		"team":                            "platform",
-		metadata.DeletionPolicyAnnotation: "Orphaned",
-	}, objs[0].GetAnnotations())
+			schemaObjs, err := rt.Node(SchemaNodeID).Resolve()
+			require.NoError(t, err)
+			rt.Set(SchemaNodeID, schemaObjs[0].Object)
+
+			objs, err := rt.Node("cm").Resolve()
+			require.NoError(t, err)
+			require.Len(t, objs, 1)
+			assert.Equal(t, tt.want, objs[0].GetAnnotations())
+		})
+	}
 }
 
 func rgdWithResource(res *v1alpha1.Resource) *v1alpha1.ResourceGraphDefinition {

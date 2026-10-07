@@ -25,9 +25,11 @@ import (
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
@@ -45,6 +47,11 @@ func asOrphaned(obj *unstructured.Unstructured) *unstructured.Unstructured {
 	return obj
 }
 
+func enableDeletionPolicy(t *testing.T) {
+	t.Helper()
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.DeletionPolicy, true)
+}
+
 func deployNodeNamed(id string) *graph.Node {
 	return &graph.Node{Meta: graph.NodeMeta{
 		ID:         id,
@@ -59,6 +66,8 @@ func deployNodeNamed(id string) *graph.Node {
 // away, so an implementation that left it in the candidate set would requeue
 // forever and the instance would never finish deleting.
 func TestReconcileDeletionReleasesOrphanedAndFinishes(t *testing.T) {
+	enableDeletionPolicy(t)
+
 	instance := newInstanceObject("demo", "default")
 	metadata.SetInstanceFinalizer(instance)
 
@@ -92,6 +101,8 @@ func TestReconcileDeletionReleasesOrphanedAndFinishes(t *testing.T) {
 // retained resource in a later wave cannot stall the deletion of the resources
 // behind it.
 func TestReconcileDeletionOrphanedDoesNotBlockLowerWaves(t *testing.T) {
+	enableDeletionPolicy(t)
+
 	instance := newInstanceObject("demo", "default")
 	metadata.SetInstanceFinalizer(instance)
 
@@ -120,6 +131,8 @@ func TestReconcileDeletionOrphanedDoesNotBlockLowerWaves(t *testing.T) {
 // behind still labelled as a member of an instance that no longer exists, which
 // no later reconcile can clean up.
 func TestReconcileDeletionReleaseFailureRetainsFinalizer(t *testing.T) {
+	enableDeletionPolicy(t)
+
 	instance := newInstanceObject("demo", "default")
 	metadata.SetInstanceFinalizer(instance)
 
@@ -138,6 +151,8 @@ func TestReconcileDeletionReleaseFailureRetainsFinalizer(t *testing.T) {
 }
 
 func TestReconcileDeletionReleaseFailureReturnsRequeueForConflictAndErrorForAnythingElse(t *testing.T) {
+	enableDeletionPolicy(t)
+
 	instance := newInstanceObject("demo", "default")
 	metadata.SetInstanceFinalizer(instance)
 
@@ -166,4 +181,27 @@ func TestReconcileDeletionReleaseFailureReturnsRequeueForConflictAndErrorForAnyt
 		var retryAfter *requeue.RequeueNeededAfter
 		require.NotErrorAs(t, err, &retryAfter)
 	})
+}
+
+// With the gate off a leftover annotation must not keep a resource alive:
+// teardown falls back to deleting everything.
+func TestReconcileDeletionIgnoresPolicyWhenGateDisabled(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.DeletionPolicy, false)
+
+	instance := newInstanceObject("demo", "default")
+	metadata.SetInstanceFinalizer(instance)
+
+	managed := asOrphaned(newManagedObject(newDeploymentObject("demo", "default"), instance, "deploy", 1))
+
+	controller, dcx, raw := newControllerAndDeletionContext(
+		t, instance, newTestGraph(deployNodeNamed("deploy")), managed)
+
+	var deleted []string
+	raw.PrependReactor("delete", "deployments", func(action k8stesting.Action) (bool, apimachineryruntime.Object, error) {
+		deleted = append(deleted, action.(k8stesting.DeleteAction).GetName())
+		return false, nil, nil
+	})
+
+	_ = controller.reconcileDeletion(dcx)
+	assert.Equal(t, []string{"demo"}, deleted, "the annotated resource must be deleted while the gate is off")
 }

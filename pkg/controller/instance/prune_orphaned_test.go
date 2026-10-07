@@ -36,6 +36,8 @@ import (
 // honour the policy too, and the policy can only come off the live object
 // because the current graph no longer describes the resource at all.
 func TestPruneGraphEngineOrphans_HonoursDeletionPolicy(t *testing.T) {
+	enableDeletionPolicy(t)
+
 	comp := newTestRealCompiler(t)
 
 	inst := newInstanceObject("demo", "default")
@@ -88,6 +90,8 @@ func TestPruneGraphEngineOrphans_HonoursDeletionPolicy(t *testing.T) {
 }
 
 func TestPruneGraphEngineOrphans_ReleaseErrorIsReturned(t *testing.T) {
+	enableDeletionPolicy(t)
+
 	comp := newTestRealCompiler(t)
 
 	inst := newInstanceObject("demo", "default")
@@ -120,6 +124,8 @@ func TestPruneGraphEngineOrphans_ReleaseErrorIsReturned(t *testing.T) {
 // existed, or one whose annotation says something unexpected, keeps the
 // historical delete behaviour rather than silently becoming undeletable.
 func TestPruneGraphEngineOrphans_UnknownPolicyStillDeletes(t *testing.T) {
+	enableDeletionPolicy(t)
+
 	comp := newTestRealCompiler(t)
 
 	inst := newInstanceObject("demo", "default")

@@ -26,9 +26,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -1362,4 +1364,21 @@ func toRawExtension(t *testing.T, v interface{}) runtime.RawExtension {
 	rawJSON, err := json.Marshal(v)
 	require.NoError(t, err)
 	return runtime.RawExtension{Raw: rawJSON}
+}
+
+func TestValidateResourceGraphDefinition_DeletionPolicyFeatureGate(t *testing.T) {
+	rgd := &v1alpha1.ResourceGraphDefinition{
+		Spec: v1alpha1.ResourceGraphDefinitionSpec{
+			Schema:    &v1alpha1.Schema{Kind: "WebApp"},
+			Resources: []*v1alpha1.Resource{{ID: "cm", DeletionPolicy: v1alpha1.DeletionPolicyOrphaned}},
+		},
+	}
+
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.DeletionPolicy, false)
+	err := validateResourceGraphDefinition(rgd, Config{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DeletionPolicy feature gate")
+
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.DeletionPolicy, true)
+	require.NoError(t, validateResourceGraphDefinition(rgd, Config{}))
 }

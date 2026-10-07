@@ -9,6 +9,13 @@ resources are too risky to remove that way: a database, a PersistentVolumeClaim,
 a bucket. The `deletionPolicy` field on a resource says what should happen to
 that resource when it's removed.
 
+:::note
+
+`deletionPolicy` is alpha and requires the `DeletionPolicy`
+[feature gate](../../advanced/02-feature-gates.md#deletionpolicy).
+
+:::
+
 ```kro
 resources:
   - id: database
@@ -85,7 +92,8 @@ kro will delete it or not.
 
 The annotation is owned by kro: a template cannot set it, and when
 `metadata.annotations` is a single expression such as
-`${schema.spec.annotations}`, kro merges the policy into its result.
+`${schema.spec.annotations}`, kro merges the policy into its result, or drops
+the key from it when the policy is `Delete`.
 
 Changing `deletionPolicy` on an existing resource takes effect as soon as the
 instance next reconciles and the annotation is rewritten. If you are about to
@@ -102,13 +110,6 @@ ResourceGraphDefinition to another without downtime:
 2. Delete the old instance. The resource stays, released.
 3. Declare the same resource in the new RGD and create an instance. kro adopts
    the existing object rather than creating a new one.
-
-:::warning Manual Owner References
-
-If manual owner references is set, and you delete the instance the resource
-may be garbage collected regardless of the policy!
-
-:::
 
 :::note
 

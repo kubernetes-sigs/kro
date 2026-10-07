@@ -338,13 +338,17 @@ start-kind:
 # lane overrides it to false (the helm default) so check-rgd-deletion holds.
 ALLOW_CRD_DELETION ?= true
 
+# Feature gates for the kind deploy, as helm --set flags. The e2e chainsaw lane
+# enables the gates its suites exercise.
+KIND_FEATURE_GATE_FLAGS ?=
+
 .PHONY: deploy-kind-helm
 deploy-kind-helm: export KO_DOCKER_REPO=kind.local
 deploy-kind-helm: ko start-kind
 	make install
 	# This generates deployment with ko://... used in image.
 	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
-	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=$(ALLOW_CRD_DELETION) | $(WITH_GOFLAGS) $(KO) apply -f -
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=$(ALLOW_CRD_DELETION) $(KIND_FEATURE_GATE_FLAGS) | $(WITH_GOFLAGS) $(KO) apply -f -
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
@@ -399,6 +403,7 @@ deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
 # the e2e lane deploys with defaults rather than the dev deploy's true.
 .PHONY: test-e2e-kind
 test-e2e-kind: ALLOW_CRD_DELETION=false
+test-e2e-kind: KIND_FEATURE_GATE_FLAGS=--set config.featureGates.DeletionPolicy=true
 test-e2e-kind: chainsaw deploy-kind-helm
 	$(CHAINSAW) test ./test/e2e/chainsaw
 

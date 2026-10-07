@@ -738,13 +738,12 @@ func (c *Controller) pruneGraphEngineOrphans(
 				continue
 			}
 		}
-		// A resource declared deletionPolicy: Detach is released, not deleted:
+		// A resource declared deletionPolicy: Orphaned is released, not deleted:
 		// kro's labels come off so it stops being an ApplySet member and is not
 		// rediscovered on the next cycle. The policy is read off the live object
 		// because prune candidates are exactly the resources the current graph no
 		// longer describes, so the RGD can no longer be asked.
-		switch p := metadata.DeletionPolicyOf(candidate.Object); p {
-		case v1alpha1.DeletionPolicyOrphaned:
+		if deletionPolicyOf(candidate.Object) == v1alpha1.DeletionPolicyOrphaned {
 			res, rerr := applier.ReleaseOrphan(ctx, candidate)
 			if rerr != nil {
 				return pruned, false, fmt.Errorf("release orphan: %w", rerr)
@@ -755,19 +754,17 @@ func (c *Controller) pruneGraphEngineOrphans(
 			if res.Conflict {
 				conflicts++
 			}
-		case v1alpha1.DeletionPolicyDelete:
-			res, derr := applier.DeleteOrphan(ctx, candidate)
-			if derr != nil {
-				return pruned, false, fmt.Errorf("delete orphan: %w", derr)
-			}
-			if res.Pruned != nil {
-				pruned = true
-			}
-			if res.Conflict {
-				conflicts++
-			}
-		default:
-			return false, false, fmt.Errorf("unknown deletion policy: %s", p)
+			continue
+		}
+		res, derr := applier.DeleteOrphan(ctx, candidate)
+		if derr != nil {
+			return pruned, false, fmt.Errorf("delete orphan: %w", derr)
+		}
+		if res.Pruned != nil {
+			pruned = true
+		}
+		if res.Conflict {
+			conflicts++
 		}
 	}
 	if conflicts > 0 {

@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/json"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
@@ -224,8 +225,14 @@ func copyRaw(raw []byte) *runtime.RawExtension {
 // Delete is the default and is represented by the annotation's ABSENCE, so
 // existing objects are untouched.
 func templateWithDeletionPolicy(res *v1alpha1.Resource) (*runtime.RawExtension, error) {
-	if res.DeletionPolicy != v1alpha1.DeletionPolicyOrphaned {
+	if !features.FeatureGate.Enabled(features.DeletionPolicy) {
+		if res.DeletionPolicy != "" {
+			return nil, fmt.Errorf("%w: resource %q: deletionPolicy requires the DeletionPolicy feature gate to be enabled", ErrUnsupported, res.ID)
+		}
 		return copyRaw(res.Template.Raw), nil
+	}
+	if res.DeletionPolicy != v1alpha1.DeletionPolicyOrphaned {
+		return templateWithoutDeletionPolicy(res), nil
 	}
 
 	var manifest map[string]any
@@ -268,9 +275,35 @@ func mergeDeletionPolicyExpression(value, id string) (string, error) {
 	if err != nil || !standalone {
 		return "", fmt.Errorf("%w: resource %q: metadata.annotations must be a map or a single ${...} expression", ErrUnsupported, id)
 	}
-	expr := strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
 	return fmt.Sprintf("${(%s).merge({%q: %q})}",
-		expr, metadata.DeletionPolicyAnnotation, string(v1alpha1.DeletionPolicyOrphaned)), nil
+		expressionBody(value), metadata.DeletionPolicyAnnotation, string(v1alpha1.DeletionPolicyOrphaned)), nil
+}
+
+// templateWithoutDeletionPolicy filters the policy out of a standalone `${expr}`
+// annotations value, which static validation cannot see into.
+func templateWithoutDeletionPolicy(res *v1alpha1.Resource) *runtime.RawExtension {
+	var manifest map[string]any
+	if err := json.Unmarshal(res.Template.Raw, &manifest); err != nil {
+		return copyRaw(res.Template.Raw)
+	}
+	meta, _ := manifest["metadata"].(map[string]any)
+	value, _ := meta["annotations"].(string)
+	if standalone, err := parser.IsStandaloneExpression(value); err != nil || !standalone {
+		return copyRaw(res.Template.Raw)
+	}
+	meta["annotations"] = fmt.Sprintf("${(%s).transformMap(k, v, k != %q, v)}",
+		expressionBody(value), metadata.DeletionPolicyAnnotation)
+
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return copyRaw(res.Template.Raw)
+	}
+	return &runtime.RawExtension{Raw: raw}
+}
+
+// expressionBody strips the `${` `}` delimiters off a standalone expression.
+func expressionBody(value string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
 }
 
 // annotatableMetadata returns the manifest's metadata map, creating it when

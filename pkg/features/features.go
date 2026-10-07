@@ -44,6 +44,12 @@ const (
 	// ConservativeCRDComparison enables conservative compatibility checks
 	// for schema facets that the default CRD comparator does not cover.
 	ConservativeCRDComparison featuregate.Feature = "ConservativeCRDComparison"
+
+	// DeletionPolicy enables the per-resource deletionPolicy field on
+	// ResourceGraphDefinition resources. When disabled, any RGD that sets
+	// deletionPolicy is rejected at build time and every managed resource is
+	// deleted as before.
+	DeletionPolicy featuregate.Feature = "DeletionPolicy"
 )
 
 // defaultKroFeatureGates consists of all known KRO-specific feature keys.
@@ -58,6 +64,7 @@ var defaultKroFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},
+	DeletionPolicy: {Default: false, PreRelease: featuregate.Alpha},
 }
 
 // FeatureGate is the shared global MutableFeatureGate for KRO.

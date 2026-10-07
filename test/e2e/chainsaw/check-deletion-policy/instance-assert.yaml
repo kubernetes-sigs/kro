@@ -1,0 +1,8 @@
+apiVersion: kro.run/v1alpha1
+kind: CheckDeletionPolicyApp
+metadata:
+  name: test-instance
+status:
+  (conditions[?type == 'Ready']):
+    - status: 'True'
+  state: ACTIVE

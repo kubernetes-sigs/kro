@@ -16,6 +16,7 @@ package instance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	controllergraph "github.com/kubernetes-sigs/kro/pkg/controller/graph"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
@@ -41,6 +43,15 @@ func (c *Controller) reconcileDeletion(dcx *DeletionContext) error {
 	if err != nil {
 		dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
 		return err
+	}
+
+	candidates, err = c.releaseOrphanedResources(dcx, applier, candidates)
+	if err != nil {
+		dcx.Mark.ResourcesUnderDeletion("deletion blocked: %v", err)
+		if errors.Is(err, errConflict) {
+			return dcx.delayedRequeue(err)
+		}
+		return fmt.Errorf("failed to release orphaned resources: %w", err)
 	}
 
 	if len(candidates) == 0 {
@@ -97,6 +108,46 @@ func (c *Controller) discoverDeletionInventory(
 		return nil, nil, fmt.Errorf("list deletion inventory: %w", err)
 	}
 	return candidates, applier, nil
+}
+
+// errConflict indicates a conflict occurred during release of an orphaned object.
+var errConflict = errors.New("conflict")
+
+// releaseOrphanedResources go through all resources and based on
+// the deletion policy, orphan them.
+func (c *Controller) releaseOrphanedResources(
+	dcx *DeletionContext,
+	applier *applyset.ApplySet,
+	candidates []applyset.OrphanCandidate,
+) ([]applyset.OrphanCandidate, error) {
+	remaining := make([]applyset.OrphanCandidate, 0, len(candidates))
+	var conflicts int
+	for _, candidate := range candidates {
+		if deletionPolicyOf(candidate.Object) != v1alpha1.DeletionPolicyOrphaned {
+			remaining = append(remaining, candidate)
+			continue
+		}
+		result, err := applier.ReleaseOrphan(dcx.Ctx, candidate)
+		if err != nil {
+			return nil, fmt.Errorf("release orphaned resource: %w", err)
+		}
+		if result.Conflict {
+			conflicts++
+		}
+	}
+	if conflicts > 0 {
+		return nil, fmt.Errorf("%w: release of %d orphaned resource(s) hit concurrent changes, retrying", errConflict, conflicts)
+	}
+	return remaining, nil
+}
+
+// deletionPolicyOf ignores the stamped policy while the DeletionPolicy gate is
+// off, so a leftover annotation cannot keep a resource alive.
+func deletionPolicyOf(obj *unstructured.Unstructured) v1alpha1.DeletionPolicy {
+	if !features.FeatureGate.Enabled(features.DeletionPolicy) {
+		return v1alpha1.DeletionPolicyDelete
+	}
+	return metadata.DeletionPolicyOf(obj)
 }
 
 const fallbackDeletionOrder = 0

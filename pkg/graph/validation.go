@@ -28,6 +28,7 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
@@ -129,6 +130,9 @@ func validateResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, rgdC
 	ids := make([]string, 0, len(rgd.Spec.Resources))
 	for _, res := range rgd.Spec.Resources {
 		ids = append(ids, res.ID)
+		if res.DeletionPolicy != "" && !features.FeatureGate.Enabled(features.DeletionPolicy) {
+			return fmt.Errorf("resource %q: deletionPolicy requires the DeletionPolicy feature gate to be enabled", res.ID)
+		}
 	}
 	if err := validateResourceIDs(ids); err != nil {
 		return fmt.Errorf("%s: %w", ErrNamingConvention, err)

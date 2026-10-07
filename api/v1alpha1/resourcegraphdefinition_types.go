@@ -291,8 +291,9 @@ type Resource struct {
 	//
 	// Not supported on externalRef.
 	//
-	// This field is alpha. It may be superseded by the broader resource
-	// lifecycle field currently under design (KREP-014).
+	// This field is alpha and requires the DeletionPolicy feature gate. It may
+	// be superseded by the broader resource lifecycle field currently under
+	// design (KREP-014).
 	//
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Enum=Delete;Orphaned

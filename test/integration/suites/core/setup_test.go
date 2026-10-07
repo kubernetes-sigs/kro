@@ -39,6 +39,9 @@ func TestCore(t *testing.T) {
 	if err := features.FeatureGate.Set("GraphKind=true"); err != nil {
 		t.Fatalf("failed to enable GraphKind feature gate: %v", err)
 	}
+	if err := features.FeatureGate.Set("DeletionPolicy=true"); err != nil {
+		t.Fatalf("failed to enable DeletionPolicy feature gate: %v", err)
+	}
 
 	RegisterFailHandler(Fail)
 

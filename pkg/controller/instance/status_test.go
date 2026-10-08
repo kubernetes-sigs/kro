@@ -142,6 +142,7 @@ func TestBuiltinConditionsFiltersAuthorTypes(t *testing.T) {
 	mark.InstanceManaged()
 	mark.GraphResolved()
 	mark.ResourcesReady()
+	mark.WatchesHealthy()
 
 	builtins := builtinConditions(instance)
 	require.Len(t, builtins, len(v1alpha1.KROBuiltinConditionTypes),

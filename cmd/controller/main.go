@@ -170,8 +170,9 @@ func main() {
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
 		"maximum number of retries for an item in the queue will be retried before being dropped")
 	flag.DurationVar(&watchSyncTimeout, "watch-sync-timeout", 30*time.Second,
-		"Maximum time a reconcile waits for a newly started resource watch to finish its initial list "+
-			"before proceeding without it for that reconcile. Increase for resources with very many objects.")
+		"Maximum time ResourceGraphDefinition activation waits for the instance kind's watch to finish its "+
+			"initial list. Child and externalRef watches never block a reconcile; they establish in the background. "+
+			"Increase when a kind has very many instances.")
 	// qps and burst
 	flag.Float64Var(&qps, "client-qps", 100, "The number of queries per second to allow")
 	flag.IntVar(&burst, "client-burst", 150,

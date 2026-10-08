@@ -32,6 +32,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
+	k8smetadata "k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -83,6 +84,11 @@ type ControllerConfig struct {
 	ReconcileConfig   ctrlinstance.ReconcileConfig
 	MaxGraphRevisions int
 	LogWriter         io.Writer
+	// WatchUser, when set, runs the watch managers (dynamic controller and
+	// Graph router) as this impersonated user while everything else keeps the
+	// admin identity. The envtest apiserver enforces RBAC, so a test can deny
+	// and later grant list/watch per GVR to observe blocked-watch behavior.
+	WatchUser string
 }
 
 // init installs a no-op apiserver warning handler for every client-go client
@@ -296,6 +302,17 @@ func (e *Environment) grantImpersonatedServiceAccounts() error {
 	return nil
 }
 
+// watchMetadataClient returns the metadata client the watch managers use: the
+// admin client unless ControllerConfig.WatchUser is set.
+func (e *Environment) watchMetadataClient() (k8smetadata.Interface, error) {
+	if e.ControllerConfig.WatchUser == "" {
+		return e.ClientSet.Metadata(), nil
+	}
+	cfg := e.ClientSet.RESTConfig()
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: e.ControllerConfig.WatchUser}
+	return k8smetadata.NewForConfig(cfg)
+}
+
 func (e *Environment) setupController() error {
 	var err error
 	rgdConfig := graph.Config{
@@ -323,6 +340,11 @@ func (e *Environment) setupController() error {
 	}
 	e.ClientSet.SetRESTMapper(e.CtrlManager.GetRESTMapper())
 
+	watchMeta, err := e.watchMetadataClient()
+	if err != nil {
+		return fmt.Errorf("creating watch metadata client: %w", err)
+	}
+
 	dc := dynamiccontroller.NewDynamicController(
 		zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)),
 		dynamiccontroller.Config{
@@ -334,7 +356,7 @@ func (e *Environment) setupController() error {
 			RateLimit:       10,
 			BurstLimit:      100,
 		},
-		e.ClientSet.Metadata(), e.ClientSet.RESTMapper())
+		watchMeta, e.ClientSet.RESTMapper())
 
 	graphRevisionRegistry := revisions.NewRegistry()
 	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
@@ -381,7 +403,7 @@ func (e *Environment) setupController() error {
 		router := watchrouter.NewRouter(
 			zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)).WithName("graph-watch-router"),
 			watchrouter.Config{},
-			e.ClientSet.Metadata(),
+			watchMeta,
 		)
 		if err := e.CtrlManager.Add(router); err != nil {
 			return fmt.Errorf("adding graph watch router to manager: %w", err)

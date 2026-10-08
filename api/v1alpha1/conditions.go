@@ -62,6 +62,7 @@ const (
 	InstanceConditionTypeInstanceManaged ConditionType = "InstanceManaged"
 	InstanceConditionTypeGraphResolved   ConditionType = "GraphResolved"
 	InstanceConditionTypeResourcesReady  ConditionType = "ResourcesReady"
+	InstanceConditionTypeWatchesHealthy  ConditionType = "WatchesHealthy"
 )
 
 // KROBuiltinConditionTypes is the set form of the instance built-in
@@ -71,6 +72,7 @@ var KROBuiltinConditionTypes = map[string]struct{}{
 	string(InstanceConditionTypeInstanceManaged): {},
 	string(InstanceConditionTypeGraphResolved):   {},
 	string(InstanceConditionTypeResourcesReady):  {},
+	string(InstanceConditionTypeWatchesHealthy):  {},
 }
 
 // Condition is the common struct used by all CRDs managed by ACK service

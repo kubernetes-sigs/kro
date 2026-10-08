@@ -239,6 +239,8 @@ func (c *Controller) reconcileViaGraphEngine(
 		mark.ResourcesNotReady("resource reconciliation failed: %v", applyErr)
 	}
 
+	c.markWatchHealth(mark, inst)
+
 	// 2. Prune completed templates even when another owner is unresolved.
 	// Hard errors veto pruning; only full owned resolution permits inventory shrink.
 	owningUnresolved := ownedUnresolved(rt, applyResult.Unresolved)

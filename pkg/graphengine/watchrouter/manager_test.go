@@ -80,7 +80,7 @@ func TestManagerLifecycle(t *testing.T) {
 		{
 			name: "ensure-once-and-release-stops",
 			fn: func(t *testing.T, wm *Manager, reg *fakeInformerRegistry) {
-				require.NoError(t, wm.EnsureWatch(gvrA, "owner-1"))
+				wm.EnsureWatch(gvrA, "owner-1")
 				inf := reg.get(gvrA)
 				require.NotNil(t, inf)
 				assert.Equal(t, 1, wm.ActiveWatchCount())
@@ -92,8 +92,8 @@ func TestManagerLifecycle(t *testing.T) {
 		{
 			name: "two-owners-only-stops-on-last-release",
 			fn: func(t *testing.T, wm *Manager, reg *fakeInformerRegistry) {
-				require.NoError(t, wm.EnsureWatch(gvrA, "owner-1"))
-				require.NoError(t, wm.EnsureWatch(gvrA, "owner-2"))
+				wm.EnsureWatch(gvrA, "owner-1")
+				wm.EnsureWatch(gvrA, "owner-2")
 				assert.Equal(t, 1, wm.ActiveWatchCount())
 				wm.ReleaseWatch(gvrA, "owner-1")
 				assert.Equal(t, 1, wm.ActiveWatchCount(), "second owner keeps watch alive")
@@ -106,9 +106,9 @@ func TestManagerLifecycle(t *testing.T) {
 		{
 			name: "duplicate-ensure-is-idempotent",
 			fn: func(t *testing.T, wm *Manager, _ *fakeInformerRegistry) {
-				require.NoError(t, wm.EnsureWatch(gvrA, "owner-1"))
-				require.NoError(t, wm.EnsureWatch(gvrA, "owner-1"))
-				require.NoError(t, wm.EnsureWatch(gvrA, "owner-1"))
+				wm.EnsureWatch(gvrA, "owner-1")
+				wm.EnsureWatch(gvrA, "owner-1")
+				wm.EnsureWatch(gvrA, "owner-1")
 				assert.Equal(t, 1, wm.ActiveWatchCount())
 				wm.ReleaseWatch(gvrA, "owner-1")
 				assert.Equal(t, 0, wm.ActiveWatchCount())
@@ -124,8 +124,8 @@ func TestManagerLifecycle(t *testing.T) {
 		{
 			name: "shutdown-stops-all",
 			fn: func(t *testing.T, wm *Manager, reg *fakeInformerRegistry) {
-				require.NoError(t, wm.EnsureWatch(gvrA, "x"))
-				require.NoError(t, wm.EnsureWatch(gvrB, "x"))
+				wm.EnsureWatch(gvrA, "x")
+				wm.EnsureWatch(gvrB, "x")
 				assert.Equal(t, 2, wm.ActiveWatchCount())
 				wm.Shutdown()
 				assert.Equal(t, 0, wm.ActiveWatchCount())
@@ -202,12 +202,15 @@ func TestManagerEventRouting(t *testing.T) {
 				got []Event
 			)
 			handler := func(e Event) {
+				if e.Type == EventSynced {
+					return
+				}
 				mu.Lock()
 				defer mu.Unlock()
 				got = append(got, e)
 			}
 			wm, reg := newTestManager(t, handler)
-			require.NoError(t, wm.EnsureWatch(gvrA, "owner"))
+			wm.EnsureWatch(gvrA, "owner")
 			tc.fire(reg.get(gvrA))
 
 			mu.Lock()
@@ -218,10 +221,8 @@ func TestManagerEventRouting(t *testing.T) {
 	}
 }
 
-// TestManagerSyncTimeout asserts EnsureWatch fails when the fake
-// informer never reports HasSynced. The watch is torn down on timeout so
-// active count stays zero — no zombie watches.
-func TestManagerSyncTimeout(t *testing.T) {
+// TestManagerUnsyncedInformerRetained asserts EnsureWatch returns at once even when the fake informer never reports HasSynced, and that the informer is retained (the reflector keeps retrying) rather than torn down.
+func TestManagerUnsyncedInformerRetained(t *testing.T) {
 	wm := NewManager(nil, 0, func(Event) {}, logr.Discard())
 	wm.SyncTimeout = 50 * time.Millisecond
 
@@ -231,12 +232,19 @@ func TestManagerSyncTimeout(t *testing.T) {
 	})
 	t.Cleanup(wm.Shutdown)
 
-	err := wm.EnsureWatch(gvrA, "owner")
+	start := time.Now()
+	wm.EnsureWatch(gvrA, "owner")
+	assert.Less(t, time.Since(start), wm.SyncTimeout)
+	assert.Equal(t, 1, wm.ActiveWatchCount())
+
+	err := wm.WaitForSync(context.Background(), gvrA)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cache sync timeout")
+	assert.Equal(t, 1, wm.ActiveWatchCount(), "timeout must not release the informer")
+	assert.False(t, never.stopped.Load())
+
+	wm.ReleaseWatch(gvrA, "owner")
 	assert.Equal(t, 0, wm.ActiveWatchCount())
-	// We were the only owner, so ReleaseWatch (called from the
-	// timeout path inside EnsureWatch) tore the informer down.
 	assert.Eventually(t, func() bool {
 		return never.stopped.Load()
 	}, time.Second, 5*time.Millisecond)

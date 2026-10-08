@@ -860,6 +860,9 @@ func TestRegister_EnsureWatchSyncError(t *testing.T) {
 	err := dc.Register(ctx, gvr, handler)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cache sync timeout")
+	assert.Equal(t, 0, dc.watches.ActiveWatchCount(), "parent retention released on sync timeout")
+	_, registered := dc.handlers.Load(gvr)
+	assert.False(t, registered)
 }
 
 func TestNewDynamicController_WatchSyncTimeout(t *testing.T) {
@@ -891,7 +894,7 @@ func TestGetInformer_ReturnsNil_ForMissingWatch(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 	assert.Nil(t, wm.GetInformer(gvr), "GetInformer should return nil for unwatched GVR")
 
-	require.NoError(t, wm.EnsureWatch(gvr, "owner"))
+	wm.EnsureWatch(gvr, "owner")
 	assert.NotNil(t, wm.GetInformer(gvr))
 
 	wm.ReleaseWatch(gvr, "owner")

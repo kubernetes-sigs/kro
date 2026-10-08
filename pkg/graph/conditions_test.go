@@ -57,6 +57,14 @@ func TestValidateConditionExpressions(t *testing.T) {
 			},
 		},
 		{
+			name: "WatchesHealthy is a readable built-in",
+			exprs: []string{
+				`runtime.newCondition({type: 'InputsWatched',
+					status: runtime.condition(schema, 'WatchesHealthy').status,
+					reason: '', message: ''})`,
+			},
+		},
+		{
 			name: "dynamic status and dynamic type lookup are left to evaluation time",
 			exprs: []string{
 				`runtime.newCondition({type: 'A', status: schema.spec.someStatus, reason: '', message: ''})`,

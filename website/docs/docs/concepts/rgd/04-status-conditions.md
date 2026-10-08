@@ -13,6 +13,7 @@ By default, kro adds four built-in conditions to every instance's
 | `GraphResolved` | The runtime graph was built and all resources resolved. |
 | `ResourcesReady` | All resources were created and reached their ready state. |
 | `Ready` | Root condition: true when the three above are true. |
+| `WatchesHealthy` | Whether every kind the instance watches (templated resources and externalRef inputs) is delivering change events. `Unknown`/`WatchesPending` while a watch is still completing its initial list; `False`/`WatchBlocked` when kro cannot list or watch a kind (usually missing RBAC), so changes to it are not detected until the next reconcile from another cause. Independent of `Ready`: the instance still applies normally. |
 
 These describe kro's lifecycle ("all child resources were applied"), not
 whether your application is actually healthy. Custom status conditions let an

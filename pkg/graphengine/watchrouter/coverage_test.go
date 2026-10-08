@@ -22,6 +22,7 @@ package watchrouter
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,7 +70,7 @@ func TestRouterManagerAccessor(t *testing.T) {
 func TestManagerGetInformer(t *testing.T) {
 	wm, _ := newTestManager(t, nil)
 	assert.Nil(t, wm.GetInformer(gvrA))
-	require.NoError(t, wm.EnsureWatch(gvrA, "owner"))
+	wm.EnsureWatch(gvrA, "owner")
 	assert.NotNil(t, wm.GetInformer(gvrA))
 }
 
@@ -85,7 +86,7 @@ func TestManagerSyncTimeoutDefault(t *testing.T) {
 	// SyncTimeout=0 means defaultSyncTimeout (30s) applies. The fake
 	// informer synces immediately so we get back from EnsureWatch
 	// long before 30s, exercising the default-fallback branch.
-	require.NoError(t, wm.EnsureWatch(gvrA, "owner"))
+	wm.EnsureWatch(gvrA, "owner")
 }
 
 // TestCoordinatorCollectionRemovalAndAbort drives a Done(true) cycle
@@ -190,7 +191,7 @@ func TestManagerNewWatchEventHandlerError(t *testing.T) {
 	t.Cleanup(wm.Shutdown)
 	// EnsureWatch should still succeed: the error path inside newWatch
 	// only logs and the informer otherwise behaves.
-	require.NoError(t, wm.EnsureWatch(gvrA, "owner"))
+	wm.EnsureWatch(gvrA, "owner")
 }
 
 // erroringHandlerInformer satisfies SharedIndexInformer but returns
@@ -221,7 +222,7 @@ func TestManagerDefaultCreateInformer(t *testing.T) {
 
 	// Pods are a known GVR the fake scheme registers by default.
 	pods := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	require.NoError(t, wm.EnsureWatch(pods, "owner"))
+	wm.EnsureWatch(pods, "owner")
 	assert.NotNil(t, wm.GetInformer(pods))
 	assert.Equal(t, 1, wm.ActiveWatchCount())
 }
@@ -252,10 +253,15 @@ func TestCoordinatorNoSuchKey(t *testing.T) {
 // that fails meta.Accessor (e.g. a non-metav1.Object value) so we
 // exercise the error-skip branch in eventHandlerFuncs.
 func TestEventHandlerFuncsAccessorError(t *testing.T) {
-	var seen int
-	handler := func(Event) { seen++ }
+	var seen atomic.Int32
+	handler := func(e Event) {
+		if e.Type == EventSynced { // lifecycle event, not an object event
+			return
+		}
+		seen.Add(1)
+	}
 	wm, reg := newTestManager(t, handler)
-	require.NoError(t, wm.EnsureWatch(gvrA, "owner"))
+	wm.EnsureWatch(gvrA, "owner")
 	inf := reg.get(gvrA)
 
 	// "string" is not an ObjectMeta accessor — toEvent should bail out.
@@ -265,5 +271,5 @@ func TestEventHandlerFuncsAccessorError(t *testing.T) {
 
 	// Real object should still flow through.
 	inf.fireAdd(newFakeObj("ns", "cm-1", nil))
-	assert.Equal(t, 1, seen)
+	assert.Equal(t, int32(1), seen.Load())
 }

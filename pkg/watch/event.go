@@ -33,6 +33,11 @@ const (
 	EventAdd    EventType = "add"
 	EventUpdate EventType = "update"
 	EventDelete EventType = "delete"
+	// EventSynced fires once per informer sync (initial, or after a blocking error
+	// clears). Initial Adds already wake owners of existing objects; this wakes
+	// owners when there are none, so WatchesHealthy can clear.
+	EventSynced       EventType = "synced"
+	EventWatchBlocked EventType = "watchBlocked"
 )
 
 // Event is a normalized watch event emitted by the [Manager].

@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	ctrlgraph "github.com/kubernetes-sigs/kro/pkg/controller/graph"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/environment"
 )
 
@@ -328,6 +329,10 @@ var _ = Describe("Graph Schema Watch", func() {
 		keyB := types.NamespacedName{Namespace: nsB, Name: "b"}
 		testEnv.AwaitCondition(t, keyA, expv1alpha1.GraphConditionTypeReady, metav1.ConditionTrue, 20*time.Second)
 		testEnv.AwaitCondition(t, keyB, expv1alpha1.GraphConditionTypeReady, metav1.ConditionTrue, 20*time.Second)
+		// Watches on the new kinds sync after Ready. That sync writes
+		// WatchesHealthy=True, so wait for it before snapshotting A.
+		testEnv.AwaitCondition(t, keyA, ctrlgraph.WatchesHealthy, metav1.ConditionTrue, 20*time.Second)
+		testEnv.AwaitCondition(t, keyB, ctrlgraph.WatchesHealthy, metav1.ConditionTrue, 20*time.Second)
 
 		// Allow any trailing in-flight initial reconcile to settle before snapshotting.
 		time.Sleep(500 * time.Millisecond)

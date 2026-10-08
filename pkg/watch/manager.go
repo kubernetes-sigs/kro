@@ -16,17 +16,23 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
+	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/metadata"
-	"k8s.io/client-go/metadata/metadatainformer"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -37,8 +43,9 @@ import (
 type MetricsRecorder interface {
 	// SetActiveWatches reports the current number of running informers.
 	SetActiveWatches(active int)
-	// ObserveInformerSync records how long EnsureWatch waited for an
-	// informer's initial cache sync, whether it succeeded or timed out.
+	// ObserveInformerSync records how long a newly started informer took to
+	// complete its initial cache sync. Not recorded for informers stopped
+	// before they synced.
 	ObserveInformerSync(gvr schema.GroupVersionResource, seconds float64)
 }
 
@@ -61,7 +68,7 @@ type Manager struct {
 	// Set at construction time; never nil.
 	onEvent EventHandler
 
-	// SyncTimeout is the maximum time to wait for cache sync in EnsureWatch.
+	// SyncTimeout is the maximum time WaitForSync waits for cache sync.
 	// Zero means use the default (30s).
 	SyncTimeout time.Duration
 
@@ -82,6 +89,14 @@ type gvrWatch struct {
 	handlerReg cache.ResourceEventHandlerRegistration
 	cancel     context.CancelFunc
 	log        logr.Logger
+	blockedErr atomic.Pointer[error]
+}
+
+// WatchState is a non-blocking snapshot of one GVR's informer.
+type WatchState struct {
+	Exists     bool
+	Synced     bool
+	BlockedErr error
 }
 
 // NewManager creates a Manager. The onEvent callback is invoked for every
@@ -108,54 +123,148 @@ func (m *Manager) SetInformerFactory(f func(schema.GroupVersionResource) cache.S
 }
 
 // EnsureWatch retains the informer for gvr under ownerID, starting one if
-// none is running yet. It then blocks until the informer reports HasSynced
-// (up to SyncTimeout) so callers can rely on a usable cache on return.
-// Idempotent for a given ownerID.
-//
-// On sync timeout only ownerID's retention is dropped -- the informer is never
-// force-stopped. If another owner attached while we were waiting, the informer
-// keeps running under that owner (and it gets its own chance to wait for
-// sync); if we were the sole owner, releasing empties the owner set and the
-// informer stops naturally.
-func (m *Manager) EnsureWatch(gvr schema.GroupVersionResource, ownerID string) error {
+// none is running yet. It never blocks on the initial list; callers that read
+// the store must call WaitForSync first. Idempotent for a given ownerID.
+func (m *Manager) EnsureWatch(gvr schema.GroupVersionResource, ownerID string) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.owners[gvr] == nil {
 		m.owners[gvr] = make(map[string]struct{})
 	}
 	m.owners[gvr][ownerID] = struct{}{}
 
-	// Check if watch already exists while still holding the lock.
-	w, alreadyExists := m.watches[gvr]
-	if !alreadyExists {
-		// Create and start the informer while still holding the lock, so no
-		// ReleaseWatch can remove our owner before the watch exists.
-		w = m.newWatch(gvr)
-		m.watches[gvr] = w
-		ctx, cancel := context.WithCancel(context.Background())
-		w.cancel = cancel
-		go w.informer.RunWithContext(ctx)
-		m.recordActiveWatchesLocked()
-		m.log.V(1).Info("Informer started", "gvr", gvr)
+	if _, alreadyExists := m.watches[gvr]; alreadyExists {
+		return
 	}
-
-	// Release the lock before blocking on cache sync.
-	m.mu.Unlock()
-
-	// Wait for initial list/sync with a timeout so callers get a usable cache.
-	syncStart := time.Now()
-	syncCtx, syncCancel := context.WithTimeout(context.Background(), m.syncTimeout())
-	defer syncCancel()
-
-	if !cache.WaitForCacheSync(syncCtx.Done(), w.informer.HasSynced) {
-		m.observeInformerSync(gvr, time.Since(syncStart))
-		// Drop our retention only. See the method comment for why we never
-		// force-stop here.
-		m.ReleaseWatch(gvr, ownerID)
-		return fmt.Errorf("cache sync timeout for %s", gvr)
-	}
-	m.observeInformerSync(gvr, time.Since(syncStart))
-	return nil
+	// Create and start the informer while still holding the lock, so no
+	// ReleaseWatch can remove our owner before the watch exists.
+	w := m.newWatch(gvr)
+	m.watches[gvr] = w
+	ctx, cancel := context.WithCancel(context.Background())
+	w.cancel = cancel
+	go w.informer.RunWithContext(ctx)
+	go m.announceSynced(ctx, w)
+	m.recordActiveWatchesLocked()
+	m.log.V(1).Info("Informer started", "gvr", gvr)
 }
+
+// announceSynced emits EventSynced once the informer's initial list completes.
+func (m *Manager) announceSynced(ctx context.Context, w *gvrWatch) {
+	start := time.Now()
+	if !cache.WaitForCacheSync(ctx.Done(), w.informer.HasSynced) {
+		return
+	}
+	m.observeInformerSync(w.gvr, time.Since(start))
+	w.log.V(1).Info("Informer synced")
+	m.onEvent(Event{Type: EventSynced, GVR: w.gvr})
+}
+
+// WatchState reports the informer state for gvr without blocking.
+func (m *Manager) WatchState(gvr schema.GroupVersionResource) WatchState {
+	return m.WatchStates([]schema.GroupVersionResource{gvr})[gvr]
+}
+
+// WatchStates reports the informer state for each gvr under one lock acquisition.
+func (m *Manager) WatchStates(gvrs []schema.GroupVersionResource) map[schema.GroupVersionResource]WatchState {
+	out := make(map[schema.GroupVersionResource]WatchState, len(gvrs))
+	m.mu.Lock()
+	for _, gvr := range gvrs {
+		w, ok := m.watches[gvr]
+		if !ok {
+			out[gvr] = WatchState{}
+			continue
+		}
+		st := WatchState{Exists: true, Synced: w.informer.HasSynced()}
+		if p := w.blockedErr.Load(); p != nil {
+			st.BlockedErr = *p
+		}
+		out[gvr] = st
+	}
+	m.mu.Unlock()
+	return out
+}
+
+// Health is an owner's view of its declared watches: Blocked holds GVRs whose
+// informer hit a blocking error, Pending those still completing their initial
+// list. Both empty means every watch is delivering events.
+type Health struct {
+	Blocked map[schema.GroupVersionResource]error
+	Pending []schema.GroupVersionResource
+}
+
+// Describe renders the health as a stable condition message: sorted GVRs with
+// the API status reason for blocked ones. Empty when healthy.
+func (h Health) Describe() string {
+	if len(h.Blocked) > 0 {
+		parts := make([]string, 0, len(h.Blocked))
+		for gvr, err := range h.Blocked {
+			reason := "error"
+			var st apierrors.APIStatus
+			if errors.As(err, &st) && st.Status().Reason != "" {
+				reason = string(st.Status().Reason)
+			}
+			parts = append(parts, fmt.Sprintf("%s (%s)", gvr.String(), reason))
+		}
+		sort.Strings(parts)
+		return "changes to these kinds are not detected until the next reconcile: " + strings.Join(parts, ", ")
+	}
+	if len(h.Pending) > 0 {
+		parts := make([]string, 0, len(h.Pending))
+		for _, gvr := range h.Pending {
+			parts = append(parts, gvr.String())
+		}
+		sort.Strings(parts)
+		return "watches still syncing: " + strings.Join(parts, ", ")
+	}
+	return ""
+}
+
+// isBlockingWatchError reports whether a list/watch error will recur identically
+// on retry (RBAC denied, kind not served) rather than clear on its own.
+func isBlockingWatchError(err error) bool {
+	return apierrors.IsForbidden(err) ||
+		apierrors.IsUnauthorized(err) ||
+		apierrors.IsNotFound(err) ||
+		apierrors.IsMethodNotSupported(err) ||
+		apierrors.IsNotAcceptable(err) ||
+		apierrors.IsUnsupportedMediaType(err)
+}
+
+// WaitForSync blocks until the informer for gvr has synced, its reflector hits a
+// blocking error, SyncTimeout elapses, or ctx is done. It does not release.
+func (m *Manager) WaitForSync(ctx context.Context, gvr schema.GroupVersionResource) error {
+	m.mu.Lock()
+	w, ok := m.watches[gvr]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no watch for %s", gvr)
+	}
+	syncCtx, cancel := context.WithTimeout(ctx, m.syncTimeout())
+	defer cancel()
+	ticker := time.NewTicker(syncPollInterval)
+	defer ticker.Stop()
+	for {
+		if w.informer.HasSynced() {
+			return nil
+		}
+		// Fail fast on authorization errors only. A NotFound right after a CRD
+		// is Established can be a stale replica; let it ride out the timeout.
+		if p := w.blockedErr.Load(); p != nil && !apierrors.IsNotFound(*p) {
+			return fmt.Errorf("watch for %s failed: %w", gvr, *p)
+		}
+		select {
+		case <-syncCtx.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("cache sync timeout for %s", gvr)
+		case <-ticker.C:
+		}
+	}
+}
+
+const syncPollInterval = 100 * time.Millisecond
 
 // ReleaseWatch removes an owner from the GVR. If no owners remain, the
 // informer is stopped automatically.
@@ -224,25 +333,65 @@ func (m *Manager) observeInformerSync(gvr schema.GroupVersionResource, d time.Du
 }
 
 func (m *Manager) defaultCreateInformer(gvr schema.GroupVersionResource) cache.SharedIndexInformer {
-	return metadatainformer.NewFilteredMetadataInformer(
-		m.client, gvr, metav1.NamespaceAll, m.resync,
+	// Same informer metadatainformer.NewFilteredMetadataInformer builds, with
+	// Watch wrapped so an accepted watch can clear a recorded blocking error
+	// (the reflector has a hook for failures, none for recovery). Only Watch
+	// counts: the reflector re-lists before every re-watch, so a List hook
+	// would flap blocked/recovered when list is permitted but watch is not.
+	res := m.client.Resource(gvr).Namespace(metav1.NamespaceAll)
+	lw := &cache.ListWatch{
+		ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
+			return res.List(ctx, options)
+		},
+		WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (watch.Interface, error) {
+			wi, err := res.Watch(ctx, options)
+			if err == nil {
+				m.recordRecovery(gvr)
+			}
+			return wi, err
+		},
+	}
+	return cache.NewSharedIndexInformer(
+		cache.ToListWatcherWithWatchListSemantics(lw, m.client),
+		&metav1.PartialObjectMetadata{},
+		m.resync,
 		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
-		nil,
-	).Informer()
+	)
+}
+
+// recordRecovery clears a recorded blocking error after an accepted Watch and,
+// if the informer had already synced, re-emits EventSynced.
+func (m *Manager) recordRecovery(gvr schema.GroupVersionResource) {
+	m.mu.Lock()
+	w, ok := m.watches[gvr]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	if w.blockedErr.Swap(nil) != nil && w.informer.HasSynced() {
+		m.onEvent(Event{Type: EventSynced, GVR: gvr})
+	}
 }
 
 func (m *Manager) newWatch(gvr schema.GroupVersionResource) *gvrWatch {
 	inf := m.createInformer(gvr)
-
-	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
-		m.log.V(1).Error(err, "Watch error", "gvr", gvr)
-	})
 
 	w := &gvrWatch{
 		gvr:      gvr,
 		informer: inf,
 		log:      m.log.WithValues("gvr", gvr.String()),
 	}
+
+	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+		m.log.V(1).Error(err, "Watch error", "gvr", gvr)
+		if !isBlockingWatchError(err) {
+			return
+		}
+		e := err
+		if w.blockedErr.Swap(&e) == nil {
+			m.onEvent(Event{Type: EventWatchBlocked, GVR: gvr})
+		}
+	})
 
 	// Register a single event handler that converts informer callbacks
 	// into normalized Event structs and dispatches via onEvent.

@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
@@ -36,6 +37,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/rgdadapter"
+	geruntime "github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
@@ -174,87 +176,60 @@ func TestReconcileDeletionSurfacesErrorsWithAuthorConditions(t *testing.T) {
 	assert.Contains(t, *resourcesReady.Message, applyset.ApplySetParentIDLabel)
 }
 
-func TestReconcileApplySetInventory_FullyResolvedGate(t *testing.T) {
-	// Tests that reconcileApplySetInventory only prunes orphan resources when
-	// fullyResolved is true (i.e. no hard apply error and no unresolved nodes).
-	// When fullyResolved is false, existing managed resources not in the applied set
-	// must NOT be pruned.
-	t.Run("fullyResolved false does not prune orphans", func(t *testing.T) {
-		instance := newInstanceObject("demo", "default")
-		addDeletionScope(instance, controllerTestDeployGVK, "default")
-
-		orphan := newManagedObject(newDeploymentObject("orphan-deploy", "default"), instance, "deploy", 1)
-		raw := newControllerTestDynamicClient(t, instance.DeepCopy(), orphan)
-		controller, _ := newControllerUnderTest(t, raw, newTestGraph())
-
-		// applied is empty (orphan is not in applied), but fullyResolved is false
-		applied := []v1alpha1.ManagedResource{}
-		err := controller.reconcileApplySetInventory(context.Background(), controller.log, instance, nil, applied, applyset.Metadata{}, false)
-		require.NoError(t, err)
-
-		// The orphan must NOT be deleted from the dynamic client
-		stored, err := raw.Tracker().Get(controllerTestDeployGVR, "default", "orphan-deploy")
-		require.NoError(t, err, "orphan resource must not be pruned when fullyResolved is false")
-		require.NotNil(t, stored)
-	})
-
-	t.Run("fullyResolved true prunes orphans", func(t *testing.T) {
-		instance := newInstanceObject("demo", "default")
-		addDeletionScope(instance, controllerTestDeployGVK, "default")
-
-		orphan := newManagedObject(newDeploymentObject("orphan-deploy", "default"), instance, "deploy", 1)
-		raw := newControllerTestDynamicClient(t, instance.DeepCopy(), orphan)
-		controller, _ := newControllerUnderTest(t, raw, newTestGraph())
-
-		// applied is empty (orphan is not in applied), and fullyResolved is true
-		applied := []v1alpha1.ManagedResource{}
-		err := controller.reconcileApplySetInventory(context.Background(), controller.log, instance, nil, applied, applyset.Metadata{}, true)
-		require.NoError(t, err)
-
-		// The orphan must be deleted from the dynamic client
-		_, err = raw.Tracker().Get(controllerTestDeployGVR, "default", "orphan-deploy")
-		require.Error(t, err, "orphan resource must be pruned when fullyResolved is true")
-	})
-}
-
-// TestPruneGate pins the wiring that combines the hard-error signal and the
-// Unresolved-node set into the ApplySet prune decision. This is the exact
-// gate that reconcileViaGraphEngine feeds into reconcileApplySetInventory.
-// Removing EITHER clause (the !hardErr guard OR the len(unresolved)==0 guard)
-// must flip one of these cases and fail the test — the mutation the review
-// flagged as surviving otherwise.
-func TestPruneGate(t *testing.T) {
+func TestReconcileApplySetInventory_PruneGate(t *testing.T) {
 	cases := []struct {
 		name       string
 		hardErr    bool
 		unresolved []string
-		want       bool
+		observed   bool
+		wantPruned bool
+		wantShrink bool
 	}{
-		{name: "resolved and no hard error prunes", hardErr: false, unresolved: nil, want: true},
-		{name: "hard error blocks prune", hardErr: true, unresolved: nil, want: false},
-		{name: "unresolved nodes block prune", hardErr: false, unresolved: []string{"nodeA"}, want: false},
-		{name: "hard error and unresolved block prune", hardErr: true, unresolved: []string{"nodeA"}, want: false},
+		{name: "full resolution prunes even unobserved owners", wantPruned: true, wantShrink: true},
+		{name: "hard error vetoes prune", hardErr: true, observed: true},
+		{name: "completed empty template prunes during partial cycle", unresolved: []string{"other"}, observed: true, wantPruned: true},
+		{name: "hard error vetoes partial prune", hardErr: true, unresolved: []string{"other"}, observed: true},
+		{name: "unobserved template retains members", unresolved: []string{"other"}},
+		{name: "unresolved template retains even observed members", unresolved: []string{"cm"}, observed: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := pruneGate(tc.hardErr, tc.unresolved); got != tc.want {
-				t.Fatalf("pruneGate(%v, %v) = %v, want %v", tc.hardErr, tc.unresolved, got, tc.want)
+			inst := newInstanceObject("demo", "default")
+			orphan := newManagedObject(newConfigMapObject("retired", "default"), inst, "cm", 1)
+			raw := newControllerTestDynamicClient(t, inst.DeepCopy(), orphan)
+			c, _ := newControllerUnderTest(t, raw, newTestGraph())
+			rt := geruntime.New(&compiler.Program{
+				Nodes:            map[string]*compiler.Node{"cm": {ID: "cm", Kind: compiler.NodeKindTemplate}},
+				TopologicalOrder: []string{"cm"},
+			}, nil)
+			if tc.observed {
+				rt.Node("cm").SetObserved([]*unstructured.Unstructured{}, nil)
+			}
+			fullyResolved, completed := pruneGate(rt, tc.hardErr, tc.unresolved)
+			require.NoError(t, c.reconcileApplySetInventory(t.Context(), c.log, inst, nil, nil, applyset.Metadata{}, fullyResolved, completed))
+
+			stored, err := raw.Resource(controllerTestCMGVR).Namespace("default").Get(t.Context(), "retired", metav1.GetOptions{})
+			if tc.wantPruned {
+				require.True(t, apierrors.IsNotFound(err), "retired member must be deleted: %v", err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, orphan.GetUID(), stored.GetUID())
+				for _, action := range raw.Actions() {
+					assert.NotEqual(t, "delete", action.GetVerb(), "retention must not attempt deletion")
+				}
+			}
+			parent := getStoredParentObject(t, raw)
+			require.NoError(t, applyset.ValidateParentInventory(parent))
+			if tc.wantShrink {
+				assert.Empty(t, parent.GetAnnotations()[applyset.ApplySetGKsAnnotation])
+			} else {
+				assert.Equal(t, "ConfigMap", parent.GetAnnotations()[applyset.ApplySetGKsAnnotation])
 			}
 		})
 	}
 }
 
-// TestOwnedUnresolved is the FINDING 2 regression: the prune gate must be
-// vetoed only by UNRESOLVED nodes that actually OWN managed resources. An
-// ownerless node — the synthesized `instance` status patch node, any other
-// patch node, a read-only ref node, or a def node — owns no cluster resource,
-// so its being Unresolved must NOT block pruning of resources owned by OTHER
-// nodes. ownedUnresolved is the filter applied to ApplyResult.Unresolved before
-// it reaches pruneGate.
-//
-// Before the fix (pruneGate fed the raw Unresolved set) an unresolved ownerless
-// node vetoes every prune and a resource removed from the RGD is never deleted;
-// after the fix ownedUnresolved drops it and pruning proceeds.
+// Only unresolved owning nodes restrict pruning and inventory shrink.
 func TestOwnedUnresolved(t *testing.T) {
 	comp := newTestRealCompiler(t)
 	inst := newInstanceObject("demo", "default")
@@ -302,31 +277,32 @@ func TestOwnedUnresolved(t *testing.T) {
 	require.NotNil(t, refNode, "externalRef node must exist")
 	require.Equal(t, compiler.NodeKindRef, refNode.Kind(), "externalRef compiles to an ownerless ref node")
 
-	t.Run("ownerless ref node is dropped from the veto set", func(t *testing.T) {
-		// Only the ownerless ref node is unresolved: prune must still be allowed.
-		owning := ownedUnresolved(rt, []string{"existing"})
+	t.Run("ownerless nodes do not restrict pruning or shrink", func(t *testing.T) {
+		owning := ownedUnresolved(rt, []string{"existing", "schema"})
 		assert.Empty(t, owning, "ownerless ref node must not veto pruning")
-		assert.True(t, pruneGate(false, owning), "prune must proceed when only ownerless nodes are unresolved")
+		fullyResolved, _ := pruneGate(rt, false, owning)
+		assert.True(t, fullyResolved)
 	})
 
-	t.Run("owning template node still vetoes", func(t *testing.T) {
+	t.Run("owning template node prevents full resolution", func(t *testing.T) {
 		owning := ownedUnresolved(rt, []string{"cm"})
-		assert.Equal(t, []string{"cm"}, owning, "an unresolved owning template node must remain in the veto set")
-		assert.False(t, pruneGate(false, owning), "prune must be withheld when an owning node is unresolved")
+		assert.Equal(t, []string{"cm"}, owning)
+		fullyResolved, _ := pruneGate(rt, false, owning)
+		assert.False(t, fullyResolved)
 	})
 
 	t.Run("mixed set keeps only owning nodes", func(t *testing.T) {
 		owning := ownedUnresolved(rt, []string{"existing", "cm"})
 		assert.Equal(t, []string{"cm"}, owning, "only the owning node survives the filter")
-		assert.False(t, pruneGate(false, owning))
+		fullyResolved, _ := pruneGate(rt, false, owning)
+		assert.False(t, fullyResolved)
 	})
 
 	t.Run("unknown node id is conservatively kept", func(t *testing.T) {
-		// A NodeID that cannot be resolved back to a node (e.g. a prefixed
-		// subgraph child ID) is treated as owning so pruning is never widened
-		// on an unclassifiable id.
-		owning := ownedUnresolved(rt, []string{"sub.child"})
-		assert.Equal(t, []string{"sub.child"}, owning, "unclassifiable node id must remain in the veto set")
+		owning := ownedUnresolved(rt, []string{"sub/child"})
+		assert.Equal(t, []string{"sub/child"}, owning)
+		fullyResolved, _ := pruneGate(rt, false, owning)
+		assert.False(t, fullyResolved, "unknown owners must keep the inventory broad")
 	})
 }
 

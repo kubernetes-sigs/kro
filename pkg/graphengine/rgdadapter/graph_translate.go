@@ -106,7 +106,7 @@ const StatusPatchNodeID = "instance"
 // manifest. BuildRuntimeForInstance marks this node soft-deps +
 // per-field-tolerant so it never gates on the resources it reads and omits
 // unresolved fields (mirroring ProjectInstanceStatus's per-field progressive
-// projection).
+// projection), and explicitly selects replacement with WithStatusReplace.
 func authorStatusPatchNode(rgd *v1alpha1.ResourceGraphDefinition) (v1alpha1.Node, bool, error) {
 	if rgd.Spec.Schema == nil {
 		return v1alpha1.Node{}, false, nil
@@ -121,9 +121,8 @@ func authorStatusPatchNode(rgd *v1alpha1.ResourceGraphDefinition) (v1alpha1.Node
 	}
 	// Author conditions stay controller-side (ProjectInstanceConditions), and
 	// .status.state is projected by the controller under its own field manager
-	// (kro-instance-status); leaving either in the synthesized node's payload
-	// makes two Force:true SSA writers fight over the same field forever. Only
-	// the remaining author status fields move to the node.
+	// (kro-instance-status). Exclude both from the author payload: the replacement
+	// writer carries their live values through without competing with that SSA.
 	delete(statusMap, "conditions")
 	delete(statusMap, "state")
 	if len(statusMap) == 0 {

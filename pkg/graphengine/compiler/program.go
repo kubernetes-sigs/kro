@@ -151,13 +151,14 @@ type Node struct {
 	// node is ready immediately after the apply call returns.
 	ReadyWhen []*krocel.Expression
 
-	// ExternalFields are dotted paths into Object that the executor keeps
-	// reconciling normally until a DIFFERENT field manager claims that exact
-	// path on the live object (executor.releaseHandedOffFields) — only then
-	// are they omitted from future applies, so an external controller's
-	// value survives instead of being reset. Validated at compile time
-	// (analyzeExternalFields) against Object's literal structure. Empty for
-	// every kind but Template.
+	// ExternalFields are field paths into Object (parsed by ParseFieldPath,
+	// which supports a [field=value] selector to address one item of an
+	// associative list) that the executor keeps reconciling normally until a
+	// DIFFERENT field manager claims that exact path on the live object
+	// (executor.releaseHandedOffFields) — only then are they omitted from
+	// future applies, so an external controller's value survives instead of
+	// being reset. Validated at compile time (analyzeExternalFields) against
+	// Object's literal structure. Empty for every kind but Template.
 	ExternalFields []string
 
 	// SubProgram is the compiled child Graph for a NodeKindGraph node, and

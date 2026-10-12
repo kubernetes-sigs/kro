@@ -22,11 +22,14 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/environment"
 )
+
+var deploymentGVK = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
 
 var _ = Describe("External Fields", func() {
 	It("sets the initial value on create, then releases ownership so external edits survive while unlisted fields still revert", func() {
@@ -107,5 +110,131 @@ var _ = Describe("External Fields", func() {
 			t.Fatalf("delete graph: %v", err)
 		}
 		env.AwaitDeleted(t, configMapGVK, cmKey, 15*time.Second)
+	})
+
+	It("releases a single environment variable on one named container via a [field=value] selector, leaving the same-named variable on a sibling container and every other field kro-managed", func() {
+		t := GinkgoT()
+		ns := env.CreateNamespace(t)
+
+		g := &expv1alpha1.Graph{
+			ObjectMeta: metav1.ObjectMeta{Name: "extfields-selector", Namespace: ns},
+			Spec: expv1alpha1.GraphSpec{
+				Nodes: []expv1alpha1.Node{{
+					ID: "deploy",
+					Template: environment.RawExt(t, map[string]any{
+						"apiVersion": "apps/v1",
+						"kind":       "Deployment",
+						"metadata":   map[string]any{"name": "extfields-deploy"},
+						"spec": map[string]any{
+							"replicas": int64(1),
+							"selector": map[string]any{"matchLabels": map[string]any{"app": "extfields-deploy"}},
+							"template": map[string]any{
+								"metadata": map[string]any{"labels": map[string]any{"app": "extfields-deploy"}},
+								"spec": map[string]any{
+									"containers": []any{
+										map[string]any{
+											"name":  "app",
+											"image": "nginx:alpine",
+											"env": []any{
+												map[string]any{"name": "FEATURE_FLAG", "value": "app-initial"},
+											},
+										},
+										map[string]any{
+											"name":  "sidecar",
+											"image": "busybox",
+											"env": []any{
+												map[string]any{"name": "FEATURE_FLAG", "value": "sidecar-initial"},
+											},
+										},
+									},
+								},
+							},
+						},
+					}),
+					ExternalFields: []string{"spec.template.spec.containers[name=sidecar].env[name=FEATURE_FLAG].value"},
+				}},
+			},
+		}
+		env.CreateGraph(t, g)
+
+		deployKey := types.NamespacedName{Namespace: ns, Name: "extfields-deploy"}
+		env.AwaitCondition(t,
+			types.NamespacedName{Namespace: ns, Name: "extfields-selector"},
+			expv1alpha1.GraphConditionTypeReady,
+			metav1.ConditionTrue, 15*time.Second)
+
+		envValue := func(u *unstructured.Unstructured, container, name string) (string, bool) {
+			containers, _, _ := unstructured.NestedSlice(u.Object, "spec", "template", "spec", "containers")
+			for _, c := range containers {
+				cm, ok := c.(map[string]any)
+				if !ok || cm["name"] != container {
+					continue
+				}
+				envs, _, _ := unstructured.NestedSlice(cm, "env")
+				for _, e := range envs {
+					em, ok := e.(map[string]any)
+					if !ok || em["name"] != name {
+						continue
+					}
+					v, _ := em["value"].(string)
+					return v, true
+				}
+			}
+			return "", false
+		}
+
+		dep := env.AwaitObject(t, deploymentGVK, deployKey, func(u *unstructured.Unstructured) error {
+			app, _ := envValue(u, "app", "FEATURE_FLAG")
+			sidecar, _ := envValue(u, "sidecar", "FEATURE_FLAG")
+			if app != "app-initial" || sidecar != "sidecar-initial" {
+				return fmt.Errorf("app=%q sidecar=%q, want both initial values", app, sidecar)
+			}
+			return nil
+		}, 5*time.Second)
+
+		// Hand-mutate both containers' FEATURE_FLAG value under a separate
+		// field manager. The "app" container's variable is not listed in
+		// externalFields and must be reverted (regression guard: the
+		// selector must target only the exact list item named, not every
+		// item sharing the same field name). The "sidecar" container's
+		// variable is listed and must survive.
+		ctx := env.Context()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		dep = dep.DeepCopy()
+		containers, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+		for _, c := range containers {
+			cm := c.(map[string]any)
+			envs, _, _ := unstructured.NestedSlice(cm, "env")
+			for _, e := range envs {
+				em := e.(map[string]any)
+				switch cm["name"] {
+				case "app":
+					em["value"] = "app-drifted"
+				case "sidecar":
+					em["value"] = "sidecar-drifted"
+				}
+			}
+			cm["env"] = envs
+		}
+		if err := unstructured.SetNestedSlice(dep.Object, containers, "spec", "template", "spec", "containers"); err != nil {
+			t.Fatalf("set containers: %v", err)
+		}
+		if err := env.Client.Update(ctx, dep); err != nil {
+			t.Fatalf("apply drift: %v", err)
+		}
+
+		env.AwaitObject(t, deploymentGVK, deployKey, func(u *unstructured.Unstructured) error {
+			app, _ := envValue(u, "app", "FEATURE_FLAG")
+			sidecar, _ := envValue(u, "sidecar", "FEATURE_FLAG")
+			if app != "app-initial" {
+				return fmt.Errorf("app=%q, want reverted to app-initial (not listed in externalFields)", app)
+			}
+			if sidecar != "sidecar-drifted" {
+				return fmt.Errorf("sidecar=%q, want external edit preserved (sidecar-drifted)", sidecar)
+			}
+			return nil
+		}, 15*time.Second)
 	})
 })

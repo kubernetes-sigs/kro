@@ -6,7 +6,7 @@ sidebar_position: 5
 
 Sometimes a resource kro creates needs to have one of its fields taken over by a different controller after kro creates it — an HPA scaling a Deployment's `replicas`, Argo Rollouts shifting a Service's `selector` during a blue/green rollout, or a Gateway API controller adjusting an HTTPRoute's backend weights. Without `externalFields`, kro resets those fields back to the template value on every reconcile, fighting the other controller.
 
-`externalFields` lets you list specific dotted paths on a resource that kro should hand off once another controller actually starts managing them, while kro keeps creating the resource (with an initial value) and managing every other field normally.
+`externalFields` lets you list specific field paths on a resource that kro should hand off once another controller actually starts managing them, while kro keeps creating the resource (with an initial value) and managing every other field normally.
 
 ## Basic Example
 
@@ -68,20 +68,40 @@ This sequencing matters: if kro released the field the moment it was created —
 
 ## Path Syntax
 
-Paths are dotted, map-key-only references into the template (for example `spec.selector`, `metadata.annotations.someKey`). A path must:
-
-- **Resolve to an existing key** in the literal template. A typo is rejected when the RGD is compiled, not silently ignored.
-- **Not cross into a list.** `spec.containers.image` is rejected because `spec.containers` is a list — Server-Side Apply's associative-list merge keys make releasing one list element ambiguous. You can release a list field as a whole (e.g. `spec.ports`), just not address through one.
+A field path is a dot-separated sequence of fields into the template, for example `spec.selector` or `metadata.annotations.someKey`. A segment can also carry a `[field=value]` selector to address one item of an associative list by matching one of its own fields, the same way [kustomize targets list items](https://kubectl.docs.kubernetes.io/references/kustomize/kustomization/replacements/) and the same way Kubernetes itself tracks ownership of list items in `metadata.managedFields`:
 
 ```kro
-# ✓ map key path
+externalFields:
+  - spec.template.spec.containers[name=sidecar].env[name=FEATURE_FLAG].value
+```
+
+This releases just the `value` field of the `FEATURE_FLAG` environment variable on the `sidecar` container, leaving every other container, every other env var, and every other field of that same container fully managed by kro.
+
+A path must:
+
+- **Resolve to an existing field** in the literal template, and a `[field=value]` selector must match an existing item. A typo, or a selector with no matching item, is rejected when the RGD is compiled, not silently ignored.
+- **Not cross into a list without a selector.** `spec.containers.image` is rejected because `spec.containers` is a list; add a selector, `spec.containers[name=app].image`, to address one item.
+- **Not end in a selector.** `spec.containers[name=app]` by itself is rejected; address a field inside the matched item instead. Releasing a whole named list item, rather than one of its fields, isn't supported.
+
+```kro
+# map key path
 externalFields:
   - spec.selector
 
-# ✗ rejected at compile time: containers is a list
+# list item selector
+externalFields:
+  - spec.containers[name=app].image
+
+# rejected at compile time: containers is a list with no selector
 externalFields:
   - spec.containers.image
+
+# rejected at compile time: a selector cannot be the final segment
+externalFields:
+  - spec.containers[name=app]
 ```
+
+Only a single `field=value` pair is supported per selector; a list item identified by more than one field together (a composite merge key, like a container port keyed by both `containerPort` and `protocol`) can't be addressed yet.
 
 `externalFields` is only valid on a resource with a `template` — it has no meaning on `externalRef` (kro never creates or owns that resource) and is rejected if both are set.
 

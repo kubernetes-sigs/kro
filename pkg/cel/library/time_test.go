@@ -30,6 +30,7 @@ func timeEnv(t *testing.T) *cel.Env {
 		Time(),
 		ext.Bindings(),
 		cel.Variable("schema", cel.DynType),
+		cel.Variable("credential", cel.DynType),
 	)
 	if err != nil {
 		t.Fatalf("NewEnv: %v", err)

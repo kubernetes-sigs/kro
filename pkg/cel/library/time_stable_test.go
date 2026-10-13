@@ -119,3 +119,38 @@ func TestStableStringFormat(t *testing.T) {
 		t.Fatalf("default format must be empty (RFC3339): %+v", s)
 	}
 }
+
+// KREP example: propagation control. The per-instance slot offset arrives as
+// data, so the gate is a plain line in now and the solver requeues at
+// start + slot.
+func TestKREPExamplePropagationControl(t *testing.T) {
+	env := timeEnv(t)
+	now := time.Date(2026, 10, 13, 20, 0, 0, 0, time.UTC)
+	start := now.Add(-2 * time.Minute).Format(time.RFC3339)
+	vars := map[string]any{"schema": map[string]any{"start": start, "app": map[string]any{"slot": "5m"}}}
+	got, tv := evalTime(t, env, `time.now() >= timestamp(schema.start) + duration(schema.app.slot)`, now, vars)
+	if got != false {
+		t.Fatalf("2m into a 5m slot the gate must be closed, got %v", got)
+	}
+	flip, ok := tv.EarliestFlip()
+	if !ok || !flip.Equal(now.Add(3*time.Minute)) {
+		t.Fatalf("want flip at start+5m (%v), got %v ok=%v", now.Add(3*time.Minute), flip, ok)
+	}
+}
+
+// KREP example: certificate renewal guard. Opens 5 days before a 90 day expiry.
+func TestKREPExampleCertRenewalGuard(t *testing.T) {
+	env := timeEnv(t)
+	now := time.Date(2026, 10, 13, 20, 0, 0, 0, time.UTC)
+	renewed := now.Add(-80 * 24 * time.Hour).Format(time.RFC3339) // 80 days ago
+	vars := map[string]any{"credential": map[string]any{"spec": map[string]any{"renewedTime": renewed}}}
+	got, tv := evalTime(t, env,
+		`time.now() >= timestamp(credential.spec.renewedTime) + duration("2160h") - duration("120h")`, now, vars)
+	if got != false {
+		t.Fatalf("80 days in, renewal (opens at day 85) must be closed, got %v", got)
+	}
+	flip, ok := tv.EarliestFlip()
+	if !ok || !flip.Equal(now.Add(5*24*time.Hour)) {
+		t.Fatalf("want flip 5 days out, got %v ok=%v", flip, ok)
+	}
+}

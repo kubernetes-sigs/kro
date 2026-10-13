@@ -163,27 +163,47 @@ openedAt: ${time.now().stableString(whenChanged(window.open).onlyWhen(time.now()
 
 `window.open` comes from a ref or the schema. Records when the window actually opened for this instance. Requeues at `window.open`.
 
+### Propagation control
+
+Roll out one instance every 5 minutes. Each instance gets its slot offset from
+the data that builds the list, so the gate is a plain line in `now`.
+
+```cel
+resources:
+  - id: deployments
+    forEach:
+      app: ${apps}            # each app carries a precomputed slot, e.g. "0s", "5m", "10m"
+    propagateWhen:
+      - ${time.now() >= timestamp(schema.metadata.annotations['kro.run/propagation-start'])
+                        + duration(app.slot)}
+    template: ...
+```
+
+Requeues at start + slot for each instance. `duration(x) * index` would be nicer
+and is a line too. `duration * int` and `indexOf` are not implemented yet, so the
+offset comes in as data for now.
+
 ### Not supported
 
 These are out of scope for this KREP. They are listed so nobody reads the
 examples above and assumes they generalize.
 
-**Business hours.** `now().withTime({hours: 9}, tz)` is constant until midnight and
-then jumps. It is not a line in `now`, so when `now() >= open` flips depends on a
-calendar, not on the 2 lines the solver has. Any helper that snaps to a day, week
-or timezone boundary has the same problem and is rejected at compile time. If you
-need a window, pass `open` and `close` in through the schema or have another
-controller write them. kro will gate on them correctly.
+**Business hours. TODO.** `now().withTime({hours: 9}, tz)` is constant until
+midnight and then jumps. It is not a line in `now`, so the solver cannot say when
+`now() >= open` flips. Any helper that snaps to a day, week or timezone boundary
+is like this. We want this eventually. The shape is the one described in Other
+time functions: the helper reports the next instant its value changes and the
+solver requeues at the earlier of that and the comparison flip. That is a second
+requeue path and it needs its own design, so it is not in this KREP. Until then,
+pass `open` and `close` in through the schema or have another controller write
+them. kro gates on them correctly today.
 
-**Tickers.** "Write every hour" means the field has to compare against its own
-previous value, and nothing in the graph can see its own previous value. That is
-not a time problem, it is a kro one. `stableString` works around it for `once` and
-`whenChanged` because the executor holds the previous value. Making the interval
-case work needs a different trigger that we chose not to add. Use a CronJob.
+**Tickers.** "Write every hour" is fine in theory. It is `whenChanged` where the
+key is the field's own previous value, and the executor already has that value
+when it resolves a `stableString`. We left it out because it is the only trigger
+that compares against its own output, and we want to see the first 2 triggers
+used before adding a third. Use a CronJob for now.
 
-**Propagation control.** `duration("5m") * indexOf(deployments, app)` is a line in
-`now` and the solver handles it. `duration * int` and `indexOf` are just not
-implemented on this branch yet. This one is a follow up, not a design limit.
 ## Implementation
 
 ### Basic Definitions
@@ -374,10 +394,15 @@ This document does not describe other time helpers to reduce scope.
 
 Most time helpers should fit very naturally into the described library.
 
-Helpers that snap to a calendar boundary are out. `withTime({hours: 17}, tz)`, `addDays`,
-`truncate`. They are constant for a stretch and then jump, so they are not a line and the
-solver cannot say when a comparison on them flips. Supporting them would mean a second
-requeue mechanism next to the solver. If you need a calendar anchor pass it in.
+Helpers that snap to a calendar boundary are not in this KREP. `withTime({hours: 17}, tz)`,
+`addDays`, `truncate`. They are constant for a stretch and then jump, so they are not a line
+and the solver cannot say when a comparison on them flips. They are rejected at compile time
+today.
+
+They are a TODO, not a no. The way to add them: the helper records the next instant its value
+changes (the next midnight in `tz`, the next DST transition) and the solver requeues at the
+earlier of that instant and the comparison's flip. This is conservative. kro may wake and find
+nothing changed. It is a second requeue path next to the line solver and wants its own KREP.
 
 Helpers whose value changes at fine granularity, for example `time.now().getSeconds()` or
 truncating `now()` to the second, are not hard to model but are hard to support well: the value

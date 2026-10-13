@@ -493,7 +493,8 @@ func (l *timeLib) CompileOptions() []cel.EnvOption {
 			),
 		),
 	}
-	return append(opts, timeFunctionDeclarations()...)
+	opts = append(opts, timeFunctionDeclarations()...)
+	return append(opts, stableDeclarations()...)
 }
 
 func (l *timeLib) ProgramOptions() []cel.ProgramOption {

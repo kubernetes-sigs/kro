@@ -16,6 +16,7 @@ package cel
 
 import (
 	"fmt"
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	"strings"
 
 	"github.com/google/cel-go/cel"
@@ -54,6 +55,15 @@ func AreTypesStructurallyCompatible(output, expected *cel.Type, provider *DeclTy
 	// Unwrap optional output if available
 	if output.Kind() == cel.OpaqueKind && output.TypeName() == "optional_type" {
 		return AreTypesStructurallyCompatible(output.Parameters()[0], expected, provider)
+	}
+
+	// A time.now().stableString(...) stamp renders as an RFC3339 string once
+	// the executor resolves it against the live object.
+	if output.Kind() == cel.OpaqueKind && output.TypeName() == library.StableStampType.TypeName() {
+		if expected.Kind() == cel.StringKind {
+			return true, nil
+		}
+		return false, fmt.Errorf("stableString() produces a string; it cannot be written to a %q field", expected.String())
 	}
 
 	switch {

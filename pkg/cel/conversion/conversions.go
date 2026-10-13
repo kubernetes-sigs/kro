@@ -90,6 +90,11 @@ func GoNativeType(v ref.Val) (any, error) {
 		if _, ok := v.Value().(sentinels.Omit); ok {
 			return sentinels.Omit{}, nil
 		}
+		// A stableString() stamp is a marker the executor resolves against
+		// the live object right before apply.
+		if s, ok := v.Value().(sentinels.StableStamp); ok {
+			return s, nil
+		}
 		// For types we can't convert, return as is with an error
 		return v.Value(), fmt.Errorf("%w: %v", ErrUnsupportedType, v.Type())
 	}

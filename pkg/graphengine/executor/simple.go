@@ -710,6 +710,7 @@ func (s *Simple) applyScalarTemplate(ctx context.Context, w watchrouter.Watcher,
 		if err != nil {
 			return applied, err
 		}
+		resolveStableStamps(obj, current)
 		// Terminating: do not re-apply while the live object is being deleted.
 		if current != nil && current.GetDeletionTimestamp() != nil {
 			return applied, &ResourceDeletingError{NodeID: s.qualifiedPath(n.ID()), Namespace: obj.GetNamespace(), Name: obj.GetName()}
@@ -992,6 +993,7 @@ func (s *Simple) applyCollectionItem(ctx context.Context, rt *runtime.Runtime, n
 		st.recordHardError(i, err)
 		return nil
 	}
+	resolveStableStamps(obj, current)
 	// Terminating: a terminating item gates the whole node, but keep
 	// applying siblings so their watches/identities are recorded.
 	if current != nil && current.GetDeletionTimestamp() != nil {
@@ -1695,6 +1697,7 @@ func (s *Simple) applyPatchOne(ctx context.Context, rt *runtime.Runtime, w watch
 		return Contribution{}, fmt.Errorf("patch target %s %q not found: %w",
 			obj.GetKind(), client.ObjectKeyFromObject(obj), ErrNotReady)
 	}
+	resolveStableStamps(obj, current)
 	if current.GetDeletionTimestamp() != nil {
 		return Contribution{}, &ResourceDeletingError{NodeID: s.qualifiedPath(n.ID()), Namespace: obj.GetNamespace(), Name: obj.GetName()}
 	}

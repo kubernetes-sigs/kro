@@ -148,3 +148,11 @@ func mustStamp(obj map[string]any) string {
 	s, _ := stampAt(obj)
 	return s
 }
+
+func TestStableStampCustomFormat(t *testing.T) {
+	d := desiredWith(StableStamp{Keys: nil, Gate: true, Now: t0, Format: "2006-01-02"})
+	ResolveStableStamps(d, nil)
+	if s, _ := stampAt(d); s != "2026-10-13" {
+		t.Fatalf("custom format: got %q", s)
+	}
+}

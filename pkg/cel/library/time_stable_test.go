@@ -106,3 +106,16 @@ func TestStableStringOffsetReceiver(t *testing.T) {
 		t.Fatalf("expected now-1h, got %v", s.Now)
 	}
 }
+
+func TestStableStringFormat(t *testing.T) {
+	env := timeEnv(t)
+	now := time.Date(2026, 10, 13, 20, 0, 0, 0, time.UTC)
+	got, _ := evalTime(t, env, `time.now().stableString(once(), "2006-01-02")`, now, nil)
+	if s := stampOf(t, got); s.Format != "2006-01-02" {
+		t.Fatalf("format not carried: %+v", s)
+	}
+	got, _ = evalTime(t, env, `time.now().stableString(once())`, now, nil)
+	if s := stampOf(t, got); s.Format != "" {
+		t.Fatalf("default format must be empty (RFC3339): %+v", s)
+	}
+}

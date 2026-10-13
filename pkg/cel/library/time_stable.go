@@ -138,6 +138,10 @@ func triggerOnlyWhen(trig, cond ref.Val) ref.Val {
 }
 
 func timestampStableString(tsVal, trig ref.Val) ref.Val {
+	return timestampStableStringFmt(tsVal, trig, types.String(""))
+}
+
+func timestampStableStringFmt(tsVal, trig, format ref.Val) ref.Val {
 	ts, ok := tsVal.(*KroTimestamp)
 	if !ok {
 		return types.MaybeNoSuchOverloadErr(tsVal)
@@ -152,7 +156,11 @@ func timestampStableString(tsVal, trig ref.Val) ref.Val {
 	if ts.nowCount != 1 {
 		return types.NewErr("stableString() receiver must be time.now() plus or minus an offset")
 	}
-	stamp := sentinels.StableStamp{Gate: t.gate, Now: ts.instant()}
+	layout, ok := format.(types.String)
+	if !ok {
+		return types.MaybeNoSuchOverloadErr(format)
+	}
+	stamp := sentinels.StableStamp{Gate: t.gate, Now: ts.instant(), Format: string(layout)}
 	if t.keys != nil {
 		stamp.Keys = make([]any, 0, len(t.keys))
 		for _, k := range t.keys {
@@ -179,7 +187,13 @@ func stableDeclarations() []cel.EnvOption {
 		cel.Function("stableString",
 			cel.MemberOverload("kro_timestamp_stablestring_trigger",
 				[]*cel.Type{KroTimestampType, TriggerType}, StableStampType,
-				cel.BinaryBinding(timestampStableString))),
+				cel.BinaryBinding(timestampStableString)),
+			// Optional Go time layout, e.g. "2006-01-02". Default RFC3339.
+			cel.MemberOverload("kro_timestamp_stablestring_trigger_string",
+				[]*cel.Type{KroTimestampType, TriggerType, cel.StringType}, StableStampType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					return timestampStableStringFmt(args[0], args[1], args[2])
+				}))),
 	}
 	// whenChanged with 1..4 dyn args. A single list argument is flattened at
 	// runtime by newWhenChanged, so whenChanged([a, b]) works too.

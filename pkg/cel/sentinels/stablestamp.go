@@ -34,11 +34,21 @@ const StableStampAnnotationPrefix = "stable.kro.run/"
 //
 // Keys is the rendered key tuple from whenChanged(...); nil for once().
 // Gate is the AND of every onlyWhen(...) clause (true when none).
-// Now is the reconcile's fixed clock.
+// Now is the instant to latch.
+// Format is a Go time layout; empty means RFC3339.
 type StableStamp struct {
-	Keys []any
-	Gate bool
-	Now  time.Time
+	Keys   []any
+	Gate   bool
+	Now    time.Time
+	Format string
+}
+
+func (s StableStamp) render() string {
+	layout := s.Format
+	if layout == "" {
+		layout = time.RFC3339
+	}
+	return s.Now.UTC().Format(layout)
 }
 
 // IsStableStamp reports whether v is a StableStamp sentinel.
@@ -134,7 +144,7 @@ func resolveOne(s StableStamp, fieldPath string, live, root map[string]any) (str
 		return "", false
 	}
 	setAnnotation(root, annoKey, fp)
-	return s.Now.UTC().Format(time.RFC3339), true
+	return s.render(), true
 }
 
 func lookupPath(obj map[string]any, fieldPath string) (string, bool) {

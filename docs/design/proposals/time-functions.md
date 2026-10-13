@@ -14,6 +14,23 @@ kro's CEL environment has limited time helpers. Date and time math is notoriousl
 difficult, and without the proper library to handle it, it is basically
 impossible to get correct in CEL.
 
+Time is the first non deterministic input to CEL in kro. Everything else a graph
+reads is in the cluster. Run the graph twice against the same cluster and you get
+the same result. `now()` breaks that. 2 reconciles a second apart see 2 different
+values.
+
+That is a problem because kro reconciles whenever anything it watches changes,
+including its own writes. If a field depends on `now()` and nothing else, every
+reconcile produces a new value, kro writes it, the write wakes the instance, and it
+loops. The same thing happens more slowly with the default resync.
+
+So the time package has to be idempotent over a window. Within a window every
+reconcile must produce the same output. A comparison like `now() >= t` is true or
+false for a stretch of time and then flips once. A written timestamp has to stay
+put until something other than the clock says it may change. Every rule in this
+document comes from that. A value that can give a different answer on the next
+reconcile for no reason is not allowed.
+
 This primitive is orthogonal to the graph engine design (KREP-024). Both the RGD
 model and the proposed Graph Kind want it, with no major difference in
 implementation or consequences for either.
@@ -148,11 +165,25 @@ openedAt: ${time.now().stableString(whenChanged(window.open).onlyWhen(time.now()
 
 ### Not supported
 
-Business hours. `now().withTime({hours: 9})` is not a line. kro cannot know when it flips.
+These are out of scope for this KREP. They are listed so nobody reads the
+examples above and assumes they generalize.
 
-Tickers. "Write every hour" needs the field to read its own last value.
+**Business hours.** `now().withTime({hours: 9}, tz)` is constant until midnight and
+then jumps. It is not a line in `now`, so when `now() >= open` flips depends on a
+calendar, not on the 2 lines the solver has. Any helper that snaps to a day, week
+or timezone boundary has the same problem and is rejected at compile time. If you
+need a window, pass `open` and `close` in through the schema or have another
+controller write them. kro will gate on them correctly.
 
-Propagation control with `duration("5m") * index`. The math is fine. `duration * int` and `indexOf` are not implemented yet.
+**Tickers.** "Write every hour" means the field has to compare against its own
+previous value, and nothing in the graph can see its own previous value. That is
+not a time problem, it is a kro one. `stableString` works around it for `once` and
+`whenChanged` because the executor holds the previous value. Making the interval
+case work needs a different trigger that we chose not to add. Use a CronJob.
+
+**Propagation control.** `duration("5m") * indexOf(deployments, app)` is a line in
+`now` and the solver handles it. `duration * int` and `indexOf` are just not
+implemented on this branch yet. This one is a follow up, not a design limit.
 ## Implementation
 
 ### Basic Definitions

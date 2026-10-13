@@ -146,10 +146,13 @@ func timestampStableString(tsVal, trig ref.Val) ref.Val {
 	if !ok {
 		return types.MaybeNoSuchOverloadErr(trig)
 	}
-	if ts.nowCount != 1 || ts.offset != 0 {
-		return types.NewErr("stableString() must be called directly on time.now()")
+	// The receiver is the instant to latch. It must be anchored to exactly one
+	// now(): time.now(), time.now() + 5m, time.now() - 1h all qualify. A plain
+	// timestamp has nothing to latch, and now()+now() is not an instant.
+	if ts.nowCount != 1 {
+		return types.NewErr("stableString() receiver must be time.now() plus or minus an offset")
 	}
-	stamp := sentinels.StableStamp{Gate: t.gate, Now: ts.clock.now}
+	stamp := sentinels.StableStamp{Gate: t.gate, Now: ts.instant()}
 	if t.keys != nil {
 		stamp.Keys = make([]any, 0, len(t.keys))
 		for _, k := range t.keys {

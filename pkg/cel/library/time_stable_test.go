@@ -77,8 +77,9 @@ func TestStableStringRejectsMisuse(t *testing.T) {
 		`string(once())`: "no matching overload",
 		// stableString only exists on kro.Timestamp.
 		`"x".stableString(once())`: "no matching overload",
-		// Must be called directly on now(), not on now()+offset.
-		`(time.now() + duration("1h")).stableString(once())`: "directly on time.now()",
+		// Receiver must be anchored to exactly one now(); now()+now() is already
+		// rejected by the type checker before the runtime nowCount guard.
+		`(time.now() + time.now()).stableString(once())`: "no matching overload for '_+_'",
 		// whenChanged needs at least one key.
 		`time.now().stableString(whenChanged([]))`: "at least one key",
 	}
@@ -87,5 +88,21 @@ func TestStableStringRejectsMisuse(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: want error containing %q, got %v", expr, want, err)
 		}
+	}
+}
+
+// The receiver is the instant to latch, so an offset from now() is a
+// first-class use: a TTL frozen at creation, a backoff deadline, a backdate.
+func TestStableStringOffsetReceiver(t *testing.T) {
+	env := timeEnv(t)
+	now := time.Date(2026, 10, 13, 20, 0, 0, 0, time.UTC)
+
+	got, _ := evalTime(t, env, `(time.now() + duration("24h")).stableString(once())`, now, nil)
+	if s := stampOf(t, got); !s.Now.Equal(now.Add(24 * time.Hour)) {
+		t.Fatalf("expected now+24h, got %v", s.Now)
+	}
+	got, _ = evalTime(t, env, `(time.now() - duration("1h")).stableString(once())`, now, nil)
+	if s := stampOf(t, got); !s.Now.Equal(now.Add(-time.Hour)) {
+		t.Fatalf("expected now-1h, got %v", s.Now)
 	}
 }

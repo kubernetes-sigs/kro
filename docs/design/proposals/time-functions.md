@@ -121,14 +121,22 @@ Only run a job between 9am and 5pm so failures land during the day.
 
 ```cel
 includeWhen:
-  - ${time.now() >= timestamp(schema.spec.opensAt)
-     && time.now() <  timestamp(schema.spec.opensAt) + duration("8h")}
+  - ${cel.bind(open,  time.now().withTime({hours: 9},  schema.spec.timezone),
+     cel.bind(close, time.now().withTime({hours: 17}, schema.spec.timezone),
+       time.now() < close
+         ? time.now() >= open                                   # before/in window today
+         : time.now() >= open.addDays(1, schema.spec.timezone)  # past close: gate on tomorrow's open
+     ))}
 ```
 
-`opensAt` is today's 9am as a timestamp, passed in through the schema. The gate is false
-before 9, true until 5, false after. Requeues at 9 and again at 5. Whatever writes
-`opensAt` for tomorrow is outside kro. See Not supported for why kro cannot compute 9am
-itself.
+Requeues at the next open or close. Before 9 it requeues at `open`. Inside the window at
+`close`. After close at tomorrow's `open`.
+
+This needs `withTime` and `addDays`, which are not in this KREP. Within one reconcile they
+return a fixed instant so the comparisons solve normally. Across reconciles they jump at
+midnight, which the solver cannot see on its own. See Other time functions for how they
+would be supported. Until then pass `open` and `close` in through the schema and kro gates
+on them correctly today.
 
 ### Propagation control
 

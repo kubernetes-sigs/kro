@@ -2,38 +2,71 @@
 
 ## Problem statement
 
-An operator written in Go can easily check the current time and decide not to
-make an update because it is outside of a deployment window. It can monitor the
-duration between events and decide to take an action on that.
+kro has no way to read the clock. Here are 4 things people want to build that need it.
 
-kro has no way to access time. The workaround today would be to have an external
-system pass in the time through a schema value. This adds complexity and
-potentially causes additional reconciles beyond what is necessary.
+**Wait before trusting a signal.** A component takes a few minutes to start and reports
+unhealthy while it does. The RGD wants to ignore that condition for 5 minutes after the
+object is created, then start caring.
 
-kro's CEL environment has limited time helpers. Date and time math is notoriously
-difficult, and without the proper library to handle it, it is basically
-impossible to get correct in CEL.
+```cel
+${time.now() >= schema.metadata.creationTimestamp + duration("5m")}
+```
 
-Time is the first non deterministic input to CEL in kro. Everything else a graph
-reads is in the cluster. Run the graph twice against the same cluster and you get
-the same result. `now()` breaks that. 2 reconciles a second apart see 2 different
-values.
+**Renew a certificate before it expires.** The cert is good for 90 days. A renewal job
+should enter the graph 5 days before the end and not before. The expiry is a timestamp
+on the credential. The gate compares the clock to it.
 
-That is a problem because kro reconciles whenever anything it watches changes,
-including its own writes. If a field depends on `now()` and nothing else, every
-reconcile produces a new value, kro writes it, the write wakes the instance, and it
-loops. The same thing happens more slowly with the default resync.
+```cel
+${time.now() >= timestamp(credential.spec.renewedTime) + duration("2160h") - duration("120h")}
+```
 
-So the time package has to be idempotent over a window. Within a window every
-reconcile must produce the same output. A comparison like `now() >= t` is true or
-false for a stretch of time and then flips once. A written timestamp has to stay
-put until something other than the clock says it may change. Every rule in this
-document comes from that. A value that can give a different answer on the next
-reconcile for no reason is not allowed.
+**Record when something happened.** A database upgraded from 10.1 to 10.2. Users want
+`lastUpgradedTime` on the status. It should be set once when the upgrade lands and never
+touched again until the next upgrade. Same shape for `createdAt`, `lastTransitionTime`,
+`lastRotated`.
 
-This primitive is orthogonal to the graph engine design (KREP-024). Both the RGD
-model and the proposed Graph Kind want it, with no major difference in
-implementation or consequences for either.
+```cel
+lastUpgradedTime: ${time.now().stableString(whenChanged(db.version).onlyWhen(db.state == "active"))}
+```
+
+**Roll out in waves.** 10 instances, 1 every 5 minutes. Each instance waits for its slot.
+The gate compares the clock to a start time plus an offset.
+
+```cel
+${time.now() >= timestamp(start) + duration(app.slot)}
+```
+
+The workaround today is to have something outside kro write the time into the schema.
+That is a second controller for every RGD that wants a clock, and it reconciles on its
+own schedule, not when the gate actually flips.
+
+### Why this is hard in CEL
+
+The first 2 and the last 1 are comparisons. They are easy to write and they read fine.
+The problem is what happens after the comparison is false. kro has to come back and
+check again. If it comes back on the default resync, "5 minutes" means somewhere between
+5 minutes and 5 minutes plus the resync. Change the resync and every time gate in every
+RGD changes behavior. The gate needs to tell kro when to come back.
+
+The third one is a write and it is the hard one. Time is the first non deterministic
+input to CEL in kro. Everything else a graph reads is in the cluster. Run the graph twice
+against the same cluster and you get the same result. `now()` breaks that. 2 reconciles a
+second apart see 2 different values.
+
+kro reconciles whenever anything it watches changes, including its own writes. So
+`lastUpgradedTime: ${string(time.now())}` produces a new value every reconcile, kro
+writes it, the write wakes the instance, and it loops. To write a timestamp once you have
+to know what was written last time, and nothing in CEL can see the previous value of the
+field it is writing.
+
+So the time package has to be idempotent over a window. Within a window every reconcile
+must produce the same output. A comparison is true or false for a stretch and then flips
+once. A written timestamp has to stay put until something other than the clock says it
+may change. Every rule in this document comes from that.
+
+This primitive is orthogonal to the graph engine design (KREP-024). Both the RGD model
+and the proposed Graph Kind want it, with no major difference in implementation or
+consequences for either.
 
 ## Non goals
 

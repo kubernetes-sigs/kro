@@ -2,142 +2,64 @@
 
 ## Problem statement
 
-kro has no way to read the clock. Here are 4 things people want to build that need it.
+kro has no way to interact with time. Here are 4 example use cases people want to build that need it.
 
 **Wait before trusting a signal.** A component takes a few minutes to start and reports
 unhealthy while it does. The RGD wants to ignore that condition for 5 minutes after the
 object is created, then start caring.
 
-```cel
-${time.now() >= schema.metadata.creationTimestamp + duration("5m")}
-```
-
 **Renew a certificate before it expires.** The cert is good for 90 days. A renewal job
-should enter the graph 5 days before the end and not before. The expiry is a timestamp
-on the credential. The gate compares the clock to it.
-
-```cel
-${time.now() >= timestamp(credential.spec.renewedTime) + duration("2160h") - duration("120h")}
-```
+should enter the graph 5 days before the end and not before.
 
 **Record when something happened.** A database upgraded from 10.1 to 10.2. Users want
 `lastUpgradedTime` on the status. It should be set once when the upgrade lands and never
-touched again until the next upgrade. Same shape for `createdAt`, `lastTransitionTime`,
-`lastRotated`.
+touched again until the next upgrade.
 
-```cel
-lastUpgradedTime: ${time.now().stableString(whenChanged(db.version).onlyWhen(db.state == "active"))}
-```
-
-**Roll out in waves.** 10 instances, 1 every 5 minutes. Each instance waits for its slot.
-The gate compares the clock to a start time plus an offset.
-
-```cel
-${time.now() >= timestamp(start) + duration(app.slot)}
-```
+**Roll out in waves.** 10 instances, 1 every 5 minutes. Add some bake time to avoid big bang
+changes with high risk.
 
 The workaround today is to have something outside kro write the time into the schema.
-That is a second controller for every RGD that wants a clock, and it reconciles on its
-own schedule, not when the gate actually flips.
+It is complex and doesn't scale well. Every instance of every RGD that wants a clock
+needs that controller to find it, write to it, and do so often enough that the gate
+flips close to when it should, which means the write rate grows with instance count and
+most of those writes change nothing.
 
 ### Why this is hard in CEL
 
-The first 2 and the last 1 are comparisons. They are easy to write and they read fine.
-The problem is what happens after the comparison is false. kro has to come back and
-check again. If it comes back on the default resync, "5 minutes" means somewhere between
-5 minutes and 5 minutes plus the resync. Change the resync and every time gate in every
-RGD changes behavior. The gate needs to tell kro when to come back.
+**Time is not deterministic.** A graph/RGD with a time gate in it behaves differently depending
+on when it happens to run. If we just add `now()`, a gate like "5 minutes after creation" flips 
+whenever kro next looks, which can be the resync period or whenever something unrelated changes.
+This would be a very bad experience if a 5 minute grace period turns into a 12 hour one.
+However time is handled, the end user behavior should be very similar to if we 
+requeued the graph/RGD every 5 seconds or if we reconciled the graph every 24 hours.
 
-The third one is a write and it is the hard one. Time is the first non deterministic
-input to CEL in kro. Everything else a graph reads is in the cluster. Run the graph twice
-against the same cluster and you get the same result. `now()` breaks that. 2 reconciles a
-second apart see 2 different values.
+**Writing time means reading our own write.** kro reconciles when anything it watches
+changes, including its own writes. `lastUpgradedTime: ${string(time.now())}` gets a new
+value every reconcile, kro writes it, the write wakes the instance, and it loops. If Kro
+expressions are not idempotent we will likely end up in infinite reconciles.
 
-kro reconciles whenever anything it watches changes, including its own writes. So
-`lastUpgradedTime: ${string(time.now())}` produces a new value every reconcile, kro
-writes it, the write wakes the instance, and it loops. To write a timestamp once you have
-to know what was written last time, and nothing in CEL can see the previous value of the
-field it is writing.
-
-So the time package has to be idempotent over a window. Within a window every reconcile
-must produce the same output. A comparison is true or false for a stretch and then flips
-once. A written timestamp has to stay put until something other than the clock says it
-may change. Every rule in this document comes from that.
-
-This primitive is orthogonal to the graph engine design (KREP-024). Both the RGD model
-and the proposed Graph Kind want it, with no major difference in implementation or
-consequences for either.
+**kro only sees current state.** A CEL expression can read the desired state of every node
+in the graph. It cannot read what is in the cluster right now for the node it is rendering,
+and it cannot read what that node wrote on the last reconcile. So `has(prev) ? prev : now()`
+is not something you can write. The previous value is not in scope. 
 
 ## Non goals
 
 - Fully designing every possible helper someone might need in the time library.
-  We can iterate on what is needed easily.
-- Stopping the user from making bad decisions. We should make it easy to do the
-  right thing and hard to do the wrong thing, but we aren't aiming to stop
-  people from misusing or abusing the time package.
+  The goal is to focus on the hard parts of time in kro then exact helpers and details 
+  can be iterated on.
+- Preventing users from intentionally writing graphs/RGDs that cause infinite reconciles. 
+  Users can write expressions today that do this and time will necessarily be another way to do this.
 
 ## Solution
 
-`time.now()` returns the current time. It is set once per reconcile. Every call in the same reconcile returns the same value.
+This design applies the same to graph as it does to RGD.
 
-The design splits into 2 parts. Comparing against now, and writing now to a field. They have different problems so they get different rules.
+We are introducing
+1. A new function `time.now()` which returns a value of type `KroTimestamp`
+2. An idempotent way to convert a `KroTimestamp` to a string, with `time.now().stableString(...)`
 
-### 1. Comparing: requeue solving
-
-`now()` returns a `KroTimestamp`. Subtracting 2 of them gives a `KroDuration`. These types only allow `+`, `-` and the 4 comparison operators. No casts, no accessor methods.
-
-Every value stays in the form `a * now + b`. When a comparison runs we know both lines, so we know when they cross. That is the exact time the comparison flips. We requeue then.
-
-```cel
-${time.now() >= schema.metadata.creationTimestamp + duration("5m")}
-```
-
-This is false for 5 minutes after creation then true. We requeue at exactly creationTimestamp + 5m.
-
-The restriction is the point. If we allowed `now().getHours()` or truncating to the day, the value would not be a line anymore and we could not say when it flips. Anything that is not a line is rejected at compile time.
-
-This means kro does intervals and windows, not schedules. Comparing against a timestamp you already have works. Computing "9am today" or "every hour" from now does not. If you need a recurring schedule, pass the anchor in through the schema or use a CronJob.
-
-Requeue is best effort. kro may be busy. Use these as guards, not as the thing that drives an action on a deadline.
-
-### 2. Writing: stableString
-
-You cannot write `now()` to a field directly. `${string(time.now())}` is not allowed.
-
-The problem is every reconcile has a new `now()`. A field set to it changes every time, kro sees a diff, writes it, the write triggers a reconcile, and so on. `lastTransitionTime: ${string(time.now())}` is an infinite loop.
-
-The fix is to say when the field is allowed to change.
-
-```cel
-createdAt:        ${time.now().stableString(once())}
-lastUpgradedTime: ${time.now().stableString(whenChanged(db.version).onlyWhen(db.state == "active"))}
-```
-
-`once()` writes the first time and never again.
-
-`whenChanged(a, b)` writes the first time and whenever the value of `a` or `b` differs from what it was at the last write.
-
-`.onlyWhen(cond)` holds the write while `cond` is false. Nothing moves, including the record of what `a` and `b` were. When `cond` goes true a pending change is written then.
-
-kro stores the last seen values of `a` and `b` in an annotation on the same object. The annotation and the field are written in the same apply. On a reconcile where nothing changed the output is byte identical and nothing is written.
-
-The thing before `.stableString` is the instant to write. It can be offset.
-
-```cel
-expiresAt: ${(time.now() + duration("2160h")).stableString(once())}
-```
-
-The offset is frozen at write time. It does not slide.
-
-An optional second argument is a Go time layout. Default is RFC3339.
-
-```cel
-date: ${time.now().stableString(once(), "2006-01-02")}
-```
-
-`once`, `whenChanged` and `onlyWhen` return a trigger. A trigger can only be passed to `stableString`. Writing one to a field is a compile error. `stableString` only works on `time.now()` plus or minus an offset. Together this means there is no way to write a timestamp that changes on every reconcile.
-
-Not covered: "every N hours since the last write". That needs the field to compare against its own previous value. We left it out on purpose. The same self reference problem shows up in business hours and tickers. See alternatives.
+More details will follow the examples.
 
 ## Examples
 
@@ -148,7 +70,7 @@ includeWhen:
   - ${time.now() >= schema.metadata.creationTimestamp + duration("5m")}
 ```
 
-Requeues 5 minutes after creation.
+Includes a node after 5 minutes past creationTimestamp. 
 
 ### Certificate renewal guard
 
@@ -157,15 +79,17 @@ includeWhen:  # renew within 5d of a 90d expiry
   - ${time.now() >= timestamp(credential.spec.renewedTime) + duration("2160h") - duration("120h")}
 ```
 
-Requeues 5 days before expiry. This is a guard. It decides if the renewal node is in the graph. It does not guarantee the renewal runs at that second.
+Includes a node 5 days before a cert is going to expire.
 
 ### Certificate expiry
 
 ```cel
-notAfter: ${(time.now() + duration("2160h")).stableString(once())}
+createdTime: ${(time.now()).stableString(once())}
 ```
 
-Written at issue. Never changes.
+Writes the creation timestamp. The first time this field evaluates the timestamp will be saved.
+
+All future evaluations use the previous value.
 
 ### Last transition time
 
@@ -177,7 +101,8 @@ status:
       lastTransitionTime: ${time.now().stableString(whenChanged(ready))}
 ```
 
-Changes when `ready` flips. Stays put otherwise.
+Writes the last transitioned timestamp. If `ready` does not change it will use the stored
+value. If `ready` does change it will store a timestamp and use that.
 
 ### Last upgraded time
 
@@ -186,15 +111,24 @@ status:
   lastUpgradedTime: ${time.now().stableString(whenChanged(db.version).onlyWhen(db.state == "active"))}
 ```
 
-Version goes 10.1 to 10.2 while upgrading. Nothing is written. State goes active. Written once. Version stays 10.2. Nothing more is written.
+Gets the value of the last time a database upgrade happened successfully.
 
-### Window opened
+If the database is not active it will not update the timestamp and just use the stored value.
+
+### Business hours
+
+Only run a job between 9am and 5pm so failures land during the day.
 
 ```cel
-openedAt: ${time.now().stableString(whenChanged(window.open).onlyWhen(time.now() >= timestamp(window.open)))}
+includeWhen:
+  - ${time.now() >= timestamp(schema.spec.opensAt)
+     && time.now() <  timestamp(schema.spec.opensAt) + duration("8h")}
 ```
 
-`window.open` comes from a ref or the schema. Records when the window actually opened for this instance. Requeues at `window.open`.
+`opensAt` is today's 9am as a timestamp, passed in through the schema. The gate is false
+before 9, true until 5, false after. Requeues at 9 and again at 5. Whatever writes
+`opensAt` for tomorrow is outside kro. See Not supported for why kro cannot compute 9am
+itself.
 
 ### Propagation control
 
@@ -212,34 +146,24 @@ resources:
     template: ...
 ```
 
-Requeues at start + slot for each instance. `duration(x) * index` would be nicer
-and is a line too. `duration * int` and `indexOf` are not implemented yet, so the
-offset comes in as data for now.
+The design of propagation control is pending to another KREP so this is more of an example to show 
+how time could benefit it.
 
-### Not supported
+## Details
 
-These are out of scope for this KREP. They are listed so nobody reads the
-examples above and assumes they generalize.
+This document describes an approach that applies equally between graph and RGD.
 
-**Business hours. TODO.** `now().withTime({hours: 9}, tz)` is constant until
-midnight and then jumps. It is not a line in `now`, so the solver cannot say when
-`now() >= open` flips. Any helper that snaps to a day, week or timezone boundary
-is like this. We want this eventually. The shape is the one described in Other
-time functions: the helper reports the next instant its value changes and the
-solver requeues at the earlier of that and the comparison flip. That is a second
-requeue path and it needs its own design, so it is not in this KREP. Until then,
-pass `open` and `close` in through the schema or have another controller write
-them. kro gates on them correctly today.
+The first section will describe a CEL time library that is designed to allow kro to always know 
+when it should requeue the graph/RGD next. The library is designed so for every expression a user
+can express with time, we know when in the future the outputs of the CEL expressions will change.
 
-**Tickers.** "Write every hour" is fine in theory. It is `whenChanged` where the
-key is the field's own previous value, and the executor already has that value
-when it resolves a `stableString`. We left it out because it is the only trigger
-that compares against its own output, and we want to see the first 2 triggers
-used before adding a third. Use a CronJob for now.
+The second section will describe how we can convert values from the CEL time library to strings
+safely within Kro's constraints.
 
-## Implementation
 
-### Basic Definitions
+### 1. CEL timestamp and knowing when to requeue
+
+#### Basic Definitions
 
 ```
 type KroTimestamp struct {
@@ -304,12 +228,16 @@ Comparison
 TSa < TSb => TSa.NowCount * now + TSa.TimeOffset < TSb.NowCount * now + TSb.TimeOffset
 ```
 
-### Solving
+#### Knowing when to requeue
 
-To solve, we only need to consider every comparison operator `<`, `<=`, `>`, `>=`.
-They are the only way a Kro timestamp or duration can affect the result of a CEL expression.
-Kro times cannot be cast to any other type. The only way out is `stableString`, which goes
-through the executor and records no requeue.
+To know when to requeue we only need to consider each comparison operator `<`, `<=`, `>`, `>=`.
+They are the only way a Kro timestamp or duration can affect the result of a CEL expression. Every other
+operator defined on KroTimestamp or KroDuration will result in another KroTimestamp or KroDuration.
+Kro times cannot be cast to any other type or written to a Kubernetes object. The only other out is 
+`stableString` (described in next section).
+
+We will call the process of evaluating expressions and figuring out when the expressions will change as 
+"solving".
 
 Solving will happen as part of the evaluation of each comparison operator for Kro's time types.
 This means we don't need to implement complicated static analysis that is hard to maintain.
@@ -322,7 +250,7 @@ false && time.now() >= timestamp("20267-01-01T12:10:00Z")
 We don't need to run any solving logic of any statements that do not execute. If the graph changes
 then another reconcile will occur.
 
-To actually solve for the critical time we need to reeval we can do the following math. 
+To actually solve for the critical time we need to reeval we can do the following math.
 
 For LHS < RHS, we can picture two lines
 ```
@@ -354,27 +282,86 @@ This same math generalizes for the duration. We take the earliest requeue time o
 
 Note the same formula handles a `NowCount` whose magnitude is greater than one (for example `b = Now() + a` has `NowCount == 2`): the denominator is simply non-zero, so `flipTime` is still solved normally. Such a value advances faster than the wall clock and is not a real clock instant, but the intersection math treats it uniformly and requeues at the computed `flipTime`.
 
-### Overriding
+#### Overriding
 
-CEL doesn't support [adding custom overloads to standard operators across types](https://github.com/cel-expr/cel-go/issues/252) (attempting it fails as a [singleton function incompatible with specialized overloads](https://github.com/cel-expr/cel-go/issues/990)).
+CEL does not let you add overloads to the standard operators across types, so
+`time.now() > ts` would normally need a cast or a method call. We declare the kro types
+on the standard operators for the type checker, so the full set of legal pairings is
+known at compile time and anything else is a check error. At runtime a small program
+decorator handles the one case CEL dispatch gets wrong, a kro value on the right hand
+side, by mirroring the operation onto the kro operand.
 
-So to support comparisons like
-```now() > k8sObject.expirationTime```
+### 2. Converting time to string with stableString
 
-we would need to have users cast values explicitly like 
-```now() > KroTimestamp(k8sObject.expirationTime)``` 
+You cannot write `now()` to a field directly. `${string(time.now())}` is not allowed. Every
+reconcile has a new `now()`, so the field changes every time, kro writes it, the write
+wakes the instance, and it loops.
 
-or use a custom function like
-```now().isAfter(k8sObject.expirationTime)```
+The fix is to only allow conversions in an idempotent way.
 
-A workaround we could do is automatically rewrite the CEL AST from the form
-`now() > k8sObject.expirationTime` to `now().isAfter(k8sObject.expirationTime)`. 
-This does require some effort but this is not a first for Kro. We already rewrite
-the AST in custom status conditions to make the user interface more ergonomic. 
+#### Triggers
 
-It's possible automatically casting values will be cleaner or another solution is possible.
-This section is to highlight some complexities with this approach that will need 
-to be worked out.
+`stableString` takes a trigger. A trigger says when the field may take a new value.
+
+`time.now().stableString(once())` writes the first time and never again. As long as the expression
+and the field it lives on do not change, the value is stable forever. Editing the expression or
+renaming the field resets it, because the annotation key is derived from both. For example the following expression will only set its timestamp
+after `willUpdateAfterSomeTime` is true.
+
+```${spec.schema.willUpdateAfterSomeTime && time.now().stableString(once()) != ""}```
+
+`time.now().stableString(whenChanged(a, b, ...))` writes the first time and whenever any of `a`, `b` differs from
+what it was at the last write.
+
+`.onlyWhen(cond)` on a trigger prevents writing while `cond` is false. The record of what the keys were
+isn't updated when `onlyWhen` is false. When `cond` goes true a pending change is written then.
+Several `onlyWhen` chain as AND. If `onlyWhen` is false for the first write the timestamp will be null.
+
+#### Format
+
+We will support an optional format method matching the CEL std library.
+
+```cel
+date: ${time.now().stableString(once()).format("2006-01-02")}
+```
+
+#### Implementation
+
+In order to support this we need to store state to know what the previous value was.
+
+The natural place to do this is on an annotation on the Kubernetes object of the 
+resource it is defined on. Note we will disallow setting stableString in identity fields
+and only allow it in node types Kro writes (template, patch, RGD nodes) to simplify the problem space.
+
+The annotations will be of the form
+```
+internal.kro.run/keyHASH=valueHASH
+internal.kro.run/keyHASH-timestamp=2026-01-02
+```
+
+The `keyHASH` is a hash of elements of the expression uniquely needed to identify it. For example suppose we have 
+```
+spec: 
+  date: ${time.now().stableString(whenChanged(a, b))}
+```
+
+The hash could be a combination of field path where the expression lives (```spec.data```) + 
+expression itself (```${time.now().stableString(whenChanged(a, b))}```) +
+position in expression (```a```). Note we would have another annotation for ```b```.
+
+The value hash would be a hash of the CEL value. It's possible we may need to constrain certain
+values in CEL to ensure they are all hashable.
+
+All hashes not defined each reconcile will be removed from an object.
+
+The storing mechanism makes ```once``` trivial. If the timestamp annotation exists we
+return it, otherwise we write ```now()``` to it and return that.
+
+```whenChanged``` adds one check. We hash each key's current value and compare against the
+stored hashes, and if any differ we write ```now()``` and update the hashes together.
+
+```onlyWhen``` is evaluated first. If it is false we return the stored timestamp and touch
+no annotation, so a change that happens while gated is still a change when the gate opens.
 
 ### Rollout plan
 
@@ -394,7 +381,7 @@ with a `startAt` that some other controller bumps every few seconds.
 We would requeue every 5 seconds and potentially slow down other instances reconciling 
 by adding a backlog. 
 
-One idea would be to prevent casting to a string, but this isn't the only way a user could
+Forbidding `string(time.now())` closes one door, but it isn't the only way a user could
 abuse time to reconcile every so often.
 
 To prevent this we need some way for Kro admins to put controls on this. The simplest option would
@@ -432,9 +419,9 @@ Helpers that snap to a calendar boundary are not in this KREP. `withTime({hours:
 and the solver cannot say when a comparison on them flips. They are rejected at compile time
 today.
 
-They are a TODO, not a no. The way to add them: the helper records the next instant its value
+We may need an approach where the helper records the next instant its value
 changes (the next midnight in `tz`, the next DST transition) and the solver requeues at the
-earlier of that instant and the comparison's flip. This is conservative. kro may wake and find
+earlier of that instant and the comparison's flip. This would be conservative. kro may wake and find
 nothing changed. It is a second requeue path next to the line solver and wants its own KREP.
 
 Helpers whose value changes at fine granularity, for example `time.now().getSeconds()` or
@@ -449,7 +436,7 @@ If this KREP is accepted, a follow up KREP can be written to go over potential h
 
 ### Not having time in CEL
 
-Time adds potential for tons of foot guns and complexity. We remove an
+Time adds potential for tons of footguns and complexity. We remove an
 assumption that we can calculate everything based on just inputs to the graph.
 
 Most of these examples can be solved with another operator or a cronjob or some
@@ -459,27 +446,52 @@ of feature support. kro becomes more powerful with the option of using this.
 Time is also a core building block. Features like propagation control and so on
 could greatly benefit from having a way to represent time.
 
-### No solver: greaterThanNow / lessThanNow
+### functions instead of ```time.now``` like `greaterThanNow` / `lessThanNow`
 
-This is the main alternative. Drop the affine types and the solver. Ship 3 functions.
+Suppose instead of exposing ```time.now()``` we expose comparison helpers.
 
 ```cel
 time.greaterThanNow(ts)
 time.lessThanNow(ts)
-time.now().stableString(trigger)
+time.stableString(trigger)
 ```
 
-`greaterThanNow(ts)` is `ts > now`. `lessThanNow(ts)` is `ts < now`. `ts` is a plain CEL timestamp so you can use the whole standard library to build it. `stableString` is the same as above.
+`greaterThanNow(ts)` is `ts > now`. `lessThanNow(ts)` is `ts < now`. `ts` is a plain CEL timestamp 
+so you can use the whole standard library to build it. `stableString` is the same as above.
 
-What this removes. There is no `KroTimestamp`, no operator rewrite, no "is this value still a line" rule. `now()` never leaks into a type the user has to learn. You can do `timestamp(x).getHours()` or anything else CEL already has and then compare. The compiler and the AST rewrite in Overriding go away. A lot less code.
+This switch to functions removes a lot of complexity with the implementation. 
+We no longer need to implement ```KroTimestamp``` or ```KroDuration```. Solving 
+becomes trivial. We just can look at the timestamp passed in to `time.greater/lessThanNow`
+and do a one line comparison instead of math. We also no longer have to worry about working 
+around CEL's inability to handle ```Timestamp > KroTimestamp```.
 
-What this gives up. We no longer know when a comparison flips, so we cannot requeue at that time. A gate like `greaterThanNow(creationTimestamp + duration("5m"))` is false until the next reconcile after 5 minutes. When that is depends on what else wakes the instance and the resync period. Changing the resync from 10s to 10h changes how every time gate behaves.
+Another benefit is our API surface becomes more obvious. It's very clear from these three functions 
+that the way to write a timestamp is with `stableString`. A user might assume they can just do `string(time.now())`
+and see it is forbidden. 
 
-We could add a knob. `time.greaterThanNow(ts, requeue: true)` or a `requeueAt(ts)` function. That puts the requeue decision on the user, which is what the solver was built to avoid. It also brings back the fairness problem in a less controlled way because any timestamp can be asked for.
+This design would work but has a few disadvantages that made the proposed design the one we chose. 
 
-The trade is simplicity now against predictable gates later. The solver is more code but it is the only way "wait 5 minutes" means 5 minutes without the user saying so.
+1. We can't write future timestamps as easily. The proposed design can do `(time.now() + '24h').StableString(...)`
+2. `time.now()` allows greater expressibility. An expression like `time.now() + 5m > expiration` could be expressed but would need to be modified to fit into the three functions.
+3. `time.now()` is the most natural interface. It aligns with what other programming languages do and what the default expectation around time is for Kro.
+4. The idea that kro could reverse engineer your CEL expressions and identify when requeues occur is a surprising and delightful feature. While surprising features are often seen as a negative, it is a positive surprise that Kro can figure this out and behave correctly for any expression written. 
 
-We went with the solver. The restriction it needs, everything stays a line, turned out to be the same restriction that keeps time from being misused. Schedules are out either way. The solver just makes the ones that are in reliable.
+### generic way to refer to previous state 
+
+```StableString``` is essentially creating a narrow way to refer to previous state in Kro. It is reasonable to ask if we 
+should instead just allow users to be able to refer to any previous state like ```object.previous.value``` and let users 
+implement it.
+
+This may be a reasonable approach and deserves a separate KREP but it does not appear to solve this issue.
+
+Even if we do have some way to refer to a previous value, we would struggle to enforce users write idempotent expressions.
+They may technically be able to check the previous state and only update the timestamp if a value changes, but it would be hard
+to ensure that they actually are doing that in a way that doesn't cause infinite reconciles.
+
+The second issue is around correctness. It's possible for the ```object.previous``` to change between when we read the object
+and write the expression. This leads to a whole class of bugs that will be hard to deal with. Time can minimize a lot of these.
+If we double write a timestamp the consequences are less severe than if certain jobs are being run twice. It is likely
+that a general purpose `object.previous` mechanism could end up being very difficult to use correctly.
 
 ### explicit ask for next requeues
 

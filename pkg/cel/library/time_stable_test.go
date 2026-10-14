@@ -154,3 +154,40 @@ func TestKREPExampleCertRenewalGuard(t *testing.T) {
 		t.Fatalf("want flip 5 days out, got %v ok=%v", flip, ok)
 	}
 }
+
+// KREP example: business hours. opensAt is supplied, so the gate is 2 lines
+// in now and the solver requeues at open and again at close.
+func TestKREPExampleBusinessHours(t *testing.T) {
+	env := timeEnv(t)
+	open := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
+	expr := `time.now() >= timestamp(schema.spec.opensAt) && time.now() < timestamp(schema.spec.opensAt) + duration("8h")`
+	vars := map[string]any{"schema": map[string]any{"spec": map[string]any{"opensAt": open.Format(time.RFC3339)}}}
+
+	cases := []struct {
+		name     string
+		now      time.Time
+		want     bool
+		wantFlip time.Time
+	}{
+		{"before open", open.Add(-time.Hour), false, open},
+		{"inside", open.Add(3 * time.Hour), true, open.Add(8 * time.Hour)},
+	}
+	for _, c := range cases {
+		got, tv := evalTime(t, env, expr, c.now, vars)
+		if got != c.want {
+			t.Fatalf("%s: gate=%v want %v", c.name, got, c.want)
+		}
+		flip, ok := tv.EarliestFlip()
+		if !ok || !flip.Equal(c.wantFlip) {
+			t.Fatalf("%s: flip=%v ok=%v want %v", c.name, flip, ok, c.wantFlip)
+		}
+	}
+	// After close: false, and nothing left to flip to.
+	got, tv := evalTime(t, env, expr, open.Add(9*time.Hour), vars)
+	if got != false {
+		t.Fatalf("after close: gate=%v want false", got)
+	}
+	if _, ok := tv.EarliestFlip(); ok {
+		t.Fatalf("after close there is no future flip; something else must supply tomorrow's opensAt")
+	}
+}

@@ -24,7 +24,7 @@ import (
 
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 
-	"gopkg.in/yaml.v2"
+	"sigs.k8s.io/yaml"
 )
 
 func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, error) {

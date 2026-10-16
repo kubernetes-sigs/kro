@@ -34,6 +34,7 @@ Or pass the flag directly to the controller binary:
 | `InstanceConditionMetrics`         | `false` | Alpha | v0.9.3  | Exports per-instance condition status as Prometheus metrics.                            |
 | `GraphKind`                        | `false` | Alpha | v0.10.0 | Starts the controller for the `Graph` API (`kro.run/v1alpha1`).                         |
 | `ConservativeCRDComparison`        | `false` | Alpha | v0.10.0 | Enables conservative checks for additional and unclassified CRD schema changes.         |
+| `DeletionPolicy`                   | `false` | Alpha | v0.10.0 | Enables the per-resource `deletionPolicy` field on ResourceGraphDefinition resources.   |
 
 ### CELOmitFunction
 
@@ -116,3 +117,26 @@ config:
 
 For instructions on applying an intentional breaking schema change, see
 [Breaking Changes](../concepts/rgd/01-overview.md#breaking-changes).
+
+### DeletionPolicy
+
+When enabled, a resource in a ResourceGraphDefinition can set
+[`deletionPolicy`](../concepts/reconciliation/06-deletion-policy.md) to
+`Orphaned` so kro releases it instead of deleting it.
+
+```yaml
+config:
+  featureGates:
+    DeletionPolicy: true
+```
+
+When this gate is disabled, any RGD that sets `deletionPolicy` is rejected at
+build time.
+
+:::warning Disabling the gate
+
+With the gate off kro ignores the policy already recorded on managed resources.
+Resources that were declared `Orphaned` are deleted again when their instance is
+deleted.
+
+:::

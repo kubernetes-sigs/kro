@@ -165,3 +165,109 @@ func TestRGDStatusWithWarmDiscoveryAndDefaultGates(t *testing.T) {
 	waitForConvergence(b, "from-b")
 	waitForConvergence(a, "from-a")
 }
+
+// TestRGDInPlaceStatusFieldAdd is the s7reg regression: adding a status field to
+// a live RGD must keep its instances ACTIVE with the new field, not stuck ERROR.
+func TestRGDInPlaceStatusFieldAdd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping envtest-backed discovery test in short mode")
+	}
+	ctx := t.Context()
+	env, err := environment.New(ctx, environment.ControllerConfig{
+		ReconcileConfig: ctrlinstance.ReconcileConfig{DefaultRequeueDuration: time.Second},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, env.Stop()) })
+
+	const namespace = "inplace-status"
+	require.NoError(t, env.Client.Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: namespace},
+	}))
+
+	const kind = "InPlaceStatus"
+	gvk := schema.GroupVersionKind{Group: "kro.run", Version: "v1alpha1", Kind: kind}
+
+	// v1: one status field, out = cm name.
+	rgd := generator.NewResourceGraphDefinition("inplace-status",
+		generator.WithSchema(kind, "v1alpha1",
+			map[string]any{"message": "string"},
+			map[string]any{"out": "${cm.metadata.name}"},
+		),
+		generator.WithResource("cm", map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]any{"name": "${schema.metadata.name}-cm"},
+			"data":       map[string]any{"message": "${schema.spec.message}"},
+		}, nil, nil),
+	)
+	require.NoError(t, env.Client.Create(ctx, rgd))
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		require.NoError(c, env.Client.Get(ctx, client.ObjectKeyFromObject(rgd), rgd))
+		assert.Equal(c, krov1alpha1.ResourceGraphDefinitionStateActive, rgd.Status.State, "%+v", rgd.Status)
+	}, 30*time.Second, 250*time.Millisecond)
+
+	newInstance := func(name string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": gvk.GroupVersion().String(),
+			"kind":       kind,
+			"metadata":   map[string]any{"name": name, "namespace": namespace},
+			"spec":       map[string]any{"message": "hi-" + name},
+		}}
+	}
+	assertActiveWithFields := func(name string, wantOut2 bool) {
+		t.Helper()
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			got := &unstructured.Unstructured{}
+			got.SetGroupVersionKind(gvk)
+			require.NoError(c, env.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, got))
+			state, _, _ := unstructured.NestedString(got.Object, "status", "state")
+			assert.Equal(c, "ACTIVE", state, "instance %s state: %+v", name, got.Object["status"])
+			out, _, _ := unstructured.NestedString(got.Object, "status", "out")
+			assert.Equal(c, name+"-cm", out, "status.out on %s", name)
+			if wantOut2 {
+				out2, found, _ := unstructured.NestedString(got.Object, "status", "out2")
+				assert.True(c, found, "status.out2 should be present on %s", name)
+				assert.Equal(c, "hi-"+name, out2, "status.out2 on %s", name)
+			}
+		}, 40*time.Second, 250*time.Millisecond, "%s should be ACTIVE with expected status", name)
+	}
+
+	// Existing instance converges under v1.
+	a := newInstance("a1")
+	require.NoError(t, env.Client.Create(ctx, a))
+	assertActiveWithFields("a1", false)
+	t.Log("a1 ACTIVE under v1 (status.out only)")
+
+	// In-place edit: add a second status field out2 = spec.message.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		require.NoError(c, env.Client.Get(ctx, client.ObjectKeyFromObject(rgd), rgd))
+		updated := generator.NewResourceGraphDefinition("inplace-status",
+			generator.WithSchema(kind, "v1alpha1",
+				map[string]any{"message": "string"},
+				map[string]any{
+					"out":  "${cm.metadata.name}",
+					"out2": "${schema.spec.message}",
+				},
+			),
+			generator.WithResource("cm", map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": "${schema.metadata.name}-cm"},
+				"data":       map[string]any{"message": "${schema.spec.message}"},
+			}, nil, nil),
+		)
+		rgd.Spec = updated.Spec
+		require.NoError(c, env.Client.Update(ctx, rgd))
+	}, 10*time.Second, 250*time.Millisecond)
+	t.Log("RGD updated in place: added status.out2")
+
+	// Pre-existing instance must pick up out2 and stay ACTIVE (not ERROR).
+	assertActiveWithFields("a1", true)
+	t.Log("a1 ACTIVE with status.out2 after in-place add (no stuck ERROR)")
+
+	// A brand-new instance created after the edit must also converge with out2.
+	b := newInstance("b1")
+	require.NoError(t, env.Client.Create(ctx, b))
+	assertActiveWithFields("b1", true)
+	t.Log("b1 ACTIVE with status.out2")
+}

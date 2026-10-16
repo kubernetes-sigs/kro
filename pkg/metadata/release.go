@@ -16,7 +16,6 @@ package metadata
 
 import (
 	"maps"
-	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -38,8 +37,9 @@ func DeletionPolicyOf(obj metav1.Object) v1alpha1.DeletionPolicy {
 	return v1alpha1.DeletionPolicyDelete
 }
 
-// ReleaseKROMetadata strips every label and annotation kro has on a
-// resource it manages, and reports whether anything was removed.
+// ReleaseKROMetadata strips the labels and annotations the instance
+// controller stamped on a resource it manages, and reports whether anything
+// was removed.
 // kro's field manager is deliberately left in-place.
 func ReleaseKROMetadata(obj metav1.Object) bool {
 	if obj == nil {
@@ -74,16 +74,35 @@ func stripKROKeys(m map[string]string) (map[string]string, bool) {
 	return m, true
 }
 
+// releasedKeys are the keys the instance controller stamps on the resources it
+// applies. Other kro keys (kro.run/reconcile, patch-contributions) are state
+// of the object itself, e.g. a nested instance, and must survive a release.
+var releasedKeys = map[string]struct{}{
+	NodeIDLabel:              {},
+	CollectionIndexLabel:     {},
+	CollectionSizeLabel:      {},
+	OwnedLabel:               {},
+	KROVersionLabel:          {},
+	InstanceIDLabel:          {},
+	InstanceLabel:            {},
+	InstanceNamespaceLabel:   {},
+	InstanceGroupLabel:       {},
+	InstanceVersionLabel:     {},
+	InstanceKindLabel:        {},
+	NodePathAnnotation:       {},
+	ApplyOrderAnnotation:     {},
+	InstanceNameAnnotation:   {},
+	InstanceGroupAnnotation:  {},
+	DeletionPolicyAnnotation: {},
+}
+
 // isKROKey reports whether a label/annotation key was stamped by kro on a
 // managed resource. The value matters only for ManagedByLabelKey, which is a
 // shared upstream key that other tools also use.
 func isKROKey(key, value string) bool {
-	switch {
-	case strings.HasPrefix(key, KROPrefix), strings.HasPrefix(key, InternalKROPrefix):
-		return true
-	case key == ManagedByLabelKey:
+	if key == ManagedByLabelKey {
 		return value == ManagedByKROValue
-	default:
-		return false
 	}
+	_, ok := releasedKeys[key]
+	return ok
 }

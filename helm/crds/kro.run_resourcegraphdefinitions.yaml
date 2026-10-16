@@ -292,7 +292,8 @@ spec:
                     - message: kind is immutable
                       rule: self == oldSelf
                   metadata:
-                    description: Metadata to apply to the generated CRD
+                    description: Metadata configures instance name validation and
+                      metadata applied to the generated CRD.
                     properties:
                       annotations:
                         additionalProperties:
@@ -304,6 +305,12 @@ spec:
                           type: string
                         description: Labels to apply to the generated CRD
                         type: object
+                      nameValidation:
+                        description: |-
+                          NameValidation constrains instance metadata.name using marker-only SimpleSchema syntax.
+                          Supported markers are minLength, maxLength, pattern, enum, and validation.
+                          Example: "maxLength=30 pattern=^[a-z].*$"
+                        type: string
                     type: object
                   plural:
                     description: |-

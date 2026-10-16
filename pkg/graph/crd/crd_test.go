@@ -190,7 +190,8 @@ func TestSynthesizeCRD(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			crd := SynthesizeCRD(tt.group, tt.apiVersion, tt.kind, tt.spec, tt.status, tt.statusFieldsOverride, tt.scope, tt.schema)
+			crd, err := SynthesizeCRD(tt.group, tt.apiVersion, tt.kind, tt.spec, tt.status, tt.statusFieldsOverride, tt.scope, tt.schema)
+			require.NoError(t, err)
 
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.expectedGroup, crd.Spec.Group)
@@ -233,6 +234,49 @@ func TestSynthesizeCRD(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSynthesizeCRDNameValidation(t *testing.T) {
+	baseSchema := &v1alpha1.Schema{}
+	withoutValidation, err := SynthesizeCRD(
+		"example.com", "v1", "Widget",
+		extv1.JSONSchemaProps{Type: "object"}, extv1.JSONSchemaProps{Type: "object"},
+		false, extv1.NamespaceScoped, baseSchema,
+	)
+	require.NoError(t, err)
+	metadataSchema := withoutValidation.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["metadata"]
+	assert.Nil(t, metadataSchema.Properties, "absent nameValidation must preserve the generated schema")
+
+	validatedSchema := &v1alpha1.Schema{
+		Metadata: &v1alpha1.CRDMetadata{
+			NameValidation: "maxLength=30",
+			Labels:         map[string]string{"environment": "test"},
+			Annotations:    map[string]string{"description": "Widget CRD"},
+		},
+	}
+	withValidation, err := SynthesizeCRD(
+		"example.com", "v1", "Widget",
+		extv1.JSONSchemaProps{Type: "object"}, extv1.JSONSchemaProps{Type: "object"},
+		false, extv1.ClusterScoped, validatedSchema,
+	)
+	require.NoError(t, err)
+	metadataSchema = withValidation.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["metadata"]
+	nameSchema, ok := metadataSchema.Properties["name"]
+	require.True(t, ok)
+	assert.Equal(t, "string", nameSchema.Type)
+	require.NotNil(t, nameSchema.MaxLength)
+	assert.EqualValues(t, 30, *nameSchema.MaxLength)
+	assert.Equal(t, validatedSchema.Metadata.Labels, withValidation.Labels)
+	assert.Equal(t, validatedSchema.Metadata.Annotations, withValidation.Annotations)
+	assert.Equal(t, extv1.ClusterScoped, withValidation.Spec.Scope)
+
+	validatedSchema.Metadata.NameValidation = "required=true"
+	_, err = SynthesizeCRD(
+		"example.com", "v1", "Widget",
+		extv1.JSONSchemaProps{Type: "object"}, extv1.JSONSchemaProps{Type: "object"},
+		false, extv1.NamespaceScoped, validatedSchema,
+	)
+	require.ErrorContains(t, err, "invalid metadata.nameValidation")
 }
 
 func TestNewCRD(t *testing.T) {
@@ -461,7 +505,7 @@ func TestNewCRDSchema(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			schema := newCRDSchema(tt.spec, tt.status, tt.statusFieldsOverride)
+			schema := newCRDSchema(tt.spec, tt.status, tt.statusFieldsOverride, nil)
 
 			assert.Equal(t, "object", schema.Type)
 			require.NotNil(t, schema.Properties)

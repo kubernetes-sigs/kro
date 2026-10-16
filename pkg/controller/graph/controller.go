@@ -175,11 +175,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // compiled Program. Conditions are written via the ConditionsMarker; status
 // is flushed by the caller via updateStatus.
 //
-// If a Router is wired in, we open a per-Graph Watcher around
-// Apply so each resolved resource registers a watch. On success commit
-// the new watch set (clearing any nodes that were removed in this
-// revision); on error abort, keeping the previously committed set
-// authoritative so drift detection survives transient failures.
+// If a Router is wired in, we open a per-Graph Watcher around Apply so each
+// resolved resource registers a watch. The new watch set is committed on every
+// apply outcome (clearing any nodes that were removed in this revision): the
+// executor never cuts the walk short on a per-node failure, so the declared set
+// is complete even when the apply reports a hard error, and committing keeps
+// the shared informers alive across a persistent failure instead of tearing
+// them down and rebuilding them every retry.
 // writeAheadIntent persists the pre-apply intent (managed resources + patch
 // contributions) BEFORE any cluster write, and returns the managed-resource
 // intent for reuse by the caller's failure branches.
@@ -351,16 +353,22 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 
 	result, applyErr := ex.Apply(ctx, rt, watcher)
 
-	// Commit on full success or soft ErrNotReady — the executor walks
-	// every reachable node even when some are not ready, so the watch
-	// set is authoritative either way. Abort only on hard errors that
-	// interrupted the walk before downstream watches could register.
+	// Commit the watch set on every apply outcome. The executor walks every
+	// reachable node regardless of per-node failures (a hard error on one node
+	// is recorded and the walk continues), so the declared set is authoritative
+	// for a hard error exactly as it is for a soft ErrNotReady. Aborting here
+	// used to drop a never-committed owner and release the sole-owner informer:
+	// the next reconcile rebuilt it (a fresh full LIST/WatchList of the GVR)
+	// and the informer's initial events re-enqueued the Graph through the
+	// non-rate-limited watch channel, hot-looping past controller-runtime's
+	// error backoff. Keeping the informer means a persistent hard failure is
+	// paced by that backoff and never re-lists the GVR.
+	watcher.Done(true)
+
 	switch {
 	case applyErr == nil:
-		watcher.Done(true)
 		marker.ResourcesConverged()
 	case errors.Is(applyErr, executor.ErrNotReady):
-		watcher.Done(true)
 		// Distinguish the not-ready flavors: an ownership conflict (nothing
 		// applied), missing upstream data, or apply succeeded but still settling.
 		switch {
@@ -372,7 +380,6 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 			marker.ResourcesNotReady(applyErr.Error())
 		}
 	default:
-		watcher.Done(false)
 		marker.ResourcesApplyFailed(applyErr.Error())
 	}
 

@@ -157,8 +157,11 @@ type Interface interface {
 	// — they are recorded and returned wrapped as ErrNotReady, while
 	// the walk continues so every reachable node still declares its
 	// watch and contributes its identities to Applied. Hard errors
-	// (apply 5xx, type errors, unsupported kinds) abort immediately;
-	// Applied carries whatever was tracked up to the abort point.
+	// (apply 5xx, type errors, unsupported kinds) do not abort the walk
+	// either: the failing node is recorded (and never marked ready, so
+	// its dependents stay gated), independent nodes still run, and the
+	// hard errors are joined and returned after the walk, dominating any
+	// soft signal. Applied carries everything that reached the cluster.
 	//
 	// The Watcher is the per-Graph handle obtained from the dynamic
 	// controller; pass watchrouter.NoopWatcher{} when drift

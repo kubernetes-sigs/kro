@@ -570,6 +570,11 @@ func (c *Coordinator[K]) findOrphanedGVRsLocked(gvrs []schema.GroupVersionResour
 // stopWatches releases the coordinator's retention on the given GVRs. Must NOT
 // hold c.mu — ReleaseWatch acquires the Manager's lock and nesting them would
 // invite deadlocks if the Manager ever calls back into the coordinator.
+//
+// TODO(nblaskey): release is immediate. An owner that drops a GVR and
+// re-declares it moments later (spec edit then revert) pays a full informer
+// rebuild and LIST. A short grace window before ReleaseWatch, cancelled if
+// the GVR is re-indexed, would avoid that. See kubernetes-sigs/kro#1464.
 func (c *Coordinator[K]) stopWatches(gvrs []schema.GroupVersionResource) {
 	for _, gvr := range gvrs {
 		c.watches.ReleaseWatch(gvr, ownerCoordinator)

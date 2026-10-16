@@ -85,7 +85,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			expression: `list[0] || flags["enabled"]`,
 			wantResources: []ResourceDependency{
 				{ID: "list", Path: "list"},
-				{ID: "flags", Path: "flags"},
+				{ID: "flags", Path: "flags.enabled"},
 			},
 		},
 		{
@@ -349,8 +349,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			resources:  []string{"bucket"},
 			expression: `bucket.?spec.name == "my-bucket"`,
 			wantResources: []ResourceDependency{
-				// for optionals, we can only depend on the known object, not on the path thereafter (as its optional)
-				{ID: "bucket", Path: "bucket"},
+				{ID: "bucket", Path: "bucket.spec.name"},
 			},
 		},
 		{
@@ -411,7 +410,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			resources:  []string{"bucket"},
 			expression: `[bucket.?spec.name, "x"]`,
 			wantResources: []ResourceDependency{
-				{ID: "bucket", Path: "bucket"},
+				{ID: "bucket", Path: "bucket.spec.name"},
 			},
 			wantFunctions: []FunctionCall{
 				{
@@ -475,7 +474,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			resources:  []string{"svc"},
 			expression: `[{"port": svc.spec.ports[0].port}]`,
 			wantResources: []ResourceDependency{
-				{ID: "svc", Path: "svc.spec.ports"},
+				{ID: "svc", Path: "svc.spec.ports.port"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "createList", Arguments: []string{`[{"port": svc.spec.ports[0].port}]`}},
@@ -516,6 +515,72 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "deployment", Path: "deployment.spec.replicas"},
 				{ID: "deployment", Path: "deployment.spec.replicas"},
 				{ID: "deployment", Path: "deployment.status.replicas"},
+			},
+		},
+		// --- Tests for index and optional-chaining path extension (issue #1466) ---
+		{
+			name:       "string-key index extends path",
+			resources:  []string{"cfg"},
+			expression: `cfg.data["foo"]`,
+			wantResources: []ResourceDependency{
+				{ID: "cfg", Path: "cfg.data.foo"},
+			},
+		},
+		{
+			name:       "optional select chain extends path",
+			resources:  []string{"obj"},
+			expression: `obj.?status.?ready`,
+			wantResources: []ResourceDependency{
+				{ID: "obj", Path: "obj.status.ready"},
+			},
+		},
+		{
+			name:       "optional index with string key extends path",
+			resources:  []string{"cfg"},
+			expression: `cfg[?"key"]`,
+			wantResources: []ResourceDependency{
+				{ID: "cfg", Path: "cfg.key"},
+			},
+		},
+		{
+			name:       "mixed hard select then optional select",
+			resources:  []string{"obj"},
+			expression: `obj.spec.?data.value`,
+			wantResources: []ResourceDependency{
+				{ID: "obj", Path: "obj.spec.data.value"},
+			},
+		},
+		{
+			name:       "integer index passes through accumulated path",
+			resources:  []string{"svc"},
+			expression: `svc.spec.ports[0].containerPort`,
+			wantResources: []ResourceDependency{
+				{ID: "svc", Path: "svc.spec.ports.containerPort"},
+			},
+		},
+		{
+			name:       "dynamic variable index does not extend path",
+			resources:  []string{"arr", "idx"},
+			expression: `arr[idx.value]`,
+			wantResources: []ResourceDependency{
+				{ID: "arr", Path: "arr"},
+				{ID: "idx", Path: "idx.value"},
+			},
+		},
+		{
+			name:       "non-identifier string key keeps bracket notation",
+			resources:  []string{"cfg"},
+			expression: `cfg.data["app.properties"]`,
+			wantResources: []ResourceDependency{
+				{ID: "cfg", Path: `cfg.data["app.properties"]`},
+			},
+		},
+		{
+			name:       "non-identifier string key with nested field",
+			resources:  []string{"cfg"},
+			expression: `cfg.data["app.properties"].timeout`,
+			wantResources: []ResourceDependency{
+				{ID: "cfg", Path: `cfg.data["app.properties"].timeout`},
 			},
 		},
 	}

@@ -38,7 +38,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/dynamic"
 
-	applysetspec "github.com/kubernetes-sigs/kro/pkg/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -75,8 +74,8 @@ type Interface interface {
 	// DeleteOrphan deletes a single orphan candidate using a UID precondition.
 	DeleteOrphan(ctx context.Context, candidate OrphanCandidate) (DeleteOrphanResult, error)
 
-	// ReleaseOrphan when deletionPolicy is Orphaned, instead of removing the resource, kro
-	// releases it by removing all annotations and labels.
+	// ReleaseOrphan releases an orphan candidate declared deletionPolicy: Orphaned
+	// by removing kro's labels and annotations instead of deleting it.
 	ReleaseOrphan(ctx context.Context, candidate OrphanCandidate) (ReleaseOrphanResult, error)
 }
 
@@ -611,7 +610,7 @@ func (a *ApplySet) ReleaseOrphan(ctx context.Context, candidate OrphanCandidate)
 func (a *ApplySet) releaseMembership(m map[string]string) (map[string]string, bool) {
 	l := len(m)
 	maps.DeleteFunc(m, func(k string, v string) bool {
-		return k == applysetspec.ApplysetPartOfLabel && v == a.applySetID
+		return k == ApplysetPartOfLabel && v == a.applySetID
 	})
 
 	return m, l != len(m)

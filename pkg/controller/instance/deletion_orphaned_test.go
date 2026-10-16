@@ -205,3 +205,67 @@ func TestReconcileDeletionIgnoresPolicyWhenGateDisabled(t *testing.T) {
 	_ = controller.reconcileDeletion(dcx)
 	assert.Equal(t, []string{"demo"}, deleted, "the annotated resource must be deleted while the gate is off")
 }
+
+func TestApplyDeletionPolicyAnnotation(t *testing.T) {
+	enableDeletionPolicy(t)
+	rgd := &v1alpha1.ResourceGraphDefinition{Spec: v1alpha1.ResourceGraphDefinitionSpec{
+		Resources: []*v1alpha1.Resource{
+			{ID: "kept", DeletionPolicy: v1alpha1.DeletionPolicyOrphaned},
+			{ID: "deleted", DeletionPolicy: v1alpha1.DeletionPolicyDelete},
+			{ID: "unset"},
+		},
+	}}
+	orphaned := orphanedNodeIDs(rgd)
+
+	cases := []struct {
+		name        string
+		nodeID      string
+		annotations map[string]string
+		wantPolicy  string
+		wantPresent bool
+	}{
+		{name: "orphaned is stamped", nodeID: "kept", wantPolicy: "Orphaned", wantPresent: true},
+		{
+			// A `metadata: ${sibling.metadata}` copy must not orphan a Delete resource.
+			name:        "delete drops a copied policy",
+			nodeID:      "deleted",
+			annotations: map[string]string{metadata.DeletionPolicyAnnotation: "Orphaned"},
+		},
+		{
+			name:        "unset drops a copied policy",
+			nodeID:      "unset",
+			annotations: map[string]string{metadata.DeletionPolicyAnnotation: "Orphaned"},
+		},
+		{
+			name:        "orphaned overrides a copied value",
+			nodeID:      "kept",
+			annotations: map[string]string{metadata.DeletionPolicyAnnotation: "Delete"},
+			wantPolicy:  "Orphaned",
+			wantPresent: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			annotations := map[string]string{metadata.NodePathAnnotation: tc.nodeID}
+			for k, v := range tc.annotations {
+				annotations[k] = v
+			}
+			obj := &unstructured.Unstructured{Object: map[string]any{}}
+			obj.SetAnnotations(annotations)
+
+			applyDeletionPolicyAnnotation(obj, orphaned)
+
+			got, ok := obj.GetAnnotations()[metadata.DeletionPolicyAnnotation]
+			assert.Equal(t, tc.wantPresent, ok)
+			assert.Equal(t, tc.wantPolicy, got)
+		})
+	}
+}
+
+func TestOrphanedNodeIDsGateDisabled(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.DeletionPolicy, false)
+	rgd := &v1alpha1.ResourceGraphDefinition{Spec: v1alpha1.ResourceGraphDefinitionSpec{
+		Resources: []*v1alpha1.Resource{{ID: "kept", DeletionPolicy: v1alpha1.DeletionPolicyOrphaned}},
+	}}
+	assert.Empty(t, orphanedNodeIDs(rgd))
+}

@@ -16,6 +16,13 @@ that resource when it's removed.
 
 :::
 
+:::note
+
+`deletionPolicy` is currently is only available for RGDs, with the
+intention of also adding it to Graphs after substantial user experience.
+
+:::
+
 ```kro
 resources:
   - id: database

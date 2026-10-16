@@ -110,6 +110,24 @@ func TestReleaseKROMetadataClearsEmptiedMaps(t *testing.T) {
 	assert.Empty(t, obj.GetAnnotations())
 }
 
+func TestReleaseKROMetadataKeepsNestedInstanceState(t *testing.T) {
+	obj := &mockObject{ObjectMeta: metav1.ObjectMeta{
+		Labels: map[string]string{OwnedLabel: "true"},
+		Annotations: map[string]string{
+			v1alpha1.InstanceReconcileAnnotation: "suspended",
+			PatchContributionsAnnotation:         "[]",
+			DeletionPolicyAnnotation:             "Orphaned",
+		},
+	}}
+
+	assert.True(t, ReleaseKROMetadata(obj))
+	assert.Empty(t, obj.GetLabels())
+	assert.Equal(t, map[string]string{
+		v1alpha1.InstanceReconcileAnnotation: "suspended",
+		PatchContributionsAnnotation:         "[]",
+	}, obj.GetAnnotations())
+}
+
 func TestReleaseKROMetadataNoKROKeys(t *testing.T) {
 	obj := &mockObject{ObjectMeta: metav1.ObjectMeta{
 		Labels: map[string]string{"app": "web"},

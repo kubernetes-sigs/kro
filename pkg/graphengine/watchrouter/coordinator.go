@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
+	kwatch "github.com/kubernetes-sigs/kro/pkg/watch"
 	"github.com/kubernetes-sigs/kro/pkg/watch/coordinator"
 )
 
@@ -67,6 +68,12 @@ func (c *Coordinator) RemoveGraph(key client.ObjectKey) { c.core.Remove(key) }
 // RouteEvent dispatches an event from the Manager to every Graph whose
 // declared watch set covers it.
 func (c *Coordinator) RouteEvent(event Event) { c.core.RouteEvent(event) }
+
+// WatchHealth reports which of the Graph's declared watches are blocked or
+// still syncing.
+func (c *Coordinator) WatchHealth(key client.ObjectKey) kwatch.Health {
+	return c.core.WatchHealth(key)
+}
 
 // GraphCount returns the number of Graphs the coordinator currently tracks.
 func (c *Coordinator) GraphCount() int { return c.core.OwnerCount() }

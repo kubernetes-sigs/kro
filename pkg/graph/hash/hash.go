@@ -44,7 +44,7 @@ var jsonMarshal = json.Marshal
 // The hash is based on a normalized form of the spec:
 // - Struct field order is stable via JSON marshaling (sorted map keys).
 // - Resources are sorted by ID so YAML reordering is a no-op.
-// - ReadyWhen and IncludeWhen are sorted for the same reason.
+// - ReadyWhen, IncludeWhen, and ExternalFields are sorted for the same reason.
 // - ForEach order is preserved because collection expansion order is semantic.
 // - RawExtension payloads are normalized into canonical JSON bytes.
 func Spec(spec v1alpha1.ResourceGraphDefinitionSpec) (string, error) {
@@ -132,6 +132,10 @@ func normalizeSpec(spec v1alpha1.ResourceGraphDefinitionSpec) (v1alpha1.Resource
 			normalized.Resources[i].IncludeWhen = []string{}
 		}
 		slices.Sort(normalized.Resources[i].IncludeWhen)
+		if normalized.Resources[i].ExternalFields == nil {
+			normalized.Resources[i].ExternalFields = []string{}
+		}
+		slices.Sort(normalized.Resources[i].ExternalFields)
 		if normalized.Resources[i].ForEach == nil {
 			normalized.Resources[i].ForEach = []v1alpha1.ForEachDimension{}
 		}

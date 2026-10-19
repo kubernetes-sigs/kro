@@ -54,10 +54,13 @@ func StringSchemaFromMarkers(value string) (*extv1.JSONSchemaProps, error) {
 		}
 	}
 
-	schema := &extv1.JSONSchemaProps{Type: schemaTypeString}
-	if err := applyMarkers(schema, markers, "name", &extv1.JSONSchemaProps{}); err != nil {
+	rootSchema, err := ToOpenAPISpec(map[string]any{
+		"name": "string | " + value,
+	}, nil)
+	if err != nil {
 		return nil, err
 	}
+	schema := rootSchema.Properties["name"]
 	if schema.MinLength != nil && *schema.MinLength < 0 {
 		return nil, fmt.Errorf("minLength must not be negative")
 	}
@@ -67,5 +70,5 @@ func StringSchemaFromMarkers(value string) (*extv1.JSONSchemaProps, error) {
 	if schema.MinLength != nil && schema.MaxLength != nil && *schema.MinLength > *schema.MaxLength {
 		return nil, fmt.Errorf("minLength must not exceed maxLength")
 	}
-	return schema, nil
+	return &schema, nil
 }

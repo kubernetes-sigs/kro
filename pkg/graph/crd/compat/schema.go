@@ -57,7 +57,51 @@ func Compare(
 	for _, option := range options {
 		option(&config)
 	}
+
+	oldSchema = withImplicitInstanceName(oldSchema)
+	newSchema = withImplicitInstanceName(newSchema)
 	return compare("", oldSchema, newSchema, config.conservative)
+}
+
+const instanceNameSchemaPath = ".properties.metadata.properties.name"
+
+// withImplicitInstanceName returns a schema whose root contains the metadata
+// object and unconstrained string name schema Kubernetes provides implicitly.
+// The input is copied only when an implicit field needs to be added.
+func withImplicitInstanceName(schema *v1.JSONSchemaProps) *v1.JSONSchemaProps {
+	if schema == nil {
+		return nil
+	}
+	if _, exists := instanceName(schema); exists {
+		return schema
+	}
+
+	schema = schema.DeepCopy()
+	if schema.Properties == nil {
+		schema.Properties = make(map[string]v1.JSONSchemaProps)
+	}
+	metadata, exists := schema.Properties["metadata"]
+	if !exists {
+		metadata.Type = "object"
+	}
+	if metadata.Properties == nil {
+		metadata.Properties = make(map[string]v1.JSONSchemaProps)
+	}
+	metadata.Properties["name"] = v1.JSONSchemaProps{Type: "string"}
+	schema.Properties["metadata"] = metadata
+	return schema
+}
+
+func instanceName(schema *v1.JSONSchemaProps) (v1.JSONSchemaProps, bool) {
+	if schema == nil {
+		return v1.JSONSchemaProps{}, false
+	}
+	metadata, exists := schema.Properties["metadata"]
+	if !exists {
+		return v1.JSONSchemaProps{}, false
+	}
+	name, exists := metadata.Properties["name"]
+	return name, exists
 }
 
 // compare is the internal recursive implementation
@@ -154,8 +198,6 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps, conservative
 		compareTopology(path, oldSchema, newSchema, result)
 		compareValidationRules(path, oldSchema, newSchema, result)
 		compareUnclassifiedFields(path, oldSchema, newSchema, result)
-	} else if path == instanceNameSchemaPath {
-		compareValidationRules(path, oldSchema, newSchema, result)
 	}
 
 	return result
@@ -180,29 +222,8 @@ func compareProperties(
 	result *Report,
 	conservativeComparison bool,
 ) {
-	// Kubernetes supplies metadata.name even when the generated schema does not
-	// declare it. Treat an absent root metadata.name schema as an unconstrained
-	// string so compatibility reflects the effect of adding or removing name
-	// constraints instead of reporting an ordinary property change.
-	if path == instanceMetadataSchemaPath {
-		oldName, oldHasName := oldSchema.Properties["name"]
-		newName, newHasName := newSchema.Properties["name"]
-		if oldHasName || newHasName {
-			if !oldHasName {
-				oldName = v1.JSONSchemaProps{Type: "string"}
-			}
-			if !newHasName {
-				newName = v1.JSONSchemaProps{Type: "string"}
-			}
-			appendReport(result, compare(instanceNameSchemaPath, &oldName, &newName, conservativeComparison))
-		}
-	}
-
 	// First, check for removed properties (breaking changes)
 	for propName, oldProp := range oldSchema.Properties {
-		if path == instanceMetadataSchemaPath && propName == "name" {
-			continue
-		}
 		propPath := path + ".properties." + propName
 
 		// check if property still exists
@@ -229,9 +250,6 @@ func compareProperties(
 	newRequiredSet := toStringSet(newSchema.Required)
 
 	for propName, newProp := range newSchema.Properties {
-		if path == instanceMetadataSchemaPath && propName == "name" {
-			continue
-		}
 		if _, exists := oldSchema.Properties[propName]; !exists {
 			propPath := path + ".properties." + propName
 
@@ -249,11 +267,6 @@ func compareProperties(
 		}
 	}
 }
-
-const (
-	instanceMetadataSchemaPath = ".properties.metadata"
-	instanceNameSchemaPath     = instanceMetadataSchemaPath + ".properties.name"
-)
 
 // compareRequiredFields checks for changes to required fields, it only considers
 // existing properties, since new properties are handled in compareProperties.

@@ -38,25 +38,30 @@ func TestCompareInstanceMetadataName(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		oldName    *v1.JSONSchemaProps
-		newName    *v1.JSONSchemaProps
-		changeType ChangeType
-		breaking   bool
+		name             string
+		oldName          *v1.JSONSchemaProps
+		newName          *v1.JSONSchemaProps
+		changeType       ChangeType
+		breaking         bool
+		conservativeOnly bool
 	}{
 		{name: "added constraint", newName: &v1.JSONSchemaProps{Type: "string", MaxLength: length(30)}, changeType: MaxLengthAdded, breaking: true},
 		{name: "tightened constraint", oldName: &v1.JSONSchemaProps{Type: "string", MaxLength: length(30)}, newName: &v1.JSONSchemaProps{Type: "string", MaxLength: length(20)}, changeType: MaxLengthDecreased, breaking: true},
 		{name: "loosened constraint", oldName: &v1.JSONSchemaProps{Type: "string", MaxLength: length(20)}, newName: &v1.JSONSchemaProps{Type: "string", MaxLength: length(30)}, changeType: MaxLengthIncreased},
 		{name: "removed constraint", oldName: &v1.JSONSchemaProps{Type: "string", MaxLength: length(30)}, changeType: MaxLengthRemoved},
-		{name: "added CEL", newName: &v1.JSONSchemaProps{Type: "string", XValidations: v1.ValidationRules{{Rule: "self != 'reserved'"}}}, changeType: ValidationRulesChanged, breaking: true},
-		{name: "changed CEL", oldName: &v1.JSONSchemaProps{Type: "string", XValidations: v1.ValidationRules{{Rule: "self != 'reserved'"}}}, newName: &v1.JSONSchemaProps{Type: "string", XValidations: v1.ValidationRules{{Rule: "self != 'blocked'"}}}, changeType: ValidationRulesChanged, breaking: true},
-		{name: "removed CEL", oldName: &v1.JSONSchemaProps{Type: "string", XValidations: v1.ValidationRules{{Rule: "self != 'reserved'"}}}, changeType: ValidationRulesChanged},
+		{name: "added CEL", newName: &v1.JSONSchemaProps{Type: "string", XValidations: v1.ValidationRules{{Rule: "self != 'reserved'"}}}, changeType: ValidationRulesChanged, breaking: true, conservativeOnly: true},
+		{name: "changed CEL", oldName: &v1.JSONSchemaProps{Type: "string", XValidations: v1.ValidationRules{{Rule: "self != 'reserved'"}}}, newName: &v1.JSONSchemaProps{Type: "string", XValidations: v1.ValidationRules{{Rule: "self != 'blocked'"}}}, changeType: ValidationRulesChanged, breaking: true, conservativeOnly: true},
+		{name: "removed CEL", oldName: &v1.JSONSchemaProps{Type: "string", XValidations: v1.ValidationRules{{Rule: "self != 'reserved'"}}}, changeType: ValidationRulesChanged, conservativeOnly: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, conservative := range []bool{false, true} {
 				report := Compare(schema(tt.oldName), schema(tt.newName), WithConservativeComparison(conservative))
+				if tt.conservativeOnly && !conservative {
+					assert.False(t, report.HasChanges())
+					continue
+				}
 				changes := report.NonBreakingChanges
 				if tt.breaking {
 					changes = report.BreakingChanges
@@ -68,4 +73,27 @@ func TestCompareInstanceMetadataName(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompareInstanceMetadataNameWhenMetadataWasImplicit(t *testing.T) {
+	maxLength := int64(30)
+	oldSchema := &v1.JSONSchemaProps{Type: "object"}
+	newSchema := &v1.JSONSchemaProps{
+		Type: "object",
+		Properties: map[string]v1.JSONSchemaProps{
+			"metadata": {
+				Type: "object",
+				Properties: map[string]v1.JSONSchemaProps{
+					"name": {Type: "string", MaxLength: &maxLength},
+				},
+			},
+		},
+	}
+
+	report := Compare(oldSchema, newSchema, WithConservativeComparison(false))
+
+	require.Len(t, report.BreakingChanges, 1)
+	assert.Equal(t, MaxLengthAdded, report.BreakingChanges[0].ChangeType)
+	assert.Equal(t, instanceNameSchemaPath+".maxLength", report.BreakingChanges[0].Path)
+	assert.Empty(t, report.NonBreakingChanges)
 }

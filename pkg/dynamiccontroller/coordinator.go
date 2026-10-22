@@ -78,6 +78,12 @@ func (c *WatchCoordinator) ForInstance(parentGVR schema.GroupVersionResource, in
 	return c.core.For(instanceKey{parentGVR: parentGVR, instance: instance})
 }
 
+// WatchHealth reports which of the instance's declared watches are blocked or
+// still syncing.
+func (c *WatchCoordinator) WatchHealth(parentGVR schema.GroupVersionResource, instance types.NamespacedName) kwatch.Health {
+	return c.core.WatchHealth(instanceKey{parentGVR: parentGVR, instance: instance})
+}
+
 // RemoveInstance removes all watch requests for a specific instance. Called
 // when an instance is deleted.
 func (c *WatchCoordinator) RemoveInstance(parentGVR schema.GroupVersionResource, instance types.NamespacedName) {

@@ -36,6 +36,11 @@ status:
     reason: AllResourcesReady
     status: "True"
     type: ResourcesReady
+  - message: changes to all watched kinds are detected
+    observedGeneration: 1
+    reason: AllWatchesSynced
+    status: "True"
+    type: WatchesHealthy
   - message: ""
     observedGeneration: 1
     reason: Ready

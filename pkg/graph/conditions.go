@@ -159,7 +159,7 @@ func validateConditionLookup(call celast.Expr, authorTypes map[string]struct{}, 
 	}
 	return fmt.Errorf(
 		"runtime.condition(schema, %q): unknown condition type; only kro's built-in types "+
-			"(InstanceManaged, GraphResolved, ResourcesReady, Ready) can be read from schema in expression %q",
+			"(InstanceManaged, GraphResolved, ResourcesReady, WatchesHealthy, Ready) can be read from schema in expression %q",
 		typeName, exprText,
 	)
 }

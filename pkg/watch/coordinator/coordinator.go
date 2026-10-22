@@ -24,7 +24,6 @@
 package coordinator
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/go-logr/logr"
@@ -195,9 +194,27 @@ func (c *Coordinator[K]) For(key K) Watcher {
 // declared watch set covers it. Both current labels and old labels are
 // considered for collection watches so that an object losing its label match
 // still triggers reconciliation.
+//
+// EventSynced and EventWatchBlocked are fanned out to every owner of the GVR.
 func (c *Coordinator[K]) RouteEvent(event kwatch.Event) {
 	c.mu.RLock()
 	matched := make(map[K]struct{})
+
+	if event.Type == kwatch.EventSynced || event.Type == kwatch.EventWatchBlocked {
+		for _, entries := range c.scalarIndex[event.GVR] {
+			for _, entry := range entries {
+				matched[entry.key] = struct{}{}
+			}
+		}
+		for _, entry := range c.collectionIndex[event.GVR] {
+			matched[entry.key] = struct{}{}
+		}
+		c.mu.RUnlock()
+		for key := range matched {
+			c.enqueue(key)
+		}
+		return
+	}
 
 	if byName, ok := c.scalarIndex[event.GVR]; ok {
 		nn := types.NamespacedName{Name: event.Name, Namespace: event.Namespace}
@@ -232,6 +249,44 @@ func (c *Coordinator[K]) RouteEvent(event kwatch.Event) {
 	// OnRoute is fired outside the lock and may run concurrently with other
 	// RouteEvent calls; the observer must treat it as a concurrent call.
 	c.obs.OnRoute(event.GVR, len(matched) > 0)
+}
+
+// WatchHealth reports, for key's declared watch set (the in-flight set during a
+// reconcile, else the last committed one), the GVRs whose informer is blocked
+// and those still completing their initial list.
+func (c *Coordinator[K]) WatchHealth(key K) kwatch.Health {
+	c.mu.RLock()
+	state, ok := c.owners[key]
+	var gvrs []schema.GroupVersionResource
+	if ok {
+		set := state.current
+		if len(set) == 0 {
+			set = state.previous
+		}
+		seen := make(map[schema.GroupVersionResource]struct{}, len(set))
+		for _, req := range set {
+			if _, dup := seen[req.GVR]; dup {
+				continue
+			}
+			seen[req.GVR] = struct{}{}
+			gvrs = append(gvrs, req.GVR)
+		}
+	}
+	c.mu.RUnlock()
+
+	var h kwatch.Health
+	for gvr, st := range c.watches.WatchStates(gvrs) {
+		switch {
+		case st.BlockedErr != nil:
+			if h.Blocked == nil {
+				h.Blocked = make(map[schema.GroupVersionResource]error)
+			}
+			h.Blocked[gvr] = st.BlockedErr
+		case st.Exists && !st.Synced:
+			h.Pending = append(h.Pending, gvr)
+		}
+	}
+	return h
 }
 
 // OwnerCount returns the number of owners the coordinator currently tracks.
@@ -310,8 +365,7 @@ func (c *Coordinator[K]) RemoveWhere(pred func(K) bool) {
 
 // addWatch enrolls a request under key. Called from watcher.Watch. EnsureWatch
 // is invoked outside the coordinator lock to avoid holding two locks
-// simultaneously. On EnsureWatch failure the added entry is rolled back and
-// the wrapped error is returned.
+// simultaneously. It never blocks on the informer's initial list.
 func (c *Coordinator[K]) addWatch(key K, req WatchRequest) error {
 	c.mu.Lock()
 
@@ -358,19 +412,7 @@ func (c *Coordinator[K]) addWatch(key K, req WatchRequest) error {
 
 	c.stopWatches(orphaned)
 
-	if err := c.watches.EnsureWatch(gvr, ownerCoordinator); err != nil {
-		c.mu.Lock()
-		if state, ok := c.owners[key]; ok {
-			if cur, exists := state.current[k]; exists && SameWatchTarget(cur, &req) {
-				delete(state.current, k)
-				if prev, shared := state.previous[k]; !shared || !SameWatchTarget(prev, cur) {
-					c.removeRequestFromIndexesLocked(key, cur)
-				}
-			}
-		}
-		c.mu.Unlock()
-		return fmt.Errorf("ensure watch for %s: %w", gvr, err)
-	}
+	c.watches.EnsureWatch(gvr, ownerCoordinator)
 	return nil
 }
 

@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
@@ -37,6 +38,7 @@ const (
 	InstanceManaged = string(v1alpha1.InstanceConditionTypeInstanceManaged)
 	GraphResolved   = string(v1alpha1.InstanceConditionTypeGraphResolved)
 	ResourcesReady  = string(v1alpha1.InstanceConditionTypeResourcesReady)
+	WatchesHealthy  = string(v1alpha1.InstanceConditionTypeWatchesHealthy)
 )
 
 // instanceStatusFieldManager owns the controller-written status surface
@@ -131,6 +133,38 @@ func (m *ConditionsMarker) ResourcesReady() {
 // ResourcesNotReady signals there are resources in the graph that are not ready.
 func (m *ConditionsMarker) ResourcesNotReady(msg string, args ...any) {
 	m.cs.SetFalse(ResourcesReady, "NotReady", fmt.Sprintf(msg, args...))
+}
+
+// WatchesHealthy marks WatchesHealthy=True. Not a Ready dependent.
+func (m *ConditionsMarker) WatchesHealthy() {
+	m.cs.SetTrueWithReason(WatchesHealthy, "AllWatchesSynced", "changes to all watched kinds are detected")
+}
+
+// WatchesBlocked marks WatchesHealthy=False with reason "WatchBlocked".
+func (m *ConditionsMarker) WatchesBlocked(msg string) {
+	m.cs.SetFalse(WatchesHealthy, "WatchBlocked", msg)
+}
+
+// WatchesPending marks WatchesHealthy=Unknown with reason "WatchesPending".
+func (m *ConditionsMarker) WatchesPending(msg string) {
+	m.cs.SetUnknownWithReason(WatchesHealthy, "WatchesPending", msg)
+}
+
+// markWatchHealth writes WatchesHealthy from this cycle's declared watch set.
+func (c *Controller) markWatchHealth(mark *ConditionsMarker, inst *unstructured.Unstructured) {
+	if c.coordinator == nil {
+		return
+	}
+	key := types.NamespacedName{Namespace: inst.GetNamespace(), Name: inst.GetName()}
+	h := c.coordinator.WatchHealth(c.gvr, key)
+	switch {
+	case len(h.Blocked) > 0:
+		mark.WatchesBlocked(h.Describe())
+	case len(h.Pending) > 0:
+		mark.WatchesPending(h.Describe())
+	default:
+		mark.WatchesHealthy()
+	}
 }
 
 // ResourcesDeleting signals there are managed resources currently terminating.

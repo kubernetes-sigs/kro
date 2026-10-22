@@ -15,6 +15,7 @@
 package simpleschema
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -342,7 +343,15 @@ func applyDefaultMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
 	var defaultValue []byte
 	switch schema.Type {
 	case schemaTypeString:
-		defaultValue = []byte(fmt.Sprintf("\"%s\"", marker.Value))
+		// marker.Value arrives with its quoting already stripped by the marker
+		// parser; re-quote via JSON encoding so embedded quotes/escapes survive
+		// as a valid JSON string instead of producing invalid JSON like
+		// "["keycloak"]" (which then crashes CRD creation downstream).
+		b, err := json.Marshal(marker.Value)
+		if err != nil {
+			return fmt.Errorf("failed to encode default value as JSON: %w", err)
+		}
+		defaultValue = b
 	case schemaTypeInteger:
 		if _, err := strconv.ParseInt(marker.Value, 10, 64); err != nil {
 			return fmt.Errorf("default value must be a valid integer, got: %s", marker.Value)

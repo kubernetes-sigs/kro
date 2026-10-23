@@ -56,7 +56,7 @@ type Schema struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="kind is immutable"
 	Kind string `json:"kind,omitempty"`
 	// Plural is the plural form of Kind used as the resource name in the generated
-	// CRD, forming its name as "<plural>.<group>". If omitted, it is derived by
+	// CRD, forming its name as `<plural>.<group>`. If omitted, it is derived by
 	// pluralizing the lowercased kind, which follows English rules and is not always
 	// what you would expect or might even not be correct. (For example: "PodInfo" becomes "podinfoes").
 	// Set this explicitly to override the generated value.

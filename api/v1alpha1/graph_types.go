@@ -45,7 +45,7 @@ type GraphSpec struct {
 	// ServiceAccountName, when set, causes kro to apply this Graph's resources
 	// while impersonating the named ServiceAccount instead of using the kro
 	// controller's own identity. The ServiceAccount is always resolved in the
-	// Graph's own namespace (system:serviceaccount:<graph-namespace>:<name>), so
+	// Graph's own namespace (`system:serviceaccount:<graph-namespace>:<name>`), so
 	// a Graph can never escalate beyond the RBAC granted to a ServiceAccount in
 	// its own namespace. When empty, kro impersonates the default ServiceAccount
 	// of the Graph's namespace, confining resource access to that namespace by
@@ -87,7 +87,7 @@ type GraphStatus struct {
 	ManagedResources []ManagedResource `json:"managedResources,omitempty"`
 
 	// AppliedServiceAccount is the impersonation username
-	// (system:serviceaccount:<namespace>:<name>) the Graph last applied its
+	// (`system:serviceaccount:<namespace>:<name>`) the Graph last applied its
 	// resources under. Teardown resolves the executor from THIS identity rather
 	// than the current spec.serviceAccountName, so editing that field between
 	// apply and delete cannot strand resources under an identity that can no

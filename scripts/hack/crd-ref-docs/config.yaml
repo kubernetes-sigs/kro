@@ -1,0 +1,8 @@
+processor:
+  ignoreTypes:
+    - "List$"
+  ignoreFields:
+    - "TypeMeta$"
+render:
+  # Keep in sync with the k8s.io/api minor version in go.mod.
+  kubernetesVersion: "1.36"

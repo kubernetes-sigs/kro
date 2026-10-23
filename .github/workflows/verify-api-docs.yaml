@@ -1,0 +1,26 @@
+name: Verify API docs
+
+on:
+  pull_request:
+    paths:
+      - "api/**"
+      - "Makefile"
+      - "scripts/hack/crd-ref-docs/**"
+      - "scripts/hack/generate-api-docs.sh"
+      - "scripts/hack/verify-api-docs.sh"
+      - "website/docs/api/api-reference.md"
+      - ".github/workflows/verify-api-docs.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-api-docs:
+    name: Verify API docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make verify-api-docs

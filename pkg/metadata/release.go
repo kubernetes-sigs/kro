@@ -18,23 +18,31 @@ import (
 	"maps"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
-// DeletionPolicyOf reads the deletion policy kro stamped on a managed
-// resource. An absent or unrecognised value is DeletionPolicyDelete, so a
-// resource written before this annotation existed, or one carrying a typo,
-// keeps the historical delete behaviour rather than silently becoming
-// undeletable.
-func DeletionPolicyOf(obj metav1.Object) v1alpha1.DeletionPolicy {
+// DeletionPolicy controls whether kro deletes or releases a resource it
+// manages once that resource leaves the desired set or its instance is deleted.
+type DeletionPolicy string
+
+const (
+	// DeletionPolicyDelete deletes the resource. This is the default.
+	DeletionPolicyDelete DeletionPolicy = "Delete"
+	// DeletionPolicyOrphaned leaves the resource in the cluster.
+	DeletionPolicyOrphaned DeletionPolicy = "Orphaned"
+)
+
+// DeletionPolicyOf reads the deletion policy declared on a managed resource.
+// An absent or unrecognised value is defaulted to DeletionPolicyDelete, so a resource
+// written before this annotation was introduced, or one that has a typo, keeps the
+// historical delete behaviour instead of failing or being interpreted incorrectly.
+func DeletionPolicyOf(obj metav1.Object) DeletionPolicy {
 	if obj == nil {
-		return v1alpha1.DeletionPolicyDelete
+		return DeletionPolicyDelete
 	}
-	if obj.GetAnnotations()[DeletionPolicyAnnotation] == string(v1alpha1.DeletionPolicyOrphaned) {
-		return v1alpha1.DeletionPolicyOrphaned
+	if obj.GetAnnotations()[DeletionPolicyAnnotation] == string(DeletionPolicyOrphaned) {
+		return DeletionPolicyOrphaned
 	}
-	return v1alpha1.DeletionPolicyDelete
+	return DeletionPolicyDelete
 }
 
 // ReleaseKROMetadata strips the labels and annotations the instance

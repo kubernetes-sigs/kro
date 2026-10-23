@@ -25,7 +25,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
@@ -153,5 +152,5 @@ func TestPruneGraphEngineOrphans_UnknownPolicyStillDeletes(t *testing.T) {
 
 	_, err = raw.Tracker().Get(controllerTestDeployGVR, "default", "drop")
 	assert.Error(t, err)
-	assert.Equal(t, v1alpha1.DeletionPolicyDelete, metadata.DeletionPolicyOf(drop))
+	assert.Equal(t, metadata.DeletionPolicyDelete, metadata.DeletionPolicyOf(drop))
 }

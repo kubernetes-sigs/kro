@@ -5,7 +5,7 @@ metadata:
 spec:
   description: |
     Tests that deleting an instance deletes the resources declared
-    deletionPolicy: Delete and releases the ones declared deletionPolicy: Orphaned,
+    kro.run/deletion-policy: Delete and releases the ones declared Orphaned,
     leaving them in the cluster with kro's labels and annotations stripped.
   steps:
   - name: install-rgd

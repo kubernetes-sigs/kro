@@ -123,7 +123,7 @@ func (c *Controller) releaseOrphanedResources(
 	remaining := make([]applyset.OrphanCandidate, 0, len(candidates))
 	var conflicts int
 	for _, candidate := range candidates {
-		if deletionPolicyOf(candidate.Object) != v1alpha1.DeletionPolicyOrphaned {
+		if deletionPolicyOf(candidate.Object) != metadata.DeletionPolicyOrphaned {
 			remaining = append(remaining, candidate)
 			continue
 		}
@@ -143,9 +143,9 @@ func (c *Controller) releaseOrphanedResources(
 
 // deletionPolicyOf ignores the stamped policy while the DeletionPolicy gate is
 // off, so a leftover annotation cannot keep a resource alive.
-func deletionPolicyOf(obj *unstructured.Unstructured) v1alpha1.DeletionPolicy {
+func deletionPolicyOf(obj *unstructured.Unstructured) metadata.DeletionPolicy {
 	if !features.FeatureGate.Enabled(features.DeletionPolicy) {
-		return v1alpha1.DeletionPolicyDelete
+		return metadata.DeletionPolicyDelete
 	}
 	return metadata.DeletionPolicyOf(obj)
 }

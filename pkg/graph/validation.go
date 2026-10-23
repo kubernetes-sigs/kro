@@ -130,9 +130,6 @@ func validateResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, rgdC
 	ids := make([]string, 0, len(rgd.Spec.Resources))
 	for _, res := range rgd.Spec.Resources {
 		ids = append(ids, res.ID)
-		if res.DeletionPolicy != "" && !features.FeatureGate.Enabled(features.DeletionPolicy) {
-			return fmt.Errorf("resource %q: deletionPolicy requires the DeletionPolicy feature gate to be enabled", res.ID)
-		}
 	}
 	if err := validateResourceIDs(ids); err != nil {
 		return fmt.Errorf("%s: %w", ErrNamingConvention, err)
@@ -479,7 +476,13 @@ func validateNoKROOwnedAnnotations(resourceID string, resourceObject map[string]
 		return nil
 	}
 
-	for key := range annotationsMap {
+	for key, value := range annotationsMap {
+		if key == metadata.DeletionPolicyAnnotation {
+			if err := validateDeletionPolicyAnnotation(resourceID, value); err != nil {
+				return err
+			}
+			continue
+		}
 		for _, prefix := range []string{metadata.KROPrefix, metadata.InternalKROPrefix} {
 			if strings.HasPrefix(key, prefix) {
 				return fmt.Errorf(
@@ -492,4 +495,27 @@ func validateNoKROOwnedAnnotations(resourceID string, resourceObject map[string]
 	}
 
 	return nil
+}
+
+// validateDeletionPolicyAnnotation checks the one kro.run/ annotation a template
+// may set. CEL values are only known per instance. DeletionPolicyOf maps typos to Delete.
+func validateDeletionPolicyAnnotation(resourceID string, value any) error {
+	if !features.FeatureGate.Enabled(features.DeletionPolicy) {
+		return fmt.Errorf("resource %q: annotation %q requires the DeletionPolicy feature gate to be enabled",
+			resourceID, metadata.DeletionPolicyAnnotation)
+	}
+	policy, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("resource %q: annotation %q must be a string", resourceID, metadata.DeletionPolicyAnnotation)
+	}
+	if strings.Contains(policy, "${") {
+		return nil
+	}
+	switch metadata.DeletionPolicy(policy) {
+	case metadata.DeletionPolicyDelete, metadata.DeletionPolicyOrphaned:
+		return nil
+	}
+	return fmt.Errorf("resource %q: annotation %q must be %q or %q, got %q",
+		resourceID, metadata.DeletionPolicyAnnotation,
+		metadata.DeletionPolicyDelete, metadata.DeletionPolicyOrphaned, policy)
 }

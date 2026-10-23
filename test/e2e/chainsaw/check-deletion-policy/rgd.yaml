@@ -10,22 +10,24 @@ spec:
       name: string | default="app"
   resources:
     - id: retained
-      deletionPolicy: Orphaned
       template:
         apiVersion: v1
         kind: ConfigMap
         metadata:
           name: ${schema.spec.name}-retained
+          annotations:
+            kro.run/deletion-policy: Orphaned
           labels:
             app: ${schema.spec.name}
         data:
           kind: retained
     - id: removed
-      deletionPolicy: Delete
       template:
         apiVersion: v1
         kind: ConfigMap
         metadata:
           name: ${schema.spec.name}-removed
+          annotations:
+            kro.run/deletion-policy: Delete
         data:
           kind: removed

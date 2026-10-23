@@ -45,9 +45,9 @@ const (
 	// for schema facets that the default CRD comparator does not cover.
 	ConservativeCRDComparison featuregate.Feature = "ConservativeCRDComparison"
 
-	// DeletionPolicy enables the per-resource deletionPolicy field on
-	// ResourceGraphDefinition resources. When disabled, any RGD that sets
-	// deletionPolicy is rejected at build time and every managed resource is
+	// DeletionPolicy enables the kro.run/deletion-policy annotation on
+	// ResourceGraphDefinition resource templates. When disabled, any RGD that sets
+	// it is rejected at build time and every managed resource is
 	// deleted as before.
 	DeletionPolicy featuregate.Feature = "DeletionPolicy"
 )

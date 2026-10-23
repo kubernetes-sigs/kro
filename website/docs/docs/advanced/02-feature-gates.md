@@ -34,7 +34,7 @@ Or pass the flag directly to the controller binary:
 | `InstanceConditionMetrics`         | `false` | Alpha | v0.9.3  | Exports per-instance condition status as Prometheus metrics.                            |
 | `GraphKind`                        | `false` | Alpha | v0.10.0 | Starts the controller for the `Graph` API (`kro.run/v1alpha1`).                         |
 | `ConservativeCRDComparison`        | `false` | Alpha | v0.10.0 | Enables conservative checks for additional and unclassified CRD schema changes.         |
-| `DeletionPolicy`                   | `false` | Alpha | v0.10.0 | Enables the per-resource `deletionPolicy` field on ResourceGraphDefinition resources.   |
+| `DeletionPolicy`                   | `false` | Alpha | v0.10.0 | Enables the per-resource `kro.run/deletion-policy` template annotation.                 |
 
 ### CELOmitFunction
 
@@ -120,9 +120,9 @@ For instructions on applying an intentional breaking schema change, see
 
 ### DeletionPolicy
 
-When enabled, a resource in a ResourceGraphDefinition can set
-[`deletionPolicy`](../concepts/reconciliation/06-deletion-policy.md) to
-`Orphaned` so kro releases it instead of deleting it.
+When enabled, a resource template in a ResourceGraphDefinition can set the
+[`kro.run/deletion-policy`](../concepts/reconciliation/06-deletion-policy.md)
+annotation to `Orphaned` so kro releases it instead of deleting it.
 
 ```yaml
 config:
@@ -130,8 +130,8 @@ config:
     DeletionPolicy: true
 ```
 
-When this gate is disabled, any RGD that sets `deletionPolicy` is rejected at
-build time.
+When this gate is disabled, any RGD whose template sets the annotation is
+rejected at build time.
 
 :::warning Disabling the gate
 

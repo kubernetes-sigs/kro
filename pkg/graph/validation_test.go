@@ -26,10 +26,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 func TestValidateRGResourceNames(t *testing.T) {
@@ -771,6 +774,13 @@ func TestValidateNoKROOwnedAnnotations(t *testing.T) {
 			errorMsg:    "internal.kro.run/",
 		},
 		{
+			// Only the public kro.run/deletion-policy key is allowed.
+			name:        "internal deletion policy annotation",
+			annotations: map[string]any{"internal.kro.run/deletion-policy": "Orphaned"},
+			expectError: true,
+			errorMsg:    "internal.kro.run/",
+		},
+		{
 			name:        "unowned annotation",
 			annotations: map[string]any{"example.com/key": "value"},
 			expectError: false,
@@ -1354,4 +1364,37 @@ func toRawExtension(t *testing.T, v interface{}) runtime.RawExtension {
 	rawJSON, err := json.Marshal(v)
 	require.NoError(t, err)
 	return runtime.RawExtension{Raw: rawJSON}
+}
+
+func TestValidateNoKROOwnedAnnotations_DeletionPolicy(t *testing.T) {
+	tests := []struct {
+		name     string
+		gate     bool
+		value    any
+		errorMsg string
+	}{
+		{name: "orphaned", gate: true, value: "Orphaned"},
+		{name: "delete", gate: true, value: "Delete"},
+		{name: "cel expression", gate: true, value: "${schema.spec.policy}"},
+		{name: "typo", gate: true, value: "orphaned", errorMsg: `must be "Delete" or "Orphaned"`},
+		{name: "not a string", gate: true, value: true, errorMsg: "must be a string"},
+		{name: "gate disabled", gate: false, value: "Orphaned", errorMsg: "DeletionPolicy feature gate"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.DeletionPolicy, tt.gate)
+			obj := map[string]any{
+				"metadata": map[string]any{"annotations": map[string]any{
+					metadata.DeletionPolicyAnnotation: tt.value,
+				}},
+			}
+			err := validateNoKROOwnedAnnotations("testResource", obj)
+			if tt.errorMsg != "" {
+				require.ErrorContains(t, err, tt.errorMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

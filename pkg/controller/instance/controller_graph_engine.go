@@ -738,6 +738,19 @@ func (c *Controller) pruneGraphEngineOrphans(
 				continue
 			}
 		}
+		if deletionPolicyOf(candidate.Object) == metadata.DeletionPolicyOrphaned {
+			res, rerr := applier.ReleaseOrphan(ctx, candidate)
+			if rerr != nil {
+				return pruned, false, fmt.Errorf("release orphan: %w", rerr)
+			}
+			if res.Released {
+				pruned = true
+			}
+			if res.Conflict {
+				conflicts++
+			}
+			continue
+		}
 		res, derr := applier.DeleteOrphan(ctx, candidate)
 		if derr != nil {
 			return pruned, false, fmt.Errorf("delete orphan: %w", derr)

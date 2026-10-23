@@ -42,7 +42,6 @@ import (
 	controllergraph "github.com/kubernetes-sigs/kro/pkg/controller/graph"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
-	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
@@ -190,11 +189,9 @@ func (c *Controller) reconcileViaGraphEngine(
 	instanceAnnotations := metadata.InstanceIdentityAnnotations(inst)
 	nodeLabeler := metadata.NewNodeLabeler()
 	applysetPartOf := applyset.ID(inst)
-	orphanedNodes := orphanedNodeIDs(rgd)
 	extraLabel := func(obj *unstructured.Unstructured) {
 		instanceLabeler.ApplyLabels(obj)
 		applyInstanceIdentityAnnotations(obj, instanceAnnotations)
-		applyDeletionPolicyAnnotation(obj, orphanedNodes)
 		// app.kubernetes.io/managed-by=kro.
 		nodeLabeler.ApplyLabels(obj)
 		l := obj.GetLabels()
@@ -741,12 +738,7 @@ func (c *Controller) pruneGraphEngineOrphans(
 				continue
 			}
 		}
-		// A resource declared deletionPolicy: Orphaned is released, not deleted:
-		// kro's labels come off so it stops being an ApplySet member and is not
-		// rediscovered on the next cycle. The policy is read off the live object
-		// because prune candidates are exactly the resources the current graph no
-		// longer describes, so the RGD can no longer be asked.
-		if deletionPolicyOf(candidate.Object) == v1alpha1.DeletionPolicyOrphaned {
+		if deletionPolicyOf(candidate.Object) == metadata.DeletionPolicyOrphaned {
 			res, rerr := applier.ReleaseOrphan(ctx, candidate)
 			if rerr != nil {
 				return pruned, false, fmt.Errorf("release orphan: %w", rerr)
@@ -1030,36 +1022,6 @@ func isResourceDeleting(err error) bool {
 	// (*ResourceDeletingError).Is reports ErrResourceDeleting, so errors.Is
 	// matches the typed error anywhere in the chain — no separate errors.As.
 	return errors.Is(err, executor.ErrResourceDeleting)
-}
-
-// orphanedNodeIDs returns the IDs of the resources declared
-// deletionPolicy: Orphaned, or nil while the DeletionPolicy gate is off.
-func orphanedNodeIDs(rgd *v1alpha1.ResourceGraphDefinition) sets.Set[string] {
-	if rgd == nil || !features.FeatureGate.Enabled(features.DeletionPolicy) {
-		return nil
-	}
-	ids := sets.New[string]()
-	for _, res := range rgd.Spec.Resources {
-		if res.DeletionPolicy == v1alpha1.DeletionPolicyOrphaned {
-			ids.Insert(res.ID)
-		}
-	}
-	return ids
-}
-
-// applyDeletionPolicyAnnotation makes the declared policy authoritative on the
-// applied object, even when a `metadata: ${...}` expression copied someone else's.
-func applyDeletionPolicyAnnotation(obj *unstructured.Unstructured, orphaned sets.Set[string]) {
-	annotations := obj.GetAnnotations()
-	if orphaned.Has(annotations[metadata.NodePathAnnotation]) {
-		annotations[metadata.DeletionPolicyAnnotation] = string(v1alpha1.DeletionPolicyOrphaned)
-		obj.SetAnnotations(annotations)
-		return
-	}
-	if _, ok := annotations[metadata.DeletionPolicyAnnotation]; ok {
-		delete(annotations, metadata.DeletionPolicyAnnotation)
-		obj.SetAnnotations(annotations)
-	}
 }
 
 // applyInstanceIdentityAnnotations stamps the preserved identity values onto a

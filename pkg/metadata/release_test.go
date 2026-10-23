@@ -27,28 +27,28 @@ func TestDeletionPolicyOf(t *testing.T) {
 	cases := []struct {
 		name        string
 		annotations map[string]string
-		want        v1alpha1.DeletionPolicy
+		want        DeletionPolicy
 	}{
 		{
 			name:        "orphaned",
 			annotations: map[string]string{DeletionPolicyAnnotation: "Orphaned"},
-			want:        v1alpha1.DeletionPolicyOrphaned,
+			want:        DeletionPolicyOrphaned,
 		},
 		{
 			name:        "explicit delete",
 			annotations: map[string]string{DeletionPolicyAnnotation: "Delete"},
-			want:        v1alpha1.DeletionPolicyDelete,
+			want:        DeletionPolicyDelete,
 		},
 		{
 			name:        "absent annotation defaults to delete",
 			annotations: map[string]string{"other": "value"},
-			want:        v1alpha1.DeletionPolicyDelete,
+			want:        DeletionPolicyDelete,
 		},
 		{
 			// A typo must not make a resource undeletable.
 			name:        "unrecognised value defaults to delete",
 			annotations: map[string]string{DeletionPolicyAnnotation: "orphaned"},
-			want:        v1alpha1.DeletionPolicyDelete,
+			want:        DeletionPolicyDelete,
 		},
 	}
 	for _, tc := range cases {
@@ -60,7 +60,7 @@ func TestDeletionPolicyOf(t *testing.T) {
 }
 
 func TestDeletionPolicyOfNilObject(t *testing.T) {
-	assert.Equal(t, v1alpha1.DeletionPolicyDelete, DeletionPolicyOf(nil))
+	assert.Equal(t, DeletionPolicyDelete, DeletionPolicyOf(nil))
 }
 
 func TestReleaseKROMetadata(t *testing.T) {

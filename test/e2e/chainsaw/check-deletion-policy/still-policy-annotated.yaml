@@ -4,4 +4,4 @@ kind: ConfigMap
 metadata:
   name: demo-retained
   annotations:
-    internal.kro.run/deletion-policy: Orphaned
+    kro.run/deletion-policy: Orphaned

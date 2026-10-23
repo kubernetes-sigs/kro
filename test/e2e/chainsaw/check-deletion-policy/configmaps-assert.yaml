@@ -6,9 +6,7 @@ metadata:
     app: demo
     kro.run/owned: "true"
   annotations:
-    # The policy has to reach the object: the deletion path reads it from here,
-    # not from the RGD.
-    internal.kro.run/deletion-policy: Orphaned
+    kro.run/deletion-policy: Orphaned
 data:
   kind: retained
 ---

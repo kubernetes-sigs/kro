@@ -62,9 +62,8 @@ var _ = Describe("DeletionPolicy", func() {
 				map[string]any{"name": "string"},
 				nil,
 			),
-			generator.WithResource("retained", configMapTemplate("${schema.spec.name}-retained"), nil, nil),
+			generator.WithResource("retained", orphaned(configMapTemplate("${schema.spec.name}-retained")), nil, nil),
 			generator.WithResource("removed", configMapTemplate("${schema.spec.name}-removed"), nil, nil),
-			generator.WithResourceDeletionPolicy("retained", krov1alpha1.DeletionPolicyOrphaned),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 		DeferCleanup(func(ctx SpecContext) {
@@ -81,7 +80,7 @@ var _ = Describe("DeletionPolicy", func() {
 		// reads it from.
 		retained := waitForConfigMap(ctx, namespace, name+"-retained")
 		Expect(retained.Annotations).To(HaveKeyWithValue(
-			metadata.DeletionPolicyAnnotation, string(krov1alpha1.DeletionPolicyOrphaned)))
+			metadata.DeletionPolicyAnnotation, string(metadata.DeletionPolicyOrphaned)))
 		waitForConfigMap(ctx, namespace, name+"-removed")
 
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -123,9 +122,8 @@ var _ = Describe("DeletionPolicy", func() {
 				},
 				nil,
 			),
-			generator.WithResource("retained", configMapTemplate("${schema.spec.name}-retained"),
+			generator.WithResource("retained", orphaned(configMapTemplate("${schema.spec.name}-retained")),
 				nil, []string{"${schema.spec.enabled}"}),
-			generator.WithResourceDeletionPolicy("retained", krov1alpha1.DeletionPolicyOrphaned),
 		)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 		DeferCleanup(func(ctx SpecContext) {
@@ -171,31 +169,6 @@ var _ = Describe("DeletionPolicy", func() {
 	})
 })
 
-// The API server rejects the field where it has no meaning, so an author who
-// puts it on an externalRef finds out on apply rather than discovering months
-// later that the policy was silently ignored.
-var _ = Describe("DeletionPolicyValidation", func() {
-	It("rejects deletionPolicy on an externalRef", func(ctx SpecContext) {
-		rgd := generator.NewResourceGraphDefinition("test-deletion-policy-externalref",
-			generator.WithSchema(
-				"TestDeletionPolicyExternalRef", "v1alpha1",
-				map[string]any{"name": "string"},
-				nil,
-			),
-			generator.WithExternalRef("existing", &krov1alpha1.ExternalRef{
-				APIVersion: "v1",
-				Kind:       "ConfigMap",
-				Metadata:   krov1alpha1.ExternalRefMetadata{Name: "some-cm"},
-			}, nil, nil),
-			generator.WithResourceDeletionPolicy("existing", krov1alpha1.DeletionPolicyOrphaned),
-		)
-
-		err := env.Client.Create(ctx, rgd)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("deletionPolicy is only supported on template resources"))
-	})
-})
-
 func configMapTemplate(name string) map[string]any {
 	return map[string]any{
 		"apiVersion": "v1",
@@ -206,6 +179,13 @@ func configMapTemplate(name string) map[string]any {
 		},
 		"data": map[string]any{"key": "value"},
 	}
+}
+
+// orphaned declares deletionPolicy: Orphaned the way an RGD author does.
+func orphaned(tmpl map[string]any) map[string]any {
+	meta := tmpl["metadata"].(map[string]any)
+	meta["annotations"] = map[string]any{metadata.DeletionPolicyAnnotation: string(metadata.DeletionPolicyOrphaned)}
+	return tmpl
 }
 
 func waitForConfigMap(ctx SpecContext, namespace, name string) *corev1.ConfigMap {

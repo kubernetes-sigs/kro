@@ -32,6 +32,7 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 func TestValidateRGResourceNames(t *testing.T) {
@@ -773,9 +774,8 @@ func TestValidateNoKROOwnedAnnotations(t *testing.T) {
 			errorMsg:    "internal.kro.run/",
 		},
 		{
-			// The deletion policy is set only through deletionPolicy, never
-			// by the template.
-			name:        "deletion policy annotation",
+			// Only the public kro.run/deletion-policy key is allowed.
+			name:        "internal deletion policy annotation",
 			annotations: map[string]any{"internal.kro.run/deletion-policy": "Orphaned"},
 			expectError: true,
 			errorMsg:    "internal.kro.run/",
@@ -1366,19 +1366,35 @@ func toRawExtension(t *testing.T, v interface{}) runtime.RawExtension {
 	return runtime.RawExtension{Raw: rawJSON}
 }
 
-func TestValidateResourceGraphDefinition_DeletionPolicyFeatureGate(t *testing.T) {
-	rgd := &v1alpha1.ResourceGraphDefinition{
-		Spec: v1alpha1.ResourceGraphDefinitionSpec{
-			Schema:    &v1alpha1.Schema{Kind: "WebApp"},
-			Resources: []*v1alpha1.Resource{{ID: "cm", DeletionPolicy: v1alpha1.DeletionPolicyOrphaned}},
-		},
+func TestValidateNoKROOwnedAnnotations_DeletionPolicy(t *testing.T) {
+	tests := []struct {
+		name     string
+		gate     bool
+		value    any
+		errorMsg string
+	}{
+		{name: "orphaned", gate: true, value: "Orphaned"},
+		{name: "delete", gate: true, value: "Delete"},
+		{name: "cel expression", gate: true, value: "${schema.spec.policy}"},
+		{name: "typo", gate: true, value: "orphaned", errorMsg: `must be "Delete" or "Orphaned"`},
+		{name: "not a string", gate: true, value: true, errorMsg: "must be a string"},
+		{name: "gate disabled", gate: false, value: "Orphaned", errorMsg: "DeletionPolicy feature gate"},
 	}
 
-	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.DeletionPolicy, false)
-	err := validateResourceGraphDefinition(rgd, Config{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "DeletionPolicy feature gate")
-
-	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.DeletionPolicy, true)
-	require.NoError(t, validateResourceGraphDefinition(rgd, Config{}))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.DeletionPolicy, tt.gate)
+			obj := map[string]any{
+				"metadata": map[string]any{"annotations": map[string]any{
+					metadata.DeletionPolicyAnnotation: tt.value,
+				}},
+			}
+			err := validateNoKROOwnedAnnotations("testResource", obj)
+			if tt.errorMsg != "" {
+				require.ErrorContains(t, err, tt.errorMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

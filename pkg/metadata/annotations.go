@@ -43,8 +43,7 @@ const (
 	// holds the exact value there is nothing to preserve.
 	InstanceNameAnnotation  = InternalKROPrefix + "instance-name"
 	InstanceGroupAnnotation = InternalKROPrefix + "instance-group"
-	// DeletionPolicyAnnotation records the resource's declared v1alpha1.DeletionPolicy.
-	//
-	// Default and absence is v1alpha1.DeletionPolicyDelete.
-	DeletionPolicyAnnotation = InternalKROPrefix + "deletion-policy"
+	// DeletionPolicyAnnotation is set by the RGD author on a resource template
+	// to declare its DeletionPolicy. Default is DeletionPolicyDelete.
+	DeletionPolicyAnnotation = KROPrefix + "deletion-policy"
 )

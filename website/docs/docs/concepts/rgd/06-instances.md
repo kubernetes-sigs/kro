@@ -166,6 +166,9 @@ kubectl get pod <name> -o jsonpath='{.metadata.annotations.internal\.kro\.run/no
 
 ### Long instance names
 
+RGD authors can constrain accepted instance names with
+[`schema.metadata.nameValidation`](./02-schema.md#validating-instance-names).
+
 The same 63 character cap applies to the instance identity kro copies onto
 every managed resource. Names and API groups are DNS subdomains and may run to
 253 characters, so `kro.run/instance-name` and `kro.run/instance-group` hold

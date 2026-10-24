@@ -57,7 +57,51 @@ func Compare(
 	for _, option := range options {
 		option(&config)
 	}
+
+	oldSchema = withImplicitInstanceName(oldSchema)
+	newSchema = withImplicitInstanceName(newSchema)
 	return compare("", oldSchema, newSchema, config.conservative)
+}
+
+const instanceNameSchemaPath = ".properties.metadata.properties.name"
+
+// withImplicitInstanceName returns a schema whose root contains the metadata
+// object and unconstrained string name schema Kubernetes provides implicitly.
+// The input is copied only when an implicit field needs to be added.
+func withImplicitInstanceName(schema *v1.JSONSchemaProps) *v1.JSONSchemaProps {
+	if schema == nil {
+		return nil
+	}
+	if _, exists := instanceName(schema); exists {
+		return schema
+	}
+
+	schema = schema.DeepCopy()
+	if schema.Properties == nil {
+		schema.Properties = make(map[string]v1.JSONSchemaProps)
+	}
+	metadata, exists := schema.Properties["metadata"]
+	if !exists {
+		metadata.Type = "object"
+	}
+	if metadata.Properties == nil {
+		metadata.Properties = make(map[string]v1.JSONSchemaProps)
+	}
+	metadata.Properties["name"] = v1.JSONSchemaProps{Type: "string"}
+	schema.Properties["metadata"] = metadata
+	return schema
+}
+
+func instanceName(schema *v1.JSONSchemaProps) (v1.JSONSchemaProps, bool) {
+	if schema == nil {
+		return v1.JSONSchemaProps{}, false
+	}
+	metadata, exists := schema.Properties["metadata"]
+	if !exists {
+		return v1.JSONSchemaProps{}, false
+	}
+	name, exists := metadata.Properties["name"]
+	return name, exists
 }
 
 // compare is the internal recursive implementation

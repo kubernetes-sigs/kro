@@ -1,4 +1,4 @@
-# kro Nested RG example
+# kro Nested RG example - OmSairam
 
 This example creates a ResourceGraphDefinition called `WebStack` comprised of
 three other RGs: `WebApp`, `S3Bucket`, and `PodIdentity`

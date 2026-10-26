@@ -276,6 +276,31 @@ func TestCompareVersions(t *testing.T) {
 			expectBreaking:   false,
 			nonBreakingCount: 1,
 		},
+		{
+			name: "non-breaking change - selectable fields changed",
+			oldVersions: []v1.CustomResourceDefinitionVersion{
+				{
+					Name: "v1",
+					Schema: &v1.CustomResourceValidation{
+						OpenAPIV3Schema: &v1.JSONSchemaProps{Type: "object"},
+					},
+				},
+			},
+			newVersions: []v1.CustomResourceDefinitionVersion{
+				{
+					Name: "v1",
+					Schema: &v1.CustomResourceValidation{
+						OpenAPIV3Schema: &v1.JSONSchemaProps{Type: "object"},
+					},
+					SelectableFields: []v1.SelectableField{
+						{JSONPath: ".spec.region"},
+					},
+				},
+			},
+			expectError:      false,
+			expectBreaking:   false,
+			nonBreakingCount: 1,
+		},
 	}
 
 	for _, tt := range tests {

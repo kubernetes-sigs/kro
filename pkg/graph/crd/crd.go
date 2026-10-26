@@ -82,6 +82,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope
 						Status: &extv1.CustomResourceSubresourceStatus{},
 					},
 					AdditionalPrinterColumns: newCRDAdditionalPrinterColumns(rgSchema.AdditionalPrinterColumns),
+					SelectableFields:         rgSchema.SelectableFields,
 				},
 			},
 		},

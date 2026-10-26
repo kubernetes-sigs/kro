@@ -561,6 +561,11 @@ func (in *Schema) DeepCopyInto(out *Schema) {
 		*out = make([]v1.CustomResourceColumnDefinition, len(*in))
 		copy(*out, *in)
 	}
+	if in.SelectableFields != nil {
+		in, out := &in.SelectableFields, &out.SelectableFields
+		*out = make([]v1.SelectableField, len(*in))
+		copy(*out, *in)
+	}
 	if in.ShortNames != nil {
 		in, out := &in.ShortNames, &out.ShortNames
 		*out = make([]string, len(*in))

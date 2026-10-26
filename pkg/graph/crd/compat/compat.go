@@ -79,5 +79,10 @@ func CompareVersions(oldVersions, newVersions []v1.CustomResourceDefinitionVersi
 		report.AddNonBreakingChange("version.additionalPrinterColumns", AdditionalPrinterColumnsChanged, "", "")
 	}
 
+	// Selectable fields are not part of the schema either.
+	if !equality.Semantic.DeepEqual(oldVersion.SelectableFields, newVersion.SelectableFields) {
+		report.AddNonBreakingChange("version.selectableFields", SelectableFieldsChanged, "", "")
+	}
+
 	return report, nil
 }

@@ -418,6 +418,24 @@ func TestNewCRD(t *testing.T) {
 	}
 }
 
+func TestNewCRDSelectableFields(t *testing.T) {
+	schema := &extv1.JSONSchemaProps{Type: "object"}
+
+	crd := newCRD("kro.run", "v1alpha1", "Application", schema, extv1.NamespaceScoped, &v1alpha1.Schema{})
+	require.Len(t, crd.Spec.Versions, 1)
+	assert.Nil(t, crd.Spec.Versions[0].SelectableFields)
+
+	fields := []extv1.SelectableField{
+		{JSONPath: ".spec.environment"},
+		{JSONPath: ".spec.region"},
+	}
+	crd = newCRD("kro.run", "v1alpha1", "Application", schema, extv1.NamespaceScoped, &v1alpha1.Schema{
+		SelectableFields: fields,
+	})
+	require.Len(t, crd.Spec.Versions, 1)
+	assert.Equal(t, fields, crd.Spec.Versions[0].SelectableFields)
+}
+
 func TestNewCRDSchema(t *testing.T) {
 	tests := []struct {
 		name                    string

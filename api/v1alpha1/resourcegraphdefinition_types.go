@@ -121,6 +121,14 @@ type Schema struct {
 	// +kubebuilder:validation:Optional
 	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
 
+	// SelectableFields lists fields of the generated CRD that can be used
+	// with field selectors, e.g. `kubectl get --field-selector spec.region=eu`.
+	// They are passed down to the created CRD.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=8
+	SelectableFields []extv1.SelectableField `json:"selectableFields,omitempty"`
+
 	// ShortNames are aliases for the generated CRD that can be used with kubectl.
 	// Example: ["wa", "webapp"] allows `kubectl get wa` or `kubectl get webapp` instead of `kubectl get webapplications`.
 	//

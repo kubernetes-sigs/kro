@@ -16,6 +16,7 @@ The schema section specifies:
 - **Status fields**: What runtime information kro surfaces from managed resources
 - **Custom types**: Reusable type definitions for complex schemas
 - **Additional printer columns**: Custom columns for `kubectl get` output
+- **Selectable fields**: Fields that can be used with `kubectl get --field-selector`
 - **Short names and categories**: Optional kubectl aliases and grouping for the generated API
 
 ## Basic Structure
@@ -515,6 +516,29 @@ $ kubectl get applications
 NAME     REPLICAS   AVAILABLE   AGE
 my-app   5          5           10m
 ```
+
+## Selectable Fields
+
+List fields that clients can filter on server side with field selectors:
+
+```kro
+schema:
+  spec:
+    environment: string
+    region: string
+
+  selectableFields:
+    - jsonPath: .spec.environment
+    - jsonPath: .spec.region
+```
+
+kro copies them to the generated CRD, so you can run:
+```bash
+$ kubectl get applications --field-selector spec.environment=prod
+```
+
+Each path must point to a string, boolean or integer field, and at most 8
+fields can be listed.
 
 ## Complete Example
 

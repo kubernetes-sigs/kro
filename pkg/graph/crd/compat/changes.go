@@ -63,6 +63,7 @@ const (
 	EnumConstraintRemoved           ChangeType = "ENUM_CONSTRAINT_REMOVED"
 	PatternRemoved                  ChangeType = "PATTERN_REMOVED"
 	AdditionalPrinterColumnsChanged ChangeType = "ADDITIONAL_PRINTER_COLUMNS_CHANGED"
+	SelectableFieldsChanged         ChangeType = "SELECTABLE_FIELDS_CHANGED"
 	NullableAdded                   ChangeType = "NULLABLE_ADDED"
 	FormatRemoved                   ChangeType = "FORMAT_REMOVED"
 	PreserveUnknownFieldsAdded      ChangeType = "PRESERVE_UNKNOWN_FIELDS_ADDED"
@@ -231,6 +232,8 @@ func (c Change) Description() string {
 		return fmt.Sprintf("Default value was changed from %s to %s", c.OldValue, c.NewValue)
 	case AdditionalPrinterColumnsChanged:
 		return "Additional printer columns were changed"
+	case SelectableFieldsChanged:
+		return "Selectable fields were changed"
 	default:
 		return c.constraintDescription()
 	}

@@ -387,9 +387,10 @@ spec:
                   "KindReady", and "ControllerReady".
                 items:
                   description: |-
-                    Condition is the common struct used by all CRDs managed by ACK service
-                    controllers to indicate terminal states  of the CR and its backend AWS
-                    service API resource
+                    Condition describes one aspect of the observed state of an object managed by
+                    kro: a ResourceGraphDefinition, Graph, GraphRevision, or an instance of an
+                    RGD-generated kind. Conditions are reported in the object's status.conditions
+                    list, which holds at most one entry per Type.
                   properties:
                     lastTransitionTime:
                       description: Last time the condition transitioned from one status

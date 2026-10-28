@@ -119,6 +119,13 @@ tt:
 verify-codegen: ## Verify generated code is up-to-date.
 	./scripts/hack/verify-codegen.sh
 
+.PHONY: generate-api-docs
+generate-api-docs: crd-ref-docs ## Generate the API reference for kro's CRDs from the Go types in ./api.
+	CRD_REF_DOCS_VERSION=$(CRD_REF_DOCS_VERSION) CRD_REF_DOCS=$(CRD_REF_DOCS) ./scripts/hack/generate-api-docs.sh
+
+.PHONY: verify-api-docs
+verify-api-docs: verify-codegen ## Verify generated code, including the API reference, is up-to-date (alias for verify-codegen).
+
 .PHONY: fmt
 fmt: go-generate ## Run go fmt against code and add licenses.
 	go fmt ./...
@@ -209,12 +216,15 @@ KO ?= $(LOCALBIN)/ko
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 CHAINSAW ?= $(LOCALBIN)/chainsaw
+CRD_REF_DOCS ?= $(LOCALBIN)/crd-ref-docs
 
 ## Tool Versions
 KO_VERSION ?= v0.19.1
 KUSTOMIZE_VERSION ?= v5.8.1
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
 CHAINSAW_VERSION ?= v0.2.15
+# When bumping CRD_REF_DOCS_VERSION, re-check scripts/hack/crd-ref-docs/templates.patch still applies to the upstream templates.
+CRD_REF_DOCS_VERSION ?= v0.3.0
 
 .PHONY: chainsaw
 chainsaw: $(CHAINSAW) ## Download chainsaw locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -250,6 +260,12 @@ controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessar
 $(CONTROLLER_GEN): $(LOCALBIN)
 	test -s $(LOCALBIN)/controller-gen && $(LOCALBIN)/controller-gen --version | grep -q $(CONTROLLER_TOOLS_VERSION) || \
 	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
+
+.PHONY: crd-ref-docs
+crd-ref-docs: $(CRD_REF_DOCS) ## Download crd-ref-docs locally if necessary.
+$(CRD_REF_DOCS): $(LOCALBIN)
+	test -s $(LOCALBIN)/crd-ref-docs && $(LOCALBIN)/crd-ref-docs --version | grep -qF "Version: $(CRD_REF_DOCS_VERSION)" || \
+	GOBIN=$(LOCALBIN) go install github.com/elastic/crd-ref-docs@$(CRD_REF_DOCS_VERSION)
 
 .PHONY: envtest
 envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.

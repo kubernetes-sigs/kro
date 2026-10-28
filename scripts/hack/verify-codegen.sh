@@ -13,6 +13,9 @@ make generate
 echo "Running make manifests..."
 make manifests
 
+echo "Running make generate-api-docs..."
+make generate-api-docs
+
 # --porcelain rather than `git diff`, so a newly generated file that is not yet
 # tracked fails the check instead of passing silently.
 if [ -n "$(git status --porcelain)" ]; then

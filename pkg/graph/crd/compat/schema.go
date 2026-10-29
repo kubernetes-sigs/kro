@@ -25,6 +25,7 @@ import (
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	utiljson "k8s.io/apimachinery/pkg/util/json"
 
 	"github.com/kubernetes-sigs/kro/pkg/features"
 )
@@ -582,9 +583,8 @@ func formatSchemaFieldValue(value any) string {
 	return string(encoded)
 }
 
-// defaultsEqual compares two JSON default values for equality.
-// Two defaults are equal if they are both nil, or both non-nil with
-// identical Raw byte content.
+// defaultsEqual normalizes both defaults the way the API server stores them,
+// so 1.0 equals the stored 1. Raw bytes that fail to decode are compared as is.
 func defaultsEqual(a, b *v1.JSON) bool {
 	if a == nil && b == nil {
 		return true
@@ -592,7 +592,20 @@ func defaultsEqual(a, b *v1.JSON) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	return bytes.Equal(a.Raw, b.Raw)
+	an, aerr := normalizeJSON(a.Raw)
+	bn, berr := normalizeJSON(b.Raw)
+	if aerr != nil || berr != nil {
+		return bytes.Equal(a.Raw, b.Raw)
+	}
+	return bytes.Equal(an, bn)
+}
+
+func normalizeJSON(raw []byte) ([]byte, error) {
+	var v any
+	if err := utiljson.Unmarshal(raw, &v); err != nil {
+		return nil, err
+	}
+	return json.Marshal(v)
 }
 
 // toStringSet converts a string slice to a map for O(1) lookups

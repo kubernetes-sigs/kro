@@ -125,7 +125,7 @@ func (f *fakeCompiler) Compile(*expv1alpha1.Graph) (*compiler.Program, error) {
 	return f.program, f.err
 }
 
-func newClient(t *testing.T, g *expv1alpha1.Graph) client.Client {
+func newClient(t *testing.T, g *expv1alpha1.Graph) client.WithWatch {
 	t.Helper()
 	s := runtime.NewScheme()
 	require.NoError(t, expv1alpha1.AddToScheme(s))
@@ -386,7 +386,7 @@ func TestReconcile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cl := newClient(t, tc.initial)
-			var clientForReconciler = cl
+			var clientForReconciler client.Client = cl
 			if tc.wrapClient != nil {
 				clientForReconciler = tc.wrapClient(cl)
 			}

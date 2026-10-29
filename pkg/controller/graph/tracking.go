@@ -140,22 +140,20 @@ func projectManagedResources(
 	seedDefNodes(rt)
 
 	for _, n := range rt.Nodes() {
+		if n.Kind() != compiler.NodeKindTemplate && n.Kind() != compiler.NodeKindGraph {
+			continue
+		}
+		// includeWhen:false won't be applied; an IsIgnored error means we can't
+		// decide yet — keep it out (its post-apply Applied entry records it).
+		if ignored, err := n.IsIgnored(); err != nil || ignored {
+			continue
+		}
 		// A subgraph node has no payload of its own; recurse into its child frame,
 		// qualifying node IDs with this node's prefix — as applySubgraph does.
 		if n.Kind() == compiler.NodeKindGraph {
 			if child := childRuntime(rt, n); child != nil {
 				projectManagedResources(child, prefix+n.ID()+"/", seen, out)
 			}
-			continue
-		}
-		// Only template nodes produce owned/torn-down resources (ref = read-only,
-		// patch = tracked as contributions, def = no I/O).
-		if n.Kind() != compiler.NodeKindTemplate {
-			continue
-		}
-		// includeWhen:false won't be applied; an IsIgnored error means we can't
-		// decide yet — keep it out (its post-apply Applied entry records it).
-		if ignored, err := n.IsIgnored(); err == nil && ignored {
 			continue
 		}
 		desired, err := n.Resolve()
@@ -262,7 +260,7 @@ func intendedContributions(rt *krotruntime.Runtime) []executor.Contribution {
 	}
 	graphUID := rt.Graph().GetUID()
 	var out []executor.Contribution
-	seen := make(map[contribKey]struct{})
+	seen := make(map[executor.Contribution]struct{})
 	projectContributions(rt, "", graphUID, seen, &out)
 	return out
 }
@@ -275,7 +273,7 @@ func projectContributions(
 	rt *krotruntime.Runtime,
 	prefix string,
 	graphUID types.UID,
-	seen map[contribKey]struct{},
+	seen map[executor.Contribution]struct{},
 	out *[]executor.Contribution,
 ) {
 	// Seed Def nodes into scope so patch targets referencing them (e.g.
@@ -283,6 +281,12 @@ func projectContributions(
 	seedDefNodes(rt)
 
 	for _, n := range rt.Nodes() {
+		if n.Kind() != compiler.NodeKindPatch && n.Kind() != compiler.NodeKindGraph {
+			continue
+		}
+		if ignored, err := n.IsIgnored(); err != nil || ignored {
+			continue
+		}
 		// A subgraph node has no payload of its own; recurse into its child frame,
 		// qualifying node IDs with this node's prefix so the projected field manager
 		// uses the SAME qualified path the child executor will.
@@ -292,45 +296,40 @@ func projectContributions(
 			}
 			continue
 		}
-		if n.Kind() != compiler.NodeKindPatch {
-			continue
-		}
-		if ignored, err := n.IsIgnored(); err == nil && ignored {
-			continue
-		}
 		desired, err := n.Resolve()
-		if err != nil || len(desired) != 1 {
+		if err != nil {
 			continue
 		}
-		obj := desired[0]
-		gvk := obj.GroupVersionKind()
-		if gvk.Kind == "" || obj.GetName() == "" {
-			continue
+		fieldManager := executor.PatchFieldManager(graphUID, prefix+n.ID())
+		for _, obj := range desired {
+			gvk := obj.GroupVersionKind()
+			if gvk.Kind == "" || obj.GetName() == "" {
+				continue
+			}
+			ns := obj.GetNamespace()
+			if ns == "" && n.Namespaced() {
+				ns = rt.Graph().GetNamespace()
+			}
+			// Same dynamic-GVK-no-namespace ambiguity as intendedManagedResources:
+			// the scope isn't known until apply resolves it from the RESTMapper, so a
+			// ns="" entry would never correlate. Skip it.
+			if ns == "" && n.DynamicGVK() {
+				continue
+			}
+			c := executor.Contribution{
+				APIVersion:   gvk.GroupVersion().String(),
+				Kind:         gvk.Kind,
+				Namespace:    ns,
+				Name:         obj.GetName(),
+				Subresource:  n.Subresource(),
+				FieldManager: fieldManager,
+			}
+			if _, dup := seen[c]; dup {
+				continue
+			}
+			seen[c] = struct{}{}
+			*out = append(*out, c)
 		}
-		ns := obj.GetNamespace()
-		if ns == "" && n.Namespaced() {
-			ns = rt.Graph().GetNamespace()
-		}
-		// Same dynamic-GVK-no-namespace ambiguity as intendedManagedResources:
-		// the scope isn't known until apply resolves it from the RESTMapper, so a
-		// ns="" entry would never correlate. Skip it.
-		if ns == "" && n.DynamicGVK() {
-			continue
-		}
-		c := executor.Contribution{
-			APIVersion:   gvk.GroupVersion().String(),
-			Kind:         gvk.Kind,
-			Namespace:    ns,
-			Name:         obj.GetName(),
-			Subresource:  n.Subresource(),
-			FieldManager: executor.PatchFieldManager(graphUID, prefix+n.ID()),
-		}
-		k := contribKeyOf(c)
-		if _, dup := seen[k]; dup {
-			continue
-		}
-		seen[k] = struct{}{}
-		*out = append(*out, c)
 	}
 }
 
@@ -371,29 +370,6 @@ func unionManagedResources(
 		add(r)
 	}
 	return out
-}
-
-// contribKey is the identity tuple for a patch contribution. The field
-// manager alone is stable per patch node, but the target identity is included
-// so a patch whose target name changed releases the old target's fields.
-type contribKey struct {
-	FieldManager string
-	APIVersion   string
-	Kind         string
-	Namespace    string
-	Name         string
-	Subresource  string
-}
-
-func contribKeyOf(c executor.Contribution) contribKey {
-	return contribKey{
-		FieldManager: c.FieldManager,
-		APIVersion:   c.APIVersion,
-		Kind:         c.Kind,
-		Namespace:    c.Namespace,
-		Name:         c.Name,
-		Subresource:  c.Subresource,
-	}
 }
 
 // ReadContributions parses the persisted patch-contribution inventory off an
@@ -440,14 +416,7 @@ func toAPIContributions(contribs []executor.Contribution) []expv1alpha1.Contribu
 	}
 	out := make([]expv1alpha1.Contribution, 0, len(contribs))
 	for _, c := range contribs {
-		out = append(out, expv1alpha1.Contribution{
-			APIVersion:   c.APIVersion,
-			Kind:         c.Kind,
-			Namespace:    c.Namespace,
-			Name:         c.Name,
-			Subresource:  c.Subresource,
-			FieldManager: c.FieldManager,
-		})
+		out = append(out, expv1alpha1.Contribution(c))
 	}
 	return out
 }
@@ -461,14 +430,7 @@ func fromAPIContributions(contribs []expv1alpha1.Contribution) []executor.Contri
 	}
 	out := make([]executor.Contribution, 0, len(contribs))
 	for _, c := range contribs {
-		out = append(out, executor.Contribution{
-			APIVersion:   c.APIVersion,
-			Kind:         c.Kind,
-			Namespace:    c.Namespace,
-			Name:         c.Name,
-			Subresource:  c.Subresource,
-			FieldManager: c.FieldManager,
-		})
+		out = append(out, executor.Contribution(c))
 	}
 	return out
 }
@@ -477,13 +439,13 @@ func fromAPIContributions(contribs []expv1alpha1.Contribution) []executor.Contri
 // current — the contributions to release because their patch node was removed
 // or its target identity changed.
 func DiffContributions(prior, current []executor.Contribution) []executor.Contribution {
-	cur := make(map[contribKey]struct{}, len(current))
+	cur := make(map[executor.Contribution]struct{}, len(current))
 	for _, c := range current {
-		cur[contribKeyOf(c)] = struct{}{}
+		cur[c] = struct{}{}
 	}
 	released := make([]executor.Contribution, 0, len(prior))
 	for _, p := range prior {
-		if _, ok := cur[contribKeyOf(p)]; !ok {
+		if _, ok := cur[p]; !ok {
 			released = append(released, p)
 		}
 	}
@@ -494,14 +456,13 @@ func DiffContributions(prior, current []executor.Contribution) []executor.Contri
 // Used when an Apply hit a soft or hard error — the diff isn't trustworthy,
 // so the persisted inventory widens to cover everything known.
 func UnionContributions(prior, current []executor.Contribution) []executor.Contribution {
-	seen := make(map[contribKey]struct{}, len(prior)+len(current))
+	seen := make(map[executor.Contribution]struct{}, len(prior)+len(current))
 	out := make([]executor.Contribution, 0, len(prior)+len(current))
 	add := func(c executor.Contribution) {
-		k := contribKeyOf(c)
-		if _, dup := seen[k]; dup {
+		if _, dup := seen[c]; dup {
 			return
 		}
-		seen[k] = struct{}{}
+		seen[c] = struct{}{}
 		out = append(out, c)
 	}
 	for _, c := range prior {

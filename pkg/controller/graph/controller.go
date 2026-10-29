@@ -175,11 +175,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // compiled Program. Conditions are written via the ConditionsMarker; status
 // is flushed by the caller via updateStatus.
 //
-// If a Router is wired in, we open a per-Graph Watcher around
-// Apply so each resolved resource registers a watch. On success commit
-// the new watch set (clearing any nodes that were removed in this
-// revision); on error abort, keeping the previously committed set
-// authoritative so drift detection survives transient failures.
+// If a Router is wired in, we open a per-Graph Watcher around Apply so each
+// resolved resource registers a watch. The new watch set is committed on every
+// apply outcome (clearing any nodes that were removed in this revision): the
+// executor never cuts the walk short on a per-node failure, so the declared set
+// is complete even when the apply reports a hard error, and committing keeps
+// the shared informers alive across a persistent failure instead of tearing
+// them down and rebuilding them every retry.
 // writeAheadIntent persists the pre-apply intent (managed resources + patch
 // contributions) BEFORE any cluster write, and returns the managed-resource
 // intent for reuse by the caller's failure branches.
@@ -351,16 +353,18 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 
 	result, applyErr := ex.Apply(ctx, rt, watcher)
 
-	// Commit on full success or soft ErrNotReady — the executor walks
-	// every reachable node even when some are not ready, so the watch
-	// set is authoritative either way. Abort only on hard errors that
-	// interrupted the walk before downstream watches could register.
+	// Commit the watch set on every apply outcome. The executor walks every
+	// reachable node regardless of per-node failures (a hard error on one node
+	// is recorded and the walk continues), so the declared set is authoritative
+	// for a hard error exactly as it is for a soft ErrNotReady. Retaining the
+	// informers keeps a persistent hard failure paced by controller-runtime's
+	// error backoff instead of re-listing the GVR on every retry.
+	watcher.Done(true)
+
 	switch {
 	case applyErr == nil:
-		watcher.Done(true)
 		marker.ResourcesConverged()
 	case errors.Is(applyErr, executor.ErrNotReady):
-		watcher.Done(true)
 		// Distinguish the not-ready flavors: an ownership conflict (nothing
 		// applied), missing upstream data, or apply succeeded but still settling.
 		switch {
@@ -372,7 +376,6 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 			marker.ResourcesNotReady(applyErr.Error())
 		}
 	default:
-		watcher.Done(false)
 		marker.ResourcesApplyFailed(applyErr.Error())
 	}
 
@@ -395,14 +398,14 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 	// shrunk, includeWhen flipped, or rename.
 	newSet, pruneCandidates := diffManagedResources(previous, result)
 
-	// Prune retired resources whenever the executor walk was not interrupted by
-	// a HARD error. diffManagedResources already keeps any entry whose owning
-	// node is Unresolved this cycle (in newSet), so pruneCandidates are exactly
-	// the resources whose owning node is genuinely gone or resolved — safe to
-	// delete even while OTHER nodes are still soft not-ready. Previously all
-	// pruning was gated on a fully clean apply, so a single never-ready node
-	// vetoed pruning of every unrelated retired node (this is the Graph-path twin
-	// of the instance ownedUnresolved/pruneGate narrowing).
+	// Prune retired resources unless the apply hard-failed. diffManagedResources
+	// keeps any entry whose owning node is Unresolved this cycle (in newSet), so
+	// on a clean or soft not-ready apply pruneCandidates are exactly the
+	// resources whose owning node is genuinely gone or resolved — safe to delete
+	// even while OTHER nodes are still soft not-ready. A hard-failed node is
+	// neither Applied nor Unresolved, so its previous resources would show up as
+	// prune candidates; skip pruning entirely in that case. This is the
+	// Graph-path twin of the instance ownedUnresolved/pruneGate narrowing.
 	hardErr := applyErr != nil && !errors.Is(applyErr, executor.ErrNotReady)
 	// The full pre-apply superset (previous + applied + intent), reused wherever
 	// the inventory must not shrink below what the write-ahead already advertised.
@@ -437,8 +440,9 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 			g.Status.ManagedResources = unionManagedResources(newSet, intendedManagedResources(rt))
 		}
 	} else {
-		// Hard failure — the walk's node outcomes are uncertain, so keep the full
-		// union so a future reconcile can still prune or restore. Fold intent back
+		// Hard failure — a hard-failed node's resources cannot be told apart from
+		// a removed node's, so keep the full union so a future reconcile can
+		// still prune or restore. Fold intent back
 		// in so the terminal updateStatus cannot shrink the server inventory below
 		// the pre-apply superset and re-open the orphan window; UID-free intent
 		// dedups against Applied via keyOf.

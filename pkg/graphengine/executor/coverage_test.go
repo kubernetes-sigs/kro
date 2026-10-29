@@ -16,12 +16,17 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	memory "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/restmapper"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,6 +37,7 @@ import (
 	krotruntime "github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
 
@@ -151,36 +157,120 @@ func TestRefName(t *testing.T) {
 	}
 }
 
-// TestDelete_UIDPrecondition exercises the UID-precondition and empty-UID skip:
-// a resource carrying a UID calls Client.Delete with a DeleteOptions UID precondition,
-// while a resource without a UID is skipped without calling Client.Delete.
+// TestDelete_UIDPrecondition checks identity and snapshot preconditions,
+// ownership checks, and retryable cleanup errors.
 func TestDelete_UIDPrecondition(t *testing.T) {
 	t.Parallel()
+	const ownerUID types.UID = "graph-uid"
+	self := templateFieldManager(ownerUID)
+	peer := templateFieldManager("peer-uid")
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, "cm", errors.New("denied"))
+	missing := apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, "cm")
+	noMatch := &meta.NoKindMatchError{GroupKind: configMapGVK.GroupKind(), SearchedVersions: []string{"v1"}}
+	unavailable := apierrors.NewServiceUnavailable("try again")
+	conflict := apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "cm", errors.New("precondition mismatch"))
 	cases := []struct {
-		name       string
-		uid        string
-		wantCalls  int
-		wantPrecon bool
+		name         string
+		uid          string
+		managers     []string
+		labelsOnly   bool
+		emptyOwner   bool
+		emptyLiveUID bool
+		getErr       error
+		deleteErr    error
+		wantUID      types.UID
+		wantErr      error
 	}{
-		{name: "with UID adds a precondition and calls delete", uid: "abc-123", wantCalls: 1, wantPrecon: true},
-		{name: "without UID skips delete call completely", uid: "", wantCalls: 0, wantPrecon: false},
+		{name: "recorded UID is used without a GET", uid: "recorded", getErr: forbidden, wantUID: "recorded"},
+		{name: "recorded UID needs no owner argument", uid: "recorded", emptyOwner: true, wantUID: "recorded"},
+		{name: "current self marker recovers live UID", managers: []string{self}, wantUID: "live"},
+		{name: "template manager suffix does not establish ownership", managers: []string{self + ".extra"}},
+		{name: "self plus non-template manager recovers", managers: []string{self, "kubectl"}, wantUID: "live"},
+		{name: "unmarked object survives"},
+		{name: "peer object survives", managers: []string{peer}},
+		{name: "peer vetoes self marker", managers: []string{self, peer}},
+		{name: "patch manager does not establish ownership", managers: []string{patchFieldManager(ownerUID, "n")}},
+		{name: "shared RGD manager does not establish ownership", managers: []string{FieldManager}},
+		{name: "unrelated manager does not establish ownership", managers: []string{"kro-other"}},
+		{name: "collection labels do not establish ownership", labelsOnly: true},
+		{name: "empty owner cannot recover", emptyOwner: true, managers: []string{templateFieldManager("")}},
+		{name: "empty live UID cannot be deleted", managers: []string{self}, emptyLiveUID: true},
+		{name: "missing object skips", getErr: missing},
+		{name: "UID-free NoMatch GET skips", getErr: noMatch},
+		{name: "UID-free Forbidden GET skips", getErr: forbidden},
+		{name: "transient GET failure propagates", getErr: unavailable, wantErr: unavailable},
+		{name: "verified DELETE Forbidden propagates", managers: []string{self}, deleteErr: forbidden, wantUID: "live", wantErr: forbidden},
+		{name: "recorded DELETE Forbidden propagates", uid: "recorded", deleteErr: forbidden, wantUID: "recorded", wantErr: forbidden},
+		{name: "known UID NoMatch stays an error", uid: "recorded", deleteErr: noMatch, wantUID: "recorded", wantErr: noMatch},
+		{name: "verified DELETE NoMatch propagates", managers: []string{self}, deleteErr: noMatch, wantUID: "live", wantErr: noMatch},
+		{name: "verified DELETE NotFound is tolerated", managers: []string{self}, deleteErr: missing, wantUID: "live"},
+		{name: "verified DELETE Conflict is retryable", managers: []string{self}, deleteErr: conflict, wantUID: "live", wantErr: conflict},
+		{name: "recorded DELETE Conflict is tolerated", uid: "recorded", deleteErr: conflict, wantUID: "recorded"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rec := &recordingDeleteClient{}
+			live := obj("cm")
+			live.SetNamespace("default")
+			live.SetResourceVersion("observed")
+			if !tc.emptyLiveUID {
+				live.SetUID("live")
+			}
+			for _, manager := range tc.managers {
+				live.SetManagedFields(append(live.GetManagedFields(), metav1.ManagedFieldsEntry{Manager: manager}))
+			}
+			if tc.labelsOnly {
+				live.SetLabels(map[string]string{metadata.InstanceIDLabel: string(ownerUID), metadata.NodeIDLabel: "n"})
+			}
+			owner := ownerUID
+			if tc.emptyOwner {
+				owner = ""
+			}
+			rec := &recordingDeleteClient{live: live, getErr: tc.getErr, deleteErr: tc.deleteErr}
 			ex := NewSimple(rec)
-			err := ex.Delete(context.Background(), []expv1alpha1.ManagedResource{{
+			err := ex.Delete(context.Background(), owner, []expv1alpha1.ManagedResource{{
 				NodeID: "n", APIVersion: "v1", Kind: "ConfigMap",
 				Namespace: "default", Name: "cm", UID: tc.uid,
 			}})
-			require.NoError(t, err)
-			require.Len(t, rec.opts, tc.wantCalls)
-			if tc.wantCalls > 0 {
-				assert.Equal(t, tc.wantPrecon, rec.hasPrecondition(0))
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			if tc.uid != "" || tc.emptyOwner {
+				assert.Empty(t, rec.gets, "recorded UID and empty-owner paths must not look up a live UID")
+			}
+			if tc.wantUID == "" {
+				assert.Empty(t, rec.opts, "unverifiable entries must not issue DELETE")
+			} else {
+				require.Len(t, rec.opts, 1)
+				preconditions := (&client.DeleteOptions{}).ApplyOptions(rec.opts[0]).Preconditions
+				require.NotNil(t, preconditions)
+				require.NotNil(t, preconditions.UID)
+				assert.Equal(t, tc.wantUID, *preconditions.UID)
+				if tc.uid == "" {
+					require.NotNil(t, preconditions.ResourceVersion)
+					assert.Equal(t, live.GetResourceVersion(), *preconditions.ResourceVersion)
+				} else {
+					assert.Nil(t, preconditions.ResourceVersion, "recorded UIDs use identity-only preconditions")
+				}
 			}
 		})
 	}
+}
+
+func TestSimple_Delete_ContinuesAfterErrors(t *testing.T) {
+	getErr := apierrors.NewServiceUnavailable("read unavailable")
+	deleteErr := apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, "cm", errors.New("delete denied"))
+	rec := &recordingDeleteClient{getErr: getErr, deleteErr: deleteErr}
+	err := NewSimple(rec).Delete(context.Background(), "graph-uid", []expv1alpha1.ManagedResource{
+		{APIVersion: "v1", Kind: "ConfigMap", Name: "dependency", UID: "uid-dependency"},
+		{APIVersion: "v1", Kind: "ConfigMap", Name: "writeahead"},
+		{APIVersion: "v1", Kind: "ConfigMap", Name: "dependent", UID: "uid-dependent"},
+	})
+	assert.ErrorIs(t, err, getErr)
+	assert.ErrorIs(t, err, deleteErr)
+	assert.Equal(t, []string{"delete dependent", "get writeahead", "delete dependency"}, rec.calls)
 }
 
 // TestMappingFor covers mappingFor's dynamic-vs-static split and the
@@ -373,27 +463,31 @@ func nodeFromSpec(id string, spec *compiler.Node) *krotruntime.Node {
 // the UID-precondition branch can be asserted without an envtest server.
 type recordingDeleteClient struct {
 	clientStub
-	opts [][]client.DeleteOption
+	live      *unstructured.Unstructured
+	getErr    error
+	deleteErr error
+	gets      []client.ObjectKey
+	calls     []string
+	opts      [][]client.DeleteOption
 }
 
-func (r *recordingDeleteClient) Delete(_ context.Context, _ client.Object, opts ...client.DeleteOption) error {
-	r.opts = append(r.opts, opts)
+func (r *recordingDeleteClient) Get(_ context.Context, key client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+	r.gets = append(r.gets, key)
+	r.calls = append(r.calls, "get "+key.Name)
+	if r.getErr != nil {
+		return r.getErr
+	}
+	obj.(*unstructured.Unstructured).Object = r.live.DeepCopy().Object
 	return nil
 }
 
-// hasPrecondition reports whether the i-th captured Delete carried a UID
-// precondition.
-func (r *recordingDeleteClient) hasPrecondition(i int) bool {
-	for _, o := range r.opts[i] {
-		do, ok := o.(*client.DeleteOptions)
-		if ok && do.Preconditions != nil && do.Preconditions.UID != nil {
-			return true
-		}
-	}
-	return false
+func (r *recordingDeleteClient) Delete(_ context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	r.calls = append(r.calls, "delete "+obj.GetName())
+	r.opts = append(r.opts, opts)
+	return r.deleteErr
 }
 
-// clientStub satisfies client.Client; only Delete is overridden by the
+// clientStub satisfies client.Client; Get and Delete are overridden by the
 // embedding type. Methods panic if unexpectedly called.
 type clientStub struct{ client.Client }
 

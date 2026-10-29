@@ -526,16 +526,12 @@ func publishScope(rt *runtime.Runtime, n *runtime.Node, objs []*unstructured.Uns
 // Graph whose templates were renamed or whose forEach shrunk between
 // apply and delete still gets every prior resource removed.
 //
-// Legitimate managed resources always carry a UID captured from SSA.
-// Refuse to delete any entry with an empty UID to close the forged/UID-less
-// prune vector where a user-forged status entry could delete arbitrary resources.
-// NotFound and "already deleted by something else" are tolerated.
-func (s *Simple) Delete(ctx context.Context, resources []expv1alpha1.ManagedResource) error {
+// Recorded UIDs are used directly. UID-free recovery checks template ownership
+// and binds deletion to that snapshot with UID and resourceVersion preconditions.
+func (s *Simple) Delete(ctx context.Context, ownerUID types.UID, resources []expv1alpha1.ManagedResource) error {
 	var errs []error
 	for _, r := range slices.Backward(resources) {
-		// Legitimate managed resources always carry a UID captured from SSA.
-		// Refuse to delete any resource without a UID to close the forged/UID-less prune vector.
-		if r.UID == "" {
+		if r.UID == "" && ownerUID == "" {
 			continue
 		}
 
@@ -546,9 +542,33 @@ func (s *Simple) Delete(ctx context.Context, resources []expv1alpha1.ManagedReso
 		obj.SetName(r.Name)
 
 		uid := types.UID(r.UID)
+		preconditions := &metav1.Preconditions{UID: &uid}
+		if uid == "" {
+			live, err := s.getLive(ctx, obj)
+			if err != nil {
+				if meta.IsNoMatchError(err) || apierrors.IsForbidden(err) {
+					// Preserve non-adoption of unverifiable intent. A denied read
+					// does not establish whether an earlier apply reached the API.
+					log.FromContext(ctx).Info("skipping UID-free entry whose ownership cannot be verified",
+						"kind", r.Kind, "resource", refName(r), "err", err.Error())
+				} else {
+					errs = append(errs, err)
+				}
+				continue
+			}
+			if !ownedByGraph(live, ownerUID) {
+				continue
+			}
+			uid = live.GetUID()
+			if uid == "" {
+				continue
+			}
+			rv := live.GetResourceVersion()
+			preconditions.ResourceVersion = &rv
+		}
 		opts := []client.DeleteOption{
 			&client.DeleteOptions{
-				Preconditions: &metav1.Preconditions{UID: &uid},
+				Preconditions: preconditions,
 			},
 		}
 
@@ -556,10 +576,9 @@ func (s *Simple) Delete(ctx context.Context, resources []expv1alpha1.ManagedReso
 			if apierrors.IsNotFound(err) {
 				continue
 			}
-			// UID-precondition mismatch surfaces as Conflict — the
-			// resource we tracked is gone and a different object now
-			// occupies its identity. Not our problem; skip.
-			if apierrors.IsConflict(err) {
+			// The UID-only path tolerates replacement conflicts. Recovery also
+			// guards resourceVersion, so any conflict must be retried.
+			if r.UID != "" && apierrors.IsConflict(err) {
 				continue
 			}
 			// Accumulate and keep going: one denied/failed delete (e.g. an
@@ -570,6 +589,26 @@ func (s *Simple) Delete(ctx context.Context, resources []expv1alpha1.ManagedReso
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// ownedByGraph requires this Graph's template manager and no other template
+// manager. Labels and patch managers are insufficient.
+func ownedByGraph(current *unstructured.Unstructured, ownerUID types.UID) bool {
+	if current == nil || ownerUID == "" {
+		return false
+	}
+	self := templateFieldManager(ownerUID)
+	owned := false
+	for _, mf := range current.GetManagedFields() {
+		if !strings.HasPrefix(mf.Manager, templateFieldManagerPrefix) {
+			continue
+		}
+		if mf.Manager != self {
+			return false
+		}
+		owned = true
+	}
+	return owned
 }
 
 func refName(r expv1alpha1.ManagedResource) string {

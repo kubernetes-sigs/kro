@@ -342,9 +342,7 @@ func projectContributions(
 // Dedup is UID-aware: keyOf excludes UID (so a UID-free write-ahead intent entry
 // dedups against its applied counterpart), but on a key collision the surviving
 // entry keeps whichever side's UID is set, and a later UID overrides an earlier
-// one. Every caller passes the UID-free previous/intent set first, so plain
-// first-wins would strand a resource in status with no UID — which Simple.Delete
-// then refuses to delete, leaking it on teardown.
+// one.
 func unionManagedResources(
 	previous []expv1alpha1.ManagedResource,
 	applied []expv1alpha1.ManagedResource,

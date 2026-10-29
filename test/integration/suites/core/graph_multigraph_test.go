@@ -20,6 +20,8 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
+	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -146,7 +148,7 @@ var _ = Describe("Graph Multi-Graph Isolation", func() {
 
 		// gb targets the SAME object with a DISJOINT field. It must be refused
 		// (held not-ready), and its field must never be written.
-		env.CreateGraph(t, mkGraph("gb", "value-b"))
+		gB := env.CreateGraph(t, mkGraph("gb", "value-b"))
 		env.AwaitCondition(t,
 			types.NamespacedName{Namespace: ns, Name: "gb"},
 			expv1alpha1.GraphConditionTypeReady,
@@ -168,6 +170,24 @@ var _ = Describe("Graph Multi-Graph Isolation", func() {
 			},
 			15*time.Second,
 		)
+
+		// The refused graph retains only UID-free intent. Deleting it must
+		// not adopt the winning graph's child for teardown.
+		loserKey := types.NamespacedName{Namespace: ns, Name: gB.Name}
+		loser := env.GetGraph(t, loserKey)
+		require.Len(t, loser.Status.ManagedResources, 1)
+		require.Empty(t, loser.Status.ManagedResources[0].UID)
+		shared := &unstructured.Unstructured{}
+		shared.SetGroupVersionKind(configMapGVK)
+		sharedKey := types.NamespacedName{Namespace: ns, Name: "shared"}
+		require.NoError(t, env.Client.Get(env.Context(), sharedKey, shared))
+		winnerUID := shared.GetUID()
+		require.NoError(t, env.Client.Delete(env.Context(), loser))
+		require.Eventually(t, func() bool {
+			return apierrors.IsNotFound(env.Client.Get(env.Context(), loserKey, &expv1alpha1.Graph{}))
+		}, 15*time.Second, 100*time.Millisecond)
+		require.NoError(t, env.Client.Get(env.Context(), sharedKey, shared))
+		require.Equal(t, winnerUID, shared.GetUID(), "peer's child must survive without recreation")
 	})
 
 	// Regression for

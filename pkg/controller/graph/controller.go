@@ -266,7 +266,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, logger logr.Logger, re
 	var deleteErrs []error
 	for _, resource := range slices.Backward(g.Status.ManagedResources) {
 		if err := cleanup(func(ex executor.Interface) error {
-			return ex.Delete(ctx, []expv1alpha1.ManagedResource{resource})
+			return ex.Delete(ctx, g.GetUID(), []expv1alpha1.ManagedResource{resource})
 		}); err != nil {
 			deleteErrs = append(deleteErrs, err)
 		}
@@ -430,11 +430,11 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 	// The full pre-apply superset (previous + applied + intent), reused wherever
 	// the inventory must not shrink below what the write-ahead already advertised.
 	superset := func() []expv1alpha1.ManagedResource {
-		return unionManagedResources(unionManagedResources(previous, result.Applied), intent)
+		return unionManagedResources(intent, result.Applied)
 	}
 	if !hardErr {
 		if len(pruneCandidates) > 0 {
-			if err := ex.Delete(ctx, pruneCandidates); err != nil {
+			if err := ex.Delete(ctx, g.GetUID(), pruneCandidates); err != nil {
 				// A retired resource could not be deleted (e.g. the impersonated
 				// SA lacks delete RBAC). The Graph has NOT converged; surface it
 				// and keep the union so teardown still sees the un-deleted entry.

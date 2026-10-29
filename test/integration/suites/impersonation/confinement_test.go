@@ -30,6 +30,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -248,6 +250,204 @@ func TestGraphImpersonationConfinement(t *testing.T) {
 	case <-errCh:
 	case <-time.After(10 * time.Second):
 		t.Log("manager did not stop within 10s")
+	}
+}
+
+// TestGraphPartialApplyTeardownIdentity exercises persisted identity through a
+// partial apply, a spec identity change, another hard failure, and deletion.
+func TestGraphPartialApplyTeardownIdentity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping envtest-backed partial-apply test in -short mode")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	testEnv := &envtest.Environment{
+		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "..", "..", "helm", "crds")},
+		ErrorIfCRDPathMissing: true,
+	}
+	cfg, err := testEnv.Start()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, testEnv.Stop()) })
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, expv1alpha1.AddToScheme(scheme))
+	admin, err := client.New(cfg, client.Options{Scheme: scheme})
+	require.NoError(t, err)
+
+	httpClient, err := rest.HTTPClientFor(cfg)
+	require.NoError(t, err)
+	cmp, err := compiler.NewCompiler(cfg, httpClient)
+	require.NoError(t, err)
+	exec := executor.NewSimple(admin)
+	exec.ConflictDetection = true
+	newClient := func(user string) (client.Client, error) {
+		ic := rest.CopyConfig(cfg)
+		ic.Impersonate = rest.ImpersonationConfig{UserName: user}
+		return client.New(ic, client.Options{Scheme: scheme, Mapper: admin.RESTMapper()})
+	}
+	// Direct reconciles make the spec change and deletion deterministic while
+	// resource requests still use the real executor and RBAC-enforcing API.
+	r := &ctrlgraph.Reconciler{
+		Client: admin, Compiler: cmp, Registry: registry.New(), Executor: exec,
+		Impersonation: ctrlgraph.NewImpersonation(exec, newClient, nil), RequireImpersonation: true,
+	}
+	for _, tc := range []struct {
+		name             string
+		currentResources []string
+		revokePrior      bool
+	}{
+		{name: "blind"},
+		{name: "broader", currentResources: []string{"configmaps", "secrets"}},
+		{name: "disjoint", currentResources: []string{"secrets"}},
+		{name: "revoked", currentResources: []string{"configmaps", "secrets"}, revokePrior: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := "partial-identity-" + tc.name
+			const childName = "partial-child"
+			applyingUser := "system:serviceaccount:" + ns + ":deployer"
+			currentUser := "system:serviceaccount:" + ns + ":replacement"
+			create(t, ctx, admin, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})
+			for _, serviceAccount := range []struct {
+				name      string
+				resources []string
+			}{
+				{name: "deployer", resources: []string{"configmaps"}},
+				{name: "replacement", resources: tc.currentResources},
+			} {
+				create(t, ctx, admin, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: serviceAccount.name}})
+				if len(serviceAccount.resources) == 0 {
+					continue
+				}
+				create(t, ctx, admin, &rbacv1.Role{
+					ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: serviceAccount.name},
+					Rules: []rbacv1.PolicyRule{{
+						APIGroups: []string{""}, Resources: serviceAccount.resources,
+						Verbs: []string{"get", "list", "watch", "create", "patch", "update", "delete"},
+					}},
+				})
+				create(t, ctx, admin, &rbacv1.RoleBinding{
+					ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: serviceAccount.name},
+					RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: serviceAccount.name},
+					Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Namespace: ns, Name: serviceAccount.name}},
+				})
+			}
+			deployer, err := newClient(applyingUser)
+			require.NoError(t, err)
+			current, err := newClient(currentUser)
+			require.NoError(t, err)
+			childKey := types.NamespacedName{Namespace: ns, Name: childName}
+			require.Eventually(t, func() bool {
+				return apierrors.IsNotFound(deployer.Get(ctx, childKey, &corev1.ConfigMap{}))
+			}, 10*time.Second, 100*time.Millisecond, "wait for the ConfigMap RBAC grant")
+			if len(tc.currentResources) > 0 {
+				require.Eventually(t, func() bool {
+					return apierrors.IsNotFound(current.Get(ctx, childKey, &corev1.Secret{}))
+				}, 10*time.Second, 100*time.Millisecond, "wait for the Secret RBAC grant")
+			}
+			target := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "patch-target"},
+				Data:       map[string]string{"kept": "original"},
+			}
+			require.NoError(t, admin.Create(ctx, target))
+			targetUID := target.UID
+			g := &expv1alpha1.Graph{
+				ObjectMeta: metav1.ObjectMeta{Name: "partial", Namespace: ns},
+				Spec: expv1alpha1.GraphSpec{
+					ServiceAccountName: "deployer",
+					Nodes: []expv1alpha1.Node{
+						{
+							ID: "cm",
+							Template: rawExt(t, map[string]any{
+								"apiVersion": "v1", "kind": "ConfigMap",
+								"metadata": map[string]any{"name": childName},
+								"data":     map[string]any{"hello": "world"},
+							}),
+						},
+						{
+							ID: "secret",
+							Template: rawExt(t, map[string]any{
+								"apiVersion": "v1", "kind": "Secret",
+								"metadata": map[string]any{"name": childName},
+							}),
+						},
+						{
+							ID: "patch",
+							Patch: rawExt(t, map[string]any{
+								"apiVersion": "v1", "kind": "ConfigMap",
+								"metadata": map[string]any{"name": target.Name},
+								"data":     map[string]any{"added": "by-graph"},
+							}),
+						},
+						{
+							ID: "denied",
+							Template: rawExt(t, map[string]any{
+								"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
+								"metadata": map[string]any{"name": "${cm.metadata.name}"},
+								"rules":    []any{},
+							}),
+						},
+					},
+				},
+			}
+			require.NoError(t, admin.Create(ctx, g))
+			key := client.ObjectKeyFromObject(g)
+			req := ctrl.Request{NamespacedName: key}
+			_, err = r.Reconcile(ctx, req)
+			require.ErrorContains(t, err, `cannot get resource "clusterroles"`)
+			require.ErrorContains(t, err, applyingUser)
+			cm := &corev1.ConfigMap{}
+			require.NoError(t, admin.Get(ctx, childKey, cm))
+			require.NotEmpty(t, cm.UID)
+			require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(target), target))
+			require.Equal(t, "by-graph", target.Data["added"])
+			checkStatus := func() {
+				t.Helper()
+				require.NoError(t, admin.Get(ctx, key, g))
+				assert.Equal(t, applyingUser, g.Status.AppliedServiceAccount)
+				assert.Contains(t, g.Status.ManagedResources, expv1alpha1.ManagedResource{
+					NodeID: "cm", APIVersion: "v1", Kind: "ConfigMap", Namespace: ns, Name: childName, UID: string(cm.UID),
+				})
+				assert.Contains(t, g.Status.Contributions, expv1alpha1.Contribution{
+					APIVersion: "v1", Kind: "ConfigMap", Namespace: ns, Name: target.Name,
+					FieldManager: executor.PatchFieldManager(g.UID, "patch"),
+				})
+			}
+			checkStatus()
+
+			g.Spec.ServiceAccountName = "replacement"
+			require.NoError(t, admin.Update(ctx, g))
+			_, err = r.Reconcile(ctx, req)
+			require.ErrorContains(t, err, currentUser)
+			checkStatus()
+			if len(tc.currentResources) > 0 {
+				secret := &corev1.Secret{}
+				require.NoError(t, admin.Get(ctx, childKey, secret))
+				require.Contains(t, g.Status.ManagedResources, expv1alpha1.ManagedResource{
+					NodeID: "secret", APIVersion: "v1", Kind: "Secret", Namespace: ns, Name: childName, UID: string(secret.UID),
+				})
+				err = deployer.Delete(ctx, secret.DeepCopy())
+				require.True(t, apierrors.IsForbidden(err), "the recorded ServiceAccount cannot delete the later child: %v", err)
+			} else {
+				err = current.Delete(ctx, cm.DeepCopy())
+				require.True(t, apierrors.IsForbidden(err), "the current ServiceAccount cannot delete the earlier child: %v", err)
+			}
+			if tc.revokePrior {
+				require.NoError(t, admin.Delete(ctx, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "deployer"}}))
+				require.Eventually(t, func() bool {
+					return apierrors.IsForbidden(deployer.Get(ctx, childKey, &corev1.ConfigMap{}))
+				}, 10*time.Second, 100*time.Millisecond, "wait for the recorded ServiceAccount's permissions to be revoked")
+			}
+
+			require.NoError(t, admin.Delete(ctx, g))
+			_, err = r.Reconcile(ctx, req)
+			require.NoError(t, err, "teardown must clean resources using the recorded and current identities")
+			assert.True(t, apierrors.IsNotFound(admin.Get(ctx, key, &expv1alpha1.Graph{})), "Graph finalizer must be released")
+			assert.True(t, apierrors.IsNotFound(admin.Get(ctx, childKey, &corev1.ConfigMap{})), "ConfigMap child must be deleted")
+			assert.True(t, apierrors.IsNotFound(admin.Get(ctx, childKey, &corev1.Secret{})), "Secret child must be deleted")
+			require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(target), target))
+			assert.Equal(t, targetUID, target.UID, "patch target must survive without recreation")
+			assert.Equal(t, map[string]string{"kept": "original"}, target.Data, "only the Graph's contribution must be released")
+		})
 	}
 }
 

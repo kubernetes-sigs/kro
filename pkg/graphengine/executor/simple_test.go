@@ -359,7 +359,7 @@ func TestSimple_Delete(t *testing.T) {
 			},
 		},
 		{
-			name: "empty UID is skipped and does not delete pre-existing object",
+			name: "empty UID does not adopt an unmarked pre-existing object",
 			seed: func(t *testing.T, c client.Client) []expv1alpha1.ManagedResource {
 				cm := &unstructured.Unstructured{}
 				cm.SetGroupVersionKind(configMapGVK)
@@ -376,7 +376,7 @@ func TestSimple_Delete(t *testing.T) {
 				cm.SetGroupVersionKind(configMapGVK)
 				err := c.Get(context.Background(),
 					types.NamespacedName{Namespace: "default", Name: "victim"}, cm)
-				require.NoError(t, err, "victim must not be deleted when UID is empty")
+				require.NoError(t, err, "unmarked victim must not be adopted for deletion")
 			},
 		},
 		{
@@ -400,7 +400,7 @@ func TestSimple_Delete(t *testing.T) {
 			cl := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
 			ex := NewSimple(cl)
 			resources := tc.seed(t, cl)
-			err := ex.Delete(context.Background(), resources)
+			err := ex.Delete(context.Background(), "graph-uid", resources)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErr)
@@ -462,7 +462,7 @@ func TestSimple_PropagatesClientError(t *testing.T) {
 				// Delete no longer needs the runtime; we hand it a
 				// single tracked entry so the underlying Client.Delete
 				// is actually called and surfaces the injected error.
-				return ex.Delete(context.Background(), []expv1alpha1.ManagedResource{{
+				return ex.Delete(context.Background(), "graph-uid", []expv1alpha1.ManagedResource{{
 					NodeID: "n", APIVersion: "v1", Kind: "ConfigMap",
 					Namespace: "default", Name: "x", UID: "uid-x",
 				}})

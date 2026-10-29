@@ -22,18 +22,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/discovery/cached/memory"
+	"k8s.io/client-go/restmapper"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/registry"
 	krotruntime "github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
+	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
 
 // templateProgram builds a minimal compiled Program with a single static
@@ -74,7 +80,7 @@ func emptyNodeProgram(nodeID string) *compiler.Program {
 	}
 }
 
-// applyObservingExecutor records the ManagedResources PERSISTED on the API
+// applyObservingExecutor records the inventories PERSISTED on the API
 // server at the moment Apply is entered, by reading them back through a
 // captured client. This is what lets a test assert the pre-apply write-ahead
 // (Finding A) landed on the server before any resource was applied.
@@ -84,6 +90,7 @@ type applyObservingExecutor struct {
 	key types.NamespacedName
 	// persistedAtApply is the server-side inventory observed when Apply ran.
 	persistedAtApply []expv1alpha1.ManagedResource
+	contribsAtApply  []expv1alpha1.Contribution
 	observed         bool
 }
 
@@ -91,6 +98,7 @@ func (e *applyObservingExecutor) Apply(ctx context.Context, rt *krotruntime.Runt
 	got := &expv1alpha1.Graph{}
 	if err := e.cl.Get(ctx, e.key, got); err == nil {
 		e.persistedAtApply = got.Status.ManagedResources
+		e.contribsAtApply = got.Status.Contributions
 		e.observed = true
 	}
 	return e.fakeExecutor.Apply(ctx, rt, w)
@@ -595,4 +603,122 @@ func TestReconcile_ErrorPathKeepsIntentSuperset(t *testing.T) {
 		"intent superset must survive a soft-error cycle in persisted status")
 	assert.Equal(t, "Widget", got.Status.ManagedResources[0].Kind)
 	assert.Equal(t, "w", got.Status.ManagedResources[0].Name)
+}
+
+func TestReconcile_PatchWriteAheadSurvivesIncompleteApply(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		singleton bool
+		observed  int
+		hard      bool
+	}{
+		{name: "forEach all targets absent"},
+		{name: "forEach two targets present", observed: 2},
+		{name: "singleton target absent", singleton: true},
+		{name: "forEach hard failure", observed: 2, hard: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			names := []string{"claim-a", "claim-b", "claim-c"}
+			target := "${n}"
+			if tc.singleton {
+				names = names[:1]
+				target = "${src.names[0]}"
+			}
+			// Unstructured payloads require JSON-compatible slices for deep copy.
+			defNames := make([]any, len(names))
+			for i, name := range names {
+				defNames[i] = name
+			}
+			g := generator.NewGraph("g",
+				generator.WithNamespace("default"),
+				generator.WithDef("src", map[string]any{"names": defNames}),
+				generator.WithPatchManifest("p", map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]any{"name": target},
+					"data":       map[string]any{"patched": "yes"},
+				}),
+			)
+			if !tc.singleton {
+				g.Spec.Nodes[1].ForEach = []expv1alpha1.ForEachDimension{{"n": "${src.names}"}}
+			}
+			g.UID = "uid-write-ahead"
+			g.Generation = 1
+			withFinalizer(g)
+			resolver, disco := testk8s.NewFakeResolver()
+			mapper := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disco))
+			prog, err := compiler.NewCompilerWithDependencies(resolver, mapper).Compile(g)
+			require.NoError(t, err)
+
+			want := make([]executor.Contribution, 0, len(names))
+			for _, name := range names {
+				want = append(want, executor.Contribution{
+					APIVersion: "v1", Kind: "ConfigMap", Namespace: "default", Name: name,
+					FieldManager: executor.PatchFieldManager(g.UID, "p"),
+				})
+			}
+			applyErr := fmt.Errorf("patch target ConfigMap %q not found: %w", "default/"+names[len(names)-1], executor.ErrNotReady)
+			unresolved := []string{"p"}
+			wantReason := "WaitingForReadiness"
+			if tc.hard {
+				applyErr = errors.New("patch request failed")
+				unresolved = nil
+				wantReason = "ApplyFailed"
+			}
+
+			// Record only patches carrying the ledger, including a null that erases it.
+			var ledgerWrites []int
+			cl := interceptor.NewClient(newClient(t, g), interceptor.Funcs{
+				SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+					if _, present := statusPatchFields(t, obj, patch)["contributions"]; sub == "status" && present {
+						ledgerWrites = append(ledgerWrites, len(obj.(*expv1alpha1.Graph).Status.Contributions))
+					}
+					return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+				},
+			})
+			key := client.ObjectKeyFromObject(g)
+			obs := &applyObservingExecutor{
+				cl: cl, key: key,
+				fakeExecutor: fakeExecutor{
+					applyErr: applyErr,
+					applyResult: executor.ApplyResult{
+						Contributions: want[:tc.observed], Unresolved: unresolved,
+					},
+				},
+			}
+			r := &Reconciler{Client: cl, Compiler: &fakeCompiler{program: prog}, Registry: registry.New(), Executor: obs}
+
+			for cycle := range 2 {
+				obs.observed = false
+				res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+				if tc.hard {
+					require.ErrorIs(t, err, applyErr)
+					assert.Zero(t, res.RequeueAfter)
+				} else {
+					require.NoError(t, err)
+					assert.Positive(t, res.RequeueAfter, "missing targets must use the timed requeue")
+				}
+				require.True(t, obs.observed, "Apply must run each cycle")
+				assert.Equal(t, toAPIContributions(want), obs.contribsAtApply, "cycle %d: all target identities must be durable before Apply", cycle)
+				assert.Empty(t, obs.persistedAtApply, "patches do not own their targets")
+
+				got := &expv1alpha1.Graph{}
+				require.NoError(t, cl.Get(context.Background(), key, got))
+				assert.Equal(t, toAPIContributions(want), got.Status.Contributions, "cycle %d: incomplete apply must retain the write-ahead", cycle)
+				converged := findCondition(got.Status.Conditions, ResourcesConverged)
+				require.NotNil(t, converged)
+				assert.Equal(t, metav1.ConditionFalse, converged.Status)
+				require.NotNil(t, converged.Reason)
+				assert.Equal(t, wantReason, *converged.Reason)
+				ready := findCondition(got.Status.Conditions, Ready)
+				require.NotNil(t, ready)
+				assert.Equal(t, metav1.ConditionFalse, ready.Status)
+			}
+			assert.Equal(t, []int{len(want)}, ledgerWrites, "only the initial write-ahead should write the ledger; shrinking it would re-enqueue the Graph")
+			assert.Empty(t, obs.releaseCalls, "incomplete apply must not release contributions")
+		})
+	}
 }

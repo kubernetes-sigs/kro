@@ -370,6 +370,7 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 	// the inventory from shrinking below the pre-apply superset.
 	intent, err := r.writeAheadIntent(ctx, g, rt, previous, priorContribs)
 	if err != nil {
+		marker.ResourcesApplyFailed(err.Error())
 		return err
 	}
 
@@ -430,8 +431,22 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 	// The full pre-apply superset (previous + applied + intent), reused wherever
 	// the inventory must not shrink below what the write-ahead already advertised.
 	superset := func() []expv1alpha1.ManagedResource {
-		return unionManagedResources(unionManagedResources(previous, result.Applied), intent)
+		return unionManagedResources(intent, result.Applied)
 	}
+	// Retain written-ahead and observed contributions before prune can fail.
+	// Shrinking the ledger requires a clean apply and successful cleanup.
+	retained := UnionContributions(fromAPIContributions(g.Status.Contributions), result.Contributions)
+	if err := r.persistContributions(ctx, g, retained); err != nil {
+		g.Status.ManagedResources = superset()
+		persistErr := fmt.Errorf("persist contributions: %w", err)
+		marker.ResourcesApplyFailed(persistErr.Error())
+		if hardErr {
+			return errors.Join(fmt.Errorf("apply: %w", applyErr), persistErr)
+		}
+		// Carrying ErrNotReady would hide this persistence failure as a soft requeue.
+		return persistErr
+	}
+
 	if !hardErr {
 		if len(pruneCandidates) > 0 {
 			if err := ex.Delete(ctx, pruneCandidates); err != nil {
@@ -481,12 +496,7 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 	// result.Contributions rather than needing a release to break the wedge.
 
 	if applyErr != nil {
-		// Soft or hard failure — keep the union so a future reconcile can
-		// release contributions we couldn't observe cleanly this cycle.
-		if err := r.persistContributions(ctx, g, UnionContributions(priorContribs, result.Contributions)); err != nil {
-			return errors.Join(fmt.Errorf("apply: %w", applyErr), err)
-		}
-		if !errors.Is(applyErr, executor.ErrNotReady) {
+		if hardErr {
 			log.FromContext(ctx).Error(applyErr, "executor apply failed")
 		}
 		return fmt.Errorf("apply: %w", applyErr)
@@ -505,14 +515,13 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 			// Ready=True with the error only in the log (symmetric with the
 			// prune-failure branch).
 			marker.ResourcesReleaseFailed(err.Error())
-			if perr := r.persistContributions(ctx, g, UnionContributions(priorContribs, result.Contributions)); perr != nil {
-				return errors.Join(fmt.Errorf("release contributions: %w", err), perr)
-			}
 			return fmt.Errorf("release contributions: %w", err)
 		}
 	}
 	if err := r.persistContributions(ctx, g, result.Contributions); err != nil {
-		return err
+		persistErr := fmt.Errorf("persist contributions: %w", err)
+		marker.ResourcesApplyFailed(persistErr.Error())
+		return persistErr
 	}
 	return nil
 }
@@ -888,7 +897,7 @@ func (m *ConditionsMarker) ResourcesFieldManagerConflict(msg string) {
 }
 
 // ResourcesApplyFailed marks ResourcesConverged=False with reason
-// "ApplyFailed" when the executor returned a hard error.
+// "ApplyFailed" when the executor returned a hard error or inventory persistence failed.
 func (m *ConditionsMarker) ResourcesApplyFailed(msg string) {
 	m.cs.SetFalse(ResourcesConverged, "ApplyFailed", msg)
 }

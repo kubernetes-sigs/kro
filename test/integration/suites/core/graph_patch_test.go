@@ -21,13 +21,18 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
+	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/environment"
 )
 
@@ -301,6 +306,164 @@ var _ = Describe("Graph Patch", func() {
 			}
 			return nil
 		}, 15*time.Second)
+	})
+
+	It("keeps forEach write-ahead stable through missing-target recovery and retirement", func() {
+		t := GinkgoT()
+		ns := env.CreateNamespace(t)
+		ctx := env.Context()
+		names := []string{"claim-a", "claim-b", "claim-c"}
+		g := env.CreateGraph(t, &expv1alpha1.Graph{
+			ObjectMeta: metav1.ObjectMeta{Name: "write-ahead-patcher", Namespace: ns},
+			Spec: expv1alpha1.GraphSpec{Nodes: []expv1alpha1.Node{
+				{ID: "src", Def: environment.RawExt(t, map[string]any{"names": names})},
+				{
+					ID:      "p",
+					ForEach: []expv1alpha1.ForEachDimension{{"n": "${src.names}"}},
+					Patch: environment.RawExt(t, map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${n}"},
+						"data":       map[string]any{"added": "contributed"},
+					}),
+				},
+			}},
+		})
+		key := client.ObjectKeyFromObject(g)
+		fieldManager := executor.PatchFieldManager(g.UID, "p")
+		want := make([]expv1alpha1.Contribution, 0, len(names))
+		for _, name := range names {
+			want = append(want, expv1alpha1.Contribution{
+				APIVersion: "v1", Kind: "ConfigMap", Namespace: ns, Name: name,
+				FieldManager: fieldManager,
+			})
+		}
+
+		// Watch from creation so an intermediate ledger drop cannot hide between polls.
+		graphGVR := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "graphs"}
+		updates, err := env.ClientSet.Dynamic().Resource(graphGVR).Namespace(ns).Watch(ctx, metav1.ListOptions{
+			FieldSelector: "metadata.name=" + g.Name, ResourceVersion: g.ResourceVersion,
+		})
+		require.NoError(t, err)
+		defer updates.Stop()
+		sawIntent := false
+		awaitPendingGeneration := func(generation int64) {
+			t.Helper()
+			timer := time.NewTimer(30 * time.Second)
+			defer timer.Stop()
+			for {
+				select {
+				case event, open := <-updates.ResultChan():
+					require.True(t, open, "Graph watch closed before reconciliation")
+					require.NotEqual(t, watch.Error, event.Type, "Graph watch error: %v", event.Object)
+					obj, ok := event.Object.(*unstructured.Unstructured)
+					require.True(t, ok, "unexpected Graph watch object: %T", event.Object)
+					cur := &expv1alpha1.Graph{}
+					require.NoError(t, runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, cur))
+					if sawIntent || len(cur.Status.Contributions) != 0 {
+						require.Equal(t, want, cur.Status.Contributions, "ledger changed at resourceVersion %s", cur.ResourceVersion)
+						sawIntent = true
+					}
+					for _, condition := range cur.Status.Conditions {
+						if string(condition.Type) != "ResourcesConverged" || condition.ObservedGeneration != generation {
+							continue
+						}
+						require.Equal(t, metav1.ConditionFalse, condition.Status)
+						require.NotNil(t, condition.Reason)
+						require.Equal(t, "WaitingForReadiness", *condition.Reason)
+						require.Equal(t, want, cur.Status.Contributions)
+						require.Empty(t, cur.Status.ManagedResources)
+						t.Logf("pending Graph %s generation=%d resourceVersion=%s ledger=%d", key, generation, cur.ResourceVersion, len(cur.Status.Contributions))
+						return
+					}
+				case <-timer.C:
+					t.Fatalf("Graph %s did not reconcile generation %d", key, generation)
+				}
+			}
+		}
+		reconcilePending := func(targets []string) {
+			env.UpdateGraphSpec(t, key, func(cur *expv1alpha1.Graph) {
+				// Change a Def value without changing target identities to force a new reconcile.
+				cur.Spec.Nodes[0].Def = environment.RawExt(t, map[string]any{
+					"names": targets, "revision": cur.Generation + 1,
+				})
+			})
+			awaitPendingGeneration(env.GetGraph(t, key).Generation)
+		}
+
+		By("retaining all three missing targets through repeated reconciles")
+		awaitPendingGeneration(g.Generation)
+		reconcilePending(names)
+		reconcilePending(names)
+
+		cmGVK := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+		uids := make(map[string]types.UID)
+		createTarget := func(name string) {
+			target := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{"name": name, "namespace": ns},
+				"data":     map[string]any{"orig": "kept"},
+			}}
+			require.NoError(t, env.Client.Create(ctx, target))
+			uids[name] = target.GetUID()
+			t.Cleanup(func() { _ = env.Client.Delete(context.Background(), target) })
+		}
+		awaitTarget := func(name string, contributed bool) {
+			env.AwaitObject(t, cmGVK, types.NamespacedName{Namespace: ns, Name: name}, func(u *unstructured.Unstructured) error {
+				data, _, _ := unstructured.NestedStringMap(u.Object, "data")
+				if u.GetUID() != uids[name] || data["orig"] != "kept" {
+					return fmt.Errorf("target %s identity or original data changed", name)
+				}
+				value, present := data["added"]
+				if present != contributed || (contributed && value != "contributed") {
+					return fmt.Errorf("target %s data.added=%q present=%t, want contributed=%t", name, value, present, contributed)
+				}
+				ownsFields := false
+				for _, entry := range u.GetManagedFields() {
+					ownsFields = ownsFields || entry.Manager == fieldManager
+				}
+				if ownsFields != contributed {
+					return fmt.Errorf("target %s patch manager present=%t, want %t", name, ownsFields, contributed)
+				}
+				return nil
+			}, 15*time.Second)
+		}
+
+		By("keeping the missing row when two targets are present")
+		for _, name := range names[:2] {
+			createTarget(name)
+		}
+		reconcilePending(names)
+		reconcilePending(names)
+		for _, name := range names[:2] {
+			awaitTarget(name, true)
+		}
+
+		By("deferring retirement until the remaining targets can all be applied")
+		reconcilePending(names[1:])
+		reconcilePending(names[1:])
+		awaitTarget(names[0], true)
+		updates.Stop()
+
+		By("recovering when the final target appears and releasing the retired target")
+		createTarget(names[2])
+		env.AwaitCondition(t, key, expv1alpha1.GraphConditionTypeReady, metav1.ConditionTrue, 60*time.Second)
+		cur := env.GetGraph(t, key)
+		require.Equal(t, want[1:], cur.Status.Contributions)
+		t.Logf("recovered Graph %s generation=%d resourceVersion=%s ledger=%d", key, cur.Generation, cur.ResourceVersion, len(cur.Status.Contributions))
+		awaitTarget(names[0], false)
+		for _, name := range names[1:] {
+			awaitTarget(name, true)
+		}
+
+		By("releasing the remaining fields on deletion while preserving every target")
+		require.NoError(t, env.Client.Delete(ctx, cur))
+		env.AwaitGraphGone(t, key, 30*time.Second)
+		require.True(t, apierrors.IsNotFound(env.Client.Get(ctx, key, &expv1alpha1.Graph{})))
+		for _, name := range names {
+			awaitTarget(name, false)
+		}
+		t.Logf("deleted Graph %s; all three original target UIDs/data preserved and patch managers released", key)
 	})
 
 	// A main-resource patch is cooperative: a contributed field already owned by

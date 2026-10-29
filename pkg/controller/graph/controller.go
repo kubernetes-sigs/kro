@@ -376,6 +376,8 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 		marker.ResourcesApplyFailed(applyErr.Error())
 	}
 
+	r.reportWatchHealth(marker, key)
+
 	// Record the identity that applied under, but ONLY when the apply reached
 	// the cluster (clean or soft not-ready) — never on a hard failure, which
 	// must preserve the last-good identity so teardown can still see resources a
@@ -528,6 +530,22 @@ func (r *Reconciler) persistContributions(
 		g.Status.Contributions = desired
 		return nil
 	})
+}
+
+// reportWatchHealth writes WatchesHealthy from the declared watch set.
+func (r *Reconciler) reportWatchHealth(marker *ConditionsMarker, key client.ObjectKey) {
+	if r.Router == nil {
+		return
+	}
+	h := r.Router.Coordinator().WatchHealth(key)
+	switch {
+	case len(h.Blocked) > 0:
+		marker.WatchesBlocked(h.Describe())
+	case len(h.Pending) > 0:
+		marker.WatchesPending(h.Describe())
+	default:
+		marker.WatchesHealthy()
+	}
 }
 
 // watcherFor returns a per-Graph Watcher when a Router is
@@ -801,6 +819,7 @@ const (
 	Ready              = string(expv1alpha1.GraphConditionTypeReady)
 	GraphAccepted      = string(expv1alpha1.GraphConditionTypeAccepted)
 	ResourcesConverged = "ResourcesConverged"
+	WatchesHealthy     = "WatchesHealthy"
 )
 
 // graphConditionTypes registers Accepted and ResourcesConverged as
@@ -889,6 +908,21 @@ func (m *ConditionsMarker) ResourcesPruneFailed(msg string) {
 // while a stale contributed field remains.
 func (m *ConditionsMarker) ResourcesReleaseFailed(msg string) {
 	m.cs.SetFalse(ResourcesConverged, "ReleaseFailed", msg)
+}
+
+// WatchesHealthy marks WatchesHealthy=True. Not a Ready dependent.
+func (m *ConditionsMarker) WatchesHealthy() {
+	m.cs.SetTrueWithReason(WatchesHealthy, "AllWatchesSynced", "changes to all watched kinds are detected")
+}
+
+// WatchesBlocked marks WatchesHealthy=False with reason "WatchBlocked".
+func (m *ConditionsMarker) WatchesBlocked(msg string) {
+	m.cs.SetFalse(WatchesHealthy, "WatchBlocked", msg)
+}
+
+// WatchesPending marks WatchesHealthy=Unknown with reason "WatchesPending".
+func (m *ConditionsMarker) WatchesPending(msg string) {
+	m.cs.SetUnknownWithReason(WatchesHealthy, "WatchesPending", msg)
 }
 
 // ResourcesDeleteFailed marks ResourcesConverged=False with reason

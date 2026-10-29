@@ -69,7 +69,7 @@ func TestMain(m *testing.M) {
 
 // patchEnvClient boots (once) an envtest control plane and returns a typed
 // client. Skips the calling test when KUBEBUILDER_ASSETS is not configured.
-func patchEnvClient(t *testing.T) client.Client {
+func patchEnvClient(t *testing.T) client.WithWatch {
 	t.Helper()
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		t.Skip("KUBEBUILDER_ASSETS not set; skipping envtest patch tests")
@@ -84,7 +84,7 @@ func patchEnvClient(t *testing.T) client.Client {
 	scheme := k8sruntime.NewScheme()
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 	require.NoError(t, apiextensionsv1.AddToScheme(scheme))
-	cl, err := client.New(patchEnvCfg, client.Options{Scheme: scheme})
+	cl, err := client.NewWithWatch(patchEnvCfg, client.Options{Scheme: scheme})
 	require.NoError(t, err)
 	return cl
 }

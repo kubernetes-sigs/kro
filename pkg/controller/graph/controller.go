@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -221,15 +222,8 @@ func (r *Reconciler) writeAheadIntent(
 	return intent, nil
 }
 
-// reconcileDelete tears down a deleting Graph entirely from its persisted
-// tracking record (no compile/resolve), so a Graph whose spec was edited
-// (rename, forEach shrunk, node dropped) still gets every resource it ever
-// applied removed. The executor is resolved from the identity the Graph ACTUALLY
-// applied under (persisted in status), not the current spec.serviceAccountName:
-// editing that field between apply and delete would run teardown as an identity
-// that can no longer see the resources, orphaning children and wedging the
-// finalizer. Falls back to the current spec when no applied identity was
-// recorded (never applied, or a pre-field kro).
+// reconcileDelete cleans up persisted inventory, preferring the applied identity.
+// Denied requests can retry under the current spec's ServiceAccount.
 func (r *Reconciler) reconcileDelete(ctx context.Context, logger logr.Logger, req ctrl.Request, g *expv1alpha1.Graph) (ctrl.Result, error) {
 	logger.V(1).Info("graph is deleting")
 	ex, err := r.teardownExecutorFor(g)
@@ -247,15 +241,45 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, logger logr.Logger, re
 		return ctrl.Result{}, fmt.Errorf("%s: %w", wrap, cause)
 	}
 
-	if len(g.Status.ManagedResources) > 0 {
-		if err := ex.Delete(ctx, g.Status.ManagedResources); err != nil {
-			return teardownFailed(err, "executor delete", "failed to persist teardown delete-failure condition")
+	// Later partial applies can use another ServiceAccount. Retry denied cleanup
+	// with it while retaining the identity needed for earlier resources.
+	cleanup := func(op func(executor.Interface) error) error {
+		err := op(ex)
+		if !apierrors.IsForbidden(err) {
+			return err
 		}
+		current := r.appliedIdentity(g)
+		if current == "" || g.Status.AppliedServiceAccount == "" ||
+			current == g.Status.AppliedServiceAccount || r.impersonatesControllerSelf(g) {
+			return err
+		}
+		fallback, resolveErr := r.executorFor(g)
+		if resolveErr != nil {
+			return errors.Join(err, resolveErr)
+		}
+		if retryErr := op(fallback); retryErr != nil {
+			return errors.Join(err, retryErr)
+		}
+		return nil
+	}
+
+	var deleteErrs []error
+	for _, resource := range slices.Backward(g.Status.ManagedResources) {
+		if err := cleanup(func(ex executor.Interface) error {
+			return ex.Delete(ctx, []expv1alpha1.ManagedResource{resource})
+		}); err != nil {
+			deleteErrs = append(deleteErrs, err)
+		}
+	}
+	if err := errors.Join(deleteErrs...); err != nil {
+		return teardownFailed(err, "executor delete", "failed to persist teardown delete-failure condition")
 	}
 	// Release every recorded patch contribution so the field managers relinquish
 	// their fields. Targets survive — patches never own them.
-	if contribs := fromAPIContributions(g.Status.Contributions); len(contribs) > 0 {
-		if err := ex.Release(ctx, contribs); err != nil {
+	for _, contribution := range fromAPIContributions(g.Status.Contributions) {
+		if err := cleanup(func(ex executor.Interface) error {
+			return ex.Release(ctx, []executor.Contribution{contribution})
+		}); err != nil {
 			return teardownFailed(err, "executor release", "failed to persist teardown release-failure condition")
 		}
 	}
@@ -376,13 +400,12 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 		marker.ResourcesApplyFailed(applyErr.Error())
 	}
 
-	// Record the identity that applied under, but ONLY when the apply reached
-	// the cluster (clean or soft not-ready) — never on a hard failure, which
-	// must preserve the last-good identity so teardown can still see resources a
-	// prior identity applied. Empty when impersonation is inactive (the base
-	// controller identity), in which case teardown falls back to the spec.
-	reachedCluster := applyErr == nil || errors.Is(applyErr, executor.ErrNotReady)
-	if reachedCluster {
+	// Clean and soft applies record the current identity. A hard partial apply
+	// fills a missing identity without replacing one needed for earlier resources.
+	hardErr := applyErr != nil && !errors.Is(applyErr, executor.ErrNotReady)
+	recordIdentity := !hardErr ||
+		(g.Status.AppliedServiceAccount == "" && len(result.Applied)+len(result.Contributions) > 0)
+	if recordIdentity {
 		if user := r.appliedIdentity(g); user != "" {
 			g.Status.AppliedServiceAccount = user
 		}
@@ -403,7 +426,7 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 	// pruning was gated on a fully clean apply, so a single never-ready node
 	// vetoed pruning of every unrelated retired node (this is the Graph-path twin
 	// of the instance ownedUnresolved/pruneGate narrowing).
-	hardErr := applyErr != nil && !errors.Is(applyErr, executor.ErrNotReady)
+
 	// The full pre-apply superset (previous + applied + intent), reused wherever
 	// the inventory must not shrink below what the write-ahead already advertised.
 	superset := func() []expv1alpha1.ManagedResource {

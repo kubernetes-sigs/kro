@@ -1,7 +1,7 @@
 # KREP-021: kro CLI
 
-> **Draft.** Supersedes [#1156](https://github.com/kubernetes-sigs/kro/pull/1156).
-> Scope narrowed 2026-09 following review on [#1234](https://github.com/kubernetes-sigs/kro/pull/1234):
+> **Draft.** Supersedes [#1234](https://github.com/kubernetes-sigs/kro/pull/1234), which superseded [#1156](https://github.com/kubernetes-sigs/kro/pull/1156).
+> Scope narrowed 2026-09 following review on [#1234](https://github.com/kubernetes-sigs/kro/pull/1234).
 
 ## Summary
 
@@ -17,6 +17,7 @@ It is also fairly limited in scope, in contrast to broad use cases for kro and w
 **Dry run**
 Updating an RGD affects all instances immediately with no preview of impact. Teams need to see what will change, both to the RGD itself and to the resources it manages, before committing.
 Because of [Deferred Schema Resolution](./deferred-schema-resolution.md), this has now limited capabilities.
+This proposal does not solve it. `kro preview` and `kro diff` are deferred, see [Future Work](#future-work).
 
 **Bootstrapping Kro**
 Helm charts offer limited capabilities in terms of upgrading CRDs and distribution. A CLI which has `kro bootstrap` alleviates
@@ -46,14 +47,18 @@ Expand the existing `kro` CLI in `cmd/kro/`. Published as part of kro releases v
 Cluster-touching commands should have the standard kubeconfig subset: `--kubeconfig`, `--context`,
 `--namespace`.
 
+`--kubeconfig` and `--context` exist today but are ignored ([#1493](https://github.com/kubernetes-sigs/kro/issues/1493)):
+every command builds its client with controller-runtime's `GetConfig()`. Cluster related commands should share one loader
+instead of creating a new one.
+
 Commands that display data should have a standard display format `-o json|yaml`. Exit codes: `0` success, `1` error, `2` findings
-without error (`fmt --check`).
+without error (`validate` on an invalid RGD or instance, `fmt --check` when changes are needed).
 
 ### Design Details
 
 #### Validate
 
-`validate rgd` is offline by default. Schemas resolves from local CRD files or bundled
+`validate rgd` is offline by default. Schemas resolve from local CRD files or bundled
 Kubernetes schemas. Cluster discovery is opt-in.
 
 ```bash
@@ -73,12 +78,18 @@ kro validate instance --rgd-file rgd.yaml --instance-file instance.yaml
 (`pkg/graph/builder.go:57`). Offline resolution requires an abstraction against these two.
 That refactor results in code `generate` can then use.
 
-Open: Should  `Graph` (KREP-024) is a first-class input alongside RGD. See
+Open: should `Graph` (KREP-024) be a first-class input alongside RGD? See
 [Relationship to Existing KREPs](#relationship-to-existing-kreps).
 
 #### Fmt
 
 Normalize RGD YAML: field ordering, indentation, spacing. Pure text transformation.
+
+- Comments are preserved.
+- Top-level keys are ordered `apiVersion`, `kind`, `metadata`, `spec`. Keys under `spec` follow the
+  field order of the `ResourceGraphDefinition` API types (`schema`, then `resources`).
+  Keys inside resource templates keep the author's order, since `fmt` has no schema for them.
+- Each document in a multi-document file is formatted in place. Document order is kept.
 
 ```bash
 kro fmt -f rgd.yaml         # in place
@@ -112,6 +123,23 @@ defaults and above all, a working, trustable *upgrade* flow.
 `manifests/rendered/*.yaml` and applies them directly. It does not link the Helm SDK to avoid
 go mod bloat and not be just a plain Helm wrapper.
 
+`cmd/kro` is a separate Go module today and pins to kro `v0.9.3` (`cmd/kro/go.mod`). That blocks
+this decision because: `go:embed` cannot see `manifests/rendered/` outside the module, and
+there is a version skew between what the CLI imports vs what the controller has.
+
+**Proposal: fold `cmd/kro` into the root module.** The CLI builds from in-tree kro, and a
+package in the root module embeds the rendered manifests. The separate module gives us little,
+since nobody imports the CLI's packages anyways. A `replace` directive is not going to work, because
+`go install` rejects modules that have one.
+
+Alternative 1: keep the module and automate the release: tag kro, bump `cmd/kro/go.mod` to that
+tag, copy the rendered manifests into `cmd/kro`, then build.
+Alternative 2: Publish manifests in the release and bootstrap fetches them from there. 
+
+`manifests/rendered/` is gitignored and generated at release (`make render-static-manifests`),
+so the module zip does not contain it. The CLI is distributed as GoReleaser binaries only.
+`go install` is not supported.
+
 The Helm SDK was considered and rejected:
 
 - **It adds nothing over `helm install`.** Helm is not in `go.mod`. Linking the SDK for template rendering plus
@@ -128,7 +156,7 @@ The Helm SDK was considered and rejected:
 
 `--version` can only mean "the version this binary shipped with". This is the Flux model.
 A kro CLI at vX.Y.Z installs kro vX.Y.Z. Upgrading kro means fetching a newer CLI, which
-makes version skew between CLI and controller is impossible.
+makes version skew between CLI and controller impossible.
 
 ##### Upgrade
 
@@ -136,12 +164,12 @@ Re-running `kro bootstrap` against a cluster that already has kro is an upgrade.
 no separate verb. kro is one component, so there is nothing for an upgrade planner to
 schedule.
 
-**Apply strategy.** Server-side apply with a stable field manager(`kro-bootstrap`).
-Re-runs converge to detect drift cause by possible other tooling.
+**Apply strategy.** Server-side apply with a stable field manager (`kro-bootstrap`).
+Re-runs converge and correct drift caused by other tooling.
 `--force-conflicts` would just overwrite.
 
-**Ordering.** CRDs first, wait for `Established`, then ServiceAccount and RBAC, then the
-Deployment last.
+**Ordering.** The `kro-system` Namespace and the ApplySet parent ConfigMap first, then CRDs,
+wait for `Established`, then ServiceAccount and RBAC, then the Deployment last.
 
 **CRD handling.** This is where a dedicated CLI will be more helpful.
 
@@ -154,23 +182,27 @@ orphan the resource.
 
 Bootstrap reuses kro's existing ApplySet implementation in
 `pkg/controller/instance/applyset`, which already implements KEP-3659 for the instance
-controller. Nothing new to build: `Project`, `Apply`, `ListOrphans` and `DeleteOrphan`.
-Incidentally, ownership is also taken care of by the ApplySet mechanism.
+controller: `Project`, `Apply`, `ListOrphans` and `DeleteOrphan`.
+Incidentally, ownership is also taken care of by the ApplySet mechanism. Two changes are needed:
+
+- **Parent.** `applyset.New` needs a parent object. Bootstrap uses a ConfigMap in `kro-system`.
+- **Field manager.** The package hardcodes `kro.run/applyset` (`const.go`). It needs a
+  configurable field manager so bootstrap applies as `kro-bootstrap`.
 
 Two things that might be a problem still:
 
 - **Prune only works if every apply succeeded.** A failed apply leaves that resource's UID out of
   `KeepUIDs`, so pruning would delete something still in use. Check `ApplyResult` errors
   first and abort the prune, not the whole run.
-- **CRDs are applied but never pruned**, for the cascade reason under Uninstall.
+- **CRDs are applied but never pruned.** Deleting a CRD deletes every object of that kind,
+  so pruning the RGD CRD would delete every RGD in the cluster.
 
 Side effect worth having: the controller prunes instance resources through ApplySet and the
 CLI prunes install components through ApplySet. One mechanism, one place to fix bugs.
 
-**Version detection and downgrade.** Current version is read from the controller Deployment
-image tag, downgrades are only considered through a force flag.
-
-**Uninstall.** Removal deletes the components and *preserves the CRDs by default*.
+**Version detection and downgrade.** The installed version is recorded as an annotation on the
+ApplySet parent ConfigMap. Image tags are not reliable, since digest-pinned and locally built
+images carry no version tag. Downgrades are only considered through a force flag.
 
 ##### Sketch
 
@@ -208,11 +240,9 @@ Uninstall is out of scope, see [Not In Scope](#not-in-scope).
 **Leave validation to the controller.** This is what is happening currently. Validation is slow, requires
 apply, a cluster and a connection. It's cumbersome just to be informed that a CEL function has a typo in it.
 
-**Helm for bootstrap.** Rejected under [Bootstrap](#bootstrap).
+**Helm or the Helm SDK for bootstrap.** Rejected under [Bootstrap](#bootstrap).
 
 **Document `helm install`.** This is the original problem where CRDs will never be properly updated.
-
-**Use the Helm SDK for bootstrapping.** This is explained in [Bootstrapping](#bootstrap) section.
 
 ## Relationship to Existing KREPs
 
@@ -230,6 +260,12 @@ ships `rbac.mode: unrestricted` (`*/*` on `*`, retained for backwards compatibil
 every rendered variant uses `aggregation`. Under aggregation the controller starts with no
 permission over user resources until an aggregated ClusterRole labelled
 `rbac.kro.run/aggregate-to-controller: "true"` is added.
+
+**Existing Helm installs.** `kro bootstrap` refuses to run over a Helm-managed install
+(`app.kubernetes.io/managed-by: Helm` on the controller Deployment). Taking over silently would
+switch RBAC from `unrestricted` to `aggregation` and cut the controller's access to user resources.
+The error explains the migration: `helm uninstall kro` (Helm keeps the CRDs in `crds/`), add the
+aggregated ClusterRoles the RGDs need, then `kro bootstrap`.
 
 `validate rgd` flips from cluster-required to offline by default. An RGD referencing CRDs that
 exist only in-cluster now needs `--crds` or `--from-cluster`. The error must say so explicitly.
@@ -290,18 +326,19 @@ into its own KREP.
 
 ### Work items
 
-1. **Release plumbing.** `.goreleaser.yaml`, CLI into the release pipeline. No design risk,
-   unblocks distribution of everything else.
+1. **Release plumbing.** Fold `cmd/kro` into the root module, `.goreleaser.yaml`, CLI into the
+   release pipeline. No design risk, unblocks distribution of everything else.
 2. **Schema resolver abstraction.** Decouple `graph.NewBuilder` from `*rest.Config`. Bundle
    Kubernetes OpenAPI schemas and decide which versions to include.
 3. **`validate instance`** on top of (2).
 4. **`fmt`.**
 5. **`bootstrap`.** `go:embed` over `manifests/rendered/*.yaml`, SSA with ordering, ApplySet
-   prune via `pkg/controller/instance/applyset`, version detection. Plus `check`.
+   prune via `pkg/controller/instance/applyset` (ConfigMap parent, configurable field manager),
+   version detection, Helm install detection. Plus `check`.
 
 ### Sequencing
 
-(1) and (5) are independent of (2) and go first. (3) and (4) next (2).
+(1) and (5) are independent of (2) and go first. (3) and (4) come after (2).
 
 ### Risks
 

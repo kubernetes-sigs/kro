@@ -23,6 +23,7 @@ import (
 	"k8s.io/client-go/util/homedir"
 
 	"github.com/kubernetes-sigs/kro/cmd/kro/commands"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 )
 
 func main() {
@@ -60,6 +61,9 @@ func NewRootCommand() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&opts.KubeConfigPath, "kubeconfig", opts.KubeConfigPath, "Path to kubeconfig file")
 	cmd.PersistentFlags().StringVar(&opts.Context, "context", "", "Kubernetes context to use")
 	cmd.PersistentFlags().BoolVar(&opts.Verbose, "verbose", false, "Enable verbose logging")
+	// Expose the same --feature-gates flag as the controller so that validate
+	// and generate accept RGDs that use gated features (e.g. omit()).
+	features.FeatureGate.AddFlag(cmd.PersistentFlags())
 
 	// Cli commands
 	commands.AddCommands(cmd)

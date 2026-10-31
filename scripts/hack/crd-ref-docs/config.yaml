@@ -1,0 +1,8 @@
+processor:
+  ignoreTypes:
+    - "List$"
+  ignoreFields:
+    - "TypeMeta$"
+render:
+  # Must equal 1.<minor> of k8s.io/api in go.mod; scripts/hack/generate-api-docs.sh fails if it drifts.
+  kubernetesVersion: "1.36"

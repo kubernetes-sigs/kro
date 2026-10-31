@@ -23,7 +23,7 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/cmd/kro/internal/defaults"
-	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/kubeconfig"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 )
 
@@ -69,7 +69,7 @@ var validateRGDCmd = &cobra.Command{
 }
 
 func validateRGD(rgd *v1alpha1.ResourceGraphDefinition) error {
-	set, err := kroclient.NewSet(kroclient.Config{})
+	set, err := kubeconfig.Global.NewClientSet()
 	if err != nil {
 		return fmt.Errorf("failed to create client set: %w", err)
 	}

@@ -17,12 +17,11 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"k8s.io/client-go/util/homedir"
 
 	"github.com/kubernetes-sigs/kro/cmd/kro/commands"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/kubeconfig"
 )
 
 func main() {
@@ -34,9 +33,7 @@ func main() {
 }
 
 type CommandOptions struct {
-	KubeConfigPath string
-	Context        string
-	Verbose        bool
+	Verbose bool
 }
 
 var cmd = &cobra.Command{
@@ -51,14 +48,12 @@ ResourceGraphDefinitions (RGDs) and their instances in Kubernetes cluster.`,
 var opts = &CommandOptions{}
 
 func NewRootCommand() *cobra.Command {
-
-	if home := homedir.HomeDir(); home != "" {
-		opts.KubeConfigPath = filepath.Join(home, ".kube", "config")
-	}
-
-	// Global flags
-	cmd.PersistentFlags().StringVar(&opts.KubeConfigPath, "kubeconfig", opts.KubeConfigPath, "Path to kubeconfig file")
-	cmd.PersistentFlags().StringVar(&opts.Context, "context", "", "Kubernetes context to use")
+	// Global flags. The cluster connection flags are bound to the shared
+	// kubeconfig options so that subcommands can build their clients from them.
+	cmd.PersistentFlags().StringVar(&kubeconfig.Global.KubeConfigPath, "kubeconfig", "",
+		"Path to kubeconfig file (defaults to $KUBECONFIG, then ~/.kube/config)")
+	cmd.PersistentFlags().StringVar(&kubeconfig.Global.Context, "context", "",
+		"Kubernetes context to use (defaults to the kubeconfig's current-context)")
 	cmd.PersistentFlags().BoolVar(&opts.Verbose, "verbose", false, "Enable verbose logging")
 
 	// Cli commands

@@ -20,15 +20,14 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/cmd/kro/internal/defaults"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/kubeconfig"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
-
-	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 
 	"gopkg.in/yaml.v2"
 )
 
 func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, error) {
-	set, err := kroclient.NewSet(kroclient.Config{})
+	set, err := kubeconfig.Global.NewClientSet()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create client set: %w", err)
 	}

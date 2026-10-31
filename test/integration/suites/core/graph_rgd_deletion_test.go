@@ -101,7 +101,6 @@ var _ = Describe("Graph RGD Deletion", func() {
 		if err != nil {
 			t.Fatalf("BuildRuntimeForInstance: %v", err)
 		}
-		_ = g
 
 		// ── 4. Apply ─────────────────────────────────────────────────────────────
 		exec := executor.NewSimple(env.Client)
@@ -199,7 +198,7 @@ var _ = Describe("Graph RGD Deletion", func() {
 		}
 
 		// ── 8. Execute Delete and verify both resources are gone from the cluster ─
-		if err := exec.Delete(ctx, applied); err != nil {
+		if err := exec.Delete(ctx, g.GetUID(), applied); err != nil {
 			t.Fatalf("executor.Delete: %v", err)
 		}
 

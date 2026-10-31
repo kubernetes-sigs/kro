@@ -163,6 +163,7 @@ func TestReconcilePrunesStaleResources(t *testing.T) {
 	fresh := r("n", "ConfigMap", "new")
 
 	g := graph("g", withFinalizer)
+	g.UID = "pruning-graph-uid"
 	g.Status.ManagedResources = []expv1alpha1.ManagedResource{stale}
 	cl := newClient(t, g)
 
@@ -182,6 +183,7 @@ func TestReconcilePrunesStaleResources(t *testing.T) {
 	// The stale resource must have been handed to Delete.
 	require.Len(t, exec.deleteCalls, 1)
 	assert.Equal(t, []expv1alpha1.ManagedResource{stale}, exec.deleteCalls[0])
+	assert.Equal(t, []types.UID{g.UID}, exec.deleteOwners)
 
 	got := &expv1alpha1.Graph{}
 	require.NoError(t, cl.Get(context.Background(), req.NamespacedName, got))

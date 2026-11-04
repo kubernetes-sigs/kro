@@ -254,6 +254,33 @@ func TestSpecCases(t *testing.T) {
 			},
 		},
 		{
+			name: "externalFields order does not affect the hash",
+			run: func(t *testing.T) {
+				specA := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+					Resources: []*v1alpha1.Resource{{
+						ID:             "svc",
+						Template:       raw(`{"apiVersion":"v1","kind":"Service"}`),
+						ExternalFields: []string{"spec.a", "spec.b"},
+					}},
+				}
+				specB := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+					Resources: []*v1alpha1.Resource{{
+						ID:             "svc",
+						Template:       raw(`{"apiVersion":"v1","kind":"Service"}`),
+						ExternalFields: []string{"spec.b", "spec.a"},
+					}},
+				}
+
+				hashA, err := Spec(specA)
+				require.NoError(t, err)
+				hashB, err := Spec(specB)
+				require.NoError(t, err)
+				assert.Equal(t, hashA, hashB)
+			},
+		},
+		{
 			name: "forEach order affects the hash",
 			run: func(t *testing.T) {
 				specA := v1alpha1.ResourceGraphDefinitionSpec{
@@ -434,10 +461,11 @@ func TestNormalizeSpecCases(t *testing.T) {
 			spec: v1alpha1.ResourceGraphDefinitionSpec{
 				Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
 				Resources: []*v1alpha1.Resource{{
-					ID:          "service",
-					Template:    raw(`{"apiVersion":"v1","kind":"ConfigMap"}`),
-					ReadyWhen:   []string{"b", "a"},
-					IncludeWhen: []string{"y", "x"},
+					ID:             "service",
+					Template:       raw(`{"apiVersion":"v1","kind":"ConfigMap"}`),
+					ReadyWhen:      []string{"b", "a"},
+					IncludeWhen:    []string{"y", "x"},
+					ExternalFields: []string{"spec.b", "spec.a"},
 					ForEach: []v1alpha1.ForEachDimension{
 						{"zone": "${schema.spec.zones}"},
 						{"region": "${schema.spec.regions}"},
@@ -448,6 +476,7 @@ func TestNormalizeSpecCases(t *testing.T) {
 				require.Len(t, normalized.Resources, 1)
 				assert.Equal(t, []string{"a", "b"}, normalized.Resources[0].ReadyWhen)
 				assert.Equal(t, []string{"x", "y"}, normalized.Resources[0].IncludeWhen)
+				assert.Equal(t, []string{"spec.a", "spec.b"}, normalized.Resources[0].ExternalFields)
 				assert.Equal(t, []v1alpha1.ForEachDimension{
 					{"zone": "${schema.spec.zones}"},
 					{"region": "${schema.spec.regions}"},

@@ -38,6 +38,7 @@ import (
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/structured-merge-diff/v6/fieldpath"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/applyset"
@@ -743,6 +744,9 @@ func (s *Simple) applyScalarTemplate(ctx context.Context, w watchrouter.Watcher,
 			return applied, fmt.Errorf("template %s %q owned by a peer kro Graph's template manager; refusing to co-manage: %w (%w)",
 				obj.GetKind(), client.ObjectKeyFromObject(obj), ErrFieldManagerConflict, ErrNotReady)
 		}
+		if current != nil {
+			releaseHandedOffFields(obj, current, n.Spec().ExternalFields)
+		}
 		if err := s.applyTemplateObject(ctx, obj, rt.Graph().GetUID()); err != nil {
 			// A peer-Graph field conflict is soft not-ready (wrapped with
 			// ErrNotReady) so the node gates its dependents and the reconcile
@@ -1026,6 +1030,9 @@ func (s *Simple) applyCollectionItem(ctx context.Context, rt *runtime.Runtime, n
 		return nil
 	}
 
+	if current != nil {
+		releaseHandedOffFields(obj, current, n.Spec().ExternalFields)
+	}
 	if err := s.applyTemplateObject(ctx, obj, rt.Graph().GetUID()); err != nil {
 		// A peer-Graph field conflict is never tolerated as an update-rejection:
 		// record it as a soft failure so the collection is held not-ready and the
@@ -2230,6 +2237,197 @@ func isForeignGraphTemplateManager(manager, self, selfGraph string) bool {
 // ownership in the read-then-write window and then get force-stolen on stale
 // evidence (reviewer finding 3909839245). Basing the decision on the causes of
 // the apply that actually failed evaluates ownership as-of that apply.
+// releaseHandedOffFields omits each externalFields field path (already
+// validated at compile time, compiler.analyzeExternalFields, to exist and to
+// end in a plain map key) from obj, but ONLY once current's managedFields
+// shows some manager OTHER than kro's own template managers actively
+// claiming that path. A [field=value] selector segment (for example
+// containers[name=nginx]) is matched against obj, the resolved object, so it
+// still resolves correctly even when the matched field's value came from a
+// CEL expression in the template.
+//
+// Omitting a path from an SSA manifest before any foreign manager claims it
+// would not just release kro's ownership — since kro would then be the ONLY
+// manager that ever mentioned the field, the API server deletes it outright.
+// That turns "hand this field off" into "delete the initial value moments
+// after create" the instant kro's own next reconcile runs (which happens
+// almost immediately, well before any external controller gets a chance to
+// act). So until a foreign owner shows up, kro keeps including the path in
+// every apply exactly like a normal field — reverting hand-edits, same as
+// any other field it owns. Once an external controller actually writes to
+// the field (an Update/Patch/Apply all register a managedFields entry), kro
+// stops including it: the field now has a real external owner keeping it
+// alive, so releasing kro's claim no longer deletes it.
+//
+// current == nil (create path) is a no-op here regardless: foreignFieldOwner
+// always returns "" for a nil object, so every path stays in obj and the
+// resource is created with its full initial values.
+func releaseHandedOffFields(obj, current *unstructured.Unstructured, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	// Parsed once per call rather than once per path: a resource can carry
+	// several externalFields entries, and re-parsing every managedFields
+	// entry's FieldsV1 JSON from scratch for each one is wasted work on an
+	// object with many managers.
+	owners := foreignFieldManagers(current)
+	for _, p := range paths {
+		segments, err := compiler.ParseFieldPath(p)
+		if err != nil {
+			// Already validated at compile time; defensive no-op.
+			continue
+		}
+		if foreignFieldOwnerAmong(owners, segments) == "" {
+			continue
+		}
+		removeFieldPath(obj.Object, segments)
+	}
+}
+
+// foreignFieldOwner returns the manager name of a managedFields entry, other
+// than one of kro's own field managers (FieldManager, any
+// templateFieldManagerPrefix identity, or any patchFieldManagerPrefix
+// identity, since a Patch node contributing to the same path is still kro,
+// not an external controller), that claims the field path on current, or ""
+// if no such entry exists (including when current is nil).
+// Each entry's FieldsV1 is the structured-merge-diff fieldpath.Set
+// serialization k8s itself uses to track field ownership, so parsing it is
+// the only reliable way to answer "does anyone besides kro manage this exact
+// field" — a manager simply being present on the object says nothing about
+// which fields it touches. A one-off convenience wrapper around
+// foreignFieldManagers and foreignFieldOwnerAmong for a single lookup; a
+// caller checking several paths against the same object (releaseHandedOffFields)
+// parses the managedFields once and calls foreignFieldOwnerAmong directly.
+func foreignFieldOwner(current *unstructured.Unstructured, segments []compiler.FieldPathSegment) string {
+	return foreignFieldOwnerAmong(foreignFieldManagers(current), segments)
+}
+
+// foreignFieldManager is one non-kro managedFields entry with its FieldsV1
+// already parsed into a fieldpath.Set.
+type foreignFieldManager struct {
+	name string
+	set  fieldpath.Set
+}
+
+// foreignFieldManagers parses every managedFields entry on current that
+// belongs to something other than kro itself (see foreignFieldOwner's doc
+// comment for which identities count as kro's own) into a foreignFieldManager,
+// skipping an entry with no FieldsV1 or a FieldsV1 that fails to parse. Nil
+// for a nil current.
+func foreignFieldManagers(current *unstructured.Unstructured) []foreignFieldManager {
+	if current == nil {
+		return nil
+	}
+	var owners []foreignFieldManager
+	for _, mf := range current.GetManagedFields() {
+		if mf.Manager == FieldManager ||
+			strings.HasPrefix(mf.Manager, templateFieldManagerPrefix) ||
+			strings.HasPrefix(mf.Manager, patchFieldManagerPrefix) {
+			continue
+		}
+		if mf.FieldsV1 == nil {
+			continue
+		}
+		var set fieldpath.Set
+		if err := set.FromJSON(mf.FieldsV1.GetRawReader()); err != nil {
+			continue
+		}
+		owners = append(owners, foreignFieldManager{name: mf.Manager, set: set})
+	}
+	return owners
+}
+
+// foreignFieldOwnerAmong returns the name of the first owner in owners whose
+// set claims the field path built from segments, or "" if none do (including
+// when owners is empty).
+func foreignFieldOwnerAmong(owners []foreignFieldManager, segments []compiler.FieldPathSegment) string {
+	if len(owners) == 0 {
+		return ""
+	}
+	want, err := buildFieldPath(segments)
+	if err != nil {
+		return ""
+	}
+	for _, o := range owners {
+		if o.set.Has(want) {
+			return o.name
+		}
+	}
+	return ""
+}
+
+// buildFieldPath converts parsed externalFields segments into a
+// structured-merge-diff fieldpath.Path. A plain segment becomes a single
+// field-name element. A [field=value] selector becomes a field-name element
+// (the list itself) followed by a key element naming the matched item, which
+// is exactly how metadata.managedFields encodes an associative list item
+// (f:containers followed by k:{"name":"nginx"}), so the constructed path
+// matches what the API server itself would report as conflicting or owned.
+func buildFieldPath(segments []compiler.FieldPathSegment) (fieldpath.Path, error) {
+	parts := make([]any, 0, len(segments)*2)
+	for _, seg := range segments {
+		parts = append(parts, seg.Key)
+		if seg.Match != "" {
+			parts = append(parts, fieldpath.KeyElementByFields(seg.Match, selectorMatchValue(seg.Value)))
+		}
+	}
+	return fieldpath.MakePath(parts...)
+}
+
+// selectorMatchValue converts a [field=value] selector's literal text into
+// the type it would decode as in the live object's JSON, since managedFields
+// preserves the merge key's actual JSON type (a number or a bool, not a
+// string), and fieldpath.Set.Has compares by type, not by string form. A
+// value that is not itself valid JSON (an ordinary name such as "nginx") is
+// used as a plain string, which is how the merge key is actually stored for
+// a string-typed field.
+func selectorMatchValue(s string) any {
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err == nil {
+		return v
+	}
+	return s
+}
+
+// removeFieldPath removes the leaf field named by the final segment from the
+// resolved object, navigating through intermediate [field=value] list
+// selectors by matching against the resolved value (compiler.MatchListItem).
+// The final segment is always a plain map key; compile-time validation
+// rejects a path ending in a selector (releasing a whole named list item,
+// rather than one of its fields, is not supported in v1). A no-op if any
+// segment along the way is missing or does not match, since there is then
+// nothing to release.
+func removeFieldPath(obj map[string]any, segments []compiler.FieldPathSegment) {
+	cur := obj
+	for i, seg := range segments {
+		val, ok := cur[seg.Key]
+		if !ok {
+			return
+		}
+		if seg.Match != "" {
+			list, ok := val.([]any)
+			if !ok {
+				return
+			}
+			item, found := compiler.MatchListItem(list, seg.Match, seg.Value)
+			if !found {
+				return
+			}
+			cur = item
+			continue
+		}
+		if i == len(segments)-1 {
+			delete(cur, seg.Key)
+			return
+		}
+		next, ok := val.(map[string]any)
+		if !ok {
+			return
+		}
+		cur = next
+	}
+}
+
 func (s *Simple) applyTemplateObject(ctx context.Context, obj *unstructured.Unstructured, parentUID types.UID) error {
 	if !s.ConflictDetection {
 		return s.ssaApply(ctx, obj, FieldManager, true)

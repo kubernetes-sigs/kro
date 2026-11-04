@@ -211,6 +211,7 @@ type ManagedResource struct {
 // reference it via CEL expressions.
 //
 // +kubebuilder:validation:XValidation:rule="[has(self.template), has(self.ref), has(self.def), has(self.graph), has(self.patch)].exists_one(x, x)",message="exactly one of template, ref, def, graph, patch must be set"
+// +kubebuilder:validation:XValidation:rule="!has(self.externalFields) || has(self.template)",message="externalFields may only be set when template is used"
 type Node struct {
 	// ID is the handle that other nodes use to reference this node from CEL
 	// expressions. Must be alphanumeric (case-insensitive) and unique within
@@ -299,6 +300,23 @@ type Node struct {
 	//
 	// +kubebuilder:validation:Optional
 	IncludeWhen []string `json:"includeWhen,omitempty"`
+
+	// ExternalFields is a list of field paths (e.g. "spec.selector") into
+	// this node's template that kro hands off to an external controller once
+	// one actually takes them over. kro sets each field's initial value on
+	// creation and keeps reconciling it normally (reverting hand-edits, same
+	// as any other field) until a write from a DIFFERENT field manager is
+	// observed on that exact path — only then does kro stop including it in
+	// future applies, so the external controller's value is never reset. kro
+	// still deletes the whole resource on prune. A segment may carry a
+	// [field=value] selector to address one item of an associative list by
+	// matching one of its fields, e.g. "containers[name=nginx].env[name=FOO].value".
+	// Every segment must resolve to an existing key (or, for a selector, an
+	// existing matching item) in the literal template, and the final segment
+	// must be a plain field, not a selector.
+	//
+	// +kubebuilder:validation:Optional
+	ExternalFields []string `json:"externalFields,omitempty"`
 
 	// ForEach expands this node into a collection. Each entry binds a
 	// variable name to a CEL expression that evaluates to an array; the

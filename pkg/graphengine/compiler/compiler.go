@@ -653,6 +653,7 @@ func (ctx *CompilationContext) analyzeNodeRefs(n *Node, inspector *ast.Inspector
 		ctx.analyzeForEach,
 		ctx.analyzeIncludeWhen,
 		ctx.analyzeReadyWhen,
+		ctx.analyzeExternalFields,
 	} {
 		capt, err := analyze(n, inspector)
 		if err != nil {
@@ -782,6 +783,67 @@ func (ctx *CompilationContext) analyzeReadyWhen(n *Node, inspector *ast.Inspecto
 			if d != n.ID {
 				return nil, fmt.Errorf("readyWhen[%d] (%q) may only reference the node itself, found %q", i, expr.UserExpression(), d)
 			}
+		}
+	}
+	return nil, nil
+}
+
+// analyzeExternalFields validates each externalFields field path against the
+// node's literal template structure (Object, pre-CEL-substitution but
+// structurally complete): every segment must resolve to an existing key, a
+// [field=value] selector must name a list whose literal template contains a
+// matching item, and the final segment must be a plain map key, not a
+// selector (releasing a whole named list item, rather than one of its
+// fields, is not supported in v1). It carries no CEL deps or captures, so it
+// always returns (nil, err).
+func (ctx *CompilationContext) analyzeExternalFields(n *Node, _ *ast.Inspector) ([]string, error) {
+	if len(n.ExternalFields) == 0 {
+		return nil, nil
+	}
+	if n.Kind != NodeKindTemplate {
+		return nil, fmt.Errorf("externalFields is only supported on a template node, found on %s node %q", n.Kind, n.ID)
+	}
+	for i, path := range n.ExternalFields {
+		segments, err := ParseFieldPath(path)
+		if err != nil {
+			return nil, fmt.Errorf("externalFields[%d]: %w", i, err)
+		}
+		var cur any
+		if n.Object != nil {
+			cur = n.Object.Object
+		}
+		for j, seg := range segments {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("externalFields[%d] (%q): %q is not inside an object", i, path, seg.Key)
+			}
+			val, ok := m[seg.Key]
+			if !ok {
+				return nil, fmt.Errorf("externalFields[%d] (%q): %q not found in template", i, path, seg.Key)
+			}
+			isLast := j == len(segments)-1
+			if seg.Match != "" {
+				list, ok := val.([]any)
+				if !ok {
+					return nil, fmt.Errorf("externalFields[%d] (%q): %q is not a list, cannot use a [%s=%s] selector", i, path, seg.Key, seg.Match, seg.Value)
+				}
+				if isLast {
+					return nil, fmt.Errorf("externalFields[%d] (%q): a [%s=%s] selector cannot be the final segment, address a field inside the matched item instead", i, path, seg.Match, seg.Value)
+				}
+				item, found := MatchListItem(list, seg.Match, seg.Value)
+				if !found {
+					return nil, fmt.Errorf("externalFields[%d] (%q): no item in %q matches [%s=%s]", i, path, seg.Key, seg.Match, seg.Value)
+				}
+				cur = item
+				continue
+			}
+			if _, isList := val.([]any); isList {
+				return nil, fmt.Errorf("externalFields[%d] (%q): %q is a list, add a [field=value] selector to address one item", i, path, seg.Key)
+			}
+			if isLast {
+				break
+			}
+			cur = val
 		}
 	}
 	return nil, nil

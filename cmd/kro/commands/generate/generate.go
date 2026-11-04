@@ -21,6 +21,7 @@ import (
 type GenerateConfig struct {
 	resourceGraphDefinitionFile string
 	outputFormat                string
+	cliVersion                  string
 }
 
 var config = &GenerateConfig{}

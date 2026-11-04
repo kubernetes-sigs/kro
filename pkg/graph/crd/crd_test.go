@@ -237,21 +237,32 @@ func TestSynthesizeCRD(t *testing.T) {
 }
 
 func TestSynthesizeCRDNameValidation(t *testing.T) {
-	baseSchema := &v1alpha1.Schema{}
-	withoutValidation, err := SynthesizeCRD(
-		"example.com", "v1", "Widget",
-		extv1.JSONSchemaProps{Type: "object"}, extv1.JSONSchemaProps{Type: "object"},
-		false, extv1.NamespaceScoped, baseSchema,
-	)
-	require.NoError(t, err)
-	metadataSchema := withoutValidation.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["metadata"]
-	assert.Nil(t, metadataSchema.Properties, "absent nameValidation must preserve the generated schema")
+	for _, tt := range []struct {
+		name   string
+		schema *v1alpha1.Schema
+	}{
+		{name: "nil schema"},
+		{name: "absent metadata", schema: &v1alpha1.Schema{}},
+		{name: "absent validation", schema: &v1alpha1.Schema{Metadata: &v1alpha1.CRDMetadata{}}},
+		{name: "empty validation", schema: &v1alpha1.Schema{Metadata: &v1alpha1.CRDMetadata{Validation: v1alpha1.MetadataValidation{}}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			withoutValidation, err := SynthesizeCRD(
+				"example.com", "v1", "Widget",
+				extv1.JSONSchemaProps{Type: "object"}, extv1.JSONSchemaProps{Type: "object"},
+				false, extv1.NamespaceScoped, tt.schema,
+			)
+			require.NoError(t, err)
+			metadataSchema := withoutValidation.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["metadata"]
+			assert.Nil(t, metadataSchema.Properties, "absent validation.name must preserve the generated schema")
+		})
+	}
 
 	validatedSchema := &v1alpha1.Schema{
 		Metadata: &v1alpha1.CRDMetadata{
-			NameValidation: "maxLength=30",
-			Labels:         map[string]string{"environment": "test"},
-			Annotations:    map[string]string{"description": "Widget CRD"},
+			Validation:  v1alpha1.MetadataValidation{Name: "maxLength=30"},
+			Labels:      map[string]string{"environment": "test"},
+			Annotations: map[string]string{"description": "Widget CRD"},
 		},
 	}
 	withValidation, err := SynthesizeCRD(
@@ -260,7 +271,7 @@ func TestSynthesizeCRDNameValidation(t *testing.T) {
 		false, extv1.ClusterScoped, validatedSchema,
 	)
 	require.NoError(t, err)
-	metadataSchema = withValidation.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["metadata"]
+	metadataSchema := withValidation.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["metadata"]
 	nameSchema, ok := metadataSchema.Properties["name"]
 	require.True(t, ok)
 	assert.Equal(t, "string", nameSchema.Type)
@@ -270,13 +281,13 @@ func TestSynthesizeCRDNameValidation(t *testing.T) {
 	assert.Equal(t, validatedSchema.Metadata.Annotations, withValidation.Annotations)
 	assert.Equal(t, extv1.ClusterScoped, withValidation.Spec.Scope)
 
-	validatedSchema.Metadata.NameValidation = "required=true"
+	validatedSchema.Metadata.Validation.Name = "required=true"
 	_, err = SynthesizeCRD(
 		"example.com", "v1", "Widget",
 		extv1.JSONSchemaProps{Type: "object"}, extv1.JSONSchemaProps{Type: "object"},
 		false, extv1.NamespaceScoped, validatedSchema,
 	)
-	require.ErrorContains(t, err, "invalid metadata.nameValidation")
+	require.ErrorContains(t, err, "invalid metadata.validation.name")
 }
 
 func TestNewCRD(t *testing.T) {

@@ -431,7 +431,7 @@ The labels and annotations you define here will be applied to the CRD itself (no
 
 #### Validating Instance Names
 
-Use `metadata.nameValidation` to add OpenAPI constraints to the names of
+Use `metadata.validation.name` to add OpenAPI constraints to the names of
 instances created from the generated CRD. The value uses marker-only
 SimpleSchema syntax; the `string` type is implicit.
 
@@ -440,7 +440,8 @@ schema:
   apiVersion: v1alpha1
   kind: Application
   metadata:
-    nameValidation: maxLength=30 pattern="^[a-z][a-z0-9-]*$"
+    validation:
+      name: maxLength=30 pattern="^[a-z][a-z0-9-]*$"
 ```
 
 Supported markers are `minLength`, `maxLength`, `pattern`, `enum`, and the

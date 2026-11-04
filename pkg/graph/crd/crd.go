@@ -31,11 +31,11 @@ import (
 // scope must be either extv1.NamespaceScoped or extv1.ClusterScoped; defaults to NamespaceScoped.
 func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, scope extv1.ResourceScope, rgSchema *v1alpha1.Schema) (*extv1.CustomResourceDefinition, error) {
 	var nameSchema *extv1.JSONSchemaProps
-	if rgSchema != nil && rgSchema.Metadata != nil && rgSchema.Metadata.NameValidation != "" {
+	if rgSchema != nil && rgSchema.Metadata != nil && rgSchema.Metadata.Validation.Name != "" {
 		var err error
-		nameSchema, err = simpleschema.StringSchemaFromMarkers(rgSchema.Metadata.NameValidation)
+		nameSchema, err = simpleschema.StringSchemaFromMarkers(rgSchema.Metadata.Validation.Name)
 		if err != nil {
-			return nil, fmt.Errorf("invalid metadata.nameValidation: %w", err)
+			return nil, fmt.Errorf("invalid metadata.validation.name: %w", err)
 		}
 	}
 	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride, nameSchema), scope, rgSchema), nil

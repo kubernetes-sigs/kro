@@ -67,7 +67,9 @@ var _ = Describe("CRD", func() {
 				)
 				rgd.Spec.Schema.Scope = scope
 				rgd.Spec.Schema.Metadata = &krov1alpha1.CRDMetadata{
-					NameValidation: `maxLength=30 validation="self.startsWith('a')"`,
+					Validation: krov1alpha1.MetadataValidation{
+						Name: `maxLength=30 validation="self.startsWith('a')"`,
+					},
 				}
 				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 				DeferCleanup(func(ctx SpecContext) {

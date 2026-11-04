@@ -117,7 +117,11 @@ var _ = Describe("Validation", func() {
 				rgd := generator.NewResourceGraphDefinition("test-name-validation-"+tt.name,
 					generator.WithSchema("InvalidNameValidation"+strings.ReplaceAll(tt.name, "-", ""), "v1alpha1", map[string]any{}, nil),
 				)
-				rgd.Spec.Schema.Metadata = &krov1alpha1.CRDMetadata{NameValidation: tt.validation}
+				rgd.Spec.Schema.Metadata = &krov1alpha1.CRDMetadata{
+					Validation: krov1alpha1.MetadataValidation{
+						Name: tt.validation,
+					},
+				}
 				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 				expectRGDInactiveWithError(ctx, rgd, tt.errorString)
 				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())

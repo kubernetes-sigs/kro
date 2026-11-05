@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	githubapi "github.com/google/go-github/v78/github"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +15,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	githubapi "github.com/google/go-github/v93/github"
 )
 
 const (
@@ -588,26 +589,23 @@ func findRepoRoot() (string, error) {
 }
 
 func newGitHubClient(cfg crawlConfig) (githubClient, error) {
-	httpClient := &http.Client{Timeout: cfg.Timeout}
-
-	client := githubapi.NewClient(httpClient)
+	options := []githubapi.ClientOptionsFunc{
+		githubapi.WithHTTPClient(&http.Client{Timeout: cfg.Timeout}),
+		githubapi.WithUserAgent("kro-krep-crawl"),
+	}
 	if cfg.APIBaseURL != defaultAPIBaseURL {
-		var err error
-		client, err = githubapi.NewEnterpriseClient(
-			normalizeAPIBaseURL(cfg.APIBaseURL),
-			normalizeAPIBaseURL(cfg.APIBaseURL),
-			httpClient,
-		)
-		if err != nil {
-			return githubClient{}, err
-		}
+		baseURL := normalizeAPIBaseURL(cfg.APIBaseURL)
+		options = append(options, githubapi.WithEnterpriseURLs(baseURL, baseURL))
 	}
 
 	if token := githubToken(); token != "" {
-		client = client.WithAuthToken(token)
+		options = append(options, githubapi.WithAuthToken(token))
 	}
 
-	client.UserAgent = "kro-krep-crawl"
+	client, err := githubapi.NewClient(options...)
+	if err != nil {
+		return githubClient{}, err
+	}
 
 	return githubClient{client: client}, nil
 }

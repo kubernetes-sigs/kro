@@ -247,7 +247,8 @@ func TestGraphImpersonationConfinement(t *testing.T) {
 
 	mgrCancel()
 	select {
-	case <-errCh:
+	case err := <-errCh:
+		require.NoError(t, err, "manager shutdown")
 	case <-time.After(10 * time.Second):
 		t.Log("manager did not stop within 10s")
 	}

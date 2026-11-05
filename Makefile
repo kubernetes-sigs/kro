@@ -3,7 +3,7 @@ OCI_REPO ?= registry.k8s.io/kro
 HELM_IMAGE ?= ${OCI_REPO}/charts/kro
 KO_DOCKER_REPO ?= ${OCI_REPO}/kro
 
-HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.19.5
+HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.22.1
 
 KOCACHE ?= ~/.ko
 KO_PUSH ?= true
@@ -170,7 +170,7 @@ test-coverage: ## Run all tests and report coverage
 	@echo "Combined:    $$(go tool cover -func=combined-cover.out | grep total | awk '{print $$NF}')"
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION ?= v2.15.0
 golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || GOBIN=$(shell dirname $(GOLANGCI_LINT)) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
@@ -212,8 +212,9 @@ CHAINSAW ?= $(LOCALBIN)/chainsaw
 
 ## Tool Versions
 KO_VERSION ?= v0.19.1
-KUSTOMIZE_VERSION ?= v5.8.1
+KUSTOMIZE_VERSION ?= v5.8.2
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
+SETUP_ENVTEST_VERSION ?= v0.24.1
 CHAINSAW_VERSION ?= v0.2.15
 
 .PHONY: chainsaw
@@ -254,7 +255,7 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 .PHONY: envtest
 envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
 $(ENVTEST): $(LOCALBIN)
-	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) $(GOPREFIX) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) $(GOPREFIX) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
 
 .PHONY: build-image
 build-image: ko ## Build kro controller image.

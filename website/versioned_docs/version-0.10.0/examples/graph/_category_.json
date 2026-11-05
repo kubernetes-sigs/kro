@@ -1,0 +1,10 @@
+{
+  "label": "Graph Examples",
+  "position": 200,
+  "link": {
+    "type": "generated-index",
+    "description": "Patterns built with the Graph API: decorators, fan-in, static bundles, and singletons."
+  },
+  "collapsible": true,
+  "collapsed": true
+}

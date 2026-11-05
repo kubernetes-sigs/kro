@@ -9,6 +9,49 @@ const config: Config = {
   plugins: [
     require.resolve("docusaurus-lunr-search"),
     require.resolve("docusaurus-plugin-image-zoom"),
+    [
+      require.resolve("@docusaurus/plugin-client-redirects"),
+      {
+        redirects: [
+          {
+            from: "/docs/concepts/instances",
+            to: "/docs/concepts/rgd/instances",
+          },
+          {
+            from: "/docs/concepts/rgd/cel-expressions",
+            to: "/docs/concepts/expressions/cel-expressions",
+          },
+          {
+            from: "/docs/concepts/rgd/cel-libraries",
+            to: "/docs/concepts/expressions/cel-libraries",
+          },
+          {
+            from: "/docs/concepts/rgd/dependencies-ordering",
+            to: "/docs/concepts/expressions/dependencies-ordering",
+          },
+          {
+            from: "/docs/concepts/rgd/resource-definitions/resource-basics",
+            to: "/docs/concepts/rgd/resource-basics",
+          },
+          {
+            from: "/docs/concepts/rgd/resource-definitions/conditional-creation",
+            to: "/docs/concepts/reconciliation/conditional-creation",
+          },
+          {
+            from: "/docs/concepts/rgd/resource-definitions/readiness",
+            to: "/docs/concepts/reconciliation/readiness",
+          },
+          {
+            from: "/docs/concepts/rgd/resource-definitions/collections",
+            to: "/docs/concepts/reconciliation/collections",
+          },
+          {
+            from: "/docs/concepts/rgd/resource-definitions/external-references",
+            to: "/docs/concepts/reconciliation/external-references",
+          },
+        ],
+      },
+    ],
     function rawYamlPlugin() {
       return {
         name: "raw-yaml-plugin",
@@ -93,7 +136,7 @@ const config: Config = {
           includeCurrentVersion: true,
           // Latest stable release, independent of the first entry in versions.json.
           // Keep this pinned when cutting release-candidate docs.
-          lastVersion: "0.9.4",
+          lastVersion: "0.10.0",
         },
         blog: false,
         theme: {

@@ -75,28 +75,9 @@ When a new kro controller version is released, you should also update/release th
     installation commands. In the new snapshot, pin install and upgrade
     examples to the release being documented. For RCs, an unpinned Helm command
     or GitHub's `releases/latest` endpoint selects stable instead of the RC.
-    Keep the stable docs and their installation instructions unchanged.
+    Published snapshots and their installation instructions are frozen.
 
-4. **Add redirects for moved pages (when promoting stable 0.10.0)**
-    The current docs reorganized `docs/concepts/` ahead of 0.10.0. Once 0.10.0
-    becomes `lastVersion` in `docusaurus.config.ts`, the pre-0.10.0 URLs below
-    stop resolving at the site root. Add `@docusaurus/plugin-client-redirects`
-    with these entries in the same PR. They cannot be added earlier because the
-    `from` paths are still live routes served by the 0.9.x version.
-
-    | From | To |
-    | --- | --- |
-    | `/docs/concepts/instances` | `/docs/concepts/rgd/instances` |
-    | `/docs/concepts/rgd/cel-expressions` | `/docs/concepts/expressions/cel-expressions` |
-    | `/docs/concepts/rgd/cel-libraries` | `/docs/concepts/expressions/cel-libraries` |
-    | `/docs/concepts/rgd/dependencies-ordering` | `/docs/concepts/expressions/dependencies-ordering` |
-    | `/docs/concepts/rgd/resource-definitions/resource-basics` | `/docs/concepts/rgd/resource-basics` |
-    | `/docs/concepts/rgd/resource-definitions/conditional-creation` | `/docs/concepts/reconciliation/conditional-creation` |
-    | `/docs/concepts/rgd/resource-definitions/readiness` | `/docs/concepts/reconciliation/readiness` |
-    | `/docs/concepts/rgd/resource-definitions/collections` | `/docs/concepts/reconciliation/collections` |
-    | `/docs/concepts/rgd/resource-definitions/external-references` | `/docs/concepts/reconciliation/external-references` |
-
-5. **Validate and submit a Pull Request**
+4. **Validate and submit a Pull Request**
     Run `npm run typecheck`, `npm test`, and `npm run build` from `website/`.
     Check that the new snapshot has its own routes, that its internal links
     stay in that version, and that the homepage and latest-version banner

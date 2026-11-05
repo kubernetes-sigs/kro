@@ -530,40 +530,40 @@ func TestNormalizeRawExtensionCases(t *testing.T) {
 
 func equivalentOrderingSpecs() (v1alpha1.ResourceGraphDefinitionSpec, v1alpha1.ResourceGraphDefinitionSpec) {
 	return v1alpha1.ResourceGraphDefinitionSpec{
-			Schema: &v1alpha1.Schema{
-				Kind:       "App",
-				APIVersion: "v1alpha1",
-				Group:      "kro.run",
-				Spec:       raw(`{"b":{"x":2,"a":1},"a":[{"k":"v","n":1}]}`),
-				Types:      raw(`{"Server":{"port":"integer","host":"string"}}`),
-				Status:     raw(`{"endpoint":"${service.status.loadBalancer.ingress[0].hostname}"}`),
-				Metadata: &v1alpha1.CRDMetadata{
-					Labels:      map[string]string{"z": "1", "a": "2"},
-					Annotations: map[string]string{"team": "kro"},
-				},
+		Schema: &v1alpha1.Schema{
+			Kind:       "App",
+			APIVersion: "v1alpha1",
+			Group:      "kro.run",
+			Spec:       raw(`{"b":{"x":2,"a":1},"a":[{"k":"v","n":1}]}`),
+			Types:      raw(`{"Server":{"port":"integer","host":"string"}}`),
+			Status:     raw(`{"endpoint":"${service.status.loadBalancer.ingress[0].hostname}"}`),
+			Metadata: &v1alpha1.CRDMetadata{
+				Labels:      map[string]string{"z": "1", "a": "2"},
+				Annotations: map[string]string{"team": "kro"},
 			},
-			Resources: []*v1alpha1.Resource{{
-				ID:       "service",
-				Template: raw(`{"apiVersion":"v1","kind":"Service","metadata":{"labels":{"y":"2","x":"1"},"name":"my-svc"},"spec":{"ports":[{"port":80}]}}`),
-			}},
-		}, v1alpha1.ResourceGraphDefinitionSpec{
-			Schema: &v1alpha1.Schema{
-				Kind:       "App",
-				APIVersion: "v1alpha1",
-				Group:      "kro.run",
-				Spec:       raw(`{"a":[{"n":1,"k":"v"}],"b":{"a":1,"x":2}}`),
-				Types:      raw(`{"Server":{"host":"string","port":"integer"}}`),
-				Status:     raw(`{"endpoint":"${service.status.loadBalancer.ingress[0].hostname}"}`),
-				Metadata: &v1alpha1.CRDMetadata{
-					Labels:      map[string]string{"a": "2", "z": "1"},
-					Annotations: map[string]string{"team": "kro"},
-				},
+		},
+		Resources: []*v1alpha1.Resource{{
+			ID:       "service",
+			Template: raw(`{"apiVersion":"v1","kind":"Service","metadata":{"labels":{"y":"2","x":"1"},"name":"my-svc"},"spec":{"ports":[{"port":80}]}}`),
+		}},
+	}, v1alpha1.ResourceGraphDefinitionSpec{
+		Schema: &v1alpha1.Schema{
+			Kind:       "App",
+			APIVersion: "v1alpha1",
+			Group:      "kro.run",
+			Spec:       raw(`{"a":[{"n":1,"k":"v"}],"b":{"a":1,"x":2}}`),
+			Types:      raw(`{"Server":{"host":"string","port":"integer"}}`),
+			Status:     raw(`{"endpoint":"${service.status.loadBalancer.ingress[0].hostname}"}`),
+			Metadata: &v1alpha1.CRDMetadata{
+				Labels:      map[string]string{"a": "2", "z": "1"},
+				Annotations: map[string]string{"team": "kro"},
 			},
-			Resources: []*v1alpha1.Resource{{
-				ID:       "service",
-				Template: raw(`{"kind":"Service","apiVersion":"v1","metadata":{"name":"my-svc","labels":{"x":"1","y":"2"}},"spec":{"ports":[{"port":80}]}}`),
-			}},
-		}
+		},
+		Resources: []*v1alpha1.Resource{{
+			ID:       "service",
+			Template: raw(`{"kind":"Service","apiVersion":"v1","metadata":{"name":"my-svc","labels":{"x":"1","y":"2"}},"spec":{"ports":[{"port":80}]}}`),
+		}},
+	}
 }
 
 func deploymentSpec() v1alpha1.ResourceGraphDefinitionSpec {

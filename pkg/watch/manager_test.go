@@ -504,9 +504,10 @@ func TestEnsureWatch_RaceCondition_ReleaseBeforeInformerCreated(t *testing.T) {
 	}
 
 	// Start EnsureWatch in a goroutine.
-	errCh := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
-		errCh <- wm.EnsureWatch(gvr, "owner-a")
+		defer close(done)
+		_ = wm.EnsureWatch(gvr, "owner-a")
 	}()
 
 	// Give EnsureWatch time to acquire the lock. The slow createInformer
@@ -522,7 +523,7 @@ func TestEnsureWatch_RaceCondition_ReleaseBeforeInformerCreated(t *testing.T) {
 	// EnsureWatch may return an error (cache sync timeout because the
 	// informer was stopped) or succeed (if cache synced before ReleaseWatch
 	// ran). Either way, the key invariant holds: no leaked watches.
-	<-errCh
+	<-done
 
 	// The key invariant: no leaked watch with zero owners.
 	assert.Equal(t, 0, wm.ActiveWatchCount(), "watch should be stopped after sole owner released")

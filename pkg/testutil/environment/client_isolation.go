@@ -353,7 +353,14 @@ func (g *groupIsolatingClient) Create(ctx context.Context, obj client.Object, op
 
 func (g *groupIsolatingClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
 	if _, ok := obj.(*apiextensionsv1.CustomResourceDefinition); ok {
-		return g.crdWriteFallback(obj, func() error { return g.Client.Update(ctx, obj, opts...) })
+		return g.crdWriteFallback(obj, func() error {
+			// A missing CRD can return a UID conflict on Update. Resolve existence
+			// with Get so name fallback does not depend on the server's update error.
+			if err := g.Client.Get(ctx, client.ObjectKeyFromObject(obj), &apiextensionsv1.CustomResourceDefinition{}); err != nil {
+				return err
+			}
+			return g.Client.Update(ctx, obj, opts...)
+		})
 	}
 	if u, ok := kroInstance(obj); ok {
 		return g.instanceFallback(u, func() error { return g.Client.Update(ctx, obj, opts...) })

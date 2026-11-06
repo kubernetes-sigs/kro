@@ -20,3 +20,10 @@ Custom Resource Definitions (CRDs) that extend Kubernetes with kro's functionali
 Schema and language specifications used when authoring kro resources.
 
 - **[SimpleSchema](specifications/simple-schema.md)** - A concise schema definition language for defining resource structures in ResourceGraphDefinitions without writing verbose OpenAPI schemas.
+
+## Generated API Reference
+
+The [API Reference](./api-reference) page is auto-generated from the Go types in
+[`api/`](https://github.com/kubernetes-sigs/kro/tree/main/api). It lists every
+type, field, enum value, and validation rule for `kro.run/v1alpha1` and
+`internal.kro.run/v1alpha1`.

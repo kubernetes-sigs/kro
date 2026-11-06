@@ -261,6 +261,32 @@ func TestCompareSchemas(t *testing.T) {
 	}
 }
 
+func TestCompareNumberDefaultsByValue(t *testing.T) {
+	tests := []struct {
+		name    string
+		old     string
+		new     string
+		changed bool
+	}{
+		{name: "fraction", old: "1", new: "1.0"},
+		{name: "negative fraction", old: "-2", new: "-2.0"},
+		{name: "exponent", old: "1000", new: "1e3"},
+		{name: "different value", old: "1", new: "1.5", changed: true},
+		{name: "integers beyond float64 precision", old: "9007199254740993", new: "9007199254740992", changed: true},
+		{name: "undecodable raw", old: "1", new: "{", changed: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := Compare(
+				&v1.JSONSchemaProps{Type: "number", Default: &v1.JSON{Raw: []byte(tt.old)}},
+				&v1.JSONSchemaProps{Type: "number", Default: &v1.JSON{Raw: []byte(tt.new)}},
+			)
+			assert.Equal(t, tt.changed, report.HasChanges())
+		})
+	}
+}
+
 func TestCompareProperties(t *testing.T) {
 	tests := []struct {
 		name               string

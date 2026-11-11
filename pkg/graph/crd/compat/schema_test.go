@@ -969,3 +969,48 @@ func TestCompareConstraints(t *testing.T) {
 		})
 	}
 }
+
+func TestCompareRootValidationRules(t *testing.T) {
+	rule := v1.ValidationRule{Rule: "has(self.spec)", Message: "spec is required"}
+	withRules := func(rules ...v1.ValidationRule) *v1.JSONSchemaProps {
+		return &v1.JSONSchemaProps{
+			Type:         "object",
+			Properties:   map[string]v1.JSONSchemaProps{"spec": {Type: "object"}},
+			XValidations: rules,
+		}
+	}
+
+	tests := []struct {
+		name             string
+		oldSchema        *v1.JSONSchemaProps
+		newSchema        *v1.JSONSchemaProps
+		breakingCount    int
+		nonBreakingCount int
+	}{
+		{
+			name:             "adding a root rule is a non-breaking change",
+			oldSchema:        withRules(),
+			newSchema:        withRules(rule),
+			nonBreakingCount: 1,
+		},
+		{
+			name:             "removing all root rules is a non-breaking change",
+			oldSchema:        withRules(rule),
+			newSchema:        withRules(),
+			nonBreakingCount: 1,
+		},
+		{
+			name:      "unchanged root rules are not a change",
+			oldSchema: withRules(rule),
+			newSchema: withRules(rule),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := Compare(tt.oldSchema, tt.newSchema, WithConservativeComparison(false))
+			assert.Len(t, report.BreakingChanges, tt.breakingCount)
+			assert.Len(t, report.NonBreakingChanges, tt.nonBreakingCount)
+		})
+	}
+}

@@ -38,7 +38,12 @@ func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchema
 			return nil, fmt.Errorf("invalid metadata.validation.name: %w", err)
 		}
 	}
-	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride, nameSchema), scope, rgSchema), nil
+	schema := newCRDSchema(spec, status, statusFieldsOverride, nameSchema)
+	if rgSchema != nil && len(rgSchema.Validation) > 0 {
+		// Root-level rules can see the whole instance, including a missing spec.
+		schema.XValidations = rgSchema.Validation
+	}
+	return newCRD(group, apiVersion, kind, schema, scope, rgSchema), nil
 }
 
 func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope extv1.ResourceScope, rgSchema *v1alpha1.Schema) *extv1.CustomResourceDefinition {

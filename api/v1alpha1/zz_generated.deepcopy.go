@@ -587,6 +587,13 @@ func (in *Schema) DeepCopyInto(out *Schema) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.Validation != nil {
+		in, out := &in.Validation, &out.Validation
+		*out = make([]v1.ValidationRule, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.Metadata != nil {
 		in, out := &in.Metadata, &out.Metadata
 		*out = new(CRDMetadata)

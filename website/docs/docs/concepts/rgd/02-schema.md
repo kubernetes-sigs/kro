@@ -507,6 +507,36 @@ schema:
 
 For more details about SimpleSchema syntax and custom types, see the [SimpleSchema Specification](../../../api/specifications/simple-schema.md).
 
+## Validation Rules
+
+Use `validation` to add CEL rules to the root of the generated CRD schema.
+The API server evaluates them when instances are created or updated, so
+`self` refers to the whole instance. This lets a rule check things a
+field-level `validation` marker cannot, such as whether `spec` is set at all.
+
+```kro
+schema:
+  apiVersion: v1alpha1
+  kind: Application
+  spec:
+    name: string | required=true
+  validation:
+    - rule: "has(self.spec) || oldSelf.hasValue()"
+      optionalOldSelf: true
+      message: "spec is required"
+```
+
+Each entry uses the Kubernetes
+[ValidationRule](https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/#validation-rules)
+fields: `rule`, `message`, `messageExpression`, `reason`, `fieldPath`, and
+`optionalOldSelf`.
+
+Rules also run on every update of an existing instance, including the update
+that removes kro's finalizer when the instance is deleted. If you add a rule
+that instances created earlier do not satisfy, write it as a transition rule
+that references `oldSelf` and set `optionalOldSelf: true`, as in the example
+above. Otherwise those instances cannot be updated or deleted.
+
 ## Additional Printer Columns
 
 Control what `kubectl get` displays:

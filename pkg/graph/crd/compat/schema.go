@@ -198,6 +198,15 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps, conservative
 		compareTopology(path, oldSchema, newSchema, result)
 		compareValidationRules(path, oldSchema, newSchema, result)
 		compareUnclassifiedFields(path, oldSchema, newSchema, result)
+	} else if path == "" && !equality.Semantic.DeepEqual(oldSchema.XValidations, newSchema.XValidations) {
+		// Root-level rules come from the RGD's schema.validation field. Report
+		// changes as non-breaking so the CRD is still updated when they change.
+		result.AddNonBreakingChange(
+			path+".x-kubernetes-validations",
+			ValidationRulesChanged,
+			formatSchemaFieldValue(oldSchema.XValidations),
+			formatSchemaFieldValue(newSchema.XValidations),
+		)
 	}
 
 	return result

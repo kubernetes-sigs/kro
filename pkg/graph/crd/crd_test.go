@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
@@ -546,4 +547,41 @@ func TestNewCRDSchema(t *testing.T) {
 
 		})
 	}
+}
+
+func TestSynthesizeCRDRootValidation(t *testing.T) {
+	spec := extv1.JSONSchemaProps{
+		Type:       "object",
+		Properties: map[string]extv1.JSONSchemaProps{"name": {Type: "string"}},
+	}
+	rules := []extv1.ValidationRule{
+		{
+			Rule:            "has(self.spec) || oldSelf.hasValue()",
+			OptionalOldSelf: ptr.To(true),
+			Message:         "spec is required",
+		},
+	}
+
+	t.Run("rules are added to the root schema", func(t *testing.T) {
+		crd, err := SynthesizeCRD(
+			"kro.run", "v1alpha1", "Widget",
+			spec, extv1.JSONSchemaProps{Type: "object"},
+			true, extv1.NamespaceScoped, &v1alpha1.Schema{Validation: rules},
+		)
+		require.NoError(t, err)
+
+		root := crd.Spec.Versions[0].Schema.OpenAPIV3Schema
+		assert.Equal(t, extv1.ValidationRules(rules), root.XValidations)
+		assert.Empty(t, root.Properties["spec"].XValidations)
+	})
+
+	t.Run("no rules leaves the root schema unchanged", func(t *testing.T) {
+		crd, err := SynthesizeCRD(
+			"kro.run", "v1alpha1", "Widget",
+			spec, extv1.JSONSchemaProps{Type: "object"},
+			true, extv1.NamespaceScoped, &v1alpha1.Schema{},
+		)
+		require.NoError(t, err)
+		assert.Empty(t, crd.Spec.Versions[0].Schema.OpenAPIV3Schema.XValidations)
+	})
 }

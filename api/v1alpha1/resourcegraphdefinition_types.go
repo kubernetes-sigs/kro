@@ -142,6 +142,15 @@ type Schema struct {
 	// +listType=set
 	Categories []string `json:"categories,omitempty"`
 
+	// Validation is a list of CEL validation rules applied to the root of the
+	// generated CRD schema, so `self` refers to the whole instance. The API server
+	// evaluates them on create and update. Rules that reference `oldSelf` can set
+	// optionalOldSelf to also run on create.
+	// Example: [{"rule": "has(self.spec) || oldSelf.hasValue()", "optionalOldSelf": true, "message": "spec is required"}]
+	//
+	// +kubebuilder:validation:Optional
+	Validation []extv1.ValidationRule `json:"validation,omitempty"`
+
 	// Metadata configures instance metadata validation and metadata applied to the generated CRD.
 	// +kubebuilder:validation:Optional
 	Metadata *CRDMetadata `json:"metadata,omitempty"`

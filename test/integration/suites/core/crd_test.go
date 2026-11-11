@@ -108,6 +108,43 @@ var _ = Describe("CRD", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
+		It("should not keep updating the CRD when a float default is a whole number", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-crd-float-default",
+				generator.WithSchema(
+					"TestFloatDefault", "v1alpha1",
+					map[string]any{
+						"ratio": "float | default=1.0",
+					},
+					nil,
+				),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			var generation int64
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name: "testfloatdefaults.kro.run",
+				}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
+				g.Expect(props["spec"].Properties["ratio"].Default.Raw).To(Equal([]byte("1")))
+				generation = crd.Generation
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			Consistently(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name: "testfloatdefaults.kro.run",
+				}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(crd.Generation).To(Equal(generation))
+			}, 5*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
 		It("should update CRD when ResourceGraphDefinition is updated", func(ctx SpecContext) {
 			// Create initial ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd-update",

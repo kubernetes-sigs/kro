@@ -24,6 +24,7 @@ import (
 	"unicode"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	utiljson "k8s.io/apimachinery/pkg/util/json"
 )
 
 // ErrUnknownMarker is returned when an unrecognized marker is encountered.
@@ -361,8 +362,25 @@ func applyDefaultMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
 	default:
 		defaultValue = []byte(marker.Value)
 	}
+	if schema.Type != schemaTypeString {
+		defaultValue = canonicalJSON(defaultValue)
+	}
 	schema.Default = &extv1.JSON{Raw: defaultValue}
 	return nil
+}
+
+// canonicalJSON re-encodes raw the way the API server stores a CRD default
+// (1.0 becomes 1). Input that is not valid JSON is returned unchanged.
+func canonicalJSON(raw []byte) []byte {
+	var v any
+	if err := utiljson.Unmarshal(raw, &v); err != nil {
+		return raw
+	}
+	out, err := utiljson.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // applyFloat64Marker parses marker.Value as a float64 and passes it to assign.

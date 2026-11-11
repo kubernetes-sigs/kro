@@ -71,6 +71,42 @@ func TestApplyMarkers(t *testing.T) {
 			markers:    "default=true",
 			want:       &extv1.JSONSchemaProps{Type: "boolean", Default: &extv1.JSON{Raw: []byte("true")}},
 		},
+		{
+			name:       "whole number default",
+			schemaType: "number",
+			markers:    "default=1.0",
+			want:       &extv1.JSONSchemaProps{Type: "number", Default: &extv1.JSON{Raw: []byte("1")}},
+		},
+		{
+			name:       "exponent number default",
+			schemaType: "number",
+			markers:    "default=1e3",
+			want:       &extv1.JSONSchemaProps{Type: "number", Default: &extv1.JSON{Raw: []byte("1000")}},
+		},
+		{
+			name:       "fractional number default",
+			schemaType: "number",
+			markers:    "default=-2.50",
+			want:       &extv1.JSONSchemaProps{Type: "number", Default: &extv1.JSON{Raw: []byte("-2.5")}},
+		},
+		{
+			name:       "object default",
+			schemaType: "object",
+			markers:    `default={"b": 1.0, "a": "x"}`,
+			want:       &extv1.JSONSchemaProps{Type: "object", Default: &extv1.JSON{Raw: []byte(`{"a":"x","b":1}`)}},
+		},
+		{
+			name:       "integer default above 2^53",
+			schemaType: "integer",
+			markers:    "default=9007199254740993",
+			want:       &extv1.JSONSchemaProps{Type: "integer", Default: &extv1.JSON{Raw: []byte("9007199254740993")}},
+		},
+		{
+			name:       "array default",
+			schemaType: "array",
+			markers:    "default=[1.0, 2]",
+			want:       &extv1.JSONSchemaProps{Type: "array", Default: &extv1.JSON{Raw: []byte("[1,2]")}},
+		},
 		// Invalid default values should error
 		{
 			name:       "integer with string default",

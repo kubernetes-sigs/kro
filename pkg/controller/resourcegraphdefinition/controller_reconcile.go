@@ -26,7 +26,9 @@ import (
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -352,6 +354,30 @@ func (r *ResourceGraphDefinitionReconciler) ensureResourceGraphDefinitionCRD(ctx
 	return nil
 }
 
+// schemaWriter write-throughs an authoritative schema; *compiler.Compiler satisfies it.
+type schemaWriter interface {
+	PutSchema(gvk k8sschema.GroupVersionKind, sch *spec.Schema)
+}
+
+// writeThroughInstanceSchema seeds the compiler cache with the instance CRD schema after ensure.
+func (r *ResourceGraphDefinitionReconciler) writeThroughInstanceSchema(crd *v1.CustomResourceDefinition) error {
+	w, ok := r.graphEngineCompiler.(schemaWriter)
+	if !ok {
+		return nil
+	}
+	sch, err := graph.InstanceSchemaFromCRD(crd)
+	if err != nil {
+		return fmt.Errorf("convert instance CRD schema for write-through: %w", err)
+	}
+	gvk := k8sschema.GroupVersionKind{
+		Group:   crd.Spec.Group,
+		Version: crd.Spec.Versions[0].Name,
+		Kind:    crd.Spec.Names.Kind,
+	}
+	w.PutSchema(gvk, sch)
+	return nil
+}
+
 // ensureResourceGraphDefinitionController starts the microcontroller for handling the resources.
 // Child/external resource watches are discovered dynamically by the coordinator from
 // Watch() calls made by instance reconcilers -- no GVR list needed here.
@@ -397,6 +423,12 @@ func (r *ResourceGraphDefinitionReconciler) ensureServingState(
 	log.V(1).Info("ensuring resource graph definition CRD")
 	allowBreakingChanges := rgd.Annotations[v1alpha1.AllowBreakingChangesAnnotation] == "true"
 	if err := r.ensureResourceGraphDefinitionCRD(ctx, crd, allowBreakingChanges); err != nil {
+		mark.KindUnready(err.Error())
+		return processedRGD.TopologicalOrder, resourcesInfo, err
+	}
+	// Write-through the authored instance CRD schema so the next status-patch
+	// compile hits it directly, avoiding the invalidate-then-repull stale race.
+	if err := r.writeThroughInstanceSchema(crd); err != nil {
 		mark.KindUnready(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}

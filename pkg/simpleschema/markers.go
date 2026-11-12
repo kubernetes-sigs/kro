@@ -184,7 +184,7 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 }
 
 func processValue(value string) string {
-	if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+	if len(value) >= 2 && strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
 		// remove surrounding quotes and unescape the string
 		unquoted := value[1 : len(value)-1]
 		return unescapeString(unquoted)

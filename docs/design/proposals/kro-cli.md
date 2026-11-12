@@ -33,7 +33,7 @@ Expand the existing `kro` CLI in `cmd/kro/`. Published as part of kro releases v
 
 | Command                 | Description                                    | Status                       |
 |-------------------------|------------------------------------------------|------------------------------|
-| `kro validate rgd`      | Validate an RGD file                           | Existing, offline by default |
+| `kro validate rgd`      | Validate an RGD file                           | Existing, becomes offline by default |
 | `kro validate instance` | Validate an RGD and instance together          | New                          |
 | `kro fmt`               | Normalize RGD YAML formatting                  | New                          |
 | `kro bootstrap`         | Install and upgrade kro in an existing cluster | New                          |
@@ -117,28 +117,35 @@ defaults and above all, a working, trustable *upgrade* flow.
 | Preflight       | `flux check --pre` (API version, RBAC)                                   | Detects cert-manager, installs it if absent, then owns it                             |
 | GitOps handoff  | writes manifests to git, cluster syncs itself                            | None                                                                                  |
 
-##### Decision: embed the rendered manifests
+##### Decision: fetch the rendered manifests from the release
 
-`kro bootstrap` embeds the release-rendered manifests with `go:embed` over
-`manifests/rendered/*.yaml` and applies them directly. It does not link the Helm SDK to avoid
-go mod bloat and not be just a plain Helm wrapper.
+`kro bootstrap` downloads the rendered manifests from the GitHub release matching its own
+version and applies them directly. Releases already publish them as assets
+(`manifests/rendered/kro-*.yaml` in `.github/workflows/github-release.yaml`), so no new release
+plumbing is needed. It does not link the Helm SDK to avoid go mod bloat and not be just a plain Helm wrapper.
 
-`cmd/kro` is a separate Go module today and pins to kro `v0.9.3` (`cmd/kro/go.mod`). That blocks
-this decision because: `go:embed` cannot see `manifests/rendered/` outside the module, and
-there is a version skew between what the CLI imports vs what the controller has.
+Embedding the manifests with `go:embed` was rejected. `manifests/rendered/` is gitignored and
+generated at release (`make render-static-manifests`, which needs helm and yq), and `go:embed`
+fails when a pattern matches no files, so a clean checkout would not compile. `go:embed` also
+cannot reach parent directories, so the embedding package would have to live under `manifests/`.
 
-**Proposal: fold `cmd/kro` into the root module.** The CLI builds from in-tree kro, and a
-package in the root module embeds the rendered manifests. The separate module gives us little,
-since nobody imports the CLI's packages anyways. A `replace` directive is not going to work, because
-`go install` rejects modules that have one.
+**Local manifests.** `--manifests <path>` skips the download and applies a local file instead.
+Air-gapped clusters cannot reach the release and must point the image at a mirror, and dev
+builds have no matching release. With `--manifests`, the installed version is read from the
+`app.kubernetes.io/version` label in the file, not from the CLI version.
 
-Alternative 1: keep the module and automate the release: tag kro, bump `cmd/kro/go.mod` to that
-tag, copy the rendered manifests into `cmd/kro`, then build.
-Alternative 2: Publish manifests in the release and bootstrap fetches them from there. 
+##### Module layout
 
-`manifests/rendered/` is gitignored and generated at release (`make render-static-manifests`),
-so the module zip does not contain it. The CLI is distributed as GoReleaser binaries only.
-`go install` is not supported.
+`cmd/kro` is a separate Go module today and pins to kro `v0.9.3` (`cmd/kro/go.mod`). The CLI
+therefore validates with a different engine than the controller released next to it.
+
+**Proposal: fold `cmd/kro` into the root module.** The CLI builds from in-tree kro. The separate
+module gives us little, since nobody imports the CLI's packages anyways. A `replace` directive is
+not going to work, because `go install` rejects modules that have one. With nothing embedded,
+`go install github.com/kubernetes-sigs/kro/cmd/kro@vX.Y.Z` works alongside the GoReleaser binaries.
+
+Alternative: keep the module and automate the release: tag kro, bump `cmd/kro/go.mod` to that
+tag, then build.
 
 The Helm SDK was considered and rejected:
 
@@ -155,8 +162,9 @@ The Helm SDK was considered and rejected:
 ##### Version
 
 `--version` can only mean "the version this binary shipped with". This is the Flux model.
-A kro CLI at vX.Y.Z installs kro vX.Y.Z. Upgrading kro means fetching a newer CLI, which
-makes version skew between CLI and controller impossible.
+A kro CLI at vX.Y.Z installs kro vX.Y.Z. Upgrading kro means fetching a newer CLI. An older CLI
+run against a newer install would be a downgrade, which bootstrap refuses without a force flag
+(see [Version detection and downgrade](#upgrade)).
 
 ##### Upgrade
 
@@ -186,6 +194,8 @@ controller: `Project`, `Apply`, `ListOrphans` and `DeleteOrphan`.
 Incidentally, ownership is also taken care of by the ApplySet mechanism. Two changes are needed:
 
 - **Parent.** `applyset.New` needs a parent object. Bootstrap uses a ConfigMap in `kro-system`.
+  `Apply` returns the updated `Metadata`, and bootstrap writes it back to the ConfigMap before
+  pruning, the same way the instance controller persists it on the instance.
 - **Field manager.** The package hardcodes `kro.run/applyset` (`const.go`). It needs a
   configurable field manager so bootstrap applies as `kro-bootstrap`.
 
@@ -195,7 +205,8 @@ Two things that might be a problem still:
   `KeepUIDs`, so pruning would delete something still in use. Check `ApplyResult` errors
   first and abort the prune, not the whole run.
 - **CRDs are applied but never pruned.** Deleting a CRD deletes every object of that kind,
-  so pruning the RGD CRD would delete every RGD in the cluster.
+  so pruning the RGD CRD would delete every RGD in the cluster. Bootstrap filters the
+  `CustomResourceDefinition` GroupKind out of the `ListOrphans` result before calling `DeleteOrphan`.
 
 Side effect worth having: the controller prunes instance resources through ApplySet and the
 CLI prunes install components through ApplySet. One mechanism, one place to fix bugs.
@@ -209,10 +220,11 @@ images carry no version tag. Downgrades are only considered through a force flag
 ```bash
 kro bootstrap                              # install or upgrade, current kubecontext
 kro bootstrap --variant <name>             # named variant from manifests/variants.yaml
+kro bootstrap --manifests ./kro.yaml       # local rendered manifests, no download
 kro bootstrap --export                     # render to stdout, apply nothing
-kro bootstrap --dry-run                    # server-side dry run, shows the diff
+kro bootstrap --dry-run                    # server-side dry run, applies nothing
 kro bootstrap --force-conflicts            # take ownership of conflicted fields
-kro check                                  # preflight: API version, RBAC, existing install (should this be separate?)
+kro check                                  # preflight: API version, RBAC, existing install
 ```
 
 ##### Open questions
@@ -221,6 +233,7 @@ kro check                                  # preflight: API version, RBAC, exist
    to have none today. Confirm before designing around it.
 2. Should upgrade run a kro-specific precheck, validating existing RGDs against the
    incoming controller's schema before swapping the Deployment?
+3. Should `kro check` be its own command, or a `kro bootstrap --pre` flag like `flux check --pre`?
 
 Uninstall is out of scope, see [Not In Scope](#not-in-scope).
 
@@ -232,7 +245,7 @@ Uninstall is out of scope, see [Not In Scope](#not-in-scope).
 | `validate instance` | No                                      |
 | `fmt`               | No                                      |
 | `generate *`        | Yes (existing behavior)                 |
-| `bootstrap`         | Yes (No with `--export`)                |
+| `bootstrap`         | Yes (No with `--export`). Needs network access unless `--manifests` is set |
 | `check`             | Yes                                     |
 
 ## Other solutions considered
@@ -332,7 +345,7 @@ into its own KREP.
    Kubernetes OpenAPI schemas and decide which versions to include.
 3. **`validate instance`** on top of (2).
 4. **`fmt`.**
-5. **`bootstrap`.** `go:embed` over `manifests/rendered/*.yaml`, SSA with ordering, ApplySet
+5. **`bootstrap`.** Fetch the release's `kro-*.yaml` assets, SSA with ordering, ApplySet
    prune via `pkg/controller/instance/applyset` (ConfigMap parent, configurable field manager),
    version detection, Helm install detection. Plus `check`.
 

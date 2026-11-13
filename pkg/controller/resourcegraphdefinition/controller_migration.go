@@ -95,11 +95,15 @@ func (r *ResourceGraphDefinitionReconciler) reconcileStorageMigration(
 			return false, nil
 		}
 		log.V(1).Info("storage version migration completed", "crd", crd.Name, "version", hub)
-	} else if err := r.rewriteInstances(ctx, crd, hub); err != nil {
-		return false, err
-	} else if !r.instancesRewritten(crd, hub) {
-		// No synced informer yet: retry on the next pass.
-		return false, nil
+	} else {
+		done, err := r.rewriteInstances(ctx, crd, hub)
+		if err != nil {
+			return false, err
+		}
+		if !done {
+			// No synced informer yet: retry on the next pass.
+			return false, nil
+		}
 	}
 
 	if err := r.crdManager.SetStoredVersions(ctx, crd.Name, []string{hub}); err != nil {
@@ -152,10 +156,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileMigrationObject(
 		log.Info("storage version migration failed; migrating through kro instead",
 			"name", migrationName, "message", message)
 		r.deleteStorageVersionMigration(ctx, migrationName)
-		if err := r.rewriteInstances(ctx, crd, hub); err != nil {
-			return false, err
-		}
-		return r.instancesRewritten(crd, hub), nil
+		return r.rewriteInstances(ctx, crd, hub)
 	default:
 		return false, nil
 	}
@@ -163,12 +164,13 @@ func (r *ResourceGraphDefinitionReconciler) reconcileMigrationObject(
 
 // rewriteInstances re-writes every cached instance through the hub version so
 // the API server stores it under the hub's encoding. It is idempotent, so a
-// partial pass simply resumes on the next reconcile.
+// partial pass simply resumes on the next reconcile. done is false when the
+// instance cache is not available yet.
 func (r *ResourceGraphDefinitionReconciler) rewriteInstances(
 	ctx context.Context,
 	crd *v1.CustomResourceDefinition,
 	hub string,
-) error {
+) (bool, error) {
 	gvr := schema.GroupVersionResource{
 		Group:    crd.Spec.Group,
 		Version:  hub,
@@ -176,7 +178,7 @@ func (r *ResourceGraphDefinitionReconciler) rewriteInstances(
 	}
 	keys, ok := r.dynamicController.InstanceKeys(gvr)
 	if !ok {
-		return nil
+		return false, nil
 	}
 
 	client := r.clientSet.Dynamic().Resource(gvr)
@@ -188,21 +190,10 @@ func (r *ResourceGraphDefinitionReconciler) rewriteInstances(
 			_, err = client.Patch(ctx, key.Name, types.MergePatchType, []byte("{}"), metav1.PatchOptions{})
 		}
 		if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
-			return fmt.Errorf("rewriting instance %s: %w", key, err)
+			return false, fmt.Errorf("rewriting instance %s: %w", key, err)
 		}
 	}
-	return nil
-}
-
-// instancesRewritten reports whether the kro rewrite pass had a usable
-// instance cache to work from.
-func (r *ResourceGraphDefinitionReconciler) instancesRewritten(crd *v1.CustomResourceDefinition, hub string) bool {
-	_, ok := r.dynamicController.InstanceKeys(schema.GroupVersionResource{
-		Group:    crd.Spec.Group,
-		Version:  hub,
-		Resource: crd.Spec.Names.Plural,
-	})
-	return ok
+	return true, nil
 }
 
 // deleteStorageVersionMigration removes a finished migration object. Failures

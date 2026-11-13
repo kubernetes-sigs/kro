@@ -168,7 +168,7 @@ func newGraphEngineControllerUnderTest(
 	}
 	for _, entry := range extraEntries {
 		if entry.OwnerKey == "" {
-			entry.OwnerKey = revisions.OwnerKey(controllerTestParentGVR.Resource)
+			entry.OwnerKey = controllerTestParentGVR.Resource
 		}
 		registry.Put(entry)
 	}

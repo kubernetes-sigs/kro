@@ -85,115 +85,15 @@ func (c *Controller) reconcileViaGraphEngine(
 
 	gvrStr := c.gvr.String()
 
-	// markResolutionFailed records a graph-resolution failure condition on the
-	// instance and best-effort persists it (a persist error is only logged — the
-	// caller still returns its requeue).
-	markResolutionFailed := func(format string, args ...any) {
-		NewConditionsMarkerFor(inst).GraphResolutionFailed(format, args...)
-		if err := c.updateConditionsStatus(ctx, inst, 0); err != nil {
-			log.V(1).Info("graph-engine: failed to update conditions status", "error", err)
-		}
-	}
-	// markRevisionUnavailable is markResolutionFailed for the cases where the
-	// instance's target revision itself cannot be served; targetRevision is
-	// recorded on the status so the pin stays visible while it is unresolvable.
-	markRevisionUnavailable := func(targetRevision int64, format string, args ...any) {
-		NewConditionsMarkerFor(inst).GraphRevisionUnavailable(format, args...)
-		if err := c.updateConditionsStatus(ctx, inst, targetRevision); err != nil {
-			log.V(1).Info("graph-engine: failed to update conditions status", "error", err)
-		}
-	}
-
-	pinningEnabled := features.FeatureGate.Enabled(features.GraphRevisionPinning)
-	current := currentGraphRevision(inst)
-
-	// Resolve the RGD spec from the revision registry.
-	var entry revisions.Entry
-	if !pinningEnabled {
-		var ok bool
-		entry, ok = c.graphResolver.GetLatestRevision()
-		if !ok {
-			metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
-			markResolutionFailed("graph not resolved: latest issued revision not found")
-			return c.delayedRequeue(fmt.Errorf("graph-engine: latest issued revision not available"))
-		}
-		if entry.State == revisions.RevisionStateFailed {
-			metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvrStr, "revision_failed").Inc()
-			markResolutionFailed("graph not resolved: latest issued revision %d failed", entry.Revision)
-			return requeue.None(fmt.Errorf("graph-engine: latest issued revision %d failed", entry.Revision))
-		}
-		if entry.State != revisions.RevisionStateActive {
-			metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
-			markResolutionFailed("graph not resolved: latest issued revision %d is not active (state=%s)", entry.Revision, entry.State)
-			return c.delayedRequeue(fmt.Errorf("graph-engine: latest issued revision %d is not active (state=%s)", entry.Revision, entry.State))
-		}
-	} else {
-		target, followLatest, resolveErr := resolveTargetRevision(
-			inst.GetAnnotations()[v1alpha1.InstanceGraphRevisionAnnotation],
-			c.reconcileConfig.RolloutStrategy,
-			current,
-		)
-		if resolveErr != nil {
-			metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvrStr, "invalid_pin").Inc()
-			markRevisionUnavailable(0, "%v", resolveErr)
-			return requeue.None(fmt.Errorf("graph-engine: %w", resolveErr))
-		}
-
-		if followLatest {
-			var ok bool
-			entry, ok = c.graphResolver.GetLatestRevision()
-			if !ok {
-				metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
-				markRevisionUnavailable(0, "graph not resolved: latest issued revision not found")
-				return c.delayedRequeue(fmt.Errorf("graph-engine: latest issued revision not available"))
-			}
-			if entry.State == revisions.RevisionStateFailed {
-				metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvrStr, "revision_failed").Inc()
-				markRevisionUnavailable(entry.Revision, "graph not resolved: latest issued revision %d failed", entry.Revision)
-				return requeue.None(fmt.Errorf("graph-engine: latest issued revision %d failed", entry.Revision))
-			}
-			if entry.State != revisions.RevisionStateActive {
-				metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
-				markResolutionFailed("graph not resolved: latest issued revision %d is not active (state=%s)", entry.Revision, entry.State)
-				return c.delayedRequeue(fmt.Errorf("graph-engine: latest issued revision %d is not active (state=%s)", entry.Revision, entry.State))
-			}
-		} else {
-			// Pinned. The instance is never reconciled against a different
-			// revision implicitly: an unresolvable pin holds it where it is.
-			var ok bool
-			entry, ok = c.graphResolver.GetGraphRevision(target)
-			if !ok {
-				metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
-				// Also covers registry warm-up right after a restart, hence
-				// the requeue rather than a terminal error.
-				markRevisionUnavailable(target, "graph not resolved: revision %d not found", target)
-				return c.delayedRequeue(fmt.Errorf("graph-engine: revision %d not available", target))
-			}
-			if entry.State == revisions.RevisionStateFailed {
-				metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvrStr, "revision_failed").Inc()
-				markRevisionUnavailable(target, "graph not resolved: revision %d failed", target)
-				return requeue.None(fmt.Errorf("graph-engine: revision %d failed", target))
-			}
-			if entry.State != revisions.RevisionStateActive {
-				metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
-				markResolutionFailed("graph not resolved: revision %d is not active (state=%s)", target, entry.State)
-				return c.delayedRequeue(fmt.Errorf("graph-engine: revision %d is not active (state=%s)", target, entry.State))
-			}
-		}
-	}
-	if entry.RGDSpec == nil {
-		metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
-		// The revision doesn't carry an RGDSpec, so there is no engine to run
-		// yet — requeue until the graphrevision controller reprocesses the
-		// revision and populates it.
-		log.V(1).Info("graph-engine: RGDSpec not available in revision; requeuing until the graphrevision controller repopulates it")
-		return c.requeueUntilRGDSpecPopulated(ctx, inst, entry.Revision)
+	entry, err := c.resolveRevisionEntry(ctx, log, inst)
+	if err != nil {
+		return err
 	}
 
 	// The revision the instance reconciles against from here on.
-	revs := &instanceRevisions{Current: entry.Revision, Target: entry.Revision}
-	if !pinningEnabled {
-		revs = nil
+	var revs *instanceRevisions
+	if features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+		revs = &instanceRevisions{Current: entry.Revision, Target: entry.Revision}
 	}
 	// Whether the author owns the condition surface is a property of the
 	// revision being reconciled, not of the latest one: a pinned instance may
@@ -224,7 +124,7 @@ func (c *Controller) reconcileViaGraphEngine(
 		fetched, err := c.getInstanceAtVersion(ctx, inst, entry.RGDSpec.Schema.APIVersion)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				markRevisionUnavailable(entry.Revision,
+				c.markRevisionUnavailable(ctx, log, inst, entry.Revision,
 					"graph revision %d requires %s which is not served or the instance no longer exists",
 					entry.Revision, entry.RGDSpec.Schema.APIVersion)
 				return c.delayedRequeue(fmt.Errorf(
@@ -270,7 +170,7 @@ func (c *Controller) reconcileViaGraphEngine(
 	if err != nil {
 		metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvrStr, "build_failed").Inc()
 		log.Error(err, "graph-engine: BuildRuntimeForInstance failed")
-		markResolutionFailed("graph-engine build failed: %v", err)
+		c.markResolutionFailed(ctx, log, inst, "graph-engine build failed: %v", err)
 		return err
 	}
 	metrics.InstanceGraphResolutionSuccessTotal.WithLabelValues(gvrStr).Inc()
@@ -401,6 +301,142 @@ func (c *Controller) reconcileViaGraphEngine(
 	// returns to fast requeues on its next stall.
 	c.backoff.Reset(instanceKey(inst))
 	return nil
+}
+
+// markResolutionFailed records a graph-resolution failure condition on the
+// instance and best-effort persists it (a persist error is only logged — the
+// caller still returns its requeue).
+func (c *Controller) markResolutionFailed(ctx context.Context, log logr.Logger, inst *unstructured.Unstructured, format string, args ...any) {
+	NewConditionsMarkerFor(inst).GraphResolutionFailed(format, args...)
+	if err := c.updateConditionsStatus(ctx, inst, 0); err != nil {
+		log.V(1).Info("graph-engine: failed to update conditions status", "error", err)
+	}
+}
+
+// markRevisionUnavailable is markResolutionFailed for the cases where the
+// instance's target revision itself cannot be served; targetRevision is
+// recorded on the status so the pin stays visible while it is unresolvable.
+func (c *Controller) markRevisionUnavailable(ctx context.Context, log logr.Logger, inst *unstructured.Unstructured, targetRevision int64, format string, args ...any) {
+	NewConditionsMarkerFor(inst).GraphRevisionUnavailable(format, args...)
+	if err := c.updateConditionsStatus(ctx, inst, targetRevision); err != nil {
+		log.V(1).Info("graph-engine: failed to update conditions status", "error", err)
+	}
+}
+
+// resolveRevisionEntry resolves the graph revision this instance reconciles
+// against: the latest issued revision, or, with GraphRevisionPinning enabled,
+// the revision the instance's pin or rollout strategy selects.
+//
+// A returned error is already requeue-shaped and carries the instance
+// condition write; callers return it as-is.
+func (c *Controller) resolveRevisionEntry(
+	ctx context.Context,
+	log logr.Logger,
+	inst *unstructured.Unstructured,
+) (revisions.Entry, error) {
+	gvrStr := c.gvr.String()
+
+	if !features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+		entry, err := c.resolveLatestRevision(ctx, log, inst, gvrStr, false)
+		if err != nil {
+			return revisions.Entry{}, err
+		}
+		return c.withRGDSpec(ctx, log, inst, entry, gvrStr)
+	}
+
+	target, followLatest, resolveErr := resolveTargetRevision(
+		inst.GetAnnotations()[v1alpha1.InstanceGraphRevisionAnnotation],
+		c.reconcileConfig.RolloutStrategy,
+		currentGraphRevision(inst),
+	)
+	if resolveErr != nil {
+		metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvrStr, "invalid_pin").Inc()
+		c.markRevisionUnavailable(ctx, log, inst, 0, "%v", resolveErr)
+		return revisions.Entry{}, requeue.None(fmt.Errorf("graph-engine: %w", resolveErr))
+	}
+
+	if followLatest {
+		entry, err := c.resolveLatestRevision(ctx, log, inst, gvrStr, true)
+		if err != nil {
+			return revisions.Entry{}, err
+		}
+		return c.withRGDSpec(ctx, log, inst, entry, gvrStr)
+	}
+
+	// Pinned. The instance is never reconciled against a different revision
+	// implicitly: an unresolvable pin holds it where it is.
+	entry, ok := c.graphResolver.GetGraphRevision(target)
+	if !ok {
+		metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
+		// Also covers registry warm-up right after a restart, hence the
+		// requeue rather than a terminal error.
+		c.markRevisionUnavailable(ctx, log, inst, target, "graph not resolved: revision %d not found", target)
+		return revisions.Entry{}, c.delayedRequeue(fmt.Errorf("graph-engine: revision %d not available", target))
+	}
+	if entry.State == revisions.RevisionStateFailed {
+		metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvrStr, "revision_failed").Inc()
+		c.markRevisionUnavailable(ctx, log, inst, target, "graph not resolved: revision %d failed", target)
+		return revisions.Entry{}, requeue.None(fmt.Errorf("graph-engine: revision %d failed", target))
+	}
+	if entry.State != revisions.RevisionStateActive {
+		metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
+		c.markResolutionFailed(ctx, log, inst, "graph not resolved: revision %d is not active (state=%s)", target, entry.State)
+		return revisions.Entry{}, c.delayedRequeue(fmt.Errorf("graph-engine: revision %d is not active (state=%s)", target, entry.State))
+	}
+	return c.withRGDSpec(ctx, log, inst, entry, gvrStr)
+}
+
+// resolveLatestRevision returns the latest issued revision, requiring it to be
+// active. pinning selects which condition reason an unavailable revision gets.
+func (c *Controller) resolveLatestRevision(
+	ctx context.Context,
+	log logr.Logger,
+	inst *unstructured.Unstructured,
+	gvrStr string,
+	pinning bool,
+) (revisions.Entry, error) {
+	markUnavailable := c.markResolutionFailed
+	if pinning {
+		markUnavailable = func(ctx context.Context, log logr.Logger, inst *unstructured.Unstructured, format string, args ...any) {
+			c.markRevisionUnavailable(ctx, log, inst, 0, format, args...)
+		}
+	}
+
+	entry, ok := c.graphResolver.GetLatestRevision()
+	if !ok {
+		metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
+		markUnavailable(ctx, log, inst, "graph not resolved: latest issued revision not found")
+		return revisions.Entry{}, c.delayedRequeue(fmt.Errorf("graph-engine: latest issued revision not available"))
+	}
+	if entry.State == revisions.RevisionStateFailed {
+		metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvrStr, "revision_failed").Inc()
+		markUnavailable(ctx, log, inst, "graph not resolved: latest issued revision %d failed", entry.Revision)
+		return revisions.Entry{}, requeue.None(fmt.Errorf("graph-engine: latest issued revision %d failed", entry.Revision))
+	}
+	if entry.State != revisions.RevisionStateActive {
+		metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
+		c.markResolutionFailed(ctx, log, inst, "graph not resolved: latest issued revision %d is not active (state=%s)", entry.Revision, entry.State)
+		return revisions.Entry{}, c.delayedRequeue(fmt.Errorf("graph-engine: latest issued revision %d is not active (state=%s)", entry.Revision, entry.State))
+	}
+	return entry, nil
+}
+
+// withRGDSpec requires the resolved revision to carry an RGD spec. Without one
+// there is no engine to run, so the instance waits for the graphrevision
+// controller to repopulate the registry entry.
+func (c *Controller) withRGDSpec(
+	ctx context.Context,
+	log logr.Logger,
+	inst *unstructured.Unstructured,
+	entry revisions.Entry,
+	gvrStr string,
+) (revisions.Entry, error) {
+	if entry.RGDSpec != nil {
+		return entry, nil
+	}
+	metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
+	log.V(1).Info("graph-engine: RGDSpec not available in revision; requeuing until the graphrevision controller repopulates it")
+	return revisions.Entry{}, c.requeueUntilRGDSpecPopulated(ctx, inst, entry.Revision)
 }
 
 // instanceKey is the per-instance backoff key. Namespaced instances key on

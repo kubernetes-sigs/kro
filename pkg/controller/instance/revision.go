@@ -41,8 +41,8 @@ type instanceRevisions struct {
 // followLatest reports that the caller must resolve the latest issued
 // revision; target is only meaningful when followLatest is false.
 func resolveTargetRevision(annotation string, strategy v1alpha1.RolloutStrategy, current int64) (target int64, followLatest bool, err error) {
-	switch {
-	case annotation == "":
+	switch annotation {
+	case "":
 		// No pin. Manual holds the instance on the revision it already
 		// reconciled against; a fresh instance has none, so it adopts the
 		// latest issued revision and stays there.
@@ -50,7 +50,7 @@ func resolveTargetRevision(annotation string, strategy v1alpha1.RolloutStrategy,
 			return current, false, nil
 		}
 		return 0, true, nil
-	case annotation == v1alpha1.GraphRevisionLatest:
+	case v1alpha1.GraphRevisionLatest:
 		return 0, true, nil
 	}
 

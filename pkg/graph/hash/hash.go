@@ -76,6 +76,9 @@ func normalizeSpec(spec v1alpha1.ResourceGraphDefinitionSpec) (v1alpha1.Resource
 	if normalized.Resources == nil {
 		normalized.Resources = []*v1alpha1.Resource{}
 	}
+	// Rollout is policy, not graph content: toggling it must not issue a new
+	// GraphRevision.
+	normalized.Rollout = nil
 
 	if normalized.Schema != nil {
 		if normalized.Schema.Group == "" {
@@ -108,6 +111,22 @@ func normalizeSpec(spec v1alpha1.ResourceGraphDefinitionSpec) (v1alpha1.Resource
 		normalized.Schema.Status, err = normalizeRawExtension(normalized.Schema.Status)
 		if err != nil {
 			return v1alpha1.ResourceGraphDefinitionSpec{}, fmt.Errorf("normalize schema.status: %w", err)
+		}
+
+		for i := range normalized.Schema.PreviousVersions {
+			version := &normalized.Schema.PreviousVersions[i]
+			version.Spec, err = normalizeRawExtension(version.Spec)
+			if err != nil {
+				return v1alpha1.ResourceGraphDefinitionSpec{}, fmt.Errorf("normalize schema.previousVersions[%d].spec: %w", i, err)
+			}
+			version.Types, err = normalizeRawExtension(version.Types)
+			if err != nil {
+				return v1alpha1.ResourceGraphDefinitionSpec{}, fmt.Errorf("normalize schema.previousVersions[%d].types: %w", i, err)
+			}
+			version.Status, err = normalizeRawExtension(version.Status)
+			if err != nil {
+				return v1alpha1.ResourceGraphDefinitionSpec{}, fmt.Errorf("normalize schema.previousVersions[%d].status: %w", i, err)
+			}
 		}
 	}
 

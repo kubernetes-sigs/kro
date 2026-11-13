@@ -123,6 +123,7 @@ kubectl get gr -l kro.run/graph-revision-hash=a1b2c3d4e5f6
 | `status.conditions`       | `GraphVerified` (compilation result) and aggregate `Ready`   |
 | `status.topologicalOrder` | Resource creation order derived from the compiled graph      |
 | `status.resources`        | Per-resource dependency information from the compiled graph  |
+| `status.celEnvironmentVersion` | kro version that compiled this revision, and therefore the CEL environment it was verified against (requires `GraphRevisionPinning`) |
 
 ### Labels
 
@@ -130,6 +131,57 @@ kubectl get gr -l kro.run/graph-revision-hash=a1b2c3d4e5f6
 | ------------------------------------------------------ | ------------------------------------------ |
 | `kro.run/resource-graph-definition-name`               | Source RGD name (also exposed as the `spec.snapshot.name` field selector) |
 | `kro.run/graph-revision-hash`                          | Spec hash for dedup and filtering           |
+
+## Pinning Instances to a Revision
+
+By default every instance reconciles against the latest issued revision. With
+the [`GraphRevisionPinning`](./02-feature-gates.md#graphrevisionpinning)
+feature gate an RGD can hold its instances instead:
+
+```yaml
+spec:
+  rollout:
+    strategy: Manual # or Latest (the default)
+```
+
+Under `Manual` an instance stays on the revision it last reconciled against; a
+new instance adopts the latest issued revision and stays there. Moving one is
+explicit, and works under either strategy:
+
+```bash
+kubectl annotate webapplication my-app kro.run/graph-revision=3 --overwrite
+kubectl annotate webapplication my-app kro.run/graph-revision=latest --overwrite
+```
+
+Each instance reports where it stands:
+
+```yaml
+status:
+  graphRevision: 2       # the revision it last reconciled against
+  targetGraphRevision: 3 # the revision it is moving to
+```
+
+Both fields belong to kro; an RGD that declares either one in `schema.status`
+is rejected at build time. A pin that names a revision kro does not have leaves
+`GraphResolved=False` with reason `GraphRevisionUnavailable`, and the instance
+keeps running the resources of the revision it is on rather than silently
+jumping to another one.
+
+Rollout is policy, not graph content: changing the strategy does not issue a
+revision. While the strategy is `Manual`, kro also rejects a change to a schema
+default, because instances still pinned to an older revision would pick it up
+without any edit of their own.
+
+## Retention
+
+`--rgd-max-graph-revisions` bounds how many revisions kro keeps per RGD; older
+ones are pruned after each successful reconcile. With `GraphRevisionPinning`
+enabled, any revision an instance still references — through
+`status.graphRevision`, `status.targetGraphRevision`, or a pin annotation — is
+kept regardless of the limit, so a pinned instance never loses the graph it
+runs. When kro cannot determine the referenced set (for example right after a
+restart, before the instance cache is warm) it skips that round of collection
+instead of guessing.
 
 ## Debugging
 

@@ -226,7 +226,9 @@ $(CHAINSAW): $(LOCALBIN)
 	fi
 	test -s $(LOCALBIN)/chainsaw || GOBIN=$(LOCALBIN) GO111MODULE=on go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
 
-ENVTEST_VERSION ?= 1.36.x
+# 1.37 is the first version whose apiserver serves storagemigration.k8s.io/v1,
+# which the MultiVersionSchema storage migration path drives.
+ENVTEST_VERSION ?= 1.37.x
 
 .PHONY: ko
 ko: $(KO) ## Download ko locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -404,7 +406,7 @@ deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
 # the e2e lane deploys with defaults rather than the dev deploy's true.
 .PHONY: test-e2e-kind
 test-e2e-kind: ALLOW_CRD_DELETION=false
-test-e2e-kind: KIND_FEATURE_GATE_FLAGS=--set config.featureGates.DeletionPolicy=true
+test-e2e-kind: KIND_FEATURE_GATE_FLAGS=--set config.featureGates.DeletionPolicy=true --set config.featureGates.GraphRevisionPinning=true --set config.featureGates.MultiVersionSchema=true
 test-e2e-kind: chainsaw deploy-kind-helm
 	$(CHAINSAW) test ./test/e2e/chainsaw
 

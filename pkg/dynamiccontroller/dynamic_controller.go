@@ -60,6 +60,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,13 +74,16 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/dynamic"
 	k8smetadata "k8s.io/client-go/metadata"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	kwatch "github.com/kubernetes-sigs/kro/pkg/watch"
@@ -156,8 +160,13 @@ type DynamicController struct {
 	config Config
 	log    logr.Logger
 
-	// Shared watch lifecycle management.
+	// Shared watch lifecycle management for child/external resources.
 	watches *kwatch.Manager
+
+	// Parent (instance) watch lifecycle management. Equal to watches unless
+	// GraphRevisionPinning is enabled, in which case parents get their own
+	// manager backed by revision-aware informers (see newInstanceInformer).
+	parents *kwatch.Manager
 
 	// Instance-level watch coordination.
 	coordinator *WatchCoordinator
@@ -176,6 +185,7 @@ func NewDynamicController(
 	log logr.Logger,
 	config Config,
 	kubeClient k8smetadata.Interface,
+	dynamicClient dynamic.Interface,
 	mapper meta.RESTMapper,
 ) *DynamicController {
 	logger := log.WithName("dynamic-controller")
@@ -194,6 +204,24 @@ func NewDynamicController(
 	dc.watches = newWatchManager(kubeClient, config.ResyncPeriod, dc.routeChildEvent, logger)
 	if config.WatchSyncTimeout > 0 {
 		dc.watches.SyncTimeout = config.WatchSyncTimeout
+	}
+
+	// Revision pinning needs status fields that metadata informers do not
+	// carry, so parents move to a second manager with trimmed full-object
+	// informers. Its events are dispatched by the parent event handler
+	// registered in Register, never through the coordinator.
+	dc.parents = dc.watches
+	if features.FeatureGate.Enabled(features.GraphRevisionPinning) && dynamicClient != nil {
+		parents := kwatch.NewManager(kubeClient, config.ResyncPeriod, func(kwatch.Event) {}, logger)
+		parents.SetInformerFactory(func(gvr schema.GroupVersionResource) cache.SharedIndexInformer {
+			return newInstanceInformer(dynamicClient, gvr, config.ResyncPeriod)
+		})
+		if config.WatchSyncTimeout > 0 {
+			parents.SyncTimeout = config.WatchSyncTimeout
+		}
+		// Metrics stay on dc.watches: both managers would otherwise write the
+		// same active-watch gauge.
+		dc.parents = parents
 	}
 
 	// Initialize coordinator eagerly so it's never nil.
@@ -402,7 +430,7 @@ func (dc *DynamicController) Register(
 	}
 
 	// Retain the shared informer for the parent and wait for cache sync.
-	if err := dc.watches.EnsureWatch(parent, "parent"); err != nil {
+	if err := dc.parents.EnsureWatch(parent, "parent"); err != nil {
 		dc.handlers.Delete(parent)
 		return fmt.Errorf("add parent handler %s: %w", parent, err)
 	}
@@ -411,13 +439,13 @@ func (dc *DynamicController) Register(
 	cleanupWatch := true
 	defer func() {
 		if cleanupWatch {
-			dc.watches.ReleaseWatch(parent, "parent")
+			dc.parents.ReleaseWatch(parent, "parent")
 			dc.handlers.Delete(parent)
 		}
 	}()
 
 	// Register event handler directly on the parent informer.
-	inf := dc.watches.GetInformer(parent)
+	inf := dc.parents.GetInformer(parent)
 	if inf == nil {
 		return fmt.Errorf("add parent handler %s: informer not found after EnsureWatch", parent)
 	}
@@ -461,7 +489,7 @@ func (dc *DynamicController) parentEventHandlerFor(parent schema.GroupVersionRes
 // enqueueExistingInstances enqueues all objects currently in the parent
 // informer's cache store for re-reconciliation.
 func (dc *DynamicController) enqueueExistingInstances(parent schema.GroupVersionResource) {
-	if inf := dc.watches.GetInformer(parent); inf != nil && !inf.IsStopped() {
+	if inf := dc.parents.GetInformer(parent); inf != nil && !inf.IsStopped() {
 		for _, obj := range inf.GetStore().List() {
 			dc.enqueueFromInformer(parent, nil, obj, kwatch.EventUpdate)
 		}
@@ -492,7 +520,12 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 			// instance re-converges, and suspending (enabled->suspended) so the
 			// ReconciliationSuspended status is written promptly (the graph
 			// engine does not periodically requeue).
-			if !reconcileSuspensionChangedInUpdate(oldMeta, newMeta) {
+			//
+			// The graph-revision pin is the same kind of change: it moves the
+			// instance to another revision without touching the spec.
+			pinChanged := features.FeatureGate.Enabled(features.GraphRevisionPinning) &&
+				graphRevisionPinChangedInUpdate(oldMeta, newMeta)
+			if !reconcileSuspensionChangedInUpdate(oldMeta, newMeta) && !pinChanged {
 				dc.log.V(2).Info("Skipping update due to unchanged generation",
 					"name", newMeta.GetName(), "namespace", newMeta.GetNamespace(), "generation", newMeta.GetGeneration())
 				return
@@ -519,6 +552,57 @@ func reconcileSuspensionChangedInUpdate(oldMeta, newMeta metav1.Object) bool {
 	return oldSuspended != newSuspended
 }
 
+// graphRevisionPinChangedInUpdate reports whether the graph-revision pin
+// annotation changed between the old and new object. Adding, removing and
+// retargeting the pin all qualify.
+func graphRevisionPinChangedInUpdate(oldMeta, newMeta metav1.Object) bool {
+	return oldMeta.GetAnnotations()[v1alpha1.InstanceGraphRevisionAnnotation] !=
+		newMeta.GetAnnotations()[v1alpha1.InstanceGraphRevisionAnnotation]
+}
+
+// ReferencedGraphRevisions returns every graph revision the instances of
+// parent currently reference. ok is false when the revision index is not
+// available — no informer, cache not synced, or GraphRevisionPinning
+// disabled — in which case the caller must not treat the empty set as "no
+// instance references anything".
+func (dc *DynamicController) ReferencedGraphRevisions(parent schema.GroupVersionResource) (sets.Set[int64], bool) {
+	if !features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+		return nil, false
+	}
+	inf := dc.parents.GetInformer(parent)
+	if inf == nil || inf.IsStopped() || !inf.HasSynced() {
+		return nil, false
+	}
+	refs := sets.New[int64]()
+	for _, value := range inf.GetIndexer().ListIndexFuncValues(graphRevisionIndex) {
+		rev, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			continue
+		}
+		refs.Insert(rev)
+	}
+	return refs, true
+}
+
+// InstanceKeys returns the namespaced names of every cached instance of
+// parent. ok is false when no synced informer exists for parent.
+func (dc *DynamicController) InstanceKeys(parent schema.GroupVersionResource) ([]types.NamespacedName, bool) {
+	inf := dc.parents.GetInformer(parent)
+	if inf == nil || inf.IsStopped() || !inf.HasSynced() {
+		return nil, false
+	}
+	objects := inf.GetStore().List()
+	keys := make([]types.NamespacedName, 0, len(objects))
+	for _, obj := range objects {
+		objMeta, err := meta.Accessor(obj)
+		if err != nil {
+			continue
+		}
+		keys = append(keys, types.NamespacedName{Namespace: objMeta.GetNamespace(), Name: objMeta.GetName()})
+	}
+	return keys, true
+}
+
 // Deregister removes a parent GVR handler and cleans up coordinator state.
 func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVersionResource) error {
 	gvrKey := keyFromGVR(parent)
@@ -529,7 +613,7 @@ func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVe
 	// Remove parent event handler registration from the informer.
 	if val, exists := dc.parentWatches.LoadAndDelete(parent); exists {
 		reg := val.(cache.ResourceEventHandlerRegistration)
-		if inf := dc.watches.GetInformer(parent); inf != nil {
+		if inf := dc.parents.GetInformer(parent); inf != nil {
 			if err := inf.RemoveEventHandler(reg); err != nil {
 				dc.log.Error(err, "failed to remove parent event handler", "parent", gvrKey)
 			}
@@ -537,7 +621,7 @@ func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVe
 
 		// Release the parent ownership; ReleaseWatch stops the informer
 		// automatically if no other owners remain.
-		dc.watches.ReleaseWatch(parent, "parent")
+		dc.parents.ReleaseWatch(parent, "parent")
 
 		metrics.DynGVRCount.Dec()
 		metrics.DynHandlerDetachTotal.WithLabelValues("parent").Inc()
@@ -555,6 +639,9 @@ func (dc *DynamicController) gracefulShutdown() error {
 	dc.log.Info("Starting graceful shutdown")
 
 	dc.watches.Shutdown()
+	if dc.parents != dc.watches {
+		dc.parents.Shutdown()
+	}
 
 	queueShutdownDone := make(chan struct{})
 	go func() {

@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/metadata/fake"
 	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/util/workqueue"
@@ -101,7 +102,7 @@ func TestNewDynamicController(t *testing.T) {
 		BurstLimit:      100,
 	}
 
-	dc := NewDynamicController(logger, config, client, mapper)
+	dc := NewDynamicController(logger, config, client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 
 	assert.NotNil(t, dc)
 	assert.Equal(t, config, dc.config)
@@ -122,7 +123,7 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 		BurstLimit:      100,
 	}
 
-	dc := NewDynamicController(logger, config, client, mapper)
+	dc := NewDynamicController(logger, config, client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 
@@ -176,7 +177,7 @@ func TestEnqueueObject(t *testing.T) {
 		MaxRetryDelay: 1000 * time.Second,
 		RateLimit:     10,
 		BurstLimit:    100,
-	}, client, mapper)
+	}, client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 
 	parentGVR := schema.GroupVersionResource{Group: "group", Version: "version", Resource: "resource"}
 
@@ -194,7 +195,7 @@ func TestChildCleanup_DoesNotStopParentInformer(t *testing.T) {
 	logger := noopLogger()
 	client, mapper := setupFakeClient(t)
 
-	dc := NewDynamicController(logger, testConfig(), client, mapper)
+	dc := NewDynamicController(logger, testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 	ctx := t.Context()
 	dc.ctx.Store(&ctx)
 
@@ -229,7 +230,7 @@ func TestDeregister_KeepsInformerWhileChildWatchRemains(t *testing.T) {
 	logger := noopLogger()
 	client, mapper := setupFakeClient(t)
 
-	dc := NewDynamicController(logger, testConfig(), client, mapper)
+	dc := NewDynamicController(logger, testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 	ctx := t.Context()
 	dc.ctx.Store(&ctx)
 
@@ -285,7 +286,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	client := fake.NewSimpleMetadataClient(scheme, obj1, obj2)
 	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
 
-	dc := NewDynamicController(logger, Config{}, client, mapper)
+	dc := NewDynamicController(logger, Config{}, client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 	dc.ctx.Store(new(t.Context())) // simulate a start through dc.Run
 
 	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
@@ -323,7 +324,7 @@ func TestStart_AlreadyRunning(t *testing.T) {
 	client := fake.NewSimpleMetadataClient(scheme)
 	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
 
-	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+	dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -355,7 +356,7 @@ func TestProcessNextWorkItem_RequeueBehaviors(t *testing.T) {
 	}
 
 	t.Run("no handler registered", func(t *testing.T) {
-		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 		dc.queue.Add(oi)
 		assert.Equal(t, 1, dc.queue.Len())
 
@@ -365,7 +366,7 @@ func TestProcessNextWorkItem_RequeueBehaviors(t *testing.T) {
 	})
 
 	t.Run("handler returns nil", func(t *testing.T) {
-		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
 			return nil
 		}))
@@ -377,7 +378,7 @@ func TestProcessNextWorkItem_RequeueBehaviors(t *testing.T) {
 	})
 
 	t.Run("handler returns NoRequeue", func(t *testing.T) {
-		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
 			return requeue.None(fmt.Errorf("terminal error"))
 		}))
@@ -389,7 +390,7 @@ func TestProcessNextWorkItem_RequeueBehaviors(t *testing.T) {
 	})
 
 	t.Run("handler returns RequeueNeeded", func(t *testing.T) {
-		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 		callCount := 0
 		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
 			callCount++
@@ -412,7 +413,7 @@ func TestProcessNextWorkItem_RequeueBehaviors(t *testing.T) {
 	})
 
 	t.Run("handler returns RequeueNeededAfter", func(t *testing.T) {
-		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
 			return requeue.NeededAfter(fmt.Errorf("retry later"), 50*time.Millisecond)
 		}))
@@ -427,7 +428,7 @@ func TestProcessNextWorkItem_RequeueBehaviors(t *testing.T) {
 	})
 
 	t.Run("handler returns NotFound error", func(t *testing.T) {
-		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
 			return apierrors.NewNotFound(schema.GroupResource{Group: "test", Resource: "tests"}, "test")
 		}))
@@ -444,7 +445,7 @@ func TestProcessNextWorkItem_RequeueBehaviors(t *testing.T) {
 		cfg.MinRetryDelay = 1 * time.Millisecond
 		cfg.MaxRetryDelay = 5 * time.Millisecond
 		cfg.RateLimit = 1000
-		dc := NewDynamicController(noopLogger(), cfg, client, mapper)
+		dc := NewDynamicController(noopLogger(), cfg, client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
 			return fmt.Errorf("transient error")
 		}))
@@ -474,7 +475,7 @@ func TestProcessNextWorkItem_RequeueBehaviors(t *testing.T) {
 	})
 
 	t.Run("queue shutdown returns false", func(t *testing.T) {
-		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 		dc.queue.ShutDown()
 		result := dc.processNextWorkItem(t.Context())
 		assert.False(t, result)
@@ -499,7 +500,7 @@ func TestProcessNextWorkItem_RecoversPanic(t *testing.T) {
 	cfg.MinRetryDelay = 1 * time.Millisecond
 	cfg.MaxRetryDelay = 5 * time.Millisecond
 	cfg.RateLimit = 1000
-	dc := NewDynamicController(noopLogger(), cfg, client, mapper)
+	dc := NewDynamicController(noopLogger(), cfg, client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 	dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		panic("boom")
 	}))
@@ -534,7 +535,7 @@ func TestGracefulShutdown_Timeout(t *testing.T) {
 
 	cfg := testConfig()
 	cfg.QueueShutdownTimeout = 10 * time.Millisecond
-	dc := NewDynamicController(noopLogger(), cfg, client, mapper)
+	dc := NewDynamicController(noopLogger(), cfg, client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 
 	blockCh := make(chan struct{})
 	dc.queue = &blockingQueue{
@@ -556,7 +557,7 @@ func TestGracefulShutdown_NoTimeout(t *testing.T) {
 
 	cfg := testConfig()
 	cfg.QueueShutdownTimeout = 0
-	dc := NewDynamicController(noopLogger(), cfg, client, mapper)
+	dc := NewDynamicController(noopLogger(), cfg, client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 
 	err := dc.gracefulShutdown()
 	assert.NoError(t, err)
@@ -568,7 +569,7 @@ func TestDeregister_NotRegistered(t *testing.T) {
 	client := fake.NewSimpleMetadataClient(scheme)
 	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
 
-	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+	dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 
@@ -675,7 +676,7 @@ func TestEnqueueFromInformer_GenerationSkip(t *testing.T) {
 			client := fake.NewSimpleMetadataClient(scheme)
 			mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
 
-			dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+			dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 			dc.enqueueFromInformer(parentGVR, tt.oldObj, tt.newObj, kwatch.EventUpdate)
 			assert.Equal(t, tt.expectQueue, dc.queue.Len())
 		})
@@ -691,7 +692,7 @@ func TestEnqueueFromInformer_AddAndDelete(t *testing.T) {
 	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
 
 	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
-	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+	dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 
 	obj := &v1.PartialObjectMetadata{}
 	obj.SetName("a")
@@ -720,7 +721,7 @@ func TestEnqueueFromInformer_NilNewObject(t *testing.T) {
 	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
 
 	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
-	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+	dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 
 	dc.enqueueFromInformer(parentGVR, nil, nil, kwatch.EventDelete)
 	assert.Equal(t, 0, dc.queue.Len(), "nil newObject should cause early return")
@@ -843,7 +844,7 @@ func TestRegister_EnsureWatchSyncError(t *testing.T) {
 
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 
-	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+	dc := NewDynamicController(noopLogger(), testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 	// Short sync timeout so test doesn't wait 30s.
 	dc.watches.SyncTimeout = 200 * time.Millisecond
 
@@ -871,12 +872,12 @@ func TestNewDynamicController_WatchSyncTimeout(t *testing.T) {
 	// Explicit value is passed through to the watch manager.
 	cfg := testConfig()
 	cfg.WatchSyncTimeout = 90 * time.Second
-	dc := NewDynamicController(noopLogger(), cfg, client, mapper)
+	dc := NewDynamicController(noopLogger(), cfg, client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 	assert.Equal(t, 90*time.Second, dc.watches.SyncTimeout)
 
 	// Zero leaves the manager on its own default.
 	cfg.WatchSyncTimeout = 0
-	dc = NewDynamicController(noopLogger(), cfg, client, mapper)
+	dc = NewDynamicController(noopLogger(), cfg, client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 	assert.Equal(t, time.Duration(0), dc.watches.SyncTimeout)
 }
 
@@ -902,7 +903,7 @@ func TestDeregister_HandlerNoLongerReceivesEvents(t *testing.T) {
 	logger := noopLogger()
 	client, mapper := setupFakeClient(t)
 
-	dc := NewDynamicController(logger, testConfig(), client, mapper)
+	dc := NewDynamicController(logger, testConfig(), client, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), mapper)
 	ctx := t.Context()
 	dc.ctx.Store(&ctx)
 

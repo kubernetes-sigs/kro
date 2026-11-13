@@ -26,13 +26,17 @@ import (
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	instancectrl "github.com/kubernetes-sigs/kro/pkg/controller/instance"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	graphhash "github.com/kubernetes-sigs/kro/pkg/graph/hash"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
@@ -75,6 +79,11 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	log := ctrl.LoggerFrom(ctx)
 	mark := NewConditionsMarkerFor(rgd)
 	resolutionResult := ""
+	if rgd.Spec.Rollout != nil && !features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+		err := fmt.Errorf("spec.rollout requires the GraphRevisionPinning feature gate to be enabled")
+		mark.ResourceGraphInvalid(err.Error())
+		return ctrl.Result{}, nil, nil, err
+	}
 	defer func() {
 		if resolutionResult != "" {
 			metrics.RGDGraphRevisionResolutionTotal.WithLabelValues(resolutionResult).Inc()
@@ -169,13 +178,37 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	if gcErr := r.garbageCollectGraphRevisions(ctx, rgd); gcErr != nil {
 		log.Error(gcErr, "failed to garbage collect graph revisions", "name", rgd.Name)
 	}
-	if err != nil {
-		resolutionResult = graphRevisionResolutionResultFailed
-	} else {
-		resolutionResult = graphRevisionResolutionResultServe
+
+	// Storage version migration rewrites objects stored under a version the
+	// CRD no longer stores. It works off the live CRD, so it runs even when
+	// the desired spec could not be applied: an edit that retires a version is
+	// rejected precisely while objects are still stored under it, and the
+	// migration is what unblocks it.
+	migrationDone := true
+	if features.FeatureGate.Enabled(features.MultiVersionSchema) {
+		done, migrateErr := r.reconcileStorageMigration(ctx, rgd)
+		switch {
+		case migrateErr != nil && err == nil:
+			resolutionResult = graphRevisionResolutionResultFailed
+			return ctrl.Result{}, topologicalOrder, resourcesInfo, migrateErr
+		case migrateErr != nil:
+			// A serving failure is the user-visible one; keep it.
+			log.Error(migrateErr, "failed to migrate stored versions", "name", rgd.Name)
+		default:
+			migrationDone = done
+		}
 	}
 
-	return ctrl.Result{}, topologicalOrder, resourcesInfo, err
+	if err != nil {
+		resolutionResult = graphRevisionResolutionResultFailed
+		return ctrl.Result{}, topologicalOrder, resourcesInfo, err
+	}
+	resolutionResult = graphRevisionResolutionResultServe
+
+	if !migrationDone {
+		return ctrl.Result{RequeueAfter: r.cfg.ProgressRequeueDelay}, topologicalOrder, resourcesInfo, nil
+	}
+	return ctrl.Result{}, topologicalOrder, resourcesInfo, nil
 }
 
 // setupMicroController creates a new controller instance with the required configuration
@@ -199,6 +232,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 			MaxCollectionSize:      r.cfg.RGDConfig.MaxCollectionSize,
 			ApplyConcurrency:       r.cfg.ApplyConcurrency,
 			CELCostLimit:           r.cfg.CELCostLimit,
+			RolloutStrategy:        rolloutStrategy(rgd),
 		},
 		gvr,
 		r.revisionsRegistry.ResolverFor(rgd.Name),
@@ -345,8 +379,8 @@ func resourcesInfoFromGraph(processedRGD *graph.Graph) []v1alpha1.ResourceInform
 }
 
 // ensureResourceGraphDefinitionCRD ensures the CRD is present and up to date in the cluster.
-func (r *ResourceGraphDefinitionReconciler) ensureResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition, allowBreakingChanges bool) error {
-	if err := r.crdManager.Ensure(ctx, *crd, allowBreakingChanges); err != nil {
+func (r *ResourceGraphDefinitionReconciler) ensureResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition, opts kroclient.EnsureOptions) error {
+	if err := r.crdManager.Ensure(ctx, *crd, opts); err != nil {
 		return newCRDError(err)
 	}
 	return nil
@@ -366,12 +400,34 @@ func (r *ResourceGraphDefinitionReconciler) ensureResourceGraphDefinitionControl
 	ctrl.LoggerFrom(ctx).V(1).Info("reconciling resource graph definition micro controller")
 	gvr := processedRGD.Instance.Meta.GVR
 
+	// A hub version move changes the GVR instances are served under. The old
+	// GVR has to stop being watched, or kro keeps reconciling through a
+	// version the RGD no longer declares.
+	if previous, ok := r.registeredGVR(rgd.UID); ok && previous != gvr {
+		if err := r.dynamicController.Deregister(ctx, previous); err != nil {
+			return newMicroControllerError(fmt.Errorf("deregistering previous GVR %s: %w", previous, err))
+		}
+		if features.FeatureGate.Enabled(features.InstanceConditionMetrics) {
+			metrics.DeleteGVRMetrics(previous)
+		}
+	}
+
 	err := r.dynamicController.Register(ctx, gvr, controller.Reconcile)
 	if err != nil {
 		return newMicroControllerError(err)
 	}
-	r.registeredControllers.Store(rgd.UID, true)
+	r.registeredControllers.Store(rgd.UID, gvr)
 	return nil
+}
+
+// registeredGVR returns the instance GVR currently registered for an RGD.
+func (r *ResourceGraphDefinitionReconciler) registeredGVR(uid types.UID) (schema.GroupVersionResource, bool) {
+	value, ok := r.registeredControllers.Load(uid)
+	if !ok {
+		return schema.GroupVersionResource{}, false
+	}
+	gvr, ok := value.(schema.GroupVersionResource)
+	return gvr, ok
 }
 
 func (r *ResourceGraphDefinitionReconciler) ensureServingState(
@@ -395,9 +451,18 @@ func (r *ResourceGraphDefinitionReconciler) ensureServingState(
 	instanceLabeler.ApplyLabels(&crd.ObjectMeta)
 
 	log.V(1).Info("ensuring resource graph definition CRD")
-	allowBreakingChanges := rgd.Annotations[v1alpha1.AllowBreakingChangesAnnotation] == "true"
-	if err := r.ensureResourceGraphDefinitionCRD(ctx, crd, allowBreakingChanges); err != nil {
-		mark.KindUnready(err.Error())
+	ensureOptions := kroclient.EnsureOptions{
+		AllowBreakingChanges: rgd.Annotations[v1alpha1.AllowBreakingChangesAnnotation] == "true",
+		RejectDefaultChanges: rolloutStrategy(rgd) == v1alpha1.RolloutStrategyManual,
+		MultiVersion:         features.FeatureGate.Enabled(features.MultiVersionSchema),
+	}
+	if features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+		ensureOptions.VersionsInUse = func() (sets.Set[string], error) {
+			return r.versionsInUse(ctx, rgd, crd)
+		}
+	}
+	if err := r.ensureResourceGraphDefinitionCRD(ctx, crd, ensureOptions); err != nil {
+		mark.KindUnreadyWithReason(crdFailureReason(err), err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
 	if crd, err = r.crdManager.Get(ctx, crd.Name); err != nil {
@@ -613,6 +678,11 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 		return nil, fmt.Errorf("failed to setup graph revision hash label: %w", err)
 	}
 
+	// Rollout is policy, not graph content: a revision snapshot never carries
+	// it, so a strategy toggle cannot change a snapshot's meaning.
+	snapshotSpec := rgd.Spec.DeepCopy()
+	snapshotSpec.Rollout = nil
+
 	graphRevision := &internalv1alpha1.GraphRevision{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: graphRevisionName(rgd.Name, revision),
@@ -625,7 +695,7 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 			Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
 				Name:       rgd.Name,
 				Generation: rgd.Generation,
-				Spec:       *rgd.Spec.DeepCopy(),
+				Spec:       *snapshotSpec,
 			},
 		},
 	}
@@ -635,6 +705,19 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 		return nil, fmt.Errorf("creating graph revision %q: %w", graphRevision.Name, err)
 	}
 	return graphRevision, nil
+}
+
+// rolloutStrategy returns the effective rollout strategy for an RGD. Without
+// the GraphRevisionPinning feature gate every instance follows the latest
+// revision, regardless of what the spec declares.
+func rolloutStrategy(rgd *v1alpha1.ResourceGraphDefinition) v1alpha1.RolloutStrategy {
+	if !features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+		return v1alpha1.RolloutStrategyLatest
+	}
+	if rgd.Spec.Rollout != nil && rgd.Spec.Rollout.Strategy == v1alpha1.RolloutStrategyManual {
+		return v1alpha1.RolloutStrategyManual
+	}
+	return v1alpha1.RolloutStrategyLatest
 }
 
 // graphRevisionName generates a deterministic name for a GraphRevision object.
@@ -715,13 +798,31 @@ func graphRevisionNameHash(rgdName string) string {
 // configured retention limit.
 //
 // Bounded retention GC keeps only the N most recent revisions per RGD,
-// pruning both API objects and in-memory cache entries.
+// pruning both API objects and in-memory cache entries. With
+// GraphRevisionPinning enabled, any revision an instance still references is
+// retained regardless of the limit; when the referenced set cannot be
+// determined (no registered controller, cache not synced) this round is
+// skipped entirely rather than deleting a revision an instance may be pinned
+// to.
 //
 // TODO(amine): enforce a minimum retention of 2 (n-1) so there is always a
 // rollback target if the latest revision fails.
 func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
 	if r.cfg.MaxGraphRevisions <= 0 {
 		return nil
+	}
+
+	var referenced sets.Set[int64]
+	if features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+		gvr, ok := r.registeredGVR(rgd.UID)
+		if !ok {
+			return nil
+		}
+		refs, ok := r.dynamicController.ReferencedGraphRevisions(gvr)
+		if !ok {
+			return nil
+		}
+		referenced = refs
 	}
 
 	graphRevisions, _, _, err := r.listGraphRevisions(ctx, rgd)
@@ -740,6 +841,9 @@ func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx con
 	for i := range graphRevisions {
 		revision := graphRevisions[i]
 		if revision.Spec.Revision >= minRevisionToKeep {
+			continue
+		}
+		if referenced.Has(revision.Spec.Revision) {
 			continue
 		}
 		if err := r.Delete(ctx, &revision); err != nil {

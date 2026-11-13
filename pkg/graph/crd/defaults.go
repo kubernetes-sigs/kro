@@ -22,6 +22,13 @@ var (
 	defaultStateType = extv1.JSONSchemaProps{
 		Type: "string",
 	}
+	// defaultGraphRevisionType is the schema of status.graphRevision and
+	// status.targetGraphRevision, written by kro when GraphRevisionPinning is
+	// enabled.
+	defaultGraphRevisionType = extv1.JSONSchemaProps{
+		Type:   "integer",
+		Format: "int64",
+	}
 	defaultConditionsType = extv1.JSONSchemaProps{
 		Type: "array",
 		Items: &extv1.JSONSchemaPropsOrArray{

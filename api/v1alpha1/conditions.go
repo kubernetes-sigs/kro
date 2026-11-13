@@ -62,6 +62,11 @@ const (
 	InstanceConditionTypeInstanceManaged ConditionType = "InstanceManaged"
 	InstanceConditionTypeGraphResolved   ConditionType = "GraphResolved"
 	InstanceConditionTypeResourcesReady  ConditionType = "ResourcesReady"
+	// RevisionReconciled reports whether the instance has reconciled against
+	// the definition's latest GraphRevision. False with reason Held means a
+	// spec.propagateWhen gate is holding it on an older revision. Not a
+	// dependency of Ready: a held instance is healthy on the revision it is on.
+	InstanceConditionTypeRevisionReconciled ConditionType = "RevisionReconciled"
 )
 
 // KROBuiltinConditionTypes is the set form of the instance built-in

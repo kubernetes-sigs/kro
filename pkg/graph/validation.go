@@ -72,6 +72,7 @@ var (
 		"graph",
 		"graphengine",
 		"instance",
+		"instances", // Reserved for the fleet propagateWhen gate
 		"item",
 		"items",
 		"kind",

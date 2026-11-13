@@ -4386,6 +4386,8 @@ func TestBuildStatusSchema(t *testing.T) {
 		{name: "string interpolation type check failure", statusRaw: "field: prefix-${resource.spec.missing}\n", wantErr: "failed to type-check status expression"},
 		{name: "string interpolation non string expression", statusRaw: "field: prefix-${resource.spec.replicas}\n", wantErr: "failed to type-check status expression \"prefix-${resource.spec.replicas}\" at path \"field\": ERROR: <input>:1:11: found no matching overload for '_+_' applied to '(string, int)'\n | \"prefix-\" + (resource.spec.replicas)\n | ..........^"},
 		{name: "string interpolation success", statusRaw: "field: prefix-${resource.spec.name}\n", wantStringField: true},
+		{name: "observedRevision is reserved", statusRaw: "observedRevision: ${resource.spec.replicas}\n", wantErr: "status.observedRevision is reserved"},
+		{name: "convergedRevision is reserved", statusRaw: "convergedRevision: 99\n", wantErr: "status.convergedRevision is reserved"},
 	}
 
 	for _, tt := range tests {

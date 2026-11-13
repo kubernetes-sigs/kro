@@ -180,6 +180,96 @@ func (n *Node) computeIgnored() (bool, error) {
 	return false, nil
 }
 
+// IsHeld evaluates propagateWhen against scope. It returns true when any
+// expression is false, meaning the executor must not resolve or apply the
+// node this cycle but must keep its existing resources. The `ready` map in
+// scope is populated by the executor as nodes reach readiness. Missing
+// entries (upstream not yet evaluated) read as false, so the gate fails
+// closed. Empty propagateWhen = never held.
+func (n *Node) IsHeld() (bool, string, error) {
+	return n.EvalHeld(n.rt.scope)
+}
+
+// PerItemGate reports whether propagateWhen must be evaluated once per
+// collection item (the gate references the node's own id or `each`).
+func (n *Node) PerItemGate() bool { return n.spec.PerItemGate }
+
+// GateUsesEach reports whether the per-item gate reads `each`.
+func (n *Node) GateUsesEach() bool { return n.spec.GateUsesEach }
+
+// Scope returns the runtime's current scope map (read-only use by the
+// executor to build per-item gate scopes).
+func (n *Node) Scope() map[string]any { return n.rt.scope }
+
+// ItemReady evaluates readyWhen against one observed collection item. An
+// empty readyWhen is ready. Data-pending reads as not ready; any other
+// evaluation error is returned.
+func (n *Node) ItemReady(obj map[string]any) (bool, error) {
+	if len(n.spec.ReadyWhen) == 0 {
+		return true, nil
+	}
+	scope := make(map[string]any, len(n.rt.scope)+1)
+	maps.Copy(scope, n.rt.scope)
+	scope[compiler.EachVarName] = wrapValueForScope(obj, n.itemSchema(), true)
+	for _, expr := range n.spec.ReadyWhen {
+		v, err := expr.Eval(scope)
+		if err != nil {
+			if IsCELDataPending(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("node %q: readyWhen %q: %w", n.spec.ID, expr.UserExpression(), err)
+		}
+		b, ok := conditionResult(v)
+		if !ok {
+			return false, fmt.Errorf("node %q: readyWhen %q returned %T, want bool", n.spec.ID, expr.UserExpression(), v)
+		}
+		if !b {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (n *Node) itemSchema() *spec.Schema {
+	if n.rt.program == nil {
+		return nil
+	}
+	sc, ok := n.rt.program.NodeSchemas[n.ID()]
+	if !ok || sc == nil {
+		return nil
+	}
+	if sc.Type.Contains("array") && sc.Items != nil && sc.Items.Schema != nil {
+		return sc.Items.Schema
+	}
+	return sc
+}
+
+// EvalHeld evaluates propagateWhen against the supplied scope.
+func (n *Node) EvalHeld(scope map[string]any) (bool, string, error) {
+	if len(n.spec.PropagateWhen) == 0 {
+		return false, "", nil
+	}
+	metrics.NodeGateEvalTotal.Inc()
+	for _, expr := range n.spec.PropagateWhen {
+		v, err := expr.Eval(scope)
+		if err != nil {
+			if IsCELDataPending(err) {
+				// Fail closed: data the gate needs is not here yet.
+				return true, expr.UserExpression(), nil
+			}
+			return false, "", fmt.Errorf("node %q: propagateWhen %q: %w", n.spec.ID, expr.UserExpression(), err)
+		}
+		b, ok := conditionResult(v)
+		if !ok {
+			return false, "", fmt.Errorf("node %q: propagateWhen %q returned %T, want bool", n.spec.ID, expr.UserExpression(), v)
+		}
+		if !b {
+			return true, expr.UserExpression(), nil
+		}
+	}
+	return false, "", nil
+}
+
 // conditionResult interprets a successfully evaluated predicate. Empty optionals
 // (nil or Omit) and CEL null are false; other nonboolean values remain invalid.
 func conditionResult(v any) (bool, bool) {

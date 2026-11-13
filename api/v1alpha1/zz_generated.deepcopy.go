@@ -353,6 +353,11 @@ func (in *Node) DeepCopyInto(out *Node) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.PropagateWhen != nil {
+		in, out := &in.PropagateWhen, &out.PropagateWhen
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.ForEach != nil {
 		in, out := &in.ForEach, &out.ForEach
 		*out = make([]ForEachDimension, len(*in))
@@ -394,6 +399,11 @@ func (in *Resource) DeepCopyInto(out *Resource) {
 	}
 	if in.IncludeWhen != nil {
 		in, out := &in.IncludeWhen, &out.IncludeWhen
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.PropagateWhen != nil {
+		in, out := &in.PropagateWhen, &out.PropagateWhen
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
@@ -499,6 +509,11 @@ func (in *ResourceGraphDefinitionSpec) DeepCopyInto(out *ResourceGraphDefinition
 				(*in).DeepCopyInto(*out)
 			}
 		}
+	}
+	if in.PropagateWhen != nil {
+		in, out := &in.PropagateWhen, &out.PropagateWhen
+		*out = make([]string, len(*in))
+		copy(*out, *in)
 	}
 }
 

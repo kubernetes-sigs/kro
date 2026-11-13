@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -41,6 +42,12 @@ var storageVersionMigrationGVR = schema.GroupVersionResource{
 }
 
 const storageVersionMigrationGroupVersion = "storagemigration.k8s.io/v1"
+
+// defaultStorageMigrationTimeout bounds how long kro waits for the cluster's
+// storage version migrator to report a result. Serving
+// storagemigration.k8s.io does not imply the migrator controller runs, and a
+// migration that never reports would block every edit that retires a version.
+const defaultStorageMigrationTimeout = 2 * time.Minute
 
 // reconcileStorageMigration rewrites every instance that is still stored under
 // a retired version, so the old version can stop being served.
@@ -86,7 +93,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileStorageMigration(
 		return true, nil
 	}
 
-	if r.storageVersionMigrationAvailable() {
+	if r.storageVersionMigrationAvailable() && !r.migrationStalled(crd.Name) {
 		done, err := r.reconcileMigrationObject(ctx, crd, hub, migrationName)
 		if err != nil {
 			return false, err
@@ -155,11 +162,47 @@ func (r *ResourceGraphDefinitionReconciler) reconcileMigrationObject(
 	case "Failed":
 		log.Info("storage version migration failed; migrating through kro instead",
 			"name", migrationName, "message", message)
+		r.markMigrationStalled(crd.Name)
 		r.deleteStorageVersionMigration(ctx, migrationName)
 		return r.rewriteInstances(ctx, crd, hub)
 	default:
-		return false, nil
+		// A cluster can serve the API without running the migrator (the
+		// controller is gated separately), in which case the object never
+		// reports anything. Give it a deadline, then migrate through kro and
+		// stop using the API for this CRD.
+		age := time.Since(existing.GetCreationTimestamp().Time)
+		if age < r.storageMigrationTimeout() {
+			return false, nil
+		}
+		log.Info("storage version migration made no progress; migrating through kro instead",
+			"name", migrationName, "age", age.String())
+		r.markMigrationStalled(crd.Name)
+		r.deleteStorageVersionMigration(ctx, migrationName)
+		return r.rewriteInstances(ctx, crd, hub)
 	}
+}
+
+// storageMigrationTimeout is how long kro waits for the cluster's storage
+// version migrator to report a result before migrating the objects itself.
+func (r *ResourceGraphDefinitionReconciler) storageMigrationTimeout() time.Duration {
+	if r.cfg.StorageMigrationTimeout > 0 {
+		return r.cfg.StorageMigrationTimeout
+	}
+	return defaultStorageMigrationTimeout
+}
+
+// markMigrationStalled records that the cluster's migrator did not finish a
+// migration for this CRD, so later migrations of the same CRD go straight
+// through kro instead of waiting out the deadline again.
+func (r *ResourceGraphDefinitionReconciler) markMigrationStalled(crdName string) {
+	r.stalledMigrations.Store(crdName, struct{}{})
+}
+
+// migrationStalled reports whether a previous migration of this CRD had to
+// fall back to the kro rewrite pass.
+func (r *ResourceGraphDefinitionReconciler) migrationStalled(crdName string) bool {
+	_, stalled := r.stalledMigrations.Load(crdName)
+	return stalled
 }
 
 // rewriteInstances re-writes every cached instance through the hub version so

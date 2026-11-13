@@ -82,7 +82,10 @@ type ControllerConfig struct {
 	AllowCRDDeletion  bool
 	ReconcileConfig   ctrlinstance.ReconcileConfig
 	MaxGraphRevisions int
-	LogWriter         io.Writer
+	// StorageMigrationTimeout bounds how long the RGD controller waits for a
+	// StorageVersionMigration before migrating stored objects itself.
+	StorageMigrationTimeout time.Duration
+	LogWriter               io.Writer
 }
 
 // init installs a no-op apiserver warning handler for every client-go client
@@ -350,6 +353,9 @@ func (e *Environment) setupController() error {
 			MaxGraphRevisions:       maxGraphRevisions,
 			RGDConfig:               rgdConfig,
 			ApplyConcurrency:        e.ControllerConfig.ReconcileConfig.ApplyConcurrency,
+			// envtest has no kube-controller-manager, so a StorageVersionMigration
+			// never reports. Fall back to kro's own rewrite pass quickly.
+			StorageMigrationTimeout: e.ControllerConfig.StorageMigrationTimeout,
 		},
 	)
 	gvReconciler := ctrlgraphrevision.NewGraphRevisionReconciler(

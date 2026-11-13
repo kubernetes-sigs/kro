@@ -62,7 +62,11 @@ type Config struct {
 	// projection so author conditions get the same execution bound as graph
 	// expressions rather than silently bypassing it.
 	CELCostLimit uint64
-	RGDConfig    graph.Config
+	// StorageMigrationTimeout bounds how long kro waits for the cluster's
+	// storage version migrator before migrating stored objects itself.
+	// Zero means the package default (2 minutes).
+	StorageMigrationTimeout time.Duration
+	RGDConfig               graph.Config
 }
 
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
@@ -85,6 +89,10 @@ type ResourceGraphDefinitionReconciler struct {
 	// storagemigration.k8s.io/v1, discovered at most once.
 	storageMigrationAPIOnce sync.Once
 	storageMigrationAPI     bool
+
+	// stalledMigrations records the CRDs whose storage version migration the
+	// cluster's migrator never finished, so kro stops waiting for it.
+	stalledMigrations sync.Map
 
 	// graphEngineCompiler is injected via WithGraphEngineCompiler after
 	// SetupWithManager so that the compiler shares the same REST config/HTTP

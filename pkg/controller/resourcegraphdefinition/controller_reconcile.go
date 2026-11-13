@@ -178,25 +178,36 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	if gcErr := r.garbageCollectGraphRevisions(ctx, rgd); gcErr != nil {
 		log.Error(gcErr, "failed to garbage collect graph revisions", "name", rgd.Name)
 	}
+
+	// Storage version migration rewrites objects stored under a version the
+	// CRD no longer stores. It works off the live CRD, so it runs even when
+	// the desired spec could not be applied: an edit that retires a version is
+	// rejected precisely while objects are still stored under it, and the
+	// migration is what unblocks it.
+	migrationDone := true
+	if features.FeatureGate.Enabled(features.MultiVersionSchema) {
+		done, migrateErr := r.reconcileStorageMigration(ctx, rgd)
+		switch {
+		case migrateErr != nil && err == nil:
+			resolutionResult = graphRevisionResolutionResultFailed
+			return ctrl.Result{}, topologicalOrder, resourcesInfo, migrateErr
+		case migrateErr != nil:
+			// A serving failure is the user-visible one; keep it.
+			log.Error(migrateErr, "failed to migrate stored versions", "name", rgd.Name)
+		default:
+			migrationDone = done
+		}
+	}
+
 	if err != nil {
 		resolutionResult = graphRevisionResolutionResultFailed
 		return ctrl.Result{}, topologicalOrder, resourcesInfo, err
 	}
 	resolutionResult = graphRevisionResolutionResultServe
 
-	// Storage version migration runs after the CRD is served: objects stored
-	// under a retired version must be rewritten before that version can be
-	// dropped.
-	if features.FeatureGate.Enabled(features.MultiVersionSchema) {
-		done, migrateErr := r.reconcileStorageMigration(ctx, rgd)
-		if migrateErr != nil {
-			return ctrl.Result{}, topologicalOrder, resourcesInfo, migrateErr
-		}
-		if !done {
-			return ctrl.Result{RequeueAfter: r.cfg.ProgressRequeueDelay}, topologicalOrder, resourcesInfo, nil
-		}
+	if !migrationDone {
+		return ctrl.Result{RequeueAfter: r.cfg.ProgressRequeueDelay}, topologicalOrder, resourcesInfo, nil
 	}
-
 	return ctrl.Result{}, topologicalOrder, resourcesInfo, nil
 }
 

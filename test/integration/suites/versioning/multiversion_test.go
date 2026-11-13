@@ -194,6 +194,51 @@ var _ = Describe("MultiVersion", func() {
 		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
+	It("retires a previous version that objects are still stored under", func(ctx SpecContext) {
+		kind := "RetireRaceApp"
+		rgd := multiVersionRGD("test-retire-race-"+rand.String(5), kind)
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(client.IgnoreNotFound(env.Client.Delete(ctx, rgd))).To(Succeed())
+		})
+		waitForRGDActive(ctx, rgd)
+
+		instance := newInstance(kind, namespace, "stored-as-alpha")
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+		Eventually(func(g Gomega, ctx SpecContext) {
+			cm := &corev1.ConfigMap{}
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: "stored-as-alpha-cm"}, cm)).To(Succeed())
+		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+		// Move the hub, then retire the old version as soon as the CRD serves
+		// the new one — without waiting for the storage migration. The retire
+		// is rejected while objects are still stored under v1alpha1, and the
+		// migration, which runs even while the edit is blocked, is what
+		// unblocks it.
+		updateRGD(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
+			live.Spec.Schema.APIVersion = "v1beta1"
+			live.Spec.Schema.PreviousVersions = []krov1alpha1.PreviousSchemaVersion{{
+				APIVersion: "v1alpha1",
+				Spec:       toRawExtension(hubSpec),
+			}}
+		})
+		Eventually(func(g Gomega, ctx SpecContext) {
+			crd := instanceCRD(g, ctx, kind)
+			g.Expect(servedVersionsOf(crd)).To(ConsistOf("v1beta1", "v1alpha1"))
+		}, 60*time.Second, 100*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+		updateRGD(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
+			live.Spec.Schema.PreviousVersions = nil
+		})
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			crd := instanceCRD(g, ctx, kind)
+			g.Expect(servedVersionsOf(crd)).To(ConsistOf("v1beta1"))
+			g.Expect(crd.Status.StoredVersions).To(Equal([]string{"v1beta1"}))
+		}, 120*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
+		waitForRGDActive(ctx, rgd)
+	})
+
 	It("rejects dropping the stored version in the same edit that moves the hub", func(ctx SpecContext) {
 		kind := "DropHubApp"
 		rgd := multiVersionRGD("test-drop-hub-"+rand.String(5), kind)

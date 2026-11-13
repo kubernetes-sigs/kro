@@ -15,6 +15,7 @@
 package simpleschema
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -153,7 +154,7 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 			}
 		case unicode.IsSpace(char) && !inQuotes && bracketCount == 0:
 			if currentMarker != nil {
-				currentMarker.Value = processValue(buffer.String())
+				currentMarker.Value = processValue(currentMarker.MarkerType, buffer.String())
 				result = append(result, currentMarker)
 				currentMarker = nil
 				buffer.Reset()
@@ -167,7 +168,7 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 	}
 
 	if currentMarker != nil {
-		currentMarker.Value = processValue(buffer.String())
+		currentMarker.Value = processValue(currentMarker.MarkerType, buffer.String())
 		result = append(result, currentMarker)
 	} else {
 		// If we end with a nil currentMarker, that's an error because it means we had a marker key without a value(i.e. no "=")
@@ -184,8 +185,18 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 	return result, nil
 }
 
-func processValue(value string) string {
+func processValue(markerType MarkerType, value string) string {
 	if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+		// A quoted default becomes a JSON string in the CRD, so its escapes keep
+		// their JSON meaning. A value that isn't a valid JSON string, like one
+		// with a regular expression escape, is unescaped like the other markers.
+		if markerType == MarkerTypeDefault {
+			var decoded string
+			if err := json.Unmarshal([]byte(value), &decoded); err == nil {
+				return decoded
+			}
+		}
+
 		// remove surrounding quotes and unescape the string
 		unquoted := value[1 : len(value)-1]
 		return unescapeString(unquoted)
@@ -343,7 +354,11 @@ func applyDefaultMarker(schema *extv1.JSONSchemaProps, marker *Marker) error {
 	var defaultValue []byte
 	switch schema.Type {
 	case schemaTypeString:
-		defaultValue = []byte(fmt.Sprintf("\"%s\"", marker.Value))
+		encoded, err := json.Marshal(marker.Value)
+		if err != nil {
+			return fmt.Errorf("failed to encode default value: %w", err)
+		}
+		defaultValue = encoded
 	case schemaTypeInteger:
 		if _, err := strconv.ParseInt(marker.Value, 10, 64); err != nil {
 			return fmt.Errorf("default value must be a valid integer, got: %s", marker.Value)

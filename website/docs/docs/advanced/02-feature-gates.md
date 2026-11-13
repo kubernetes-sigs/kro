@@ -210,7 +210,10 @@ objects itself — and then trims `status.storedVersions` to the new hub.
 A version may not stop being served while it is still listed in the CRD's
 `status.storedVersions` or still used by a graph revision an instance is pinned
 to; kro reports `KindReady=False` with reason `VersionRemovalBlocked` and keeps
-serving it. Moving `schema.apiVersion` backwards is always rejected.
+serving it. Retiring a version in the same edit that moves the hub is therefore
+rejected at first and applied by itself once the migration has rewritten the
+stored objects — the migration runs even while the edit is blocked. Moving
+`schema.apiVersion` backwards is always rejected.
 
 With `rbac.mode: aggregation`, the chart grants the controller the extra
 permissions this needs (`customresourcedefinitions/status` and

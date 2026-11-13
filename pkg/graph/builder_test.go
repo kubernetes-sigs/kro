@@ -4416,13 +4416,13 @@ func TestGetSchemaWithoutStatus(t *testing.T) {
 		wantHasNamespace bool
 	}{
 		{
-			name: "requires exactly one version",
+			name: "requires at least one version",
 			crd: &extv1.CustomResourceDefinition{
 				Spec: extv1.CustomResourceDefinitionSpec{
 					Versions: []extv1.CustomResourceDefinitionVersion{},
 				},
 			},
-			wantErr: "exactly one version",
+			wantErr: "at least one version",
 		},
 		{
 			name: "requires schema",

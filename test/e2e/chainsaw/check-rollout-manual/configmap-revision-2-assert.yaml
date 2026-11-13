@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pinned-instance-cm
+data:
+  value: hello
+  extra: from-revision-2

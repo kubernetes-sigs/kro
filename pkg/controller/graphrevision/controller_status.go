@@ -22,10 +22,12 @@ import (
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/release-utils/version"
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/apis"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -57,6 +59,12 @@ func (r *GraphRevisionReconciler) updateStatus(
 		dc.Status.Conditions = obj.Status.Conditions
 		dc.Status.TopologicalOrder = topologicalOrder
 		dc.Status.Resources = resources
+		if features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+			// The kro version determines the CEL environment a revision was
+			// compiled and verified against: there is no separate CEL
+			// environment version.
+			dc.Status.CELEnvironmentVersion = version.GetVersionInfo().GitVersion
+		}
 
 		if equality.Semantic.DeepEqual(current.Status, dc.Status) {
 			return nil

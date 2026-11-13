@@ -66,6 +66,11 @@ const (
 	NullableAdded                   ChangeType = "NULLABLE_ADDED"
 	FormatRemoved                   ChangeType = "FORMAT_REMOVED"
 	PreserveUnknownFieldsAdded      ChangeType = "PRESERVE_UNKNOWN_FIELDS_ADDED"
+	// VersionMetadataChanged covers served/storage/deprecated/deprecationWarning
+	// differences on a version. They are never breaking on their own; whether a
+	// version may stop being served depends on stored and in-use versions,
+	// which the CRD client decides.
+	VersionMetadataChanged ChangeType = "VERSION_METADATA_CHANGED"
 
 	// Non-breaking - constraint relaxed
 	MinimumRemoved     ChangeType = "MINIMUM_REMOVED"

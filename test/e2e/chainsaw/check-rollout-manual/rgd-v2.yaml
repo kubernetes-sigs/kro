@@ -1,0 +1,22 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: check-rollout-manual
+spec:
+  rollout:
+    strategy: Manual
+  schema:
+    apiVersion: v1alpha1
+    kind: CheckRolloutManualApp
+    spec:
+      value: string | default="hello"
+  resources:
+    - id: cm
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.metadata.name}-cm
+        data:
+          value: ${schema.spec.value}
+          extra: from-revision-2

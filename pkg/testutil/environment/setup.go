@@ -334,7 +334,7 @@ func (e *Environment) setupController() error {
 			RateLimit:       10,
 			BurstLimit:      100,
 		},
-		e.ClientSet.Metadata(), e.ClientSet.RESTMapper())
+		e.ClientSet.Metadata(), e.ClientSet.Dynamic(), e.ClientSet.RESTMapper())
 
 	graphRevisionRegistry := revisions.NewRegistry()
 	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(

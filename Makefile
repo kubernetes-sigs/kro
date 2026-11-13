@@ -404,7 +404,7 @@ deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
 # the e2e lane deploys with defaults rather than the dev deploy's true.
 .PHONY: test-e2e-kind
 test-e2e-kind: ALLOW_CRD_DELETION=false
-test-e2e-kind: KIND_FEATURE_GATE_FLAGS=--set config.featureGates.DeletionPolicy=true
+test-e2e-kind: KIND_FEATURE_GATE_FLAGS=--set config.featureGates.DeletionPolicy=true --set config.featureGates.GraphRevisionPinning=true --set config.featureGates.MultiVersionSchema=true
 test-e2e-kind: chainsaw deploy-kind-helm
 	$(CHAINSAW) test ./test/e2e/chainsaw
 

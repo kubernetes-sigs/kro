@@ -81,6 +81,11 @@ type ResourceGraphDefinitionReconciler struct {
 	registeredControllers sync.Map
 	cfg                   Config
 
+	// storageMigrationAPI caches whether the cluster serves
+	// storagemigration.k8s.io/v1, discovered at most once.
+	storageMigrationAPIOnce sync.Once
+	storageMigrationAPI     bool
+
 	// graphEngineCompiler is injected via WithGraphEngineCompiler after
 	// SetupWithManager so that the compiler shares the same REST config/HTTP
 	// client as the rest of the manager.  It drives the instance reconcile path.

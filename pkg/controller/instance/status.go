@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -29,6 +30,7 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/apis"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
@@ -123,6 +125,13 @@ func (m *ConditionsMarker) GraphResolutionFailed(msg string, args ...any) {
 	m.cs.SetFalse(GraphResolved, "ResolutionFailed", fmt.Sprintf(msg, args...))
 }
 
+// GraphRevisionUnavailable signals the graph revision the instance targets
+// cannot be served: the pin names a revision kro does not have, the revision
+// failed to compile, or no revision has been issued yet.
+func (m *ConditionsMarker) GraphRevisionUnavailable(msg string, args ...any) {
+	m.cs.SetFalse(GraphResolved, "GraphRevisionUnavailable", fmt.Sprintf(msg, args...))
+}
+
 // ResourcesReady signals all resources in the graph are created and ready.
 func (m *ConditionsMarker) ResourcesReady() {
 	m.cs.SetTrueWithReason(ResourcesReady, "AllResourcesReady", "all resources are created and ready")
@@ -153,8 +162,12 @@ func (m *ConditionsMarker) ResourcesUnderDeletion(msg string, args ...any) {
 // full ReconcileContext is not available. When the RGD declares author
 // conditions this path cannot evaluate them (there is no graph), so only
 // `state` is written and the persisted conditions are left untouched.
-func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructured.Unstructured) error {
-	ri := c.client.Dynamic().Resource(c.gvr)
+//
+// targetGraphRevision, when greater than zero and GraphRevisionPinning is
+// enabled, also records the revision the instance is trying to reach, so a
+// pin that cannot be served stays visible on the instance.
+func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructured.Unstructured, targetGraphRevision int64) error {
+	ri := c.client.Dynamic().Resource(c.gvrFor(inst))
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var cur *unstructured.Unstructured
 		var err error
@@ -176,6 +189,9 @@ func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructu
 			}
 		}
 		status["state"] = string(v1alpha1.InstanceStateError)
+		if targetGraphRevision > 0 && features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+			status["targetGraphRevision"] = targetGraphRevision
+		}
 		cur.Object["status"] = status
 		// Mirror persisted status onto the instance so the deferred
 		// emitters read what's on the wire, not the marker's built-ins.
@@ -311,20 +327,20 @@ func (c *Controller) persistConditionsAndState(
 	status map[string]any,
 	previousState string,
 ) error {
-	// Mirror conditions/state onto the instance for the deferred emitters,
-	// leaving any author status fields already present untouched.
+	// Mirror every controller-written key onto the instance for the deferred
+	// emitters, leaving any author status fields already present untouched.
 	if inst.Object["status"] == nil {
 		inst.Object["status"] = map[string]any{}
 	}
 	if s, ok := inst.Object["status"].(map[string]any); ok {
-		s["conditions"] = status["conditions"]
-		s["state"] = status["state"]
+		maps.Copy(s, status)
 	}
 
-	// Skip the API write when the wire already carries identical conditions+state.
-	wireCS := map[string]any{
-		"conditions": wireStatus["conditions"],
-		"state":      wireStatus["state"],
+	// Skip the API write when the wire already carries identical values for
+	// every key this writer owns.
+	wireCS := make(map[string]any, len(status))
+	for key := range status {
+		wireCS[key] = wireStatus[key]
 	}
 	if statusesMatch(wireCS, status) {
 		return nil
@@ -333,7 +349,7 @@ func (c *Controller) persistConditionsAndState(
 	patchObj := instanceSSAPatch(inst)
 	patchObj.Object["status"] = status
 
-	ri := c.client.Dynamic().Resource(c.gvr)
+	ri := c.client.Dynamic().Resource(c.gvrFor(inst))
 	var instanceClient dynamic.ResourceInterface = ri
 	if c.namespaced {
 		instanceClient = ri.Namespace(inst.GetNamespace())

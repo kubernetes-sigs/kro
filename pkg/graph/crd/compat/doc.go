@@ -62,14 +62,19 @@
 //	// Get existing and new CRD objects
 //	oldCRD, newCRD := getCRDs()
 //
-//	// Compare schemas
+//	// Compare every version present on both sides
 //	report, err := crdcompat.CompareVersions(oldCRD.Spec.Versions, newCRD.Spec.Versions)
 //	if err != nil {
 //	    // Handle error
 //	}
 //
-//	// Check for breaking changes
-//	if report.HasBreakingChanges() {
-//	    log.Fatalf("Breaking changes detected: %s", report)
+//	// Check for breaking changes per version
+//	for name, version := range report.Versions {
+//	    if version.HasBreakingChanges() {
+//	        log.Fatalf("Breaking changes detected in %s: %s", name, version)
+//	    }
 //	}
+//
+//	// Check whether a spoke schema can serve objects stored under the hub
+//	acrossReport, err := crdcompat.CompareAcrossVersions(spokeVersion, hubVersion)
 package compat

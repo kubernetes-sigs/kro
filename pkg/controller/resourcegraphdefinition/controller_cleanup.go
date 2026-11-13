@@ -37,8 +37,11 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 
 	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema)
 
-	// Check in-memory map to avoid stale status data
-	if _, registered := r.registeredControllers.Load(rgd.UID); registered {
+	// Check in-memory map to avoid stale status data. The registered GVR is
+	// authoritative: with multi-version schemas the spec's hub version may
+	// already have moved past the version instances are served under.
+	if registered, ok := r.registeredGVR(rgd.UID); ok {
+		gvr = registered
 		// shutdown microcontroller
 		if err := r.shutdownResourceGraphDefinitionMicroController(ctx, &gvr); err != nil {
 			return fmt.Errorf("failed to shutdown microcontroller: %w", err)

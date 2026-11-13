@@ -1,0 +1,85 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-rollout-manual
+spec:
+  description: |
+    Tests that rollout strategy Manual keeps an instance on the graph revision
+    it reconciled against until the kro.run/graph-revision annotation moves it.
+    Requires the GraphRevisionPinning feature gate.
+  steps:
+  - name: install-rgd
+    try:
+    - apply:
+        file: cluster-role.yaml
+      description: Apply Cluster Role
+    - apply:
+        file: rgd.yaml
+      description: Apply RGD with rollout strategy Manual
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: create-instance
+    try:
+    - apply:
+        file: instance.yaml
+      description: Create instance against revision 1
+    - assert:
+        file: instance-revision-1-assert.yaml
+      description: Instance records graph revision 1
+    - assert:
+        file: configmap-revision-1-assert.yaml
+      description: ConfigMap rendered from revision 1
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: issue-revision-2
+    try:
+    - apply:
+        file: rgd-v2.yaml
+      description: Change the rendered ConfigMap, issuing revision 2
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD is serving again
+    - assert:
+        file: instance-revision-1-assert.yaml
+      description: The existing instance stays on revision 1
+    - script:
+        content: |
+          set -eu
+          if kubectl get configmap pinned-instance-cm -n $NAMESPACE -o jsonpath='{.data.extra}' | grep -q .; then
+            echo "configmap was updated from revision 2 despite the Manual strategy" >&2
+            exit 1
+          fi
+      description: The rendered ConfigMap keeps the revision 1 content
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: move-instance-to-revision-2
+    try:
+    - script:
+        content: |
+          set -eu
+          kubectl annotate checkrolloutmanualapp pinned-instance -n $NAMESPACE \
+            kro.run/graph-revision=2 --overwrite
+      description: Pin the instance to revision 2
+    - assert:
+        file: instance-revision-2-assert.yaml
+      description: Instance records graph revision 2
+    - assert:
+        file: configmap-revision-2-assert.yaml
+      description: ConfigMap re-rendered from revision 2
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

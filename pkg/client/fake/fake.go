@@ -98,7 +98,13 @@ type FakeCRD struct{}
 var _ client.CRDInterface = (*FakeCRD)(nil)
 
 // Ensure ensures a CRD exists, up-to-date, and is ready
-func (f *FakeCRD) Ensure(ctx context.Context, crd v1.CustomResourceDefinition, allowBreakingChanges bool) error {
+func (f *FakeCRD) Ensure(ctx context.Context, crd v1.CustomResourceDefinition, opts client.EnsureOptions) error {
+	// For testing, just return success
+	return nil
+}
+
+// SetStoredVersions replaces status.storedVersions on a CRD
+func (f *FakeCRD) SetStoredVersions(ctx context.Context, name string, versions []string) error {
 	// For testing, just return success
 	return nil
 }

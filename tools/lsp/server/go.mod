@@ -104,7 +104,3 @@ require (
 	sigs.k8s.io/release-utils v0.12.5 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 )
-
-// Broken depenceny for GOPROXY=direct
-// https://github.com/tliron/glsp/issues/45
-replace github.com/tliron/kutil => github.com/tliron/go-kutil v0.3.11

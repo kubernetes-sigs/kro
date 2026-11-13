@@ -20,7 +20,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ConditionType is a type of condition for a resource.
+// ConditionType is the type of a status condition reported on kro resources.
+//
+// ConditionType is an open string type, not a schema-validated enum: the API
+// server accepts any value in a condition's type field. The constants in this
+// package are the condition types kro itself sets on ResourceGraphDefinitions,
+// Graphs, and RGD-generated instances, so the same value (for example "Ready")
+// can appear for more than one resource kind. Other controllers or future kro
+// versions may report additional condition types.
 type ConditionType string
 
 func (c ConditionType) String() string { return string(c) }
@@ -57,11 +64,30 @@ const (
 
 // Instance built-in condition types. kro computes these on every managed
 // instance; author CEL reads them via runtime.condition(schema, 'X').
+//
+// Ready (root)
+// ├── InstanceManaged — finalizers and labels are set
+// ├── GraphResolved   — runtime graph is built and resources resolved
+// └── ResourcesReady  — every resource is created and ready
 const (
-	InstanceConditionTypeReady           ConditionType = "Ready"
+	// InstanceConditionTypeReady is the root condition on an instance of an
+	// RGD-generated kind. It is true only when InstanceManaged, GraphResolved,
+	// and ResourcesReady are all true for the current generation; otherwise
+	// it mirrors the status, reason, and message of the least healthy of them.
+	InstanceConditionTypeReady ConditionType = "Ready"
+	// InstanceConditionTypeInstanceManaged is true when kro has set the
+	// finalizers and labels it needs to manage the instance. False with
+	// reason "ManagementFailed" otherwise.
 	InstanceConditionTypeInstanceManaged ConditionType = "InstanceManaged"
-	InstanceConditionTypeGraphResolved   ConditionType = "GraphResolved"
-	InstanceConditionTypeResourcesReady  ConditionType = "ResourcesReady"
+	// InstanceConditionTypeGraphResolved is true when the instance's runtime
+	// graph has been created and all of its resources resolved. False with
+	// reason "ResolutionFailed" otherwise.
+	InstanceConditionTypeGraphResolved ConditionType = "GraphResolved"
+	// InstanceConditionTypeResourcesReady is true when every resource in the
+	// instance's graph has been created and is ready. False with reason
+	// "NotReady" while resources are still converging, or "ResourceDeleting"
+	// while managed resources are terminating.
+	InstanceConditionTypeResourcesReady ConditionType = "ResourcesReady"
 )
 
 // KROBuiltinConditionTypes is the set form of the instance built-in
@@ -73,9 +99,10 @@ var KROBuiltinConditionTypes = map[string]struct{}{
 	string(InstanceConditionTypeResourcesReady):  {},
 }
 
-// Condition is the common struct used by all CRDs managed by ACK service
-// controllers to indicate terminal states  of the CR and its backend AWS
-// service API resource
+// Condition describes one aspect of the observed state of an object managed by
+// kro: a ResourceGraphDefinition, Graph, GraphRevision, or an instance of an
+// RGD-generated kind. Conditions are reported in the object's status.conditions
+// list, which holds at most one entry per Type.
 type Condition struct {
 	// Type is the type of the Condition
 	Type ConditionType `json:"type"`

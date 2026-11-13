@@ -194,7 +194,10 @@ func newGraphEngineControllerUnderTest(
 	}
 	for _, entry := range extraEntries {
 		if entry.OwnerKey == "" {
-			entry.OwnerKey = revisions.OwnerKey(controllerTestParentGVR.Resource)
+			entry.OwnerKey = controllerTestParentGVR.Resource
+		}
+		if entry.RGDSpec != nil && entry.CompiledGraph == nil {
+			entry.CompiledGraph = &graph.Graph{CRD: testInstanceCRD()}
 		}
 		registry.Put(entry)
 	}

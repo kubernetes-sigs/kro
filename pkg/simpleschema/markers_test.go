@@ -545,6 +545,12 @@ func TestParseMarkers(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "value that is only an opening quote",
+			input:   "default=\"",
+			want:    nil,
+			wantErr: true,
+		},
+		{
 			name:    "unclosed brace (incomplete json)",
 			input:   "default={\"unclosed\": \"brace\"",
 			want:    nil,

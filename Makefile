@@ -226,7 +226,9 @@ $(CHAINSAW): $(LOCALBIN)
 	fi
 	test -s $(LOCALBIN)/chainsaw || GOBIN=$(LOCALBIN) GO111MODULE=on go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
 
-ENVTEST_VERSION ?= 1.36.x
+# 1.37 is the first version whose apiserver serves storagemigration.k8s.io/v1,
+# which the MultiVersionSchema storage migration path drives.
+ENVTEST_VERSION ?= 1.37.x
 
 .PHONY: ko
 ko: $(KO) ## Download ko locally if necessary. If wrong version is installed, it will be removed before downloading.

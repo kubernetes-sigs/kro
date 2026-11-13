@@ -73,6 +73,11 @@ type ReconcileConfig struct {
 	// author conditions share the same execution bound as graph expressions
 	// instead of silently using DefaultProgramOptions (unbounded).
 	CELCostLimit uint64
+	// RolloutStrategy is the RGD's effective rollout strategy. Manual keeps
+	// each instance on the revision it already reconciled against until the
+	// kro.run/graph-revision annotation moves it. Only consulted when the
+	// GraphRevisionPinning feature gate is enabled.
+	RolloutStrategy v1alpha1.RolloutStrategy
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,
@@ -351,7 +356,7 @@ func (c *Controller) reconcileSuspended(ctx context.Context, inst *unstructured.
 	// nothing to mark not-ready beyond the suspend condition). Author conditions
 	// are carried forward from the wire since they cannot be re-evaluated while
 	// suspended.
-	ri := c.client.Dynamic().Resource(c.gvr)
+	ri := c.client.Dynamic().Resource(c.gvrFor(inst))
 	var instanceClient dynamic.ResourceInterface = ri
 	if c.namespaced {
 		instanceClient = ri.Namespace(inst.GetNamespace())
@@ -401,7 +406,7 @@ func (c *Controller) stampInstanceMetadata(ctx context.Context, inst *unstructur
 	patch.SetLabels(patchLabels)
 	metadata.SetInstanceFinalizer(patch)
 
-	ri := c.client.Dynamic().Resource(c.gvr)
+	ri := c.client.Dynamic().Resource(c.gvrFor(inst))
 	var instClient dynamic.ResourceInterface
 	if c.namespaced {
 		instClient = ri.Namespace(inst.GetNamespace())

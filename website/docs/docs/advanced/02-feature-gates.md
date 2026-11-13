@@ -35,6 +35,8 @@ Or pass the flag directly to the controller binary:
 | `GraphKind`                        | `false` | Alpha | v0.10.0 | Starts the controller for the `Graph` API (`kro.run/v1alpha1`).                         |
 | `ConservativeCRDComparison`        | `false` | Alpha | v0.10.0 | Enables conservative checks for additional and unclassified CRD schema changes.         |
 | `DeletionPolicy`                   | `false` | Alpha | v0.10.0 | Enables the per-resource `kro.run/deletion-policy` template annotation.                 |
+| `GraphRevisionPinning`             | `false` | Alpha | v0.11.0 | Enables `spec.rollout.strategy` and pinning an instance to a graph revision.            |
+| `MultiVersionSchema`               | `false` | Alpha | v0.11.0 | Enables `schema.previousVersions` and moving `schema.apiVersion` forward.               |
 
 ### CELOmitFunction
 
@@ -140,3 +142,76 @@ Resources that were declared `Orphaned` are deleted again when their instance is
 deleted.
 
 :::
+
+### GraphRevisionPinning
+
+When enabled, a ResourceGraphDefinition can declare how its instances adopt new
+graph revisions:
+
+```yaml
+spec:
+  rollout:
+    strategy: Manual # or Latest (the default)
+```
+
+With `Manual`, an instance keeps reconciling against the revision it last
+reconciled against; a new instance adopts the latest issued revision. Moving an
+instance is explicit:
+
+```bash
+kubectl annotate myapp my-instance kro.run/graph-revision=3 --overwrite
+```
+
+The annotation also works under the `Latest` strategy, and accepts `latest` to
+return an instance to following the newest revision.
+
+Every instance then reports where it stands:
+
+```yaml
+status:
+  graphRevision: 2 # the revision it last reconciled against
+  targetGraphRevision: 3 # the revision it is moving to
+```
+
+Both fields are owned by kro: an RGD that declares `graphRevision` or
+`targetGraphRevision` in `schema.status` is rejected at build time. Revision
+garbage collection (`--rgd-max-graph-revisions`) keeps any revision an instance
+still references, regardless of the retention limit, and a default change in the
+instance schema is rejected while the strategy is `Manual`, because pinned
+instances would silently pick it up.
+
+### MultiVersionSchema
+
+When enabled, `schema.apiVersion` may move forward in Kubernetes version
+priority, and the versions it leaves behind are declared under
+`schema.previousVersions`:
+
+```yaml
+spec:
+  schema:
+    apiVersion: v1beta1
+    kind: MyApp
+    spec:
+      value: string
+    previousVersions:
+      - apiVersion: v1alpha1
+        deprecated: true
+        spec:
+          value: string
+```
+
+kro serves every declared version from one stored object (CRD conversion
+strategy `None`), so a previous version's schema must accept what the hub
+version stores; kro rejects a previous version that cannot. After the hub moves,
+kro migrates the stored objects — through the cluster's
+`StorageVersionMigration` API where it exists, otherwise by rewriting the
+objects itself — and then trims `status.storedVersions` to the new hub.
+
+A version may not stop being served while it is still listed in the CRD's
+`status.storedVersions` or still used by a graph revision an instance is pinned
+to; kro reports `KindReady=False` with reason `VersionRemovalBlocked` and keeps
+serving it. Moving `schema.apiVersion` backwards is always rejected.
+
+With `rbac.mode: aggregation`, the chart grants the controller the extra
+permissions this needs (`customresourcedefinitions/status` and
+`storageversionmigrations`) only when the gate is on.

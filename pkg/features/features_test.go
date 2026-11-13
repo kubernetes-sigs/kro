@@ -33,6 +33,10 @@ func TestDefaultFeatureGatesAreDisabled(t *testing.T) {
 		"CELOmitFunction should be disabled by default (Alpha)")
 	assert.False(t, FeatureGate.Enabled(ConservativeCRDComparison),
 		"ConservativeCRDComparison should be disabled by default (Alpha)")
+	assert.False(t, FeatureGate.Enabled(GraphRevisionPinning),
+		"GraphRevisionPinning should be disabled by default (Alpha)")
+	assert.False(t, FeatureGate.Enabled(MultiVersionSchema),
+		"MultiVersionSchema should be disabled by default (Alpha)")
 }
 
 func TestCRDCompatibilityFeatureNames(t *testing.T) {
@@ -83,4 +87,6 @@ func TestKnownFeaturesContainsAllRegistered(t *testing.T) {
 	assert.Contains(t, knownStr, string(InstanceConditionMetrics))
 	assert.Contains(t, knownStr, string(CELOmitFunction))
 	assert.Contains(t, knownStr, string(ConservativeCRDComparison))
+	assert.Contains(t, knownStr, string(GraphRevisionPinning))
+	assert.Contains(t, knownStr, string(MultiVersionSchema))
 }

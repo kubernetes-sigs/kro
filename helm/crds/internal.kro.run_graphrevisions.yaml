@@ -214,6 +214,29 @@ spec:
                             rule: (has(self.template) && !has(self.externalRef)) ||
                               (!has(self.template) && has(self.externalRef))
                         type: array
+                      rollout:
+                        description: |-
+                          Rollout controls how instances of this ResourceGraphDefinition adopt new
+                          graph revisions. It is policy, not graph content: changing it does not
+                          issue a new GraphRevision.
+
+                          Requires the GraphRevisionPinning feature gate.
+                        properties:
+                          strategy:
+                            default: Latest
+                            description: |-
+                              Strategy selects the rollout strategy for instances of this
+                              ResourceGraphDefinition.
+
+                              "Latest" (the default) reconciles every instance against the most
+                              recent graph revision. "Manual" keeps each instance on the revision it
+                              already reconciled against until the kro.run/graph-revision annotation
+                              moves it.
+                            enum:
+                            - Latest
+                            - Manual
+                            type: string
+                        type: object
                       schema:
                         description: |-
                           Schema defines the structure of instances created from this ResourceGraphDefinition.
@@ -270,15 +293,16 @@ spec:
                             type: array
                           apiVersion:
                             description: |-
-                              APIVersion is the version identifier for the generated CRD.
+                              APIVersion is the version identifier for the generated CRD, and the
+                              version instances are stored under (the "hub" version).
                               Must follow Kubernetes versioning conventions (v1, v1alpha1, v1beta1, etc.).
-                              This field is immutable after creation.
+                              It may only move forward in Kubernetes version priority, and only with
+                              the MultiVersionSchema feature gate enabled; the controller rejects any
+                              other change. The previous hub must be listed under previousVersions
+                              until no object is stored under it.
                               Example: "v1alpha1", "v1", "v2beta1"
                             pattern: ^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$
                             type: string
-                            x-kubernetes-validations:
-                            - message: apiVersion is immutable
-                              rule: self == oldSelf
                           categories:
                             description: |-
                               Categories is a list of grouped resources this custom resource belongs to.
@@ -354,6 +378,73 @@ spec:
                             x-kubernetes-validations:
                             - message: plural is immutable
                               rule: self == oldSelf
+                          previousVersions:
+                            description: |-
+                              PreviousVersions declares additional, read-only versions of the
+                              generated CRD that the API server keeps serving while objects stored
+                              under them are migrated to apiVersion. Every previous version must have
+                              a lower Kubernetes version priority than apiVersion.
+
+                              kro converts between versions with strategy None: the stored object is
+                              served verbatim under every version, so a previous version's schema must
+                              accept what the hub schema stores.
+
+                              Requires the MultiVersionSchema feature gate.
+                            items:
+                              description: PreviousSchemaVersion is one additional
+                                served version of the generated CRD.
+                              properties:
+                                apiVersion:
+                                  description: |-
+                                    APIVersion is this version's identifier. It must differ from, and have a
+                                    lower Kubernetes version priority than, schema.apiVersion.
+                                  pattern: ^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$
+                                  type: string
+                                deprecated:
+                                  description: |-
+                                    Deprecated marks this version deprecated. kubectl warns on every request
+                                    to a deprecated version.
+                                  type: boolean
+                                deprecationWarning:
+                                  description: |-
+                                    DeprecationWarning replaces the default deprecation warning. Ignored
+                                    unless Deprecated is set.
+                                  maxLength: 256
+                                  type: string
+                                served:
+                                  default: true
+                                  description: |-
+                                    Served controls whether the API server serves this version. Defaults to
+                                    true. A version may only stop being served once nothing is stored under
+                                    it and no pinned graph revision still uses it.
+                                  type: boolean
+                                spec:
+                                  description: |-
+                                    Spec is this version's instance spec in SimpleSchema syntax, with the
+                                    same grammar as schema.spec.
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
+                                status:
+                                  description: |-
+                                    Status declares this version's instance status fields in SimpleSchema
+                                    syntax — type declarations, not the CEL expressions schema.status uses.
+                                    Omit it to reuse the status schema inferred for the hub version.
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
+                                types:
+                                  description: |-
+                                    Types holds the custom type definitions referenced by this version's
+                                    Spec and Status. Previous versions carry their own types because the
+                                    hub's types evolve with the hub schema.
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
+                              required:
+                              - apiVersion
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - apiVersion
+                            x-kubernetes-list-type: map
                           scope:
                             default: Namespaced
                             description: |-
@@ -428,6 +519,12 @@ spec:
               Internal runtime states such as Pending, Active, and Failed live in
               kro's in-memory revision registry and are not persisted here.
             properties:
+              celEnvironmentVersion:
+                description: |-
+                  CELEnvironmentVersion records the kro version that compiled this
+                  snapshot. The kro version determines the CEL environment (available
+                  functions and their semantics) a revision was verified against.
+                type: string
               conditions:
                 description: |-
                   Conditions represent the latest available observations of the GraphRevision state.

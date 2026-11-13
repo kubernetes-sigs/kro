@@ -48,6 +48,7 @@ import (
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	krofake "github.com/kubernetes-sigs/kro/pkg/client/fake"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
@@ -64,9 +65,11 @@ type stubCRDManager struct {
 	getReturn         *extv1.CustomResourceDefinition
 	ensureCalls       int
 	lastAllowBreaking bool
+	lastEnsureOptions kroclient.EnsureOptions
 	lastEnsure        extv1.CustomResourceDefinition
 	deleted           []string
 	requestedCRDNames []string
+	storedVersions    map[string][]string
 }
 
 type stubManager struct {
@@ -102,11 +105,20 @@ type stubCache struct {
 	crdInformer *stubInformer
 }
 
-func (s *stubCRDManager) Ensure(_ context.Context, crd extv1.CustomResourceDefinition, allowBreakingChanges bool) error {
+func (s *stubCRDManager) Ensure(_ context.Context, crd extv1.CustomResourceDefinition, opts kroclient.EnsureOptions) error {
 	s.ensureCalls++
 	s.lastEnsure = *crd.DeepCopy()
-	s.lastAllowBreaking = allowBreakingChanges
+	s.lastEnsureOptions = opts
+	s.lastAllowBreaking = opts.AllowBreakingChanges
 	return s.ensureErr
+}
+
+func (s *stubCRDManager) SetStoredVersions(_ context.Context, name string, versions []string) error {
+	if s.storedVersions == nil {
+		s.storedVersions = map[string][]string{}
+	}
+	s.storedVersions[name] = versions
+	return nil
 }
 
 func (s *stubCRDManager) Delete(_ context.Context, name string) error {
@@ -414,6 +426,7 @@ func newDynamicController(t testing.TB) *dynamiccontroller.DynamicController {
 		logr.Discard(),
 		testDynamicControllerConfig(),
 		metadatafake.NewSimpleMetadataClient(scheme),
+		dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
 		apimeta.NewDefaultRESTMapper([]schema.GroupVersion{{Group: "example.io", Version: "v1alpha1"}}),
 	)
 }

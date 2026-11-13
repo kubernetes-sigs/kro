@@ -50,6 +50,21 @@ const (
 	// it is rejected at build time and every managed resource is
 	// deleted as before.
 	DeletionPolicy featuregate.Feature = "DeletionPolicy"
+
+	// GraphRevisionPinning enables pinning an instance to a specific
+	// GraphRevision. When enabled, ResourceGraphDefinitions may declare
+	// spec.rollout.strategy, instances may carry the kro.run/graph-revision
+	// annotation, instance status exposes graphRevision and
+	// targetGraphRevision, and revision garbage collection retains any
+	// revision an instance still references.
+	GraphRevisionPinning featuregate.Feature = "GraphRevisionPinning"
+
+	// MultiVersionSchema enables serving more than one version of a
+	// generated instance CRD. When enabled, a ResourceGraphDefinition may
+	// declare schema.previousVersions, schema.apiVersion may move forward in
+	// Kubernetes version priority, and kro migrates stored objects to the
+	// new storage version.
+	MultiVersionSchema featuregate.Feature = "MultiVersionSchema"
 )
 
 // defaultKroFeatureGates consists of all known KRO-specific feature keys.
@@ -64,7 +79,9 @@ var defaultKroFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 		Default:    false,
 		PreRelease: featuregate.Alpha,
 	},
-	DeletionPolicy: {Default: false, PreRelease: featuregate.Alpha},
+	DeletionPolicy:       {Default: false, PreRelease: featuregate.Alpha},
+	GraphRevisionPinning: {Default: false, PreRelease: featuregate.Alpha},
+	MultiVersionSchema:   {Default: false, PreRelease: featuregate.Alpha},
 }
 
 // FeatureGate is the shared global MutableFeatureGate for KRO.

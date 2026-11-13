@@ -1,0 +1,118 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-multi-version
+spec:
+  description: |
+    Tests moving the instance CRD's hub version forward while keeping the
+    previous version served, migrating stored objects, and blocking an edit
+    that would drop a version still listed in status.storedVersions.
+    Requires the MultiVersionSchema feature gate.
+  steps:
+  - name: install-rgd
+    try:
+    - apply:
+        file: cluster-role.yaml
+      description: Apply Cluster Role
+    - apply:
+        file: rgd.yaml
+      description: Apply RGD serving v1alpha1
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD state
+    - assert:
+        file: instancecrd-single-assert.yaml
+      description: CRD serves and stores v1alpha1 only
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: create-instance
+    try:
+    - apply:
+        file: instance.yaml
+      description: Create an instance stored as v1alpha1
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: legacy-instance-cm
+          data:
+            value: hello
+      description: Child ConfigMap rendered
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: reject-dropping-the-stored-version
+    try:
+    - apply:
+        file: rgd-hub-move-no-spoke.yaml
+      description: Move the hub to v1beta1 without keeping v1alpha1
+    - assert:
+        resource:
+          apiVersion: kro.run/v1alpha1
+          kind: ResourceGraphDefinition
+          metadata:
+            name: check-multi-version
+          status:
+            (conditions[?type == 'KindReady']):
+              - status: 'False'
+                reason: VersionRemovalBlocked
+      description: kro refuses to retire a stored version
+    - assert:
+        file: instancecrd-single-assert.yaml
+      description: The CRD still stores v1alpha1
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: move-hub-forward
+    try:
+    - apply:
+        file: rgd-hub-move.yaml
+      description: Move the hub to v1beta1, keeping v1alpha1 served
+    - assert:
+        file: rgd-assert.yaml
+      description: RGD serving again
+    - assert:
+        file: instancecrd-multi-assert.yaml
+      description: CRD serves both versions, stores v1beta1 only
+    - script:
+        content: |
+          set -eu
+          value=$(kubectl get checkmultiversionapps.v1beta1.kro.run legacy-instance \
+            -n $NAMESPACE -o jsonpath='{.spec.value}')
+          test "$value" = "hello"
+      description: The object created as v1alpha1 reads back as v1beta1
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: retire-the-previous-version
+    try:
+    - apply:
+        file: rgd-hub-move-no-spoke.yaml
+      description: Drop v1alpha1 now that nothing is stored under it
+    - assert:
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: checkmultiversionapps.kro.run
+          spec:
+            (length(versions)): 1
+            (versions[?name == 'v1beta1']):
+              - served: true
+                storage: true
+      description: Only the hub version remains
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

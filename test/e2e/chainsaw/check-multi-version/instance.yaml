@@ -1,0 +1,6 @@
+apiVersion: kro.run/v1alpha1
+kind: CheckMultiVersionApp
+metadata:
+  name: legacy-instance
+spec:
+  value: hello

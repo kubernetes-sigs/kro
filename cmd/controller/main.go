@@ -283,7 +283,7 @@ func main() {
 		RateLimit:        rateLimit,
 		BurstLimit:       burstLimit,
 		WatchSyncTimeout: watchSyncTimeout,
-	}, set.Metadata(), set.RESTMapper())
+	}, set.Metadata(), set.Dynamic(), set.RESTMapper())
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
 		restConfig,

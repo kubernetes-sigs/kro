@@ -53,8 +53,8 @@ func TestCompareVersionsConservativeComparisonOption(t *testing.T) {
 			require.NoError(t, err)
 			want := Compare(oldVersions[0].Schema.OpenAPIV3Schema, newVersions[0].Schema.OpenAPIV3Schema,
 				WithConservativeComparison(tc.conservative))
-			assert.Equal(t, want, got)
-			assert.Equal(t, tc.conservative, got.HasBreakingChanges())
+			assert.Equal(t, want, got.Versions["v1"])
+			assert.Equal(t, tc.conservative, got.Versions["v1"].HasBreakingChanges())
 		})
 	}
 }
@@ -70,6 +70,8 @@ func TestCompareVersions(t *testing.T) {
 		breakingCount     int
 		nonBreakingCount  int
 		checkBreakingType ChangeType
+		expectAdded       []string
+		expectRemoved     []string
 	}{
 		{
 			name: "identical versions",
@@ -113,16 +115,27 @@ func TestCompareVersions(t *testing.T) {
 			expectBreaking: false,
 		},
 		{
-			name: "too many versions",
+			name: "version added and removed",
 			oldVersions: []v1.CustomResourceDefinitionVersion{
-				{Name: "v1"},
-				{Name: "v2"},
+				{Name: "v1", Schema: &v1.CustomResourceValidation{OpenAPIV3Schema: &v1.JSONSchemaProps{Type: "object"}}},
+				{Name: "v1alpha1", Schema: &v1.CustomResourceValidation{OpenAPIV3Schema: &v1.JSONSchemaProps{Type: "object"}}},
 			},
 			newVersions: []v1.CustomResourceDefinitionVersion{
-				{Name: "v1"},
+				{Name: "v1", Schema: &v1.CustomResourceValidation{OpenAPIV3Schema: &v1.JSONSchemaProps{Type: "object"}}},
+				{Name: "v2", Schema: &v1.CustomResourceValidation{OpenAPIV3Schema: &v1.JSONSchemaProps{Type: "object"}}},
 			},
-			expectError:  true,
-			errorMessage: "expected exactly one version",
+			expectAdded:   []string{"v2"},
+			expectRemoved: []string{"v1alpha1"},
+		},
+		{
+			name: "no longer served is a metadata change, not a breaking one",
+			oldVersions: []v1.CustomResourceDefinitionVersion{
+				{Name: "v1", Served: true, Schema: &v1.CustomResourceValidation{OpenAPIV3Schema: &v1.JSONSchemaProps{Type: "object"}}},
+			},
+			newVersions: []v1.CustomResourceDefinitionVersion{
+				{Name: "v1", Served: false, Schema: &v1.CustomResourceValidation{OpenAPIV3Schema: &v1.JSONSchemaProps{Type: "object"}}},
+			},
+			nonBreakingCount: 1,
 		},
 		{
 			name: "missing schema in old version",
@@ -280,7 +293,7 @@ func TestCompareVersions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := CompareVersions(tt.oldVersions, tt.newVersions)
+			versionsReport, err := CompareVersions(tt.oldVersions, tt.newVersions)
 
 			if tt.expectError {
 				require.Error(t, err)
@@ -291,6 +304,11 @@ func TestCompareVersions(t *testing.T) {
 			}
 
 			require.NoError(t, err)
+			assert.ElementsMatch(t, tt.expectAdded, versionsReport.Added)
+			assert.ElementsMatch(t, tt.expectRemoved, versionsReport.Removed)
+
+			result, ok := versionsReport.Versions["v1"]
+			require.True(t, ok, "expected a report for version v1")
 
 			if tt.expectBreaking {
 				assert.False(t, result.IsCompatible(), "Expected incompatible (breaking changes)")
@@ -310,4 +328,46 @@ func TestCompareVersions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompareAcrossVersions(t *testing.T) {
+	hub := v1.CustomResourceDefinitionVersion{
+		Name: "v1beta1",
+		Schema: &v1.CustomResourceValidation{OpenAPIV3Schema: &v1.JSONSchemaProps{
+			Type: "object",
+			Properties: map[string]v1.JSONSchemaProps{
+				"spec": {Type: "object", Properties: map[string]v1.JSONSchemaProps{
+					"replicas": {Type: "integer"},
+				}},
+			},
+		}},
+	}
+	spoke := v1.CustomResourceDefinitionVersion{
+		Name: "v1alpha1",
+		Schema: &v1.CustomResourceValidation{OpenAPIV3Schema: &v1.JSONSchemaProps{
+			Type: "object",
+			Properties: map[string]v1.JSONSchemaProps{
+				"spec": {Type: "object", Properties: map[string]v1.JSONSchemaProps{
+					"replicas": {Type: "integer"},
+					"retired":  {Type: "string"},
+				}},
+			},
+		}},
+	}
+
+	// The spoke declares a field the hub cannot serve: an object stored under
+	// the hub loses it when read as the spoke.
+	report, err := CompareAcrossVersions(spoke, hub)
+	require.NoError(t, err)
+	assert.False(t, report.IsCompatible())
+	assert.Equal(t, PropertyRemoved, report.BreakingChanges[0].ChangeType)
+
+	// The other direction only adds a property, which is compatible.
+	report, err = CompareAcrossVersions(hub, spoke)
+	require.NoError(t, err)
+	assert.True(t, report.IsCompatible())
+
+	_, err = CompareAcrossVersions(v1.CustomResourceDefinitionVersion{Name: "v1"}, hub)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has no schema")
 }

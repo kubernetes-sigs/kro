@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -26,7 +27,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/version"
+	"k8s.io/client-go/util/retry"
 	logr "sigs.k8s.io/controller-runtime/pkg/log"
 
 	crdcompat "github.com/kubernetes-sigs/kro/pkg/graph/crd/compat"
@@ -42,16 +46,49 @@ const (
 
 var _ CRDClient = &CRDWrapper{}
 
+// ErrVersionRemovalBlocked is returned when a CRD update would stop serving a
+// version that is still stored or still referenced by a pinned graph revision.
+// It is never overridable by the allow-breaking-changes annotation.
+var ErrVersionRemovalBlocked = errors.New("version removal blocked")
+
+// ErrSpokeSchemaMismatch is returned when a non-storage version's schema
+// cannot serve what the storage version accepts. With conversion strategy None
+// the API server returns the stored object verbatim under every version, so
+// such a spoke would fail to read existing objects.
+var ErrSpokeSchemaMismatch = errors.New("spoke schema mismatch")
+
+// EnsureOptions tunes the rules Ensure applies to a CRD update.
+type EnsureOptions struct {
+	// AllowBreakingChanges permits schema changes that would otherwise be
+	// rejected. It never permits removing a stored or in-use version, nor a
+	// backwards move of the storage version.
+	AllowBreakingChanges bool
+	// RejectDefaultChanges rejects changes to schema defaults. Set under the
+	// Manual rollout strategy, where a default change would silently alter
+	// instances still pinned to an older graph revision.
+	RejectDefaultChanges bool
+	// MultiVersion allows the storage version to move forward in Kubernetes
+	// version priority. Without it, schema.apiVersion is immutable.
+	MultiVersion bool
+	// VersionsInUse reports the instance API versions pinned graph revisions
+	// still reconcile against. May be nil; it is called at most once, and
+	// only when a version would stop being served.
+	VersionsInUse func() (sets.Set[string], error)
+}
+
 // CRDClient represents operations for managing CustomResourceDefinitions
 type CRDClient interface {
 	// EnsureCreated ensures a CRD exists and is ready
-	Ensure(ctx context.Context, crd v1.CustomResourceDefinition, allowBreakingChanges bool) error
+	Ensure(ctx context.Context, crd v1.CustomResourceDefinition, opts EnsureOptions) error
 
 	// Delete removes a CRD if it exists
 	Delete(ctx context.Context, name string) error
 
 	// Get retrieves a CRD by name
 	Get(ctx context.Context, name string) (*v1.CustomResourceDefinition, error)
+
+	// SetStoredVersions replaces status.storedVersions on a CRD.
+	SetStoredVersions(ctx context.Context, name string, versions []string) error
 }
 
 // CRDInterface provides a simplified interface for CRD operations
@@ -59,15 +96,20 @@ type CRDInterface interface {
 	// Ensure ensures a CRD exists, up-to-date, and is ready. This can be
 	// a dangerous operation as it will update the CRD if it already exists.
 	//
-	// If allowBreakingChanges is false and the update contains breaking schema
-	// changes, an error is returned. Set to true to force the update anyway.
-	Ensure(ctx context.Context, crd v1.CustomResourceDefinition, allowBreakingChanges bool) error
+	// Breaking schema changes are rejected unless opts.AllowBreakingChanges is
+	// set. Version removal and backwards storage-version moves are rejected
+	// unconditionally.
+	Ensure(ctx context.Context, crd v1.CustomResourceDefinition, opts EnsureOptions) error
 
 	// Get retrieves a CRD by name
 	Get(ctx context.Context, name string) (*v1.CustomResourceDefinition, error)
 
 	// Delete removes a CRD if it exists
 	Delete(ctx context.Context, name string) error
+
+	// SetStoredVersions replaces status.storedVersions on a CRD. It is used
+	// after a storage version migration to retire the old version.
+	SetStoredVersions(ctx context.Context, name string, versions []string) error
 }
 
 // CRDWrapper provides a simplified interface for CRD operations
@@ -105,11 +147,25 @@ func newCRDWrapper(cfg CRDWrapperConfig) *CRDWrapper {
 // Ensure ensures a CRD exists, up-to-date, and is ready. This can be
 // a dangerous operation as it will update the CRD if it already exists.
 //
-// If a CRD does exist, it will compare the existing CRD with the desired CRD
-// and update it if necessary. If the existing CRD has breaking changes and
-// allowBreakingChanges is false, it will return an error.
-func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefinition, allowBreakingChanges bool) error {
+// If a CRD does exist, it compares the existing CRD with the desired one and
+// patches it when they differ, after checking, in order:
+//
+//  1. every desired non-storage version can serve objects stored under the
+//     storage version (conversion strategy is None);
+//  2. the storage version only moves forward, and only with MultiVersion;
+//  3. no version that is stored or in use stops being served;
+//  4. no incompatible edit to a non-storage version;
+//  5. no breaking change to the storage version;
+//  6. no default change when RejectDefaultChanges is set.
+func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefinition, opts EnsureOptions) error {
 	log := logr.FromContext(ctx)
+
+	// Applies to creates too: a spoke that cannot serve hub-stored objects is
+	// broken from the first object onwards.
+	if err := checkSpokesServeStorage(desired, opts); err != nil {
+		return err
+	}
+
 	existing, err := w.Get(ctx, desired.Name)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
@@ -120,61 +176,235 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 		if err := w.create(ctx, desired); err != nil {
 			return fmt.Errorf("failed to create CRD: %w", err)
 		}
-	} else {
-		// Check ownership first
-		kroOwned, nameMatch, idMatch := metadata.CompareRGDOwnership(existing.ObjectMeta, desired.ObjectMeta)
-		if !kroOwned {
+		return w.waitForReady(ctx, desired.Name)
+	}
+
+	// Check ownership first
+	kroOwned, nameMatch, idMatch := metadata.CompareRGDOwnership(existing.ObjectMeta, desired.ObjectMeta)
+	if !kroOwned {
+		return fmt.Errorf(
+			"failed to update CRD %s: CRD already exists and is not owned by KRO", desired.Name,
+		)
+	}
+
+	if !nameMatch {
+		existingRGDName := existing.Labels[metadata.ResourceGraphDefinitionNameLabel]
+		return fmt.Errorf(
+			"failed to update CRD %s: CRD is owned by another ResourceGraphDefinition %s",
+			desired.Name, existingRGDName,
+		)
+	}
+
+	if !idMatch {
+		log.Info(
+			"Adopting CRD with different RGD ID - RGD may have been deleted and recreated",
+			"crd", desired.Name,
+			"existingRGDID", existing.Labels[metadata.ResourceGraphDefinitionIDLabel],
+			"newRGDID", desired.Labels[metadata.ResourceGraphDefinitionIDLabel],
+		)
+	}
+
+	oldStorage := storageVersion(existing)
+	newStorage := storageVersion(&desired)
+	if oldStorage != newStorage {
+		if !opts.MultiVersion {
 			return fmt.Errorf(
-				"failed to update CRD %s: CRD already exists and is not owned by KRO", desired.Name,
+				"cannot update CRD %s: schema.apiVersion is immutable (current %s, desired %s) unless the MultiVersionSchema feature gate is enabled",
+				desired.Name, oldStorage, newStorage,
 			)
 		}
-
-		if !nameMatch {
-			existingRGDName := existing.Labels[metadata.ResourceGraphDefinitionNameLabel]
+		if version.CompareKubeAwareVersionStrings(newStorage, oldStorage) <= 0 {
 			return fmt.Errorf(
-				"failed to update CRD %s: CRD is owned by another ResourceGraphDefinition %s",
-				desired.Name, existingRGDName,
+				"cannot update CRD %s: schema.apiVersion may only move forward in Kubernetes version priority (current %s, desired %s)",
+				desired.Name, oldStorage, newStorage,
 			)
-		}
-
-		if !idMatch {
-			log.Info(
-				"Adopting CRD with different RGD ID - RGD may have been deleted and recreated",
-				"crd", desired.Name,
-				"existingRGDID", existing.Labels[metadata.ResourceGraphDefinitionIDLabel],
-				"newRGDID", desired.Labels[metadata.ResourceGraphDefinitionIDLabel],
-			)
-		}
-
-		// Check for breaking schema changes
-		report, err := crdcompat.CompareVersions(existing.Spec.Versions, desired.Spec.Versions)
-		if err != nil {
-			return fmt.Errorf("failed to check schema compatibility: %w", err)
-		}
-
-		// If there are no changes at all, we can skip the update
-		namesChanged := !equality.Semantic.DeepEqual(existing.Spec.Names, desired.Spec.Names)
-		if !report.HasChanges() && !namesChanged {
-			log.V(1).Info("CRD is up-to-date", "name", desired.Name)
-			return nil
-		}
-
-		// Check for breaking changes
-		if !report.IsCompatible() {
-			log.Info("Breaking changes detected in CRD update", "name", desired.Name, "breakingChanges", len(report.BreakingChanges), "summary", report)
-			if !allowBreakingChanges {
-				return fmt.Errorf("cannot update CRD %s: breaking changes detected: %s", desired.Name, report)
-			}
-			log.Info("Allowing breaking changes", "name", desired.Name)
-		}
-
-		log.Info("Updating existing CRD", "name", desired.Name)
-		if err := w.patch(ctx, desired); err != nil {
-			return fmt.Errorf("failed to patch CRD: %w", err)
 		}
 	}
 
+	// Check for breaking schema changes
+	report, err := crdcompat.CompareVersions(existing.Spec.Versions, desired.Spec.Versions)
+	if err != nil {
+		return fmt.Errorf("failed to check schema compatibility: %w", err)
+	}
+
+	if err := w.checkRetiredVersions(existing, desired, report, opts); err != nil {
+		return err
+	}
+
+	for name, versionReport := range report.Versions {
+		if name == newStorage || versionReport.IsCompatible() {
+			continue
+		}
+		if !opts.AllowBreakingChanges {
+			return fmt.Errorf("%w: version %s of CRD %s differs incompatibly from the served schema: %s",
+				ErrSpokeSchemaMismatch, name, desired.Name, versionReport)
+		}
+		log.Info("Allowing breaking changes to a non-storage version", "name", desired.Name, "version", name)
+	}
+
+	if storageReport, ok := report.Versions[newStorage]; ok && !storageReport.IsCompatible() {
+		log.Info("Breaking changes detected in CRD update", "name", desired.Name, "breakingChanges", len(storageReport.BreakingChanges), "summary", storageReport)
+		if !opts.AllowBreakingChanges {
+			return fmt.Errorf("cannot update CRD %s: breaking changes detected: %s", desired.Name, storageReport)
+		}
+		log.Info("Allowing breaking changes", "name", desired.Name)
+	}
+
+	if opts.RejectDefaultChanges && !opts.AllowBreakingChanges {
+		for name, versionReport := range report.Versions {
+			for _, change := range versionReport.NonBreakingChanges {
+				if change.ChangeType != crdcompat.DefaultChanged {
+					continue
+				}
+				return fmt.Errorf(
+					"cannot update CRD %s: default changes are not allowed with rollout strategy Manual: version %s: %s",
+					desired.Name, name, change.Description(),
+				)
+			}
+		}
+	}
+
+	// If there are no changes at all, we can skip the update. The API server
+	// defaults an omitted conversion to None, so compare the effective
+	// strategies rather than the pointers: otherwise every single-version CRD
+	// looks changed on every reconcile.
+	namesChanged := !equality.Semantic.DeepEqual(existing.Spec.Names, desired.Spec.Names)
+	conversionChanged := conversionStrategy(existing.Spec.Conversion) != conversionStrategy(desired.Spec.Conversion)
+	if !report.HasChanges() && !namesChanged && !conversionChanged {
+		log.V(1).Info("CRD is up-to-date", "name", desired.Name)
+		return nil
+	}
+
+	log.Info("Updating existing CRD", "name", desired.Name)
+	if err := w.patch(ctx, desired); err != nil {
+		return fmt.Errorf("failed to patch CRD: %w", err)
+	}
+
 	return w.waitForReady(ctx, desired.Name)
+}
+
+// checkSpokesServeStorage rejects a desired CRD whose non-storage versions
+// cannot serve objects stored under its storage version. kro converts with
+// strategy None, so the API server hands the stored object to every served
+// version unchanged.
+func checkSpokesServeStorage(desired v1.CustomResourceDefinition, opts EnsureOptions) error {
+	if len(desired.Spec.Versions) < 2 {
+		return nil
+	}
+	var hub *v1.CustomResourceDefinitionVersion
+	for i := range desired.Spec.Versions {
+		if desired.Spec.Versions[i].Storage {
+			hub = &desired.Spec.Versions[i]
+			break
+		}
+	}
+	if hub == nil {
+		return fmt.Errorf("cannot update CRD %s: no storage version declared", desired.Name)
+	}
+	for i := range desired.Spec.Versions {
+		spoke := desired.Spec.Versions[i]
+		if spoke.Storage {
+			continue
+		}
+		report, err := crdcompat.CompareAcrossVersions(spoke, *hub)
+		if err != nil {
+			return fmt.Errorf("failed to check schema compatibility: %w", err)
+		}
+		if report.IsCompatible() || opts.AllowBreakingChanges {
+			continue
+		}
+		return fmt.Errorf(
+			"cannot update CRD %s: version %s cannot be converted to %s without a conversion webhook: %s",
+			desired.Name, spoke.Name, hub.Name, report,
+		)
+	}
+	return nil
+}
+
+// checkRetiredVersions rejects removing — or ceasing to serve — any version
+// that the API server still lists as stored, or that a pinned graph revision
+// still reconciles against. Neither is overridable.
+func (w *CRDWrapper) checkRetiredVersions(
+	existing *v1.CustomResourceDefinition,
+	desired v1.CustomResourceDefinition,
+	report *crdcompat.VersionsReport,
+	opts EnsureOptions,
+) error {
+	retired := append([]string{}, report.Removed...)
+	desiredByName := make(map[string]v1.CustomResourceDefinitionVersion, len(desired.Spec.Versions))
+	for _, version := range desired.Spec.Versions {
+		desiredByName[version.Name] = version
+	}
+	for _, old := range existing.Spec.Versions {
+		if next, ok := desiredByName[old.Name]; ok && old.Served && !next.Served {
+			retired = append(retired, old.Name)
+		}
+	}
+	if len(retired) == 0 {
+		return nil
+	}
+
+	stored := sets.New(existing.Status.StoredVersions...)
+	var inUse sets.Set[string]
+	for _, name := range retired {
+		if stored.Has(name) {
+			return fmt.Errorf("%w: version %s of CRD %s is still listed in status.storedVersions",
+				ErrVersionRemovalBlocked, name, desired.Name)
+		}
+		if opts.VersionsInUse == nil {
+			continue
+		}
+		if inUse == nil {
+			used, err := opts.VersionsInUse()
+			if err != nil {
+				return fmt.Errorf("failed to determine versions in use for CRD %s: %w", desired.Name, err)
+			}
+			inUse = used
+		}
+		if inUse.Has(name) {
+			return fmt.Errorf("%w: version %s of CRD %s is still used by a pinned graph revision",
+				ErrVersionRemovalBlocked, name, desired.Name)
+		}
+	}
+	return nil
+}
+
+// storageVersion returns the name of the CRD's storage version, or "" when
+// none is marked.
+func storageVersion(crd *v1.CustomResourceDefinition) string {
+	for _, v := range crd.Spec.Versions {
+		if v.Storage {
+			return v.Name
+		}
+	}
+	return ""
+}
+
+// conversionStrategy returns a CRD's effective conversion strategy. A nil
+// conversion means the API server's default, None.
+func conversionStrategy(conversion *v1.CustomResourceConversion) v1.ConversionStrategyType {
+	if conversion == nil || conversion.Strategy == "" {
+		return v1.NoneConverter
+	}
+	return conversion.Strategy
+}
+
+// SetStoredVersions replaces status.storedVersions on a CRD. The API server
+// only ever appends to that list; trimming it after a storage migration is the
+// migrator's job, and here kro's.
+func (w *CRDWrapper) SetStoredVersions(ctx context.Context, name string, versions []string) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		crd, err := w.client.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if equality.Semantic.DeepEqual(crd.Status.StoredVersions, versions) {
+			return nil
+		}
+		crd.Status.StoredVersions = versions
+		_, err = w.client.UpdateStatus(ctx, crd, metav1.UpdateOptions{})
+		return err
+	})
 }
 
 // Get retrieves a CRD by name

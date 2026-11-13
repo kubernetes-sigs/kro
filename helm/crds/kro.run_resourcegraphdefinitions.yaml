@@ -331,6 +331,11 @@ spec:
                     x-kubernetes-validations:
                     - message: plural is immutable
                       rule: self == oldSelf
+                  requireSpec:
+                    description: |-
+                      RequireSpec makes the generated CRD reject new instances that have no spec.
+                      Instances created before it was enabled can still be updated and deleted.
+                    type: boolean
                   scope:
                     default: Namespaced
                     description: |-

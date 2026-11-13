@@ -16,9 +16,19 @@ package crd
 
 import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/utils/ptr"
 )
 
 var (
+	// requireSpecRule rejects new instances without spec. Through oldSelf,
+	// instances that existed before the rule can still be updated, so their
+	// finalizers can be removed.
+	requireSpecRule = extv1.ValidationRule{
+		Rule:            "has(self.spec) || oldSelf.hasValue()",
+		OptionalOldSelf: ptr.To(true),
+		Message:         "spec is required",
+	}
+
 	defaultStateType = extv1.JSONSchemaProps{
 		Type: "string",
 	}

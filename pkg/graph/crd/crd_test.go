@@ -547,3 +547,36 @@ func TestNewCRDSchema(t *testing.T) {
 		})
 	}
 }
+
+func TestSynthesizeCRDRequireSpec(t *testing.T) {
+	spec := extv1.JSONSchemaProps{
+		Type:       "object",
+		Properties: map[string]extv1.JSONSchemaProps{"name": {Type: "string"}},
+	}
+
+	t.Run("requireSpec adds the rule to the root schema", func(t *testing.T) {
+		crd, err := SynthesizeCRD(
+			"kro.run", "v1alpha1", "Widget",
+			spec, extv1.JSONSchemaProps{Type: "object"},
+			true, extv1.NamespaceScoped, &v1alpha1.Schema{RequireSpec: true},
+		)
+		require.NoError(t, err)
+
+		root := crd.Spec.Versions[0].Schema.OpenAPIV3Schema
+		require.Len(t, root.XValidations, 1)
+		assert.Equal(t, "has(self.spec) || oldSelf.hasValue()", root.XValidations[0].Rule)
+		require.NotNil(t, root.XValidations[0].OptionalOldSelf)
+		assert.True(t, *root.XValidations[0].OptionalOldSelf)
+		assert.Empty(t, root.Properties["spec"].XValidations)
+	})
+
+	t.Run("without requireSpec the root schema has no rules", func(t *testing.T) {
+		crd, err := SynthesizeCRD(
+			"kro.run", "v1alpha1", "Widget",
+			spec, extv1.JSONSchemaProps{Type: "object"},
+			true, extv1.NamespaceScoped, &v1alpha1.Schema{},
+		)
+		require.NoError(t, err)
+		assert.Empty(t, crd.Spec.Versions[0].Schema.OpenAPIV3Schema.XValidations)
+	})
+}

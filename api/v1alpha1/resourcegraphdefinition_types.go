@@ -142,6 +142,12 @@ type Schema struct {
 	// +listType=set
 	Categories []string `json:"categories,omitempty"`
 
+	// RequireSpec makes the generated CRD reject new instances that have no spec.
+	// Instances created before it was enabled can still be updated and deleted.
+	//
+	// +kubebuilder:validation:Optional
+	RequireSpec bool `json:"requireSpec,omitempty"`
+
 	// Metadata configures instance metadata validation and metadata applied to the generated CRD.
 	// +kubebuilder:validation:Optional
 	Metadata *CRDMetadata `json:"metadata,omitempty"`

@@ -40,6 +40,12 @@ const FieldManager = "kro.run/applyset"
 // error — the user's spec is fine, the cluster just hasn't converged yet.
 var ErrNotReady = errors.New("executor: node not ready")
 
+// ErrHeld signals that a node (or one or more collection items) was withheld
+// by a propagateWhen gate: nothing was applied for it this cycle and its
+// existing resources are preserved. Wraps ErrNotReady so the reconciler
+// requeues; distinguishable so status can report reason "Held".
+var ErrHeld = fmt.Errorf("held by propagateWhen: %w", ErrNotReady)
+
 // ErrResourceDeleting is the sentinel signaling that a managed object an
 // executor wanted to apply is still terminating (has a deletionTimestamp).
 // The node is held soft not-ready so its dependents gate and the reconcile

@@ -28,6 +28,13 @@ import (
 // collection iteration.
 const EachVarName = "each"
 
+// ReadyVarName is the CEL identifier bound to a map[nodeID]bool of readyWhen
+// verdicts from the current reconcile, for use in propagateWhen.
+//
+// Users never write this name. `<nodeId>.ready()` in a propagateWhen is a
+// parse-time macro that lowers to a lookup in this map; see NodeReadyMacro.
+const ReadyVarName = "__kro_ready"
+
 // NodeKind discriminates the Graph node types.
 type NodeKind int
 
@@ -154,6 +161,25 @@ type Node struct {
 	// for the node to be considered ready after apply. Empty means the
 	// node is ready immediately after the apply call returns.
 	ReadyWhen []*krocel.Expression
+
+	// PropagateWhen are compiled CEL conditions that all must evaluate true
+	// before the executor resolves and applies this node. Empty means never
+	// held. References inside create hard dependency edges; `<id>.ready()`
+	// references the readiness verdict of node <id>.
+	PropagateWhen []*krocel.Expression
+
+	// PerItemGate is set when a collection node's propagateWhen references
+	// the node's own id or `each`. The executor then evaluates the gate once
+	// per rendered item, serially and in order, with the node's id bound to
+	// the collection's current per-item state (live objects carrying
+	// ready()/updated() facts) and `each` bound to the item under decision.
+	PerItemGate bool
+
+	// GateUsesEach is set when a per-item gate reads `each`. When it does not,
+	// a false verdict for one item is identical for every later item in the
+	// same pass (a hold leaves the collection value unchanged), so the
+	// executor stops evaluating after the first hold.
+	GateUsesEach bool
 
 	// SubProgram is the compiled child Graph for a NodeKindGraph node, and
 	// nil for every other kind. The child is its own lexical frame: it runs

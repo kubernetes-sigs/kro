@@ -134,6 +134,18 @@ func WithReadyWhen(exprs ...string) GraphOption {
 	}
 }
 
+// WithPropagateWhen appends propagateWhen expressions to the most recently
+// added node. No-op if no node has been added yet.
+func WithPropagateWhen(exprs ...string) GraphOption {
+	return func(g *expv1alpha1.Graph) {
+		if len(g.Spec.Nodes) == 0 {
+			return
+		}
+		last := &g.Spec.Nodes[len(g.Spec.Nodes)-1]
+		last.PropagateWhen = append(last.PropagateWhen, exprs...)
+	}
+}
+
 // WithIncludeWhen appends includeWhen expressions to the most recently
 // added node. No-op if no node has been added yet.
 func WithIncludeWhen(exprs ...string) GraphOption {

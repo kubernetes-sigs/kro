@@ -121,6 +121,9 @@ type Inspector struct {
 // The set of known functions is derived automatically from the environment,
 // so adding new CEL libraries or functions does not require updating a
 // hardcoded list.
+// Env returns the CEL environment the inspector parses with.
+func (a *Inspector) Env() *cel.Env { return a.env }
+
 func NewInspectorWithEnv(env *cel.Env, resources []string) *Inspector {
 	resourceMap := map[string]struct{}{}
 	for _, r := range resources {

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -41,6 +43,7 @@ import (
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/applyset"
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/runtime"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/watchrouter"
@@ -265,8 +268,19 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 	recordHard := func(err error) { hardErrs = append(hardErrs, err) }
 
 	// ready tracks which nodes reached a terminal ready state this cycle, so
-	// dependents can be gated until their dependencies converge.
+	// dependents can be gated until their dependencies converge. The same
+	// verdicts are published into scope as the `ready` map so propagateWhen
+	// expressions can read `<id>.ready()`, which lowers to this map.
 	ready := make(map[string]bool, len(rt.Nodes()))
+	readyScope := make(map[string]any, len(rt.Nodes()))
+	for _, n := range rt.Nodes() {
+		readyScope[n.ID()] = false
+	}
+	rt.Set(compiler.ReadyVarName, readyScope)
+	markReady := func(id string) {
+		ready[id] = true
+		readyScope[id] = true
+	}
 
 	for _, n := range rt.Nodes() {
 		if s.GateReadiness {
@@ -296,8 +310,24 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			// will treat any previous entries for this NodeID as
 			// prune candidates. Ignored nodes are non-blocking for
 			// dependents (their dependents are contagiously ignored too).
-			ready[n.ID()] = true
+			markReady(n.ID())
 			continue
+		}
+
+		// propagateWhen: hold the node. Unresolved (not ignored) so the caller
+		// preserves its existing resources instead of pruning them; never
+		// marked ready so dependents that read from it are held as well.
+		if !n.PerItemGate() {
+			held, why, err := n.IsHeld()
+			if err != nil {
+				recordHard(fmt.Errorf("apply %q: %w", n.ID(), err))
+				continue
+			}
+			if held {
+				result.Unresolved = append(result.Unresolved, n.ID())
+				recordSoft(fmt.Errorf("node %q: propagateWhen %q is false: %w", n.ID(), why, ErrHeld))
+				continue
+			}
 		}
 
 		// A subgraph node has no payload of its own — it runs a child
@@ -316,7 +346,7 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 				recordHard(fmt.Errorf("apply %q (subgraph): %w", n.ID(), err))
 				continue
 			}
-			ready[n.ID()] = true
+			markReady(n.ID())
 			continue
 		}
 
@@ -353,7 +383,7 @@ func (s *Simple) Apply(ctx context.Context, rt *runtime.Runtime, w watchrouter.W
 			continue
 		}
 		// Node reached a terminal ready state — unblock its dependents.
-		ready[n.ID()] = true
+		markReady(n.ID())
 	}
 	// A hard error dominates any soft signal — errors.Join preserves errors.Is
 	// for each joined error, and none of the hard errors carry ErrNotReady, so
@@ -970,6 +1000,10 @@ func (s *Simple) applyCollectionTemplate(ctx context.Context, w watchrouter.Watc
 		}
 	}
 
+	if n.PerItemGate() {
+		return s.applyCollectionPerItem(ctx, rt, n, desired, mappings)
+	}
+
 	bound := defaultApplyConcurrency
 	if s.ApplyConcurrency > 0 {
 		bound = s.ApplyConcurrency
@@ -1064,63 +1098,7 @@ func (s *Simple) applyCollectionItem(ctx context.Context, rt *runtime.Runtime, n
 	}
 
 	if err := s.applyTemplateObject(ctx, obj, rt.Graph().GetUID()); err != nil {
-		// A peer-Graph field conflict is never tolerated as an update-rejection:
-		// record it as a soft failure so the collection is held not-ready and the
-		// reconcile backs off instead of flip-flopping the contested field.
-		if errors.Is(err, ErrFieldManagerConflict) {
-			st.recordFailure(i, fmt.Errorf("item %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
-			return nil
-		}
-		if current != nil {
-			reason, permanent := classifyRejection(err)
-			if !permanent {
-				// Keep the live identity for tracking, but retry before publishing
-				// a converged collection value to dependents.
-				st.recordApplied(i, managedResourceFrom(n, current))
-				st.recordFailure(i, fmt.Errorf("item %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
-				return nil
-			}
-			// Keep the live object so an immutable update does not wedge the
-			// node; surface details through the log and optional event hook.
-			log.FromContext(ctx).Info("collection item update rejected; keeping live object (desired change did not land)",
-				"node", s.qualifiedPath(n.ID()),
-				"object", obj.GetNamespace()+"/"+obj.GetName(),
-				"gvk", obj.GroupVersionKind().String(),
-				"reason", reason,
-				"cause", err.Error())
-			if s.OnToleratedRejection != nil {
-				gvk := obj.GroupVersionKind()
-				s.OnToleratedRejection(ToleratedRejection{
-					NodeID:     s.qualifiedPath(n.ID()),
-					APIVersion: gvk.GroupVersion().String(),
-					Kind:       gvk.Kind,
-					Namespace:  obj.GetNamespace(),
-					Name:       obj.GetName(),
-					Reason:     reason,
-					Cause:      err.Error(),
-				})
-			}
-			st.recordUpdateRejected(i, managedResourceFrom(n, current), desired, current)
-			// Maintain compatibility with the RGD/instance path, where a dropped
-			// update must surface as ERROR instead of ACTIVE. The standalone
-			// Graph path keeps converging (anti-wedge).
-			if s.GateReadiness {
-				st.recordHardError(i, fmt.Errorf("item %s/%s: update rejected (%s), keeping live object: %w",
-					obj.GetNamespace(), obj.GetName(), reason, err))
-			}
-			return nil
-		}
-		// The object does not exist and CREATE failed. A genuinely malformed
-		// object (Invalid / BadRequest) can never succeed — surface it as a hard
-		// error so the node fails fast instead of requeuing forever on an
-		// unfixable create. Transient/again-later causes (quota, throttling,
-		// RBAC being provisioned, generic errors) stay soft not-ready so the
-		// reconcile retries. Siblings still apply either way.
-		if apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
-			st.recordHardError(i, fmt.Errorf("item %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
-			return nil
-		}
-		st.recordFailure(i, fmt.Errorf("item %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
+		s.recordCollectionItemApplyError(ctx, rt, n, obj, current, desired, i, st, err)
 		return nil
 	}
 	// SSA returned UID + server-managed fields on obj. Record the
@@ -1128,6 +1106,315 @@ func (s *Simple) applyCollectionItem(ctx context.Context, rt *runtime.Runtime, n
 	// for resources that didn't actually land.
 	st.recordApplied(i, managedResourceFrom(n, obj))
 	return nil
+}
+
+// recordCollectionItemApplyError classifies one collection item's SSA failure
+// into st: peer-manager conflict and retriable update/create failures are soft,
+// permanent update rejections keep the live object (hard on the RGD path), and
+// malformed creates are hard.
+func (s *Simple) recordCollectionItemApplyError(ctx context.Context, rt *runtime.Runtime, n *runtime.Node, obj, current *unstructured.Unstructured, desired []*unstructured.Unstructured, i int, st *collectionApplyState, err error) {
+	// A peer-Graph field conflict is never tolerated as an update-rejection:
+	// record it as a soft failure so the collection is held not-ready and the
+	// reconcile backs off instead of flip-flopping the contested field.
+	if errors.Is(err, ErrFieldManagerConflict) {
+		st.recordFailure(i, fmt.Errorf("item %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
+		return
+	}
+	if current != nil {
+		reason, permanent := classifyRejection(err)
+		if !permanent {
+			// Keep the live identity for tracking, but retry before publishing
+			// a converged collection value to dependents.
+			st.recordApplied(i, managedResourceFrom(n, current))
+			st.recordFailure(i, fmt.Errorf("item %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
+			return
+		}
+		// Keep the live object so an immutable update does not wedge the
+		// node; surface details through the log and optional event hook.
+		log.FromContext(ctx).Info("collection item update rejected; keeping live object (desired change did not land)",
+			"node", s.qualifiedPath(n.ID()),
+			"object", obj.GetNamespace()+"/"+obj.GetName(),
+			"gvk", obj.GroupVersionKind().String(),
+			"reason", reason,
+			"cause", err.Error())
+		if s.OnToleratedRejection != nil {
+			gvk := obj.GroupVersionKind()
+			s.OnToleratedRejection(ToleratedRejection{
+				NodeID:     s.qualifiedPath(n.ID()),
+				APIVersion: gvk.GroupVersion().String(),
+				Kind:       gvk.Kind,
+				Namespace:  obj.GetNamespace(),
+				Name:       obj.GetName(),
+				Reason:     reason,
+				Cause:      err.Error(),
+			})
+		}
+		st.recordUpdateRejected(i, managedResourceFrom(n, current), desired, current)
+		// Maintain compatibility with the RGD/instance path, where a dropped
+		// update must surface as ERROR instead of ACTIVE. The standalone
+		// Graph path keeps converging (anti-wedge).
+		if s.GateReadiness {
+			st.recordHardError(i, fmt.Errorf("item %s/%s: update rejected (%s), keeping live object: %w",
+				obj.GetNamespace(), obj.GetName(), reason, err))
+		}
+		return
+	}
+	// The object does not exist and CREATE failed. A genuinely malformed
+	// object (Invalid / BadRequest) can never succeed — surface it as a hard
+	// error so the node fails fast instead of requeuing forever on an
+	// unfixable create. Transient/again-later causes (quota, throttling,
+	// RBAC being provisioned, generic errors) stay soft not-ready so the
+	// reconcile retries. Siblings still apply either way.
+	if apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
+		st.recordHardError(i, fmt.Errorf("item %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
+		return
+	}
+	st.recordFailure(i, fmt.Errorf("item %s/%s: %w", obj.GetNamespace(), obj.GetName(), err))
+	return
+}
+
+// specHashAnnotation records, on each managed collection item, a digest of
+// the render that produced it. `<item>.updated()` compares the live stamp to
+// the current render. POC for KREP-026.
+const specHashAnnotation = "kro.run/spec-hash"
+
+func specHash(obj *unstructured.Unstructured) (string, error) {
+	c := obj.DeepCopy()
+	ann := c.GetAnnotations()
+	delete(ann, specHashAnnotation)
+	if len(ann) == 0 {
+		unstructured.RemoveNestedField(c.Object, "metadata", "annotations")
+	} else {
+		c.SetAnnotations(ann)
+	}
+	b, err := json.Marshal(c.Object)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("%x", sum[:8]), nil
+}
+
+func stampSpecHash(obj *unstructured.Unstructured, h string) {
+	ann := obj.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	ann[specHashAnnotation] = h
+	obj.SetAnnotations(ann)
+}
+
+// itemFacts returns the per-item scope value for a gate: the object map with
+// the reserved ready()/updated() keys attached. Never written to the cluster.
+func itemFacts(obj map[string]any, updated, ready bool) map[string]any {
+	m := k8sruntime.DeepCopyJSON(obj)
+	m[library.ItemUpdatedKey] = updated
+	m[library.ItemReadyKey] = ready
+	return m
+}
+
+// applyCollectionPerItem is the serial, per-item form of a collection apply
+// used when propagateWhen references the collection itself or `each`. Every
+// item is pre-read so the gate sees the live state of items not yet decided
+// this pass; items are then decided in order, and each decision updates the
+// collection value the next gate reads. Held items keep their live object
+// and identity. Any held item holds the node (soft not-ready) so dependents
+// never see a mixed-generation list.
+func (s *Simple) applyCollectionPerItem(ctx context.Context, rt *runtime.Runtime, n *runtime.Node, desired []*unstructured.Unstructured, mappings []applyMapping) ([]expv1alpha1.ManagedResource, error) {
+	size := len(desired)
+	st := &collectionApplyState{
+		results:      make([]*expv1alpha1.ManagedResource, size),
+		hardErrors:   make([]error, size),
+		itemFailures: make([]error, size),
+	}
+	items := make([]any, size)
+	live := make([]*unstructured.Unstructured, size)
+	hashes := make([]string, size)
+
+	for i, obj := range desired {
+		// Hash the author's rendered desired state BEFORE kro stamps its own
+		// bookkeeping (node-id, collection-index/size labels, instance labels).
+		// Those change when a sibling is inserted or removed; a rollout is
+		// about the object the author wants, not kro's position metadata.
+		h, err := specHash(obj)
+		if err != nil {
+			st.recordHardError(i, fmt.Errorf("item %s/%s: hash: %w", obj.GetNamespace(), obj.GetName(), err))
+			continue
+		}
+		hashes[i] = h
+		if err := s.prepareItem(rt, n, obj, i, size, mappings[i]); err != nil {
+			st.recordHardError(i, err)
+			continue
+		}
+		cur, err := s.getLive(ctx, obj)
+		if err != nil {
+			st.recordHardError(i, err)
+			continue
+		}
+		live[i] = cur
+		if cur == nil {
+			// Absent: pending, not stuck. ready() is the author's readyWhen
+			// against the live object; with no object there is nothing to be
+			// unready about, and the item has not been disrupted. Reading it
+			// as !ready() made "no broken items" hold a fresh collection
+			// forever. The render stands in for the object so gates can read
+			// its fields.
+			items[i] = itemFacts(obj.Object, false, true)
+			continue
+		}
+		ready, err := n.ItemReady(cur.Object)
+		if err != nil {
+			st.recordHardError(i, err)
+			continue
+		}
+		items[i] = itemFacts(cur.Object, cur.GetAnnotations()[specHashAnnotation] == h, ready)
+	}
+	if hardErr := st.hardError(); hardErr != nil {
+		return st.appliedResources(), hardErr
+	}
+
+	scope := make(map[string]any, len(n.Scope())+2)
+	maps.Copy(scope, n.Scope())
+	scope[n.ID()] = items
+
+	bound := defaultApplyConcurrency
+	if s.ApplyConcurrency > 0 {
+		bound = s.ApplyConcurrency
+	}
+
+	// applyBatch applies the given indices in parallel at the collection's
+	// normal concurrency and refreshes each item's facts from the response.
+	// Items in a batch are independent: every per-item check and record
+	// touches only its own index, and collectionApplyState is mutex-guarded.
+	applyBatch := func(idx []int) {
+		if len(idx) == 0 {
+			return
+		}
+		g, gCtx := errgroup.WithContext(ctx)
+		g.SetLimit(min(bound, len(idx)))
+		for _, i := range idx {
+			i := i
+			g.Go(func() error {
+				obj, cur := desired[i], live[i]
+				if cur != nil && cur.GetDeletionTimestamp() != nil {
+					st.recordDeleting(&ResourceDeletingError{NodeID: s.qualifiedPath(n.ID()), Namespace: obj.GetNamespace(), Name: obj.GetName()})
+					return nil
+				}
+				if err := applySetConflict(cur, obj); err != nil {
+					st.recordHardError(i, err)
+					return nil
+				}
+				if !s.ConflictDetection && ownedByGraphTemplate(cur) {
+					st.recordFailure(i, fmt.Errorf("item %s/%s owned by a foreign kro Graph: %w", obj.GetNamespace(), obj.GetName(), ErrFieldManagerConflict))
+					return nil
+				}
+				if s.ConflictDetection && ownedByForeignGraphTemplate(cur, templateFieldManager(rt.Graph().GetUID())) {
+					st.recordFailure(i, fmt.Errorf("item %s/%s owned by a peer kro Graph's template manager; refusing to co-manage: %w", obj.GetNamespace(), obj.GetName(), ErrFieldManagerConflict))
+					return nil
+				}
+				stampSpecHash(obj, hashes[i])
+				if err := s.applyTemplateObject(gCtx, obj, rt.Graph().GetUID()); err != nil {
+					s.recordCollectionItemApplyError(gCtx, rt, n, obj, cur, desired, i, st, err)
+					return nil
+				}
+				st.recordApplied(i, managedResourceFrom(n, obj))
+				ready, err := n.ItemReady(obj.Object)
+				if err != nil {
+					st.recordHardError(i, err)
+					return nil
+				}
+				items[i] = itemFacts(obj.Object, true, ready)
+				return nil
+			})
+		}
+		_ = g.Wait()
+	}
+
+	// Phase 1: items whose live object already carries the current render
+	// have nothing to advance. They bypass the gate and are re-applied as
+	// drift correction, in parallel, exactly like an ungated collection.
+	var current, pending []int
+	for i := range desired {
+		cur := live[i]
+		if cur != nil && cur.GetAnnotations()[specHashAnnotation] == hashes[i] {
+			current = append(current, i)
+		} else {
+			pending = append(pending, i)
+		}
+	}
+	applyBatch(current)
+
+	// Phase 2: admission is sequential, apply is not. Each pending item's
+	// gate reads the collection with every earlier decision already in it:
+	// an admitted item counts as updated() && !ready() until its apply
+	// response replaces that optimistic fact. Admitted items are applied in
+	// batches of `bound`; after each batch the loop resumes with refreshed
+	// facts, so a gate that depends on ready() (exponential, canary) sees
+	// real outcomes at every batch boundary. Within a batch the optimistic
+	// fact is conservative: a pass never admits more than the serial walk
+	// would, and never fewer across the whole pass unless a hold intervenes.
+	held := 0
+	var heldWhy string
+	// Once a gate that does not read `each` is false, it stays false for the
+	// rest of the pass: holding an item leaves the collection value exactly
+	// as the next gate would see it. Skip the remaining evaluations.
+	stuck := false
+	var batch []int
+	for _, i := range pending {
+		obj := desired[i]
+		cur := live[i]
+		scope[compiler.EachVarName] = items[i]
+		var isHeld bool
+		var why string
+		if stuck {
+			isHeld, why = true, heldWhy
+		} else {
+			var err error
+			isHeld, why, err = n.EvalHeld(scope)
+			if err != nil {
+				st.recordHardError(i, err)
+				continue
+			}
+		}
+		if isHeld {
+			held++
+			if heldWhy == "" {
+				heldWhy = why
+			}
+			if !n.GateUsesEach() {
+				stuck = true
+			}
+			if cur != nil {
+				st.recordApplied(i, managedResourceFrom(n, cur))
+				desired[i] = cur
+			}
+			log.FromContext(ctx).V(1).Info("collection item held by propagateWhen",
+				"node", s.qualifiedPath(n.ID()), "item", i, "object", obj.GetNamespace()+"/"+obj.GetName(), "expr", why)
+			continue
+		}
+		// Admitted: in flight until the response says otherwise.
+		items[i] = itemFacts(obj.Object, true, false)
+		batch = append(batch, i)
+		if len(batch) == bound {
+			applyBatch(batch)
+			batch = batch[:0]
+		}
+	}
+	applyBatch(batch)
+
+	if hardErr := st.hardError(); hardErr != nil {
+		return st.appliedResources(), hardErr
+	}
+	if deletingErr := st.deletingError(); deletingErr != nil {
+		return st.appliedResources(), deletingErr
+	}
+	if softErr := st.softError(n.ID()); softErr != nil {
+		return st.appliedResources(), softErr
+	}
+	if held > 0 {
+		return st.appliedResources(), fmt.Errorf("node %q: %d of %d items held, propagateWhen %q is false: %w", n.ID(), held, size, heldWhy, ErrHeld)
+	}
+	return st.appliedResources(), nil
 }
 
 // getLive fetches the current cluster state of obj by GVK/namespace/name.

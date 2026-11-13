@@ -39,6 +39,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/registry"
@@ -73,6 +74,10 @@ type ReconcileConfig struct {
 	// author conditions share the same execution bound as graph expressions
 	// instead of silently using DefaultProgramOptions (unbounded).
 	CELCostLimit uint64
+	// FleetGate is the definition's spec.propagateWhen: per-instance CEL
+	// gates on moving to a newer GraphRevision. Empty means instances always
+	// follow the latest revision. Read from the live RGD, not the revision.
+	FleetGate []string
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,
@@ -132,8 +137,20 @@ type Controller struct {
 	// reference at a flat interval forever. Lazily initialized via backoffOnce
 	// so a directly-constructed Controller (tests) works too. Its first-attempt
 	// delay is seeded from reconcileConfig.DefaultRequeueDuration.
-	backoff     *backoff.Tracker
+	backoff *backoff.Tracker
+	// heldBackoff paces fleet-gate held polls separately from the not-ready
+	// backoff, so an admitted instance does not inherit a 5 min delay from
+	// the time it spent held.
+	heldBackoff *backoff.Tracker
 	backoffOnce sync.Once
+
+	// Compiled spec.propagateWhen (fleet gate), lazily built from
+	// reconcileConfig.FleetGate. POC for KREP-026.
+	fleetGateOnce  sync.Once
+	fleetGateExprs []*krocel.Expression
+	fleetGateErr   error
+	// ledger serializes fleet-gate admissions across workers.
+	ledger admissionLedger
 }
 
 // ensureBackoff lazily initializes the per-instance requeue backoff tracker,
@@ -143,6 +160,9 @@ func (c *Controller) ensureBackoff() {
 	c.backoffOnce.Do(func() {
 		if c.backoff == nil {
 			c.backoff = backoff.New(c.reconcileConfig.DefaultRequeueDuration)
+		}
+		if c.heldBackoff == nil {
+			c.heldBackoff = backoff.New(c.reconcileConfig.DefaultRequeueDuration)
 		}
 	})
 }

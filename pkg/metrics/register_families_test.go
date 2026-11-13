@@ -80,6 +80,7 @@ var registeredFamilies = []string{
 	"runtime_node_ignored_total",
 	"runtime_node_not_ready_total",
 	"runtime_node_ready_check_total",
+	"runtime_node_gate_eval_total",
 
 	// RGD controller
 	"rgd_deletion_duration_seconds",

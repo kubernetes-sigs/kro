@@ -54,6 +54,11 @@ func TestVersioning(t *testing.T) {
 			environment.ControllerConfig{
 				AllowCRDDeletion:  true,
 				MaxGraphRevisions: maxGraphRevisions,
+				// envtest serves storagemigration.k8s.io from 1.37 but runs no
+				// kube-controller-manager, so a StorageVersionMigration never
+				// reports. This is the stalled-migrator path: kro must fall
+				// back to rewriting the objects itself.
+				StorageMigrationTimeout: 5 * time.Second,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 5 * time.Second,
 				},

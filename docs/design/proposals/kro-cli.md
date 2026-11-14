@@ -71,7 +71,7 @@ kro validate rgd -f rgd.yaml \
 `validate instance` checks an instance against the schema the RGD would generate.
 
 ```bash
-kro validate instance --rgd-file rgd.yaml --instance-file instance.yaml
+kro validate instance --rgd-path rgd.yaml --instance-path instance.yaml
 ```
 
 `graph.NewBuilder` currently takes `*rest.Config` and `*http.Client` positionally

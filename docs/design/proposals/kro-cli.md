@@ -91,9 +91,13 @@ Normalize RGD YAML: field ordering, indentation, spacing. Pure text transformati
   Keys inside resource templates keep the author's order, since `fmt` has no schema for them.
 - Each document in a multi-document file is formatted in place. Document order is kept.
 
+Usage follows go standards (finding a yaml that does not parse results in a warning log on stderr so it does not pollute stdout):
+
 ```bash
-kro fmt -f rgd.yaml         # in place
-kro fmt -f rgd.yaml --check # exit 2 if changes needed
+kro fmt .         # . discover all files in current folder; does not recurse; default is stdout
+kro fmt . --check # exit 2 if changes needed
+kro fmt . -w      # write in-place
+kro fmt . -r      # recurse into subfolders
 ```
 
 #### Bootstrap

@@ -189,11 +189,10 @@ spelling is used on collection items and fleet instances below.
 `propagateWhen` creates ordinary dependencies on the resources it references,
 identical to template references. The gate adds a new predicate that is
 evaluated once those dependencies are in scope. If any of the `propagateWhen`
-conditions are false, then the node is held, along with any resources that have
-the node as a dependency. When a node's `propagateWhen` evaluates to false, Kro
-does not prune its objects or the objects of any node that depends on it. They
-stay as last applied. Pruning is per node: a hold on one node does not stop Kro
-from pruning objects retired by other nodes in the same reconcile.
+conditions are false, the node and every node that depends on it are held: not
+rendered, not applied, not pruned. Their objects stay as last applied. Pruning
+is per node: a hold on one node does not stop Kro from pruning objects retired
+by other nodes in the same reconcile.
 
 A condition is put on the Graph/RGD instance, giving users a way to understand
 what has happened. An example of the condition is below:
@@ -251,9 +250,8 @@ is less than ideal. This will be documented for users.
 
 ### Collection
 
-A collection in kro forms a node. All of the resource-level semantics apply to
-the collection as a node. If `propagateWhen` is false for the collection node,
-any resources that depend on the collection are held. Nothing is pruned.
+A collection in kro is one node. Everything in the resource-level section
+applies to it: a false gate holds the collection and its dependents.
 
 A collection gate that references neither the collection's own `id` nor `each`
 is evaluated once for the whole node: either every item is applied or none is.
@@ -400,10 +398,9 @@ This can be used with `ready()` to help determine the state of a resource.
 | Pending (healthy on old version) | `!w.updated() && w.ready()` |
 | Stuck (broken on old version) | `!w.updated() && !w.ready()` |
 
-Semantically, an object is updated if it matches what kro intends to apply.
-This is tracked with an annotation called `kro.run/spec-hash`. The hash is
-taken from kro's render before mutating webhooks run, so if a webhook adds a
-label, the object won't show as perpetually different.
+This is tracked with an annotation, `kro.run/spec-hash`. The hash is taken from
+kro's render before mutating webhooks run, so if a webhook adds a label, the
+object won't show as perpetually different.
 
 This also means that external writers will not cause the object to temporarily
 become not updated. kro will still do drift detection, but it won't cause a blip
@@ -434,11 +431,6 @@ To evaluate `propagateWhen` for a collection, kro:
    The one exception is if `propagateWhen` refers to `each`, the item under
    decision. kro can't stop early if it does, because the answer may differ per
    item.
-
-Admission is sequential with apply is not. A gated collection applies at the same
-concurrency as an ungated one. Counting an admitted item as in flight until its
-response arrives is the conservative assumption, so a pass never admits more
-than a fully serial walk would.
 
 Every reconcile either admits at least one item or evaluates the gate once,
 because in-flight items are already at the current hash and never evaluate.
@@ -491,16 +483,14 @@ Workers evaluate the gate one at a time against a snapshot of all instances.
 kro tracks admissions in memory, so a worker sees every admission made before
 it, even if that instance's status write hasn't landed yet. Once admitted, an
 instance records the new revision in `status.observedRevision` before applying
-anything. The apply itself runs in parallel with other workers.
+anything, so the in-memory record only has to outlive that one write and can be
+lost on restart without consequence. The apply itself runs in parallel with
+other workers.
 
 A held instance is not applied and its readiness is not re-evaluated; only
 `RevisionReconciled=False` with reason `Held` is written. It re-evaluates the
 gate when another instance converges and frees a slot, or on the next periodic
 requeue.
-
-The ledger does not survive a controller restart and does not need to. Every
-admission is recorded in `status.observedRevision` before the apply, so the
-first snapshot after a restart already counts every admitted instance.
 
 Because a held instance is never applied, it does not need the revision it is
 on to stay resolvable. `status.observedRevision` is only compared to the latest

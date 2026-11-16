@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -38,6 +39,27 @@ import (
 // directly; tests may pass a narrower stub.
 type Compiler interface {
 	CompileWithOptions(g *v1alpha1.Graph, opts ...compiler.CompileOption) (*compiler.Program, error)
+}
+
+// WithInstanceCRD returns a Compiler that types the author-status writeback
+// node against crd. The resolver cache is fed by apiserver discovery, which
+// lags CRD writes, so it is not consulted for the instance kind.
+func WithInstanceCRD(c Compiler, crd *extv1.CustomResourceDefinition) Compiler {
+	return &instanceCRDCompiler{Compiler: c, crd: crd}
+}
+
+type instanceCRDCompiler struct {
+	Compiler
+	crd *extv1.CustomResourceDefinition
+}
+
+func (c *instanceCRDCompiler) CompileWithOptions(g *v1alpha1.Graph, opts ...compiler.CompileOption) (*compiler.Program, error) {
+	sch, err := graph.InstanceSchemaFromCRD(c.crd)
+	if err != nil {
+		return nil, fmt.Errorf("rgdadapter: instance CRD schema: %w", err)
+	}
+	opts = append(opts, compiler.WithNodeSchemaOverride(StatusPatchNodeID, sch))
+	return c.Compiler.CompileWithOptions(g, opts...)
 }
 
 // ProgramCache is the subset of *registry.Registry that

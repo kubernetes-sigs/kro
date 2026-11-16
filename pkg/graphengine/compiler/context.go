@@ -75,7 +75,8 @@ type CompilationContext struct {
 	// publishes that schema instead of the value-shape inference of
 	// inferDefSchema — used by the RGD adapter to type the `schema` node
 	// with the RGD's declared SimpleSchema, which stays stable across
-	// reconciles even when the instance is missing fields.
+	// reconciles even when the instance is missing fields. A GVK-targeted
+	// node with an override skips the schema-resolver lookup.
 	nodeSchemaOverrides map[string]*spec.Schema
 
 	// literalNodes declares nodes whose payloads are treated as literal data
@@ -262,9 +263,9 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	if err != nil {
 		return nil, nil, err
 	}
-	sch, err := ctx.schemaResolver.ResolveSchema(gvk)
+	sch, err := ctx.targetSchema(n.ID, gvk)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve schema for %s: %w", gvk, err)
+		return nil, nil, err
 	}
 	mapping, err := ctx.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	// Memory-cached discovery can still report Fresh after a new CRD appears.
@@ -342,6 +343,19 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 		// a list into scope like a forEach collection.
 		Collection: kind == NodeKindRef && hasMetadataSelector(payload),
 	}, sch, nil
+}
+
+// targetSchema returns the schema a GVK-targeted node is typed against: the
+// caller's override for the node when present, else the resolver's schema.
+func (ctx *CompilationContext) targetSchema(nodeID string, gvk k8sschema.GroupVersionKind) (*spec.Schema, error) {
+	if sch, ok := ctx.nodeSchemaOverrides[nodeID]; ok {
+		return sch, nil
+	}
+	sch, err := ctx.schemaResolver.ResolveSchema(gvk)
+	if err != nil {
+		return nil, fmt.Errorf("resolve schema for %s: %w", gvk, err)
+	}
+	return sch, nil
 }
 
 type parsedNodeElements struct {

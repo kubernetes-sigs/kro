@@ -110,7 +110,7 @@ func (c *Controller) reconcileViaGraphEngine(
 		markResolutionFailed("graph not resolved: latest issued revision %d is not active (state=%s)", latest.Revision, latest.State)
 		return c.delayedRequeue(fmt.Errorf("graph-engine: latest issued revision %d is not active (state=%s)", latest.Revision, latest.State))
 	}
-	if latest.RGDSpec == nil {
+	if latest.RGDSpec == nil || latest.CompiledGraph == nil {
 		metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
 		// The revision doesn't carry an RGDSpec, so there is no engine to run
 		// yet — requeue until the graphrevision controller reprocesses the
@@ -160,7 +160,8 @@ func (c *Controller) reconcileViaGraphEngine(
 	if c.reconcileConfig.MaxCollectionSize > 0 {
 		rtOpts = append(rtOpts, geruntime.WithMaxCollectionSize(c.reconcileConfig.MaxCollectionSize))
 	}
-	rt, _, err := rgdadapter.BuildRuntimeForInstanceCached(rgd, inst, c.graphEngineCompiler, c.programCache, rtOpts...)
+	comp := rgdadapter.WithInstanceCRD(c.graphEngineCompiler, latest.CompiledGraph.CRD)
+	rt, _, err := rgdadapter.BuildRuntimeForInstanceCached(rgd, inst, comp, c.programCache, rtOpts...)
 	if err != nil {
 		metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvrStr, "build_failed").Inc()
 		log.Error(err, "graph-engine: BuildRuntimeForInstance failed")

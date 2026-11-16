@@ -27,6 +27,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/features"
@@ -1509,4 +1510,31 @@ func indexOf(xs []string, want string) int {
 		}
 	}
 	return -1
+}
+
+func TestCompile_NodeSchemaOverrideTypesPatchTarget(t *testing.T) {
+	t.Parallel()
+	g := generator.NewGraph("g",
+		generator.WithPatch("p", "ec2.services.k8s.aws/v1alpha1", "VPC", "target", map[string]any{
+			"status": map[string]any{"freshField": "${'x'}"},
+		}),
+	)
+	c := newTestCompiler(t)
+
+	_, err := c.Compile(g)
+	require.ErrorContains(t, err, "schema not found for field freshField")
+
+	str := spec.Schema{SchemaProps: spec.SchemaProps{Type: []string{"string"}}}
+	authored := &spec.Schema{SchemaProps: spec.SchemaProps{
+		Type: []string{"object"},
+		Properties: map[string]spec.Schema{
+			"apiVersion": str,
+			"kind":       str,
+			"metadata":   {SchemaProps: spec.SchemaProps{Type: []string{"object"}, Properties: map[string]spec.Schema{"name": str}}},
+			"status":     {SchemaProps: spec.SchemaProps{Type: []string{"object"}, Properties: map[string]spec.Schema{"freshField": str}}},
+		},
+	}}
+	prog, err := c.CompileWithOptions(g, WithNodeSchemaOverride("p", authored))
+	require.NoError(t, err)
+	assert.Equal(t, "vpcs", prog.Nodes["p"].GVR.Resource)
 }

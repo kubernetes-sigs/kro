@@ -210,9 +210,6 @@ status:
       message: 'node "app": propagateWhen "errorRate.status.state != ''ALARM''" is false'
 ```
 
-When the gate is `${x.ready()}` and `x` is not ready, the reported reason is
-`WaitingForReadiness` for `x`, since that is the first node the walk stops at.
-
 An RGD instance held on an old revision stays `Ready=True`, because it is healthy
 on that revision, and reports the hold on `RevisionReconciled`:
 
@@ -230,10 +227,8 @@ desired state to hold. Gate the consumer of a `ref`, not the `ref`.
 For RGD, `propagateWhen` is supported on `template` fields. RGD `externalRef`s
 do not support `propagateWhen` for the same reason as Graph refs.
 
-For RGD, the behaviour is for resources to only apply after their dependencies
-are ready. `${a.ready()}` is redundant with the data edge on RGD (edges already
-wait for readiness). This means the readiness gating in `propagateWhen` is more useful for Graph than
-RGD. Still, there is value in other custom update gating for RGD.
+On RGD, dependency edges already wait for readiness, so `${a.ready()}` is
+redundant there. The other gates are not.
 
 The definition of "update" in kro spans various situations:
 
@@ -242,10 +237,8 @@ The definition of "update" in kro spans various situations:
 3. A change in Kubernetes resources that an RGD/Graph is referencing through CEL
 4. A change to the applied objects by an external system, away from what kro wants (drift detection)
 
-Since `propagateWhen` will stop the evaluation of the graph, all of these will be
-temporarily stopped. It may be somewhat surprising, but the alternative of
-trying to keep applying a potentially stale definition to keep drift detection
-is less than ideal. This will be documented for users.
+A held node stops all 4, drift correction included. Re-applying a stale
+definition to keep catching drift would be worse than pausing both.
 
 
 ### Collection
@@ -443,12 +436,10 @@ tenants first.
 - ${each.metadata.labels.tier == 'canary' || web.filter(w, w.metadata.labels.tier == 'canary' && !(w.updated() && w.ready())).size() == 0}
 ```
 
-Ordering alone can help a lot of cases, but it doesn't give the same power.
-While many more CEL expressions are needed, a benchmark with a 1000-item
-collection still runs the CEL evaluations in about 750 ms
-([`krep026_bench_test.go`](https://github.com/NicholasBlaskey/kro/blob/poc/propagate-when/pkg/graphengine/executor/krep026_bench_test.go),
-which also pins the evaluation counts: 0 for a converged collection, 1 for a
-stalled budget, 999 for a stalled `each` gate at N=1000).
+At 1000 pending items that is about 750 ms per reconcile
+([benchmark](https://github.com/NicholasBlaskey/kro/blob/poc/propagate-when/pkg/graphengine/executor/krep026_bench_test.go),
+which also pins the evaluation counts: 0 converged, 1 stalled budget, 999
+stalled `each` gate).
 
 
 ### RGD instances

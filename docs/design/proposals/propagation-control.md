@@ -33,6 +33,11 @@ Another use case that falls into this would be freezing changes during an alarm
 or an event. You may want to stop rolling out updates if the error rate for
 customers is above a threshold.
 
+A maintenance window has 2 halves: a way to define the window and a way to block
+updates while it is closed. Defining the window is a separate problem (KREP
+#1376, `time.now()`). `propagateWhen` is the second half, the place where that
+predicate can stop an apply.
+
 ### Throttling of updates to a collection for RGD/Graphs
 
 Suppose kro is managing web servers for a set of tenants. kro could model this
@@ -185,8 +190,10 @@ spelling is used on collection items and fleet instances below.
 identical to template references. The gate adds a new predicate that is
 evaluated once those dependencies are in scope. If any of the `propagateWhen`
 conditions are false, then the node is held, along with any resources that have
-the node as a dependency. A held node is not rendered or applied; its existing
-objects stay as they are. Nothing is pruned.
+the node as a dependency. When a node's `propagateWhen` evaluates to false, Kro
+does not prune its objects or the objects of any node that depends on it. They
+stay as last applied. Pruning is per node: a hold on one node does not stop Kro
+from pruning objects retired by other nodes in the same reconcile.
 
 A condition is put on the Graph/RGD instance, giving users a way to understand
 what has happened. An example of the condition is below:
@@ -343,8 +350,10 @@ spec:
       ...
 ```
 
-`instances` becomes a reserved keyword. It works very similarly to collection
-`propagateWhen`.
+`instances` is bound only inside `spec.propagateWhen`. It is not a reserved
+word; an RGD may have a resource with that id. The fleet gate does not see the
+RGD's resources, so there is nothing to shadow. It works very similarly to
+collection `propagateWhen`.
 
 Each element of `instances`, and `each`, is the full instance object
 (`metadata`, `spec`, and `status`) plus two facts. `updated()` is true when the
@@ -484,18 +493,18 @@ it, even if that instance's status write hasn't landed yet. Once admitted, an
 instance records the new revision in `status.observedRevision` before applying
 anything. The apply itself runs in parallel with other workers.
 
-A held instance is not applied, but kro still evaluates its readiness and
-writes its status, so `ready()` stays accurate for the rest of the fleet. It
-re-evaluates the gate when another instance converges and frees a slot, or on
-the next periodic requeue.
+A held instance is not applied and its readiness is not re-evaluated; only
+`RevisionReconciled=False` with reason `Held` is written. It re-evaluates the
+gate when another instance converges and frees a slot, or on the next periodic
+requeue.
 
 The ledger does not survive a controller restart and does not need to. Every
 admission is recorded in `status.observedRevision` before the apply, so the
 first snapshot after a restart already counts every admitted instance.
 
-A held instance needs the revision it is on to stay resolvable. Revisions with
-instances still on them must not be garbage-collected. If one is, the gate fails
-open and the instance takes the latest revision rather than being stranded.
+Because a held instance is never applied, it does not need the revision it is
+on to stay resolvable. `status.observedRevision` is only compared to the latest
+revision number. GraphRevision garbage collection is unchanged.
 
 ## Release plan
 

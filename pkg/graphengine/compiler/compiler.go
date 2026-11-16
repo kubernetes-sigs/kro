@@ -168,8 +168,9 @@ func WithLiteralNode(nodeID string) CompileOption {
 // WithNodeSchemaOverride declares the OpenAPI schema a node publishes into
 // scope. For Def nodes this replaces the value-shape inference the compiler
 // otherwise applies (a fresh instance carrying no fields must still
-// type-check expressions that reference them). The schema is used verbatim;
-// the caller owns any conversion (e.g. RGD SimpleSchema → OpenAPI).
+// type-check expressions that reference them). For GVK-targeted nodes it
+// replaces the schema-resolver lookup. The schema is used verbatim; the
+// caller owns any conversion (e.g. RGD SimpleSchema → OpenAPI).
 func WithNodeSchemaOverride(nodeID string, s *spec.Schema) CompileOption {
 	return func(o *compileOptions) {
 		if o.nodeSchemaOverrides == nil {

@@ -31,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
-	"k8s.io/kube-openapi/pkg/validation/spec"
 	ctrl "sigs.k8s.io/controller-runtime"
 	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -50,22 +49,8 @@ func TestReconcile_IncludeWhenAfterInventoryProjection(t *testing.T) {
 	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.CELOmitFunction, false)
 	t.Logf("GraphKind=%t CELOmitFunction=%t", features.FeatureGate.Enabled(features.GraphKind), features.FeatureGate.Enabled(features.CELOmitFunction))
 
-	// The synthesized author-status patch needs the parent kind's schema.
+	// The author-status patch is typed against the revision's CRD.
 	resolver, _ := testk8s.NewFakeResolver()
-	resolver.AddSchema(controllerTestParentGVK, &spec.Schema{SchemaProps: spec.SchemaProps{
-		Type: []string{"object"},
-		Properties: map[string]spec.Schema{
-			"apiVersion": *spec.StringProperty(),
-			"kind":       *spec.StringProperty(),
-			"metadata": {SchemaProps: spec.SchemaProps{Type: []string{"object"}, Properties: map[string]spec.Schema{
-				"name":      *spec.StringProperty(),
-				"namespace": *spec.StringProperty(),
-			}}},
-			"status": {SchemaProps: spec.SchemaProps{Type: []string{"object"}, Properties: map[string]spec.Schema{
-				"dbOwner": *spec.StringProperty(),
-			}}},
-		},
-	}})
 	comp := compiler.NewCompilerWithDependencies(resolver, buildControllerTestRESTMapper())
 
 	for _, tt := range []struct {

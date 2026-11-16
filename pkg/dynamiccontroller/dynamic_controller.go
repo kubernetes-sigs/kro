@@ -401,8 +401,13 @@ func (dc *DynamicController) Register(
 		return nil
 	}
 
-	// Retain the shared informer for the parent and wait for cache sync.
-	if err := dc.watches.EnsureWatch(parent, "parent"); err != nil {
+	// The parent watch must be established before we read its store to
+	// enqueue existing instances. WaitForSync returns early on a blocking
+	// error (Forbidden, Unauthorized) and otherwise waits up to the sync
+	// timeout.
+	dc.watches.EnsureWatch(parent, "parent")
+	if err := dc.watches.WaitForSync(*ctx, parent); err != nil {
+		dc.watches.ReleaseWatch(parent, "parent")
 		dc.handlers.Delete(parent)
 		return fmt.Errorf("add parent handler %s: %w", parent, err)
 	}

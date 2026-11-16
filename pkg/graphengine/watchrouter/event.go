@@ -25,9 +25,11 @@ import kwatch "github.com/kubernetes-sigs/kro/pkg/watch"
 type EventType = kwatch.EventType
 
 const (
-	EventAdd    = kwatch.EventAdd
-	EventUpdate = kwatch.EventUpdate
-	EventDelete = kwatch.EventDelete
+	EventAdd          = kwatch.EventAdd
+	EventUpdate       = kwatch.EventUpdate
+	EventDelete       = kwatch.EventDelete
+	EventSynced       = kwatch.EventSynced
+	EventWatchBlocked = kwatch.EventWatchBlocked
 )
 
 // Event is a normalized informer event emitted by the Manager.

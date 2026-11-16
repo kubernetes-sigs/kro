@@ -96,8 +96,8 @@ func (o *recordingObserver) OnRoute(_ schema.GroupVersionResource, matched bool)
 }
 
 // fakeInformer is a minimal cache.SharedIndexInformer whose HasSynced flag can
-// be forced to never sync, which drives the Manager's EnsureWatch sync-timeout
-// path (and thus the coordinator's rollback path).
+// be forced to never sync, so tests can assert that an unsynced informer is
+// retained and indexed rather than torn down.
 type fakeInformer struct {
 	mu        sync.Mutex
 	handlers  []cache.ResourceEventHandler
@@ -189,7 +189,8 @@ func (c fakeDoneChecker) Done() <-chan struct{} {
 
 // fakeInformerRegistry hands the Manager fake informers and remembers them so
 // tests can assert on their stopped state. failGVRs forces a given GVR's
-// informer to never sync, exercising EnsureWatch failure.
+// informer to never sync, so it stays retained-but-unsynced (no EventSynced is
+// emitted and a WaitForSync on it would time out).
 type fakeInformerRegistry struct {
 	mu        sync.Mutex
 	informers map[schema.GroupVersionResource]*fakeInformer
@@ -212,7 +213,7 @@ func (r *fakeInformerRegistry) get(gvr schema.GroupVersionResource) *fakeInforme
 
 // newTestCoordinator wires a coordinator to a real Manager backed by fake
 // informers with a short sync timeout. failGVRs marks GVRs whose informer
-// never syncs, so EnsureWatch for them fails.
+// never syncs; EnsureWatch still returns immediately and retains the informer.
 func newTestCoordinator(t *testing.T, obs Observer[string], failGVRs ...schema.GroupVersionResource) (*Coordinator[string], *enqueueRecorder, *fakeInformerRegistry) {
 	t.Helper()
 	reg := &fakeInformerRegistry{
@@ -471,62 +472,85 @@ func TestDone_AbortWithNoPreviousDropsOwner(t *testing.T) {
 	assert.Equal(t, 1, obs.removeOwner, "aborting a never-committed owner removes it")
 }
 
-// --- EnsureWatch failure / rollback (the reviewer's focus) ------------------
+// --- unsynced informers are retained, never rolled back --------------------
 
-func TestWatch_EnsureWatchFailureRollsBack(t *testing.T) {
+func TestWatch_UnsyncedInformerIsRetainedAndIndexed(t *testing.T) {
 	obs := &recordingObserver{}
-	// gvrA's informer never syncs → EnsureWatch times out and returns an error.
 	c, rec, reg := newTestCoordinator(t, obs, gvrA)
 
 	w := c.For("owner-a")
-	err := w.Watch(scalarReq("n1", gvrA, "cm-1", "ns"))
-	require.Error(t, err, "a failed informer sync must surface as an error")
-	assert.Contains(t, err.Error(), "ensure watch")
+	start := time.Now()
+	require.NoError(t, w.Watch(scalarReq("n1", gvrA, "cm-1", "ns")),
+		"Watch never fails or blocks on an informer that has not synced")
+	assert.Less(t, time.Since(start), 150*time.Millisecond, "Watch must not wait for the initial list")
 
-	// Rollback: the entry that was optimistically added must be gone.
 	s, col := c.WatchRequestCount()
-	assert.Equal(t, 0, s, "failed EnsureWatch must roll back the scalar index entry")
+	assert.Equal(t, 1, s)
 	assert.Equal(t, 0, col)
-
-	// And an event for the rolled-back target routes to nobody.
 	c.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns"})
-	assert.Empty(t, rec.snapshot())
+	assert.ElementsMatch(t, []string{"owner-a"}, rec.snapshot())
 
-	// The Manager should not retain a broken informer for gvrA.
-	if inf := reg.get(gvrA); inf != nil {
-		assert.Eventually(t, inf.IsStopped, time.Second, 5*time.Millisecond,
-			"broken informer should be released after sync failure")
-	}
+	inf := reg.get(gvrA)
+	require.NotNil(t, inf)
+	time.Sleep(300 * time.Millisecond) // > SyncTimeout
+	assert.False(t, inf.IsStopped(), "unsynced informer must be retained, not released")
+	assert.Equal(t, 1, c.watches.ActiveWatchCount())
 
-	// Observer saw the add then the compensating remove.
+	w.Done(true)
+	assert.False(t, inf.IsStopped())
+	c.Remove("owner-a")
+	assert.Eventually(t, inf.IsStopped, time.Second, 5*time.Millisecond)
+
 	obs.mu.Lock()
 	defer obs.mu.Unlock()
 	assert.Equal(t, 1, obs.addRequest)
 	assert.Equal(t, 1, obs.removeRequest)
-	assert.Equal(t, 1, obs.removeRequestN)
 }
 
-func TestWatch_EnsureWatchFailureKeepsPriorCommittedEntry(t *testing.T) {
+func TestWatch_UnsyncedInformerDoesNotDisturbOtherEntries(t *testing.T) {
 	// gvrB's informer never syncs. gvrA is healthy.
-	c, rec, _ := newTestCoordinator(t, nil, gvrB)
+	c, rec, reg := newTestCoordinator(t, nil, gvrB)
 
-	// Commit a healthy scalar watch on gvrA.
 	w := c.For("owner-a")
 	require.NoError(t, w.Watch(scalarReq("n1", gvrA, "cm-1", "ns")))
 	w.Done(true)
 
-	// Next cycle re-declares n1 (still fine) and adds a failing gvrB watch.
 	w2 := c.For("owner-a")
 	require.NoError(t, w2.Watch(scalarReq("n1", gvrA, "cm-1", "ns")))
-	require.Error(t, w2.Watch(scalarReq("n2", gvrB, "dep-1", "ns")))
+	require.NoError(t, w2.Watch(scalarReq("n2", gvrB, "dep-1", "ns")))
+	w2.Done(true)
 
-	// The failing add rolled itself back; the committed gvrA entry is intact.
 	c.RouteEvent(kwatch.Event{Type: kwatch.EventUpdate, GVR: gvrA, Name: "cm-1", Namespace: "ns"})
 	assert.ElementsMatch(t, []string{"owner-a"}, rec.snapshot())
 
-	// gvrB never made it into the index.
 	scalar, _ := c.WatchRequestCount()
-	assert.Equal(t, 1, scalar)
+	assert.Equal(t, 2, scalar)
+	assert.Equal(t, 2, c.watches.ActiveWatchCount())
+	assert.False(t, reg.get(gvrB).IsStopped())
+}
+
+func TestRouteEvent_SyncedFansOutToEveryOwnerOfGVR(t *testing.T) {
+	c, rec, _ := newTestCoordinator(t, nil)
+
+	wa := c.For("owner-a")
+	require.NoError(t, wa.Watch(scalarReq("n1", gvrA, "cm-1", "ns")))
+	wa.Done(true)
+	wb := c.For("owner-b")
+	require.NoError(t, wb.Watch(scalarReq("n1", gvrA, "cm-2", "other")))
+	wb.Done(true)
+	wc := c.For("owner-c")
+	require.NoError(t, wc.Watch(collectionReq("n1", gvrA, "ns", labels.SelectorFromSet(labels.Set{"app": "x"}))))
+	wc.Done(true)
+	wd := c.For("owner-d")
+	require.NoError(t, wd.Watch(scalarReq("n1", gvrB, "dep-1", "ns")))
+	wd.Done(true)
+
+	c.RouteEvent(kwatch.Event{Type: kwatch.EventSynced, GVR: gvrA})
+	assert.ElementsMatch(t, []string{"owner-a", "owner-b", "owner-c"}, rec.snapshot())
+
+	before := len(rec.snapshot())
+	c.RouteEvent(kwatch.Event{Type: kwatch.EventSynced, GVR: schema.GroupVersionResource{Version: "v1", Resource: "secrets"}})
+	assert.Len(t, rec.snapshot(), before)
 }
 
 // --- routing ----------------------------------------------------------------
@@ -954,4 +978,39 @@ func TestConcurrentWatchRouteRemove(t *testing.T) {
 	// No assertion on exact counts; the test passes if the race detector and
 	// the coordinator's locks kept everything consistent (no panic/deadlock).
 	assert.Equal(t, int64(200), routes.Load())
+}
+
+func TestRouteEvent_WatchBlockedFansOutLikeSynced(t *testing.T) {
+	c, rec, _ := newTestCoordinator(t, nil)
+	wa := c.For("owner-a")
+	require.NoError(t, wa.Watch(scalarReq("n1", gvrA, "cm-1", "ns")))
+	wa.Done(true)
+	wb := c.For("owner-b")
+	require.NoError(t, wb.Watch(scalarReq("n1", gvrB, "dep-1", "ns")))
+	wb.Done(true)
+
+	c.RouteEvent(kwatch.Event{Type: kwatch.EventWatchBlocked, GVR: gvrA})
+	assert.ElementsMatch(t, []string{"owner-a"}, rec.snapshot(), "only owners of the failed GVR are woken")
+}
+
+func TestWatchHealth_PendingThenHealthy(t *testing.T) {
+	// gvrB's fake informer never syncs; gvrA's syncs once Run starts.
+	c, _, _ := newTestCoordinator(t, nil, gvrB)
+	h := c.WatchHealth("nobody")
+	assert.Empty(t, h.Blocked)
+	assert.Empty(t, h.Pending)
+
+	w := c.For("owner-a")
+	require.NoError(t, w.Watch(scalarReq("n1", gvrA, "cm-1", "ns")))
+	require.NoError(t, w.Watch(scalarReq("n2", gvrB, "dep-1", "ns")))
+	// In-flight set is consulted before Done.
+	assert.Eventually(t, func() bool {
+		h := c.WatchHealth("owner-a")
+		return len(h.Blocked) == 0 && len(h.Pending) == 1 && h.Pending[0] == gvrB
+	}, time.Second, 5*time.Millisecond)
+	w.Done(true)
+	// Committed set after Done gives the same answer.
+	h = c.WatchHealth("owner-a")
+	assert.Empty(t, h.Blocked)
+	assert.Equal(t, []schema.GroupVersionResource{gvrB}, h.Pending)
 }

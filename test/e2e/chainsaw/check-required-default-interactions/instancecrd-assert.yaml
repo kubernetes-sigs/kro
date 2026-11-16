@@ -94,7 +94,6 @@ spec:
                 maximum: 100
                 x-kubernetes-validations:
                   - rule: self <= 10 || self % 2 == 0
-                    message: validation failed
               resources:
                 type: object
                 default: {}

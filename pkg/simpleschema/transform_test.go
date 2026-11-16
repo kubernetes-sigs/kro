@@ -587,8 +587,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						Type: "string",
 						XValidations: []extv1.ValidationRule{
 							{
-								Rule:    "self.name != 'invalid'",
-								Message: "validation failed",
+								Rule: "self.name != 'invalid'",
 							},
 						},
 					},
@@ -609,8 +608,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						Type: "integer",
 						XValidations: []extv1.ValidationRule{
 							{
-								Rule:    "self.age >= 0 && self.age <= 120",
-								Message: "validation failed",
+								Rule: "self.age >= 0 && self.age <= 120",
 							},
 						},
 					},
@@ -618,8 +616,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						Type: "string",
 						XValidations: []extv1.ValidationRule{
 							{
-								Rule:    "self.name.length() >= 3",
-								Message: "validation failed",
+								Rule: "self.name.length() >= 3",
 							},
 						},
 					},
@@ -1454,7 +1451,7 @@ func TestComplexSchemaE2E(t *testing.T) {
 				Minimum: new(0.0),
 				Maximum: new(100.0),
 				XValidations: []extv1.ValidationRule{
-					{Rule: "self <= 10 || self % 2 == 0", Message: "validation failed"},
+					{Rule: "self <= 10 || self % 2 == 0"},
 				},
 			},
 			"resources": {

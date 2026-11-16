@@ -184,7 +184,7 @@ func TestApplyMarkers(t *testing.T) {
 			want: &extv1.JSONSchemaProps{
 				Type: "string",
 				XValidations: []extv1.ValidationRule{
-					{Rule: "self.size() > 0", Message: "validation failed"},
+					{Rule: "self.size() > 0"},
 				},
 			},
 		},
@@ -477,7 +477,7 @@ func TestApplyMarkers(t *testing.T) {
 				Type: "string",
 				XValidations: []extv1.ValidationRule{
 					{Rule: "self == oldSelf", Message: "field is immutable"},
-					{Rule: "self.matches('^(pending|active|done)$')", Message: "validation failed"},
+					{Rule: "self.matches('^(pending|active|done)$')"},
 				},
 			},
 		},
@@ -488,7 +488,7 @@ func TestApplyMarkers(t *testing.T) {
 			want: &extv1.JSONSchemaProps{
 				Type: "string",
 				XValidations: []extv1.ValidationRule{
-					{Rule: "self.size() > 0", Message: "validation failed"},
+					{Rule: "self.size() > 0"},
 					{Rule: "self == oldSelf", Message: "field is immutable"},
 				},
 			},

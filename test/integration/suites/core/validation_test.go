@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
@@ -126,6 +127,42 @@ var _ = Describe("Validation", func() {
 				expectRGDInactiveWithError(ctx, rgd, tt.errorString)
 				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 			}
+		})
+	})
+
+	Context("Field validation marker", func() {
+		It("should report the failed rule when an instance violates it", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-validation-message",
+				generator.WithSchema("ValidationMessage", "v1alpha1", map[string]any{
+					"replicas": `integer | validation="self >= 1 && self <= 10"`,
+				}, nil),
+			)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+			})
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			newInstance := func(name string, replicas int64) *unstructured.Unstructured {
+				return &unstructured.Unstructured{Object: map[string]any{
+					"apiVersion": "kro.run/v1alpha1",
+					"kind":       "ValidationMessage",
+					"metadata":   map[string]any{"name": name, "namespace": namespace},
+					"spec":       map[string]any{"replicas": replicas},
+				}}
+			}
+
+			err := env.Client.Create(ctx, newInstance("too-many", 11))
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed rule: self >= 1 && self <= 10"))
+
+			valid := newInstance("ok", 5)
+			Expect(env.Client.Create(ctx, valid)).To(Succeed())
+			Expect(env.Client.Delete(ctx, valid)).To(Succeed())
 		})
 	})
 

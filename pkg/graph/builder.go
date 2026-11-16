@@ -1615,7 +1615,25 @@ func stripStatusFromSchema(openAPI *extv1.JSONSchemaProps, isClusterScoped bool)
 	if err != nil {
 		return nil, err
 	}
+	setObjectMetaSchema(specSchema, isClusterScoped)
+	return specSchema, nil
+}
 
+// InstanceSchemaFromCRD converts an instance CRD's schema to a spec.Schema,
+// keeping status and adding metadata.
+func InstanceSchemaFromCRD(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
+	if len(crd.Spec.Versions) != 1 || crd.Spec.Versions[0].Schema == nil || crd.Spec.Versions[0].Schema.OpenAPIV3Schema == nil {
+		return nil, fmt.Errorf("expected instance CRD to have exactly one version with a schema")
+	}
+	specSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
+	if err != nil {
+		return nil, err
+	}
+	setObjectMetaSchema(specSchema, crd.Spec.Scope == extv1.ClusterScoped)
+	return specSchema, nil
+}
+
+func setObjectMetaSchema(specSchema *spec.Schema, isClusterScoped bool) {
 	if specSchema.Properties == nil {
 		specSchema.Properties = make(map[string]spec.Schema)
 	}
@@ -1624,8 +1642,6 @@ func stripStatusFromSchema(openAPI *extv1.JSONSchemaProps, isClusterScoped bool)
 		metadataSchema = schema.NamespacelessObjectMetaSchema
 	}
 	specSchema.Properties["metadata"] = metadataSchema
-
-	return specSchema, nil
 }
 
 // collectNodeSchemas builds a map of node IDs to their OpenAPI schemas.

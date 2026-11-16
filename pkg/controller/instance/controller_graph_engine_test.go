@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
@@ -50,6 +51,7 @@ import (
 	controllergraph "github.com/kubernetes-sigs/kro/pkg/controller/graph"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/compiler"
 	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
@@ -98,6 +100,26 @@ func newFakeRuntimeClient(t *testing.T, objs ...client.Object) client.Client {
 	require.NoError(t, v1alpha1.AddToScheme(s))
 	require.NoError(t, appsv1.AddToScheme(s))
 	return fakeclient.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+}
+
+// testInstanceCRD is the CRD an active revision carries for the test WebApp
+// kind. Its schema preserves unknown fields so any author status compiles.
+func testInstanceCRD() *extv1.CustomResourceDefinition {
+	preserve := true
+	return &extv1.CustomResourceDefinition{
+		Spec: extv1.CustomResourceDefinitionSpec{
+			Group: controllerTestParentGVK.Group,
+			Names: extv1.CustomResourceDefinitionNames{Kind: controllerTestParentGVK.Kind, Plural: controllerTestParentGVR.Resource},
+			Scope: extv1.NamespaceScoped,
+			Versions: []extv1.CustomResourceDefinitionVersion{{
+				Name: controllerTestParentGVK.Version,
+				Schema: &extv1.CustomResourceValidation{OpenAPIV3Schema: &extv1.JSONSchemaProps{
+					Type:                   "object",
+					XPreserveUnknownFields: &preserve,
+				}},
+			}},
+		},
+	}
 }
 
 func testEmptyRGDSpec() *v1alpha1.ResourceGraphDefinitionSpec {
@@ -158,12 +180,16 @@ func newGraphEngineControllerUnderTest(
 	clientSet.SetRESTMapper(buildControllerTestRESTMapper())
 	registry := revisions.NewRegistry()
 	if revState != "" {
-		registry.Put(revisions.Entry{
+		entry := revisions.Entry{
 			OwnerKey: controllerTestParentGVR.Resource,
 			Revision: 1,
 			State:    revState,
 			RGDSpec:  rgdSpec,
-		})
+		}
+		if rgdSpec != nil {
+			entry.CompiledGraph = &graph.Graph{CRD: testInstanceCRD()}
+		}
+		registry.Put(entry)
 	}
 
 	controller := NewController(
@@ -679,6 +705,32 @@ func TestReconcileViaGraphEngine_RevisionHandling(t *testing.T) {
 		raw := newControllerTestDynamicClient(t, inst.DeepCopy())
 		// Pass nil rgdSpec with Active state
 		c, _ := newGraphEngineControllerUnderTest(t, raw, nil, revisions.RevisionStateActive, comp, nil)
+
+		watcher := &fakeInstanceWatcher{}
+		err := c.reconcileViaGraphEngine(context.Background(), inst, watcher)
+		require.Error(t, err)
+		assert.True(t, requeue.IsRequeueError(err))
+		assert.Contains(t, err.Error(), "revision entry has no RGDSpec")
+
+		stored := getStoredParentObject(t, raw)
+		cond := conditionByType(t, stored, GraphResolved)
+		assert.Equal(t, metav1.ConditionFalse, cond.Status)
+		require.NotNil(t, cond.Message)
+		assert.Contains(t, *cond.Message, "revision entry has no RGDSpec")
+	})
+
+	t.Run("Latest revision Active but CompiledGraph is nil -> requeueUntilRGDSpecPopulated", func(t *testing.T) {
+		inst := newInstanceObject("demo", "default")
+		raw := newControllerTestDynamicClient(t, inst.DeepCopy())
+		c, _ := newGraphEngineControllerUnderTest(t, raw, nil, "", comp, nil)
+		reg := revisions.NewRegistry()
+		reg.Put(revisions.Entry{
+			OwnerKey: controllerTestParentGVR.Resource,
+			Revision: 1,
+			State:    revisions.RevisionStateActive,
+			RGDSpec:  testEmptyRGDSpec(),
+		})
+		c.graphResolver = reg.ResolverFor(controllerTestParentGVR.Resource)
 
 		watcher := &fakeInstanceWatcher{}
 		err := c.reconcileViaGraphEngine(context.Background(), inst, watcher)

@@ -15,6 +15,7 @@
 package simpleschema
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"regexp"
@@ -111,6 +112,7 @@ type Marker struct {
 	MarkerType MarkerType
 	Key        string
 	Value      string
+	Message    string
 }
 
 // ParseMarkers parses a string of markers and returns a slice of Marker structs.
@@ -126,15 +128,11 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 	for _, char := range markers {
 		switch {
 		case char == '=' && currentMarker == nil && !inQuotes && bracketCount == 0:
-			key := strings.TrimSpace(buffer.String())
-			if key == "" {
-				return nil, fmt.Errorf("empty marker key")
-			}
-			markerType, err := markerTypeFromString(key)
+			marker, err := newMarker(buffer.String())
 			if err != nil {
-				return nil, fmt.Errorf("invalid marker key %q: %w", key, err)
+				return nil, err
 			}
-			currentMarker = &Marker{MarkerType: markerType, Key: key}
+			currentMarker = marker
 			buffer.Reset()
 		case char == '"' && !escaped:
 			inQuotes = !inQuotes
@@ -153,7 +151,9 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 			}
 		case unicode.IsSpace(char) && !inQuotes && bracketCount == 0:
 			if currentMarker != nil {
-				currentMarker.Value = processValue(buffer.String())
+				if err := setMarkerValue(currentMarker, buffer.String()); err != nil {
+					return nil, err
+				}
 				result = append(result, currentMarker)
 				currentMarker = nil
 				buffer.Reset()
@@ -167,7 +167,9 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 	}
 
 	if currentMarker != nil {
-		currentMarker.Value = processValue(buffer.String())
+		if err := setMarkerValue(currentMarker, buffer.String()); err != nil {
+			return nil, err
+		}
 		result = append(result, currentMarker)
 	} else {
 		// If we end with a nil currentMarker, that's an error because it means we had a marker key without a value(i.e. no "=")
@@ -182,6 +184,68 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 	}
 
 	return result, nil
+}
+
+func newMarker(rawKey string) (*Marker, error) {
+	key := strings.TrimSpace(rawKey)
+	if key == "" {
+		return nil, fmt.Errorf("empty marker key")
+	}
+	markerType, err := markerTypeFromString(key)
+	if err != nil {
+		return nil, fmt.Errorf("invalid marker key %q: %w", key, err)
+	}
+	return &Marker{MarkerType: markerType, Key: key}, nil
+}
+
+const validationMessageArg = ",message="
+
+func setMarkerValue(marker *Marker, raw string) error {
+	if marker.MarkerType != MarkerTypeValidation {
+		marker.Value = processValue(raw)
+		return nil
+	}
+	end := closingQuoteIndex(raw)
+	if end < 0 {
+		if strings.Contains(raw, validationMessageArg) {
+			return fmt.Errorf("validation rule must be quoted when a message is set, got %s", raw)
+		}
+		marker.Value = processValue(raw)
+		return nil
+	}
+	rest := raw[end+1:]
+	if rest == "" {
+		marker.Value = processValue(raw)
+		return nil
+	}
+	if !strings.HasPrefix(rest, validationMessageArg) {
+		return fmt.Errorf("unexpected %q after validation rule, expected %s\"<text>\"", rest, validationMessageArg)
+	}
+	message := rest[len(validationMessageArg):]
+	if closingQuoteIndex(message) != len(message)-1 {
+		return fmt.Errorf("validation message must be a quoted string, got %s", message)
+	}
+	marker.Value = processValue(raw[:end+1])
+	marker.Message = processValue(message)
+	return nil
+}
+
+func closingQuoteIndex(s string) int {
+	if !strings.HasPrefix(s, `"`) {
+		return -1
+	}
+	escaped := false
+	for i := 1; i < len(s); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case s[i] == '\\':
+			escaped = true
+		case s[i] == '"':
+			return i
+		}
+	}
+	return -1
 }
 
 func processValue(value string) string {
@@ -409,7 +473,7 @@ func applyValidationMarker(schema *extv1.JSONSchemaProps, marker *Marker) error 
 	}
 	schema.XValidations = append(schema.XValidations, extv1.ValidationRule{
 		Rule:    marker.Value,
-		Message: "validation failed",
+		Message: cmp.Or(marker.Message, "validation failed"),
 	})
 	return nil
 }

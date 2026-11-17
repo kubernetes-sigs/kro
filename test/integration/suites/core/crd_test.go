@@ -250,6 +250,78 @@ var _ = Describe("CRD", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
+		It("should reconcile metadata-only CRD changes", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-crd-metadata",
+				generator.WithSchema("TestMetadata", "v1alpha1", map[string]any{"field": "string"}, nil),
+			)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+			})
+
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			crdKey := types.NamespacedName{Name: "testmetadata.kro.run"}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, crdKey, crd)).To(Succeed())
+				g.Expect(crd.Annotations).To(HaveKey(metadata.CRDMetadataAnnotation))
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			originalSpec := crd.Spec.DeepCopy()
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, crdKey, crd)).To(Succeed())
+				crd.Labels["other.example.com/label"] = "preserved"
+				crd.Annotations["other.example.com/annotation"] = "preserved"
+				g.Expect(env.Client.Update(ctx, crd)).To(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			for _, phase := range []struct {
+				name        string
+				labels      map[string]string
+				annotations map[string]string
+			}{
+				{
+					name:        "add metadata without changing the schema",
+					labels:      map[string]string{"example.com/ingest": "true"},
+					annotations: map[string]string{"example.com/description": "original"},
+				},
+				{
+					name:        "update metadata without changing the schema",
+					labels:      map[string]string{"example.com/ingest": "false"},
+					annotations: map[string]string{"example.com/description": "updated"},
+				},
+				{name: "remove metadata without changing the schema"},
+			} {
+				By(phase.name)
+				Eventually(func(g Gomega, ctx SpecContext) {
+					g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
+					rgd.Spec.Schema.Metadata = &krov1alpha1.CRDMetadata{Labels: phase.labels, Annotations: phase.annotations}
+					g.Expect(env.Client.Update(ctx, rgd)).To(Succeed())
+				}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+				Eventually(func(g Gomega, ctx SpecContext) {
+					g.Expect(env.Client.Get(ctx, crdKey, crd)).To(Succeed())
+					if phase.labels == nil {
+						g.Expect(crd.Labels).NotTo(HaveKey("example.com/ingest"))
+						g.Expect(crd.Annotations).NotTo(HaveKey("example.com/description"))
+					} else {
+						g.Expect(crd.Labels).To(HaveKeyWithValue("example.com/ingest", phase.labels["example.com/ingest"]))
+						g.Expect(crd.Annotations).To(HaveKeyWithValue("example.com/description", phase.annotations["example.com/description"]))
+					}
+					g.Expect(crd.Labels).To(HaveKeyWithValue("other.example.com/label", "preserved"))
+					g.Expect(crd.Annotations).To(HaveKeyWithValue("other.example.com/annotation", "preserved"))
+					g.Expect(crd.Labels).To(HaveKeyWithValue(metadata.OwnedLabel, "true"))
+					g.Expect(crd.Labels).To(HaveKeyWithValue(metadata.ResourceGraphDefinitionNameLabel, rgd.Name))
+					g.Expect(crd.Spec).To(Equal(*originalSpec))
+				}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}
+
+			resourceVersion := crd.ResourceVersion
+			Consistently(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, crdKey, crd)).To(Succeed())
+				g.Expect(crd.ResourceVersion).To(Equal(resourceVersion))
+			}, 3*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		})
+
 		It("should update CRD short names and categories", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-crd-names",
 				generator.WithSchema(

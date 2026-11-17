@@ -194,6 +194,80 @@ func TestApplyMarkers(t *testing.T) {
 			markers:    `validation=""`,
 			wantErr:    true,
 		},
+		{
+			name:       "validation rule with custom message",
+			schemaType: "integer",
+			markers:    `validation="self >= 1 && self <= 10",message="Replicas must be between 1 and 10"`,
+			want: &extv1.JSONSchemaProps{
+				Type: "integer",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self >= 1 && self <= 10", Message: "Replicas must be between 1 and 10"},
+				},
+			},
+		},
+		{
+			name:       "validation rule with empty message falls back to default",
+			schemaType: "integer",
+			markers:    `validation="self > 0",message=""`,
+			want: &extv1.JSONSchemaProps{
+				Type: "integer",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self > 0", Message: "validation failed"},
+				},
+			},
+		},
+		{
+			name:       "validation rule containing message text inside the CEL string",
+			schemaType: "string",
+			markers:    `validation="self != 'a\",message=\"b'",message="must not be the reserved value"`,
+			want: &extv1.JSONSchemaProps{
+				Type: "string",
+				XValidations: []extv1.ValidationRule{
+					{Rule: `self != 'a",message="b'`, Message: "must not be the reserved value"},
+				},
+			},
+		},
+		{
+			name:       "validation message with escaped quotes",
+			schemaType: "string",
+			markers:    `validation="self != 'x'",message="value must not be \"x\""`,
+			want: &extv1.JSONSchemaProps{
+				Type: "string",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self != 'x'", Message: `value must not be "x"`},
+				},
+			},
+		},
+		{
+			name:       "validation with message but empty rule",
+			schemaType: "string",
+			markers:    `validation="",message="something"`,
+			wantErr:    true,
+		},
+		{
+			name:       "multiple validation markers each with their own message",
+			schemaType: "integer",
+			markers:    `validation="self >= 1",message="must be at least 1" validation="self % 2 == 1",message="must be odd"`,
+			want: &extv1.JSONSchemaProps{
+				Type: "integer",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self >= 1", Message: "must be at least 1"},
+					{Rule: "self % 2 == 1", Message: "must be odd"},
+				},
+			},
+		},
+		{
+			name:       "multiple validation markers with and without message",
+			schemaType: "integer",
+			markers:    `validation="self >= 1" validation="self % 2 == 1",message="must be odd"`,
+			want: &extv1.JSONSchemaProps{
+				Type: "integer",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self >= 1", Message: "validation failed"},
+					{Rule: "self % 2 == 1", Message: "must be odd"},
+				},
+			},
+		},
 		// Immutable marker
 		{
 			name:       "immutable=true",
@@ -809,6 +883,51 @@ func TestParseMarkers(t *testing.T) {
 				{MarkerType: MarkerTypeDescription, Key: "description", Value: "Array with comprehensive validation"},
 			},
 			wantErr: false,
+		},
+		{
+			name:  "validation with message",
+			input: `validation="self > 0",message="must be positive" required=true`,
+			want: []*Marker{
+				{MarkerType: MarkerTypeValidation, Key: "validation", Value: "self > 0", Message: "must be positive"},
+				{MarkerType: MarkerTypeRequired, Key: "required", Value: "true"},
+			},
+		},
+		{
+			name:  "unquoted validation without message",
+			input: `validation=self>0`,
+			want: []*Marker{
+				{MarkerType: MarkerTypeValidation, Key: "validation", Value: "self>0"},
+			},
+		},
+		{
+			name:    "unquoted validation rule with message",
+			input:   `validation=self>0,message="must be positive"`,
+			wantErr: true,
+		},
+		{
+			name:    "unquoted validation message",
+			input:   `validation="self > 0",message=positive`,
+			wantErr: true,
+		},
+		{
+			name:    "unknown validation argument",
+			input:   `validation="self > 0",reason="FieldValueInvalid"`,
+			wantErr: true,
+		},
+		{
+			name:    "text after quoted validation message",
+			input:   `validation="self > 0",message="a"b`,
+			wantErr: true,
+		},
+		{
+			name:    "unclosed validation message",
+			input:   `validation="self > 0",message="must be positive`,
+			wantErr: true,
+		},
+		{
+			name:    "space before validation message is a separate unknown marker",
+			input:   `validation="self > 0", message="must be positive"`,
+			wantErr: true,
 		},
 		{
 			name:  "zero minItems",

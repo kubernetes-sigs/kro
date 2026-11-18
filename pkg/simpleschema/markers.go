@@ -116,6 +116,8 @@ type Marker struct {
 
 // ParseMarkers parses a string of markers and returns a slice of Marker structs.
 // The marker string should be in the format `marker=value`.
+//
+//nolint:gocyclo // a single pass over quotes, escapes and brackets is easier to follow in one switch
 func ParseMarkers(markers string) ([]*Marker, error) {
 	var result []*Marker
 	var currentMarker *Marker
@@ -154,7 +156,11 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 			}
 		case unicode.IsSpace(char) && !inQuotes && bracketCount == 0:
 			if currentMarker != nil {
-				currentMarker.Value = processValue(currentMarker.MarkerType, buffer.String())
+				value, err := processValue(currentMarker.MarkerType, buffer.String())
+				if err != nil {
+					return nil, err
+				}
+				currentMarker.Value = value
 				result = append(result, currentMarker)
 				currentMarker = nil
 				buffer.Reset()
@@ -168,7 +174,11 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 	}
 
 	if currentMarker != nil {
-		currentMarker.Value = processValue(currentMarker.MarkerType, buffer.String())
+		value, err := processValue(currentMarker.MarkerType, buffer.String())
+		if err != nil {
+			return nil, err
+		}
+		currentMarker.Value = value
 		result = append(result, currentMarker)
 	} else {
 		// If we end with a nil currentMarker, that's an error because it means we had a marker key without a value(i.e. no "=")
@@ -185,23 +195,24 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 	return result, nil
 }
 
-func processValue(markerType MarkerType, value string) string {
+func processValue(markerType MarkerType, value string) (string, error) {
 	if len(value) >= 2 && strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
-		// A quoted default becomes a JSON string in the CRD, so its escapes keep
-		// their JSON meaning. A value that isn't a valid JSON string, like one
-		// with a regular expression escape, is unescaped like the other markers.
+		// A quoted default becomes a JSON string in the CRD, so it has to be a
+		// valid one. Unescaping it like the other markers instead would keep
+		// "\n" as two characters in "\d\n" but turn it into a newline in "a\nb".
 		if markerType == MarkerTypeDefault {
 			var decoded string
-			if err := json.Unmarshal([]byte(value), &decoded); err == nil {
-				return decoded
+			if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+				return "", fmt.Errorf("default value %s is not a valid JSON string: %w", value, err)
 			}
+			return decoded, nil
 		}
 
 		// remove surrounding quotes and unescape the string
 		unquoted := value[1 : len(value)-1]
-		return unescapeString(unquoted)
+		return unescapeString(unquoted), nil
 	}
-	return strings.TrimSpace(value)
+	return strings.TrimSpace(value), nil
 }
 
 // unescapeString unescapes a string that is surrounded by quotes.

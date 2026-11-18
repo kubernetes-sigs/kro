@@ -60,6 +60,24 @@ func TestApplyMarkers(t *testing.T) {
 			want:       &extv1.JSONSchemaProps{Type: "string", Default: &extv1.JSON{Raw: []byte(`"hello"`)}},
 		},
 		{
+			name:       "string default with escaped quotes",
+			schemaType: "string",
+			markers:    `default="say \"hi\""`,
+			want:       &extv1.JSONSchemaProps{Type: "string", Default: &extv1.JSON{Raw: []byte(`"say \"hi\""`)}},
+		},
+		{
+			name:       "string default with backslashes",
+			schemaType: "string",
+			markers:    `default="C:\\temp"`,
+			want:       &extv1.JSONSchemaProps{Type: "string", Default: &extv1.JSON{Raw: []byte(`"C:\\temp"`)}},
+		},
+		{
+			name:       "string default keeps its JSON escapes",
+			schemaType: "string",
+			markers:    `default="a\nb"`,
+			want:       &extv1.JSONSchemaProps{Type: "string", Default: &extv1.JSON{Raw: []byte(`"a\nb"`)}},
+		},
+		{
 			name:       "integer default",
 			schemaType: "integer",
 			markers:    "default=42",

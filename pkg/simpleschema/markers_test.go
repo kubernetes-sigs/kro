@@ -527,6 +527,21 @@ func TestParseMarkers(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			// A quoted default is written to the CRD as a JSON string, so an escape
+			// JSON doesn't have can't keep its meaning.
+			name:    "default that is not a valid JSON string",
+			input:   `default="\d\n"`,
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:  "default with an escaped backslash",
+			input: `default="\\d"`,
+			want: []*Marker{
+				{MarkerType: MarkerTypeDefault, Key: "default", Value: `\d`},
+			},
+		},
+		{
 			name:    "unclosed brace (incomplete json)",
 			input:   "default={\"unclosed\": \"brace\"",
 			want:    nil,

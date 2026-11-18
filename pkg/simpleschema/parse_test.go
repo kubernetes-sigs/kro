@@ -50,6 +50,7 @@ func TestParseField(t *testing.T) {
 		{name: "empty slice elem", input: "[]", wantErr: true},
 		{name: "non-string map key", input: "map[integer]string", wantErr: true},
 		{name: "invalid marker syntax", input: "string | =invalid", wantErr: true},
+		{name: "marker value that is only an opening quote", input: "string | description=\"", wantErr: true},
 		{name: "invalid nested slice elem", input: "[][]", wantErr: true},
 		{name: "invalid map value type", input: "map[string][]", wantErr: true},
 		{name: "empty type", input: "", wantErr: true},

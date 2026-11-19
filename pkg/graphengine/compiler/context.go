@@ -28,6 +28,7 @@ import (
 
 	expv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/defschema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -72,8 +73,7 @@ type CompilationContext struct {
 
 	// nodeSchemaOverrides declares per-node publication schemas supplied by
 	// the caller via WithNodeSchemaOverride. A Def node with an override
-	// publishes that schema instead of the value-shape inference of
-	// inferDefSchema — used by the RGD adapter to type the `schema` node
+	// publishes that schema instead of the inferred one — used by the RGD adapter to type the `schema` node
 	// with the RGD's declared SimpleSchema, which stays stable across
 	// reconciles even when the instance is missing fields.
 	nodeSchemaOverrides map[string]*spec.Schema
@@ -184,12 +184,13 @@ func (ctx *CompilationContext) ancestorIDs() []string {
 
 // buildNode produces a single compiled Node from its API form, parses CEL
 // fragments out of the payload, and returns the OpenAPI schema the node
-// publishes to scope (nil for Def and dynamic-GVK templates).
+// publishes to scope (nil for Def nodes with expressions and dynamic-GVK
+// templates).
 // buildDefNode builds a Def node from its literal payload. Def nodes have no
-// target GVK, but we infer an OpenAPI schema from the payload so the typed CEL
-// env can narrow def-sourced expressions; fields whose value is a CEL fragment
-// stay dyn (see inferDefSchema). Literal def nodes (e.g. instance schema nodes)
-// skip expression parsing.
+// target GVK. A def without expressions gets its schema from the payload here;
+// a def with expressions gets it from the checked expression types after the
+// dependency order is known (see inferDefSchemas). Literal def nodes (e.g.
+// instance schema nodes) skip expression parsing.
 func (ctx *CompilationContext) buildDefNode(n *expv1alpha1.Node, order int, payload map[string]any) (*Node, *spec.Schema, error) {
 	var descriptors []variable.FieldDescriptor
 	if _, isLiteral := ctx.literalNodes[n.ID]; !isLiteral {
@@ -216,7 +217,17 @@ func (ctx *CompilationContext) buildDefNode(n *expv1alpha1.Node, order int, payl
 	if override, ok := ctx.nodeSchemaOverrides[n.ID]; ok {
 		return node, override, nil
 	}
-	return node, inferDefSchema(payload), nil
+	if len(descriptors) > 0 {
+		// Fields hold CEL expressions, so the schema depends on the types of
+		// the nodes they reference. compileFrame infers it once the dependency
+		// order is known (see inferDefSchemas).
+		return node, nil, nil
+	}
+	sch, err := defschema.Infer(payload, nil, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("infer def schema: %w", err)
+	}
+	return node, sch, nil
 }
 
 func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, order int) (*Node, *spec.Schema, error) {

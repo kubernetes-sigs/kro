@@ -582,14 +582,14 @@ func TestCompile(t *testing.T) {
 			wantErr: "",
 		},
 		{
-			name: "CEL-fragment def field stays dyn (sub-field access compiles)",
+			name: "dyn-typed def field (sub-field access compiles)",
 			graph: generator.NewGraph("g",
 				generator.WithDef("seed", map[string]any{"k": "v"}),
-				// `info` is a CEL fragment, so its inferred type is dyn —
+				// `info` is dyn(...), so its inferred type is dyn —
 				// downstream sub-field access compiles even though the
 				// runtime value won't have it (used by other tests that
 				// rely on this contract).
-				generator.WithDef("base", map[string]any{"info": "${'literal'}"}),
+				generator.WithDef("base", map[string]any{"info": "${dyn('literal')}"}),
 				generator.WithTemplate("cm", map[string]any{
 					"apiVersion": "v1", "kind": "ConfigMap",
 					"metadata": map[string]any{"name": "${base.info.anything}"},
@@ -599,6 +599,82 @@ func TestCompile(t *testing.T) {
 			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
 				// Compiles fine — the dyn escape hatch works.
 				assert.Contains(t, prog.Nodes, "cm")
+			},
+		},
+		{
+			name: "def field typed from its expression rejects sub-field access",
+			graph: generator.NewGraph("g",
+				generator.WithDef("seed", map[string]any{"k": "v"}),
+				generator.WithDef("base", map[string]any{"info": "${'literal'}"}),
+				generator.WithTemplate("cm", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "${base.info.anything}"},
+					"data":     map[string]any{"k": "v"},
+				}),
+			),
+			wantErr: "does not support field selection",
+		},
+		{
+			name: "def field typed from its expression is checked against the consuming field",
+			graph: generator.NewGraph("g",
+				generator.WithDef("seed", map[string]any{"k": "v"}),
+				generator.WithDef("computed", map[string]any{"count": "${1 + 2}"}),
+				generator.WithTemplate("cm", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "cm"},
+					"data":     map[string]any{"count": "${computed.count}"},
+				}),
+			),
+			wantErr: "type mismatch",
+		},
+		{
+			name: "def typed through another def and a template output",
+			graph: generator.NewGraph("g",
+				generator.WithTemplate("src", configMap("source")),
+				generator.WithDef("first", map[string]any{"name": "${src.metadata.name}"}),
+				generator.WithDef("second", map[string]any{"upper": "${first.name.upperAscii()}"}),
+				generator.WithTemplate("cm", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "${second.upper}"},
+					"data":     map[string]any{"k": "v"},
+				}),
+			),
+			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
+				assert.Contains(t, prog.NodeSchemas, "second")
+			},
+		},
+		{
+			name: "def with a string field cannot gate includeWhen",
+			graph: generator.NewGraph("g",
+				generator.WithDef("seed", map[string]any{"k": "v"}),
+				generator.WithDef("cfg", map[string]any{"flag": "${'on'}"}),
+				generator.WithTemplate("cm", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "cm"},
+					"data":     map[string]any{"k": "v"},
+				}),
+				generator.WithIncludeWhen("${cfg.flag}"),
+			),
+			wantErr: "must return bool",
+		},
+		{
+			name: "forEach def is a typed list for a consuming forEach",
+			graph: generator.NewGraph("g",
+				generator.WithDef("seed", map[string]any{"names": []any{"a", "b"}}),
+				generator.WithRawNode(expv1alpha1.Node{
+					ID:      "labels",
+					Def:     rawExtensionFromString(`{"full":"${'x-' + n}"}`),
+					ForEach: []expv1alpha1.ForEachDimension{{"n": "${seed.names}"}},
+				}),
+				generator.WithTemplate("cm", map[string]any{
+					"apiVersion": "v1", "kind": "ConfigMap",
+					"metadata": map[string]any{"name": "${l.full}"},
+					"data":     map[string]any{"k": "v"},
+				}, generator.ForEachDim("l", "${labels}")),
+			),
+			after: func(t *testing.T, prog *Program, _ *expv1alpha1.Graph) {
+				require.Contains(t, prog.NodeSchemas, "labels")
+				assert.True(t, prog.NodeSchemas["labels"].Type.Contains("array"))
 			},
 		},
 		{

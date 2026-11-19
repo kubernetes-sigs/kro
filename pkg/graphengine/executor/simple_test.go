@@ -223,7 +223,7 @@ func TestSimple_Apply(t *testing.T) {
 				// Dyn def field so the sub-field access compiles; the
 				// actual value is a string, so .bogus errors at runtime
 				// during Resolve.
-				generator.WithDef("base", map[string]any{"name": "${'ok'}"}),
+				generator.WithDef("base", map[string]any{"name": "${dyn('ok')}"}),
 				generator.WithTemplate("cm", map[string]any{
 					"apiVersion": "v1", "kind": "ConfigMap",
 					"metadata": map[string]any{"name": "${base.name.bogus}"},

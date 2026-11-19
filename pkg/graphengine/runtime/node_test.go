@@ -119,7 +119,7 @@ func TestNode_IsIgnored(t *testing.T) {
 				generator.WithDef("seed", map[string]any{"k": "v"}),
 				// dyn-typed field passes the bool typecheck but resolves
 				// to a string at runtime, hitting the non-bool branch.
-				generator.WithDef("cfg", map[string]any{"flag": "${'literal'}"}),
+				generator.WithDef("cfg", map[string]any{"flag": "${dyn('literal')}"}),
 				generator.WithDef("guarded", map[string]any{"x": "y"}),
 				generator.WithIncludeWhen("${cfg.flag}"),
 			),
@@ -131,7 +131,7 @@ func TestNode_IsIgnored(t *testing.T) {
 			name: "includeWhen referencing a missing sub-field on a static def is a hard error",
 			graph: generator.NewGraph("g",
 				generator.WithDef("seed", map[string]any{"k": "v"}),
-				generator.WithDef("cfg", map[string]any{"flag": "${'literal'}"}),
+				generator.WithDef("cfg", map[string]any{"flag": "${dyn('literal')}"}),
 				generator.WithDef("guarded", map[string]any{"x": "y"}),
 				generator.WithIncludeWhen("${cfg.flag.bogus}"),
 			),
@@ -247,7 +247,7 @@ func TestNode_CheckReadiness(t *testing.T) {
 				// readyWhen typecheck doesn't reject. At runtime the
 				// resolved value is a string, so `.bogus` triggers the
 				// data-pending classification.
-				generator.WithDef("svc", map[string]any{"x": "${'literal'}"}),
+				generator.WithDef("svc", map[string]any{"x": "${dyn('literal')}"}),
 				generator.WithReadyWhen("${svc.x.bogus != ''}"),
 			),
 			populate: func(rt *Runtime) {
@@ -265,7 +265,7 @@ func TestNode_CheckReadiness(t *testing.T) {
 				// access compiles. If the ignore short-circuit doesn't
 				// fire, eval would error at runtime — the test passes
 				// only when ignored=true skips the eval entirely.
-				generator.WithDef("guarded", map[string]any{"x": "${'literal'}"}),
+				generator.WithDef("guarded", map[string]any{"x": "${dyn('literal')}"}),
 				generator.WithIncludeWhen("${flag.enabled}"),
 				generator.WithReadyWhen("${guarded.x.bogus != ''}"),
 			),
@@ -278,7 +278,7 @@ func TestNode_CheckReadiness(t *testing.T) {
 				generator.WithDef("seed", map[string]any{"k": "v"}),
 				// dyn field resolves to a string, so the readyWhen result
 				// isn't a bool and hits the non-bool branch (hard error).
-				generator.WithDef("svc", map[string]any{"phase": "${'Active'}"}),
+				generator.WithDef("svc", map[string]any{"phase": "${dyn('Active')}"}),
 				generator.WithReadyWhen("${svc.phase}"),
 			),
 			populate: func(rt *Runtime) {
@@ -421,7 +421,7 @@ func TestNode_Resolve(t *testing.T) {
 				// The CEL fragment makes this def field dyn at compile
 				// time, so downstream sub-field access compiles but errors
 				// at runtime when the actual value doesn't have the field.
-				generator.WithDef("base", map[string]any{"info": "${'literal'}"}),
+				generator.WithDef("base", map[string]any{"info": "${dyn('literal')}"}),
 				generator.WithTemplate("cm", map[string]any{
 					"apiVersion": "v1", "kind": "ConfigMap",
 					"metadata": map[string]any{"name": "${base.info.missing}"},
@@ -520,7 +520,7 @@ func TestNode_Resolve(t *testing.T) {
 				// the static forEach-must-return-list check can't reject
 				// upfront. The actual runtime value is a string, which
 				// the runtime list assertion catches.
-				generator.WithDef("src", map[string]any{"value": "${'not a list'}"}),
+				generator.WithDef("src", map[string]any{"value": "${dyn('not a list')}"}),
 				generator.WithTemplate("p", map[string]any{
 					"apiVersion": "v1", "kind": "Pod",
 					"metadata": map[string]any{"name": "${'p-' + n}"},
@@ -562,7 +562,7 @@ func TestNode_TolerateDataPending(t *testing.T) {
 		t.Parallel()
 		g := generator.NewGraph("g",
 			generator.WithDef("seed", map[string]any{"k": "v"}),
-			generator.WithDef("upstream", map[string]any{"data": "${'val'}"}),
+			generator.WithDef("upstream", map[string]any{"data": "${dyn('val')}"}),
 			generator.WithTemplate("cm", map[string]any{
 				"apiVersion": "v1", "kind": "ConfigMap",
 				"metadata": map[string]any{"name": "cm-test"},
@@ -594,7 +594,7 @@ func TestNode_TolerateDataPending(t *testing.T) {
 		t.Parallel()
 		g := generator.NewGraph("g",
 			generator.WithDef("seed", map[string]any{"k": "v"}),
-			generator.WithDef("upstream", map[string]any{"data": "${'val'}", "enabled": "${true}"}),
+			generator.WithDef("upstream", map[string]any{"data": "${dyn('val')}", "enabled": "${true}"}),
 			generator.WithTemplate("vpc", map[string]any{
 				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 				"kind":       "VPC",
@@ -632,7 +632,7 @@ func TestNode_TolerateDataPending(t *testing.T) {
 		t.Parallel()
 		g := generator.NewGraph("g",
 			generator.WithDef("seed", map[string]any{"k": "v"}),
-			generator.WithDef("upstream", map[string]any{"data": "${'val'}"}),
+			generator.WithDef("upstream", map[string]any{"data": "${dyn('val')}"}),
 			generator.WithTemplate("vpc", map[string]any{
 				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 				"kind":       "VPC",
@@ -670,7 +670,7 @@ func TestNode_TolerateDataPending(t *testing.T) {
 		t.Parallel()
 		g := generator.NewGraph("g",
 			generator.WithDef("seed", map[string]any{"k": "v"}),
-			generator.WithDef("upstream", map[string]any{"data": "${'val'}"}),
+			generator.WithDef("upstream", map[string]any{"data": "${dyn('val')}"}),
 			generator.WithTemplate("vpc", map[string]any{
 				"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 				"kind":       "VPC",

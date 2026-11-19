@@ -228,7 +228,7 @@ type ForEachDimension map[string]string
 // Each resource can either be created using a template or reference an existing resource.
 // Resources can depend on each other through CEL expressions, creating a dependency graph.
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.template) && !has(self.externalRef)) || (!has(self.template) && has(self.externalRef))",message="exactly one of template or externalRef must be provided"
+// +kubebuilder:validation:XValidation:rule="[has(self.template), has(self.externalRef), has(self.def)].exists_one(x, x)",message="exactly one of template, externalRef, or def must be provided"
 type Resource struct {
 	// ID is a unique identifier for this resource within the ResourceGraphDefinition.
 	// It is used to reference this resource in CEL expressions from other resources.
@@ -238,16 +238,27 @@ type Resource struct {
 	ID string `json:"id,omitempty"`
 	// Template is the Kubernetes resource manifest to create.
 	// It can contain CEL expressions (using ${...} syntax) that reference other resources.
-	// Exactly one of template or externalRef must be provided.
+	// Exactly one of template, externalRef, or def must be provided.
 	//
 	// +kubebuilder:validation:Optional
 	Template runtime.RawExtension `json:"template,omitempty"`
 	// ExternalRef references an existing resource in the cluster instead of creating one.
 	// This is useful for reading existing resources and using their values in other resources.
-	// Exactly one of template or externalRef must be provided.
+	// Exactly one of template, externalRef, or def must be provided.
 	//
 	// +kubebuilder:validation:Optional
 	ExternalRef *ExternalRef `json:"externalRef,omitempty"`
+
+	// Def introduces computed data into scope without creating or reading any
+	// Kubernetes resource. The value must be an object whose fields may contain
+	// CEL expressions (using ${...} syntax). Other resources reference it by id,
+	// for example ${naming.prefix}. The type of each field is inferred from its
+	// CEL expression. Def supports forEach (the node becomes a list of
+	// computed objects), includeWhen, and readyWhen.
+	// Exactly one of template, externalRef, or def must be provided.
+	//
+	// +kubebuilder:validation:Optional
+	Def runtime.RawExtension `json:"def,omitempty"`
 	// ReadyWhen is a list of CEL expressions that determine when this resource is considered ready.
 	// All expressions must evaluate to true for the resource to be ready.
 	// If not specified, the resource is considered ready when it exists.

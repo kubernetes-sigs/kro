@@ -73,7 +73,7 @@ func TestResourceGraphDefinitionToGraph_Rejections(t *testing.T) {
 					Metadata: v1alpha1.ExternalRefMetadata{Name: "cm"},
 				},
 			}),
-			wantErr:     "both",
+			wantErr:     "only one of",
 			unsupported: true,
 		},
 		{
@@ -297,4 +297,39 @@ func TestInstanceSchemaNode(t *testing.T) {
 		require.NotNil(t, node.Def)
 		assert.Contains(t, string(node.Def.Raw), "metadata")
 	})
+}
+
+// A def resource becomes a Graph def node with its modifiers intact, and does
+// not alias the RGD's raw payload.
+func TestResourceGraphDefinitionToGraph_Def(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{"prefix":"${schema.spec.name + '-x'}"}`)
+	rgd := &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "webapp"},
+		Spec: v1alpha1.ResourceGraphDefinitionSpec{Resources: []*v1alpha1.Resource{{
+			ID:          "naming",
+			Def:         apimachineryruntime.RawExtension{Raw: raw},
+			ReadyWhen:   []string{"${each.prefix != ''}"},
+			IncludeWhen: []string{"${schema.spec.enabled}"},
+			ForEach:     []v1alpha1.ForEachDimension{{"n": "${schema.spec.names}"}},
+		}}},
+	}
+
+	g, err := ResourceGraphDefinitionToGraph(rgd)
+	require.NoError(t, err)
+	require.Len(t, g.Spec.Nodes, 1)
+
+	node := g.Spec.Nodes[0]
+	assert.Equal(t, "naming", node.ID)
+	assert.Nil(t, node.Template)
+	assert.Nil(t, node.Ref)
+	require.NotNil(t, node.Def)
+	assert.JSONEq(t, string(raw), string(node.Def.Raw))
+	assert.Equal(t, []string{"${each.prefix != ''}"}, node.ReadyWhen)
+	assert.Equal(t, []string{"${schema.spec.enabled}"}, node.IncludeWhen)
+	require.Len(t, node.ForEach, 1)
+
+	node.Def.Raw[0] = 'X'
+	assert.Equal(t, byte('{'), raw[0], "the translated def must not alias the RGD's payload")
 }

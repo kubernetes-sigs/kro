@@ -801,7 +801,7 @@ func TestValidateCombinableResourceFields(t *testing.T) {
 		{
 			name:    "missing both template and external ref",
 			res:     &v1alpha1.Resource{ID: "res"},
-			wantErr: "exactly one of template or externalRef must be provided",
+			wantErr: "exactly one of template, externalRef, or def must be provided",
 		},
 		{
 			name: "template and external ref together",
@@ -810,7 +810,7 @@ func TestValidateCombinableResourceFields(t *testing.T) {
 				Template:    runtime.RawExtension{Raw: []byte("kind: ConfigMap")},
 				ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap"},
 			},
-			wantErr: "cannot use externalRef with template",
+			wantErr: "only one of template, externalRef, or def may be provided",
 		},
 		{
 			name: "external ref and foreach together",
@@ -835,11 +835,35 @@ func TestValidateCombinableResourceFields(t *testing.T) {
 				ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap"},
 			},
 		},
+		{
+			name: "def only is valid",
+			res: &v1alpha1.Resource{
+				ID:  "res",
+				Def: runtime.RawExtension{Raw: []byte("a: b")},
+			},
+		},
+		{
+			name: "def and template together",
+			res: &v1alpha1.Resource{
+				ID:       "res",
+				Def:      runtime.RawExtension{Raw: []byte("a: b")},
+				Template: runtime.RawExtension{Raw: []byte("kind: ConfigMap")},
+			},
+			wantErr: "only one of template, externalRef, or def may be provided",
+		},
+		{
+			name: "def with forEach is valid",
+			res: &v1alpha1.Resource{
+				ID:      "res",
+				Def:     runtime.RawExtension{Raw: []byte("a: b")},
+				ForEach: []v1alpha1.ForEachDimension{{"item": "${schema.spec.items}"}},
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateCombinableResourceFields(tt.res.ID, len(tt.res.Template.Raw) > 0, tt.res.ExternalRef != nil, len(tt.res.ForEach))
+			err := validateCombinableResourceFields(tt.res.ID, len(tt.res.Template.Raw) > 0, tt.res.ExternalRef != nil, len(tt.res.Def.Raw) > 0, len(tt.res.ForEach))
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 				return

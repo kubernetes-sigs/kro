@@ -371,6 +371,7 @@ func (in *Resource) DeepCopyInto(out *Resource) {
 		*out = new(ExternalRef)
 		(*in).DeepCopyInto(*out)
 	}
+	in.Def.DeepCopyInto(&out.Def)
 	if in.ReadyWhen != nil {
 		in, out := &in.ReadyWhen, &out.ReadyWhen
 		*out = make([]string, len(*in))

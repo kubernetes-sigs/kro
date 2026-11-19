@@ -183,3 +183,27 @@ func WithResourceCollection(
 		})
 	}
 }
+
+// WithDef adds a def (computed data) resource to the ResourceGraphDefinition.
+// forEach, readyWhen and includeWhen are optional.
+func WithDef(
+	id string,
+	def map[string]any,
+	forEach []krov1alpha1.ForEachDimension,
+	readyWhen []string,
+	includeWhen []string,
+) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		raw, err := json.Marshal(def)
+		if err != nil {
+			panic(err)
+		}
+		rgd.Spec.Resources = append(rgd.Spec.Resources, &krov1alpha1.Resource{
+			ID:          id,
+			ReadyWhen:   readyWhen,
+			IncludeWhen: includeWhen,
+			ForEach:     forEach,
+			Def:         runtime.RawExtension{Raw: raw},
+		})
+	}
+}

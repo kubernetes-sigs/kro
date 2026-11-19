@@ -100,11 +100,22 @@ spec:
                             Each resource can either be created using a template or reference an existing resource.
                             Resources can depend on each other through CEL expressions, creating a dependency graph.
                           properties:
+                            def:
+                              description: |-
+                                Def introduces computed data into scope without creating or reading any
+                                Kubernetes resource. The value must be an object whose fields may contain
+                                CEL expressions (using ${...} syntax). Other resources reference it by id,
+                                for example ${naming.prefix}. The type of each field is inferred from its
+                                CEL expression. Def supports forEach (the node becomes a list of
+                                computed objects), includeWhen, and readyWhen.
+                                Exactly one of template, externalRef, or def must be provided.
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
                             externalRef:
                               description: |-
                                 ExternalRef references an existing resource in the cluster instead of creating one.
                                 This is useful for reading existing resources and using their values in other resources.
-                                Exactly one of template or externalRef must be provided.
+                                Exactly one of template, externalRef, or def must be provided.
                               properties:
                                 apiVersion:
                                   description: |-
@@ -202,17 +213,17 @@ spec:
                               description: |-
                                 Template is the Kubernetes resource manifest to create.
                                 It can contain CEL expressions (using ${...} syntax) that reference other resources.
-                                Exactly one of template or externalRef must be provided.
+                                Exactly one of template, externalRef, or def must be provided.
                               type: object
                               x-kubernetes-preserve-unknown-fields: true
                           required:
                           - id
                           type: object
                           x-kubernetes-validations:
-                          - message: exactly one of template or externalRef must be
-                              provided
-                            rule: (has(self.template) && !has(self.externalRef)) ||
-                              (!has(self.template) && has(self.externalRef))
+                          - message: exactly one of template, externalRef, or def
+                              must be provided
+                            rule: '[has(self.template), has(self.externalRef), has(self.def)].exists_one(x,
+                              x)'
                         type: array
                       schema:
                         description: |-

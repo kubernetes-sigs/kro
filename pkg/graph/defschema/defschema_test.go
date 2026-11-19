@@ -89,6 +89,13 @@ func TestInfer(t *testing.T) {
 		assert.True(t, isDyn(empty.Items.Schema))
 	})
 
+	t.Run("an empty object stays a declared field", func(t *testing.T) {
+		sch, err := Infer(map[string]any{"empty": map[string]any{}}, nil, nil)
+		require.NoError(t, err)
+		_, ok := sch.Properties["empty"]
+		assert.True(t, ok)
+	})
+
 	t.Run("a field name with a dot is addressed by its quoted path", func(t *testing.T) {
 		sch, err := Infer(
 			map[string]any{"a.b": "${schema.spec.n}"},

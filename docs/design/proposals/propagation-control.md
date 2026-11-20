@@ -180,11 +180,28 @@ spec:
 
 ### Resource level
 
-`propagateWhen` introduces one new CEL function, `<id>.ready()`: true when node
-`<id>` has been applied and its `readyWhen` holds. Today nothing in a Graph can
-read another node's readiness; `readyWhen` may only reference its own node. The
-gate is where that read happens, so `app` can wait on `role.ready()`. The same
-spelling is used on collection items and fleet instances below.
+Gating on another node's readiness is the most common use of `propagateWhen`,
+and nothing in a Graph exposes it today. This does not compile:
+
+```
+- id: db
+  template: ...
+  readyWhen:
+    - ${db.status.readyReplicas == db.spec.replicas}
+
+- id: app
+  template:
+    ...
+            env:
+            - name: DB_READY
+              value: ${string(db.ready())}   # db.ready() is not exposed
+```
+
+A template can read `db.status.readyReplicas`, but not the `readyWhen` verdict
+the author already wrote for `db`. `propagateWhen` exposes that verdict as
+`<id>.ready()`: true when node `<id>` has been applied and its `readyWhen`
+holds. The same spelling is used for collection items and fleet instances
+below.
 
 `propagateWhen` creates ordinary dependencies on the resources it references,
 identical to template references. The gate adds a new predicate that is
@@ -223,6 +240,9 @@ on that revision, and reports the hold on `RevisionReconciled`:
 For Graph, `propagateWhen` is supported on every node that writes or computes
 (`template`, `patch`, `graph`, `def`) and rejected on `ref`, which has no
 desired state to hold. Gate the consumer of a `ref`, not the `ref`.
+
+A held node also retains contributions, the same as an already applied object
+that does not change.
 
 For RGD, `propagateWhen` is supported on `template` fields. RGD `externalRef`s
 do not support `propagateWhen` for the same reason as Graph refs.
@@ -412,8 +432,9 @@ To evaluate `propagateWhen` for a collection, kro:
 2. Applies every item that already carries the current hash, in parallel at
    `--apply-concurrency`, without evaluating the gate. There is nothing to
    advance; this is drift correction.
-3. For the remaining items, in order, evaluates `propagateWhen` with the
-   collection bound to the decisions so far and `each` bound to the item.
+3. For the remaining items, in order, evaluates `propagateWhen` with `each`
+   bound to the item and the collection list including the items admitted
+   earlier in this pass.
 4. If it is true, admits the item. It immediately counts as
    `updated() && !ready()` in the collection list. Admitted items are applied
    in batches of `--apply-concurrency`; after each batch their facts are
@@ -621,8 +642,9 @@ the gate to the consumer, added `ready()` and `updated()` per item, and sorts
 collections Ready-first with a random tiebreak.
 
 This KREP keeps the consumer-side gate, hold-not-prune, and filter-form budgets.
-It differs in 3 ways. `updated()` is collection-only and compares a render hash
-instead of a generation, so changes to referenced objects are caught. kro does
+It differs in 3 ways. `updated()` is not defined on single resources, and on
+collection items it compares a render hash instead of a generation, so changes
+to referenced objects are caught. kro does
 not reorder items. The RGD-level fleet gate is new.
 
 ### KREP-024: Instance Propagation Control

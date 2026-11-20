@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/defaults"
 )
 
 var generateDiagramCmd = &cobra.Command{
@@ -45,6 +46,7 @@ var generateDiagramCmd = &cobra.Command{
 		if err = yaml.Unmarshal(data, &rgd); err != nil {
 			return fmt.Errorf("failed to unmarshal ResourceGraphDefinition: %w", err)
 		}
+		defaults.ApplyRGDDefaults(&rgd)
 
 		if err = generateDiagram(&rgd); err != nil {
 			return fmt.Errorf("failed to generate diagram: %w", err)

@@ -60,6 +60,24 @@ func TestApplyMarkers(t *testing.T) {
 			want:       &extv1.JSONSchemaProps{Type: "string", Default: &extv1.JSON{Raw: []byte(`"hello"`)}},
 		},
 		{
+			name:       "string default with escaped quotes",
+			schemaType: "string",
+			markers:    `default="say \"hi\""`,
+			want:       &extv1.JSONSchemaProps{Type: "string", Default: &extv1.JSON{Raw: []byte(`"say \"hi\""`)}},
+		},
+		{
+			name:       "string default with backslashes",
+			schemaType: "string",
+			markers:    `default="C:\\temp"`,
+			want:       &extv1.JSONSchemaProps{Type: "string", Default: &extv1.JSON{Raw: []byte(`"C:\\temp"`)}},
+		},
+		{
+			name:       "string default keeps its JSON escapes",
+			schemaType: "string",
+			markers:    `default="a\nb"`,
+			want:       &extv1.JSONSchemaProps{Type: "string", Default: &extv1.JSON{Raw: []byte(`"a\nb"`)}},
+		},
+		{
 			name:       "integer default",
 			schemaType: "integer",
 			markers:    "default=42",
@@ -543,6 +561,21 @@ func TestParseMarkers(t *testing.T) {
 			input:   "description=\"Unclosed quote",
 			want:    nil,
 			wantErr: true,
+		},
+		{
+			// A quoted default is written to the CRD as a JSON string, so an escape
+			// JSON doesn't have can't keep its meaning.
+			name:    "default that is not a valid JSON string",
+			input:   `default="\d\n"`,
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:  "default with an escaped backslash",
+			input: `default="\\d"`,
+			want: []*Marker{
+				{MarkerType: MarkerTypeDefault, Key: "default", Value: `\d`},
+			},
 		},
 		{
 			name:    "unclosed brace (incomplete json)",

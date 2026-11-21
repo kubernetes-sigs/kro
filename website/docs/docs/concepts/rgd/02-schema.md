@@ -507,6 +507,25 @@ schema:
 
 For more details about SimpleSchema syntax and custom types, see the [SimpleSchema Specification](../../../api/specifications/simple-schema.md).
 
+## Requiring spec
+
+By default, the generated CRD accepts instances without a `spec`, even when
+`spec` has required fields. Required fields are only enforced once `spec` is
+present. Set `requireSpec: true` to reject new instances that have no `spec`:
+
+```kro
+schema:
+  apiVersion: v1alpha1
+  kind: Application
+  requireSpec: true
+  spec:
+    name: string | required=true
+```
+
+kro adds a validation rule to the root of the generated CRD, so the API server
+rejects these instances before kro processes them. Instances that already
+existed without a `spec` when you enabled it can still be updated and deleted.
+
 ## Additional Printer Columns
 
 Control what `kubectl get` displays:

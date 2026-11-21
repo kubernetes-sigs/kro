@@ -73,6 +73,9 @@ func FNV64a(v any, marshal func(any) ([]byte, error)) (string, error) {
 
 func normalizeSpec(spec v1alpha1.ResourceGraphDefinitionSpec) (v1alpha1.ResourceGraphDefinitionSpec, error) {
 	normalized := spec.DeepCopy()
+	// Rollout policy is not part of the graph: changing how a revision is
+	// propagated must not itself issue a revision.
+	normalized.PropagateWhen = nil
 	if normalized.Resources == nil {
 		normalized.Resources = []*v1alpha1.Resource{}
 	}

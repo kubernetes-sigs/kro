@@ -860,6 +860,14 @@ func buildStatusSchema(
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
 	}
+	// The fleet gate reads these two status fields as facts; an author-defined
+	// value would be a permanent gate bypass (convergedRevision: 99 makes the
+	// instance "in flight" forever).
+	for _, reserved := range []string{"observedRevision", "convergedRevision"} {
+		if _, ok := unstructuredStatus[reserved]; ok {
+			return nil, nil, nil, nil, fmt.Errorf("status.%s is reserved: kro writes it", reserved)
+		}
+	}
 	return inferStatusSchema(bc, unstructuredStatus, nodeNames, inspector)
 }
 

@@ -75,6 +75,15 @@ var (
 		},
 	)
 
+	// NodeGateEvalTotal counts propagateWhen evaluations: one per node for a
+	// single resource, one per item that reaches the gate for a collection.
+	NodeGateEvalTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "runtime_node_gate_eval_total",
+			Help: "Total number of propagateWhen evaluations",
+		},
+	)
+
 	NodeNotReadyTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "runtime_node_not_ready_total",

@@ -199,6 +199,9 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 			MaxCollectionSize:      r.cfg.RGDConfig.MaxCollectionSize,
 			ApplyConcurrency:       r.cfg.ApplyConcurrency,
 			CELCostLimit:           r.cfg.CELCostLimit,
+			// Live rollout policy; excluded from the revision hash so edits
+			// take effect on the next RGD reconcile without a new revision.
+			FleetGate: rgd.Spec.PropagateWhen,
 		},
 		gvr,
 		r.revisionsRegistry.ResolverFor(rgd.Name),

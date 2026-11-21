@@ -166,11 +166,12 @@ func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {
 		return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: template and externalRef are both set", ErrUnsupported, res.ID)
 	case hasTemplate:
 		return v1alpha1.Node{
-			ID:          res.ID,
-			Template:    copyRaw(res.Template.Raw),
-			ReadyWhen:   copyStrings(res.ReadyWhen),
-			IncludeWhen: copyStrings(res.IncludeWhen),
-			ForEach:     copyForEach(res.ForEach),
+			ID:            res.ID,
+			Template:      copyRaw(res.Template.Raw),
+			ReadyWhen:     copyStrings(res.ReadyWhen),
+			IncludeWhen:   copyStrings(res.IncludeWhen),
+			PropagateWhen: copyStrings(res.PropagateWhen),
+			ForEach:       copyForEach(res.ForEach),
 		}, nil
 	case hasRef:
 		// A selector externalRef is a read-only COLLECTION of external
@@ -196,10 +197,11 @@ func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {
 		// and rendered, and the executor can read the selector back off the
 		// resolved object.
 		return v1alpha1.Node{
-			ID:          res.ID,
-			Ref:         res.ExternalRef.DeepCopy(),
-			ReadyWhen:   copyStrings(res.ReadyWhen),
-			IncludeWhen: copyStrings(res.IncludeWhen),
+			ID:            res.ID,
+			Ref:           res.ExternalRef.DeepCopy(),
+			ReadyWhen:     copyStrings(res.ReadyWhen),
+			IncludeWhen:   copyStrings(res.IncludeWhen),
+			PropagateWhen: copyStrings(res.PropagateWhen),
 		}, nil
 	default:
 		return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: neither template nor externalRef is set", ErrUnsupported, res.ID)

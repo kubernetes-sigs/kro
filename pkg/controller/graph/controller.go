@@ -395,6 +395,8 @@ func (r *Reconciler) reconcileGraph(ctx context.Context, g *expv1alpha1.Graph) e
 		switch {
 		case errors.Is(applyErr, executor.ErrFieldManagerConflict):
 			marker.ResourcesFieldManagerConflict(applyErr.Error())
+		case errors.Is(applyErr, executor.ErrHeld):
+			marker.ResourcesHeld(applyErr.Error())
 		case errors.Is(applyErr, krotruntime.ErrDataPending):
 			marker.ResourcesDataPending(applyErr.Error())
 		default:
@@ -880,6 +882,13 @@ func (m *ConditionsMarker) ResourcesConverged() {
 // expressions evaluated false.
 func (m *ConditionsMarker) ResourcesNotReady(msg string) {
 	m.cs.SetFalse(ResourcesConverged, "WaitingForReadiness", msg)
+}
+
+// ResourcesHeld marks ResourcesConverged=False with reason "Held": a
+// propagateWhen gate is false, so the node (or some collection items) kept
+// its existing resources and nothing new was applied for it.
+func (m *ConditionsMarker) ResourcesHeld(msg string) {
+	m.cs.SetFalse(ResourcesConverged, "Held", msg)
 }
 
 // ResourcesDataPending marks ResourcesConverged=False with reason

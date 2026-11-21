@@ -37,6 +37,8 @@ const (
 	InstanceManaged = string(v1alpha1.InstanceConditionTypeInstanceManaged)
 	GraphResolved   = string(v1alpha1.InstanceConditionTypeGraphResolved)
 	ResourcesReady  = string(v1alpha1.InstanceConditionTypeResourcesReady)
+	// RevisionReconciled is informational: not in condSet, so it never gates Ready.
+	RevisionReconciled = string(v1alpha1.InstanceConditionTypeRevisionReconciled)
 )
 
 // instanceStatusFieldManager owns the controller-written status surface
@@ -121,6 +123,18 @@ func (m *ConditionsMarker) GraphResolved() {
 // GraphResolutionFailed signals there was an issue creating the runtime graph or resolving resources.
 func (m *ConditionsMarker) GraphResolutionFailed(msg string, args ...any) {
 	m.cs.SetFalse(GraphResolved, "ResolutionFailed", fmt.Sprintf(msg, args...))
+}
+
+// RevisionReconciled marks RevisionReconciled=True with the revision number.
+func (m *ConditionsMarker) RevisionReconciled(rev int64) {
+	m.cs.SetTrueWithReason(RevisionReconciled, "Reconciled", fmt.Sprintf("reconciled against revision %d", rev))
+}
+
+// RevisionHeld marks RevisionReconciled=False reason=Held: a propagateWhen
+// gate on the definition is holding this instance on revision `on` while
+// revision `latest` exists.
+func (m *ConditionsMarker) RevisionHeld(on, latest int64, expr string) {
+	m.cs.SetFalse(RevisionReconciled, "Held", heldMessage(on, latest, expr))
 }
 
 // ResourcesReady signals all resources in the graph are created and ready.
@@ -319,12 +333,24 @@ func (c *Controller) persistConditionsAndState(
 	if s, ok := inst.Object["status"].(map[string]any); ok {
 		s["conditions"] = status["conditions"]
 		s["state"] = status["state"]
+		if rev, ok := status[observedRevisionField]; ok {
+			s[observedRevisionField] = rev
+		}
+		if rev, ok := status[convergedRevisionField]; ok {
+			s[convergedRevisionField] = rev
+		}
 	}
 
 	// Skip the API write when the wire already carries identical conditions+state.
 	wireCS := map[string]any{
 		"conditions": wireStatus["conditions"],
 		"state":      wireStatus["state"],
+	}
+	if rev, ok := wireStatus[observedRevisionField]; ok {
+		wireCS[observedRevisionField] = rev
+	}
+	if rev, ok := wireStatus[convergedRevisionField]; ok {
+		wireCS[convergedRevisionField] = rev
 	}
 	if statusesMatch(wireCS, status) {
 		return nil
@@ -387,6 +413,12 @@ func builtinConditions(inst *unstructured.Unstructured) []v1alpha1.Condition {
 	out := make([]v1alpha1.Condition, 0, len(v1alpha1.KROBuiltinConditionTypes))
 	for _, c := range all {
 		if _, ok := v1alpha1.KROBuiltinConditionTypes[string(c.Type)]; ok {
+			out = append(out, c)
+			continue
+		}
+		// RevisionReconciled is controller-owned but optional: present only
+		// once a revision has been selected for the instance.
+		if string(c.Type) == RevisionReconciled {
 			out = append(out, c)
 		}
 	}

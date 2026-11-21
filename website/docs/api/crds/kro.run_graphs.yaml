@@ -138,6 +138,18 @@ spec:
                         fields, and it must contribute at least one field beyond identity.
                       type: object
                       x-kubernetes-preserve-unknown-fields: true
+                    propagateWhen:
+                      description: |-
+                        PropagateWhen is a list of CEL expressions that must all evaluate to
+                        true before this node's desired state may be applied. Evaluated
+                        against scope before resolve, after includeWhen. When any is false
+                        the node is held: not resolved, not applied, its existing resources
+                        are not pruned, and dependents that read from it are held too. Unlike
+                        includeWhen, a false propagateWhen never deletes anything. Use
+                        `ready.<id>` to gate on another node's readyWhen verdict.
+                      items:
+                        type: string
+                      type: array
                     readyWhen:
                       description: |-
                         ReadyWhen is a list of CEL expressions that must all evaluate to

@@ -36,6 +36,11 @@ const (
 	// rejected at build time.
 	CELOmitFunction featuregate.Feature = "CELOmitFunction"
 
+	// PropagateWhen enables the propagateWhen field on Graph nodes, RGD
+	// resources and the RGD spec (KREP-026). When disabled, any use of the
+	// field is rejected at build time.
+	PropagateWhen featuregate.Feature = "PropagateWhen"
+
 	// GraphKind enables the experimental Graph controller (kro.run/v1alpha1
 	// Graph). When disabled (the default), the Graph controller is not started
 	// and existing ResourceGraphDefinition behavior is unaffected.
@@ -59,6 +64,7 @@ var defaultKroFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	InstanceConditionEvents:  {Default: false, PreRelease: featuregate.Alpha},
 	InstanceConditionMetrics: {Default: false, PreRelease: featuregate.Alpha},
 	CELOmitFunction:          {Default: false, PreRelease: featuregate.Alpha},
+	PropagateWhen:            {Default: false, PreRelease: featuregate.Alpha},
 	GraphKind:                {Default: false, PreRelease: featuregate.Alpha},
 	ConservativeCRDComparison: {
 		Default:    false,

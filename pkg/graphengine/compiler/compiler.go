@@ -342,7 +342,7 @@ func (ctx *CompilationContext) compileFrame(apiNodes []expv1alpha1.Node, isRoot 
 		identifiers = append(identifiers, apiNodes[i].ID)
 	}
 	identifiers = append(identifiers, ancestors...)
-	identifiers = append(identifiers, EachVarName)
+	identifiers = append(identifiers, EachVarName, ReadyVarName)
 	identifiers = append(identifiers, allIteratorNames(nodes)...)
 	identifiers = dedupe(identifiers)
 
@@ -407,6 +407,10 @@ func (ctx *CompilationContext) compileFrame(apiNodes []expv1alpha1.Node, isRoot 
 	}
 
 	bc := newBuildContext(typedEnv, typeProvider, ctx.fieldCache, ctx.costLimit)
+	bc.nodeIDs = make(map[string]bool, len(nodes))
+	for id := range nodes {
+		bc.nodeIDs[id] = true
+	}
 	for id, node := range nodes {
 		if node.Kind == NodeKindGraph {
 			continue // already compiled in its own frame
@@ -652,6 +656,7 @@ func (ctx *CompilationContext) analyzeNodeRefs(n *Node, inspector *ast.Inspector
 		ctx.analyzeVariables,
 		ctx.analyzeForEach,
 		ctx.analyzeIncludeWhen,
+		ctx.analyzePropagateWhen,
 		ctx.analyzeReadyWhen,
 	} {
 		capt, err := analyze(n, inspector)
@@ -763,11 +768,98 @@ func (ctx *CompilationContext) analyzeIncludeWhen(n *Node, inspector *ast.Inspec
 	return captured, nil
 }
 
+// analyzePropagateWhen collects propagateWhen dependencies. Direct node
+// references and `<id>.ready()` calls both create hard edges to <id>, so a
+// gated node is ordered after everything its gate reads. A self-reference is
+// rejected for the same reason as includeWhen.
+func (ctx *CompilationContext) analyzePropagateWhen(n *Node, inspector *ast.Inspector) ([]string, error) {
+	if len(n.PropagateWhen) == 0 {
+		return nil, nil
+	}
+	if !features.FeatureGate.Enabled(features.PropagateWhen) {
+		return nil, fmt.Errorf("node %q: propagateWhen requires the PropagateWhen feature gate to be enabled", n.ID)
+	}
+	if n.Kind == NodeKindRef {
+		return nil, fmt.Errorf("node %q: propagateWhen is not supported on ref nodes, which have no desired state to hold; gate the consumer instead", n.ID)
+	}
+	// updated()/ready() are facts about the items of THIS collection only.
+	factRoots := map[string]struct{}{}
+	if n.IsCollection() {
+		factRoots[n.ID] = struct{}{}
+		factRoots[EachVarName] = struct{}{}
+	}
+	nodeIDs := make(map[string]bool, len(ctx.localIDs))
+	for id := range ctx.localIDs {
+		nodeIDs[id] = true
+	}
+	var captured []string
+	for i, expr := range n.PropagateWhen {
+		nodeReads, err := CheckFactReceivers(inspector.Env(), expr.Original, factRoots, nodeIDs, n.ID)
+		if err != nil {
+			return nil, fmt.Errorf("node %q: propagateWhen[%d]: %w", n.ID, i, err)
+		}
+		analysis, err := ctx.extractDependencies(inspector, expr, nil)
+		if err != nil {
+			return nil, fmt.Errorf("propagateWhen[%d]: %w", i, err)
+		}
+		if analysis.inspection != nil && analysis.inspection.UsesOmit() {
+			return nil, fmt.Errorf("propagateWhen[%d]: omit() can only be used in resource template expressions", i)
+		}
+		captured = append(captured, analysis.captured...)
+		deps := append([]string(nil), analysis.nodeDeps...)
+		if analysis.inspection != nil {
+			for _, rd := range analysis.inspection.ResourceDependencies {
+				if rd.ID == ReadyVarName {
+					return nil, fmt.Errorf("propagateWhen[%d]: %q is internal; write <nodeId>.ready()", i, ReadyVarName)
+				}
+			}
+		}
+		// <id>.ready() reads another node's readyWhen verdict: a dependency
+		// edge like any other reference to that node. The inspector already
+		// records the ident as a node dep; this only enforces frame locality.
+		for _, target := range nodeReads {
+			if ctx.frameDepth(target) != 0 {
+				return nil, fmt.Errorf("propagateWhen[%d]: %s.ready() must reference a node in this graph", i, target)
+			}
+			if !slices.Contains(deps, target) {
+				deps = append(deps, target)
+			}
+		}
+		if analysis.inspection != nil {
+			for _, rd := range analysis.inspection.ResourceDependencies {
+				if rd.ID == EachVarName {
+					if !n.IsCollection() {
+						return nil, fmt.Errorf("node %q: propagateWhen[%d] references %q but the node has no forEach", n.ID, i, EachVarName)
+					}
+					n.PerItemGate = true
+					n.GateUsesEach = true
+				}
+			}
+		}
+		for _, d := range deps {
+			if d == n.ID {
+				// A collection may read itself: the gate then runs per item
+				// against the items decided so far this pass. Not an edge.
+				if n.IsCollection() {
+					n.PerItemGate = true
+					continue
+				}
+				return nil, fmt.Errorf("node %q: propagateWhen references its own id %q, which can never be satisfied", n.ID, n.ID)
+			}
+			addDependency(n, d)
+		}
+	}
+	return captured, nil
+}
+
 // analyzeReadyWhen verifies each readyWhen expression references only the
 // node itself — no cross-node deps (local or captured), which would create
 // implicit ordering ambiguity.
 func (ctx *CompilationContext) analyzeReadyWhen(n *Node, inspector *ast.Inspector) ([]string, error) {
 	for i, expr := range n.ReadyWhen {
+		if err := CheckItemFactReceivers(inspector.Env(), expr.Original, nil); err != nil {
+			return nil, fmt.Errorf("node %q: readyWhen[%d]: %w", n.ID, i, err)
+		}
 		analysis, err := ctx.extractDependencies(inspector, expr, nil)
 		if err != nil {
 			return nil, fmt.Errorf("readyWhen[%d]: %w", i, err)
@@ -829,7 +921,7 @@ func (ctx *CompilationContext) extractDependencies(
 
 	frames := make(map[int]struct{})
 	classify := func(id string) error {
-		if id == EachVarName {
+		if id == EachVarName || id == ReadyVarName {
 			return nil
 		}
 		// A patch node publishes no value into scope and cannot be referenced

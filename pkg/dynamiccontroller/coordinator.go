@@ -60,6 +60,7 @@ type instanceKey struct {
 type WatchCoordinator struct {
 	core    *coordinator.Coordinator[instanceKey]
 	watches *kwatch.Manager
+	enqueue EnqueueFunc
 }
 
 // NewWatchCoordinator creates a new WatchCoordinator.
@@ -70,7 +71,16 @@ func NewWatchCoordinator(watches *kwatch.Manager, enqueue EnqueueFunc, log logr.
 		coordinator.Observer[instanceKey](newDynObserver()),
 		log,
 	)
-	return &WatchCoordinator{core: core, watches: watches}
+	return &WatchCoordinator{core: core, watches: watches, enqueue: enqueue}
+}
+
+// EnqueueInstance requests a reconcile of one parent instance. Used by the
+// fleet gate to wake held siblings when an instance converges, since a status
+// change does not bump generation and so does not re-enqueue via the informer.
+func (c *WatchCoordinator) EnqueueInstance(parentGVR schema.GroupVersionResource, instance types.NamespacedName) {
+	if c.enqueue != nil {
+		c.enqueue(parentGVR, instance)
+	}
 }
 
 // ForInstance returns a scoped InstanceWatcher handle for the given instance.

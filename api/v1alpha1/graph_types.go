@@ -298,6 +298,17 @@ type Node struct {
 	// +kubebuilder:validation:Optional
 	IncludeWhen []string `json:"includeWhen,omitempty"`
 
+	// PropagateWhen is a list of CEL expressions that must all evaluate to
+	// true before this node's desired state may be applied. Evaluated
+	// against scope before resolve, after includeWhen. When any is false
+	// the node is held: not resolved, not applied, its existing resources
+	// are not pruned, and dependents that read from it are held too. Unlike
+	// includeWhen, a false propagateWhen never deletes anything. Use
+	// `ready.<id>` to gate on another node's readyWhen verdict.
+	//
+	// +kubebuilder:validation:Optional
+	PropagateWhen []string `json:"propagateWhen,omitempty"`
+
 	// ForEach expands this node into a collection. Each entry binds a
 	// variable name to a CEL expression that evaluates to an array; the
 	// controller produces one instance per element. Multiple dimensions form

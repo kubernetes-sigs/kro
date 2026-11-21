@@ -17,12 +17,14 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
+	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
-	"k8s.io/client-go/util/homedir"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/kubernetes-sigs/kro/cmd/kro/commands"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/kubeconfig"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 )
 
@@ -35,9 +37,7 @@ func main() {
 }
 
 type CommandOptions struct {
-	KubeConfigPath string
-	Context        string
-	Verbose        bool
+	Verbose bool
 }
 
 var cmd = &cobra.Command{
@@ -52,15 +52,10 @@ ResourceGraphDefinitions (RGDs) and their instances in Kubernetes cluster.`,
 var opts = &CommandOptions{}
 
 func NewRootCommand() *cobra.Command {
-
-	if home := homedir.HomeDir(); home != "" {
-		opts.KubeConfigPath = filepath.Join(home, ".kube", "config")
-	}
-
 	// Global flags
-	cmd.PersistentFlags().StringVar(&opts.KubeConfigPath, "kubeconfig", opts.KubeConfigPath, "Path to kubeconfig file")
-	cmd.PersistentFlags().StringVar(&opts.Context, "context", "", "Kubernetes context to use")
+	kubeconfig.AddFlags(cmd.PersistentFlags())
 	cmd.PersistentFlags().BoolVar(&opts.Verbose, "verbose", false, "Enable verbose logging")
+	cmd.PersistentPreRun = func(*cobra.Command, []string) { setLogger(opts.Verbose) }
 	// Expose the same --feature-gates flag as the controller so that validate
 	// and generate accept RGDs that use gated features (e.g. omit()).
 	features.FeatureGate.AddFlag(cmd.PersistentFlags())
@@ -68,4 +63,14 @@ func NewRootCommand() *cobra.Command {
 	// Cli commands
 	commands.AddCommands(cmd)
 	return cmd
+}
+
+// setLogger sends the logs of the packages that the CLI uses, controller-runtime's
+// included, to stderr with --verbose, and drops them otherwise.
+func setLogger(verbose bool) {
+	if !verbose {
+		ctrllog.SetLogger(logr.Discard())
+		return
+	}
+	ctrllog.SetLogger(zap.New(zap.WriteTo(os.Stderr), zap.UseDevMode(true)))
 }

@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/defaults"
 )
 
 var generateCRDCmd = &cobra.Command{
@@ -45,6 +46,7 @@ var generateCRDCmd = &cobra.Command{
 		if err = yaml.Unmarshal(data, &rgd); err != nil {
 			return fmt.Errorf("failed to unmarshal ResourceGraphDefinition: %w", err)
 		}
+		defaults.ApplyRGDDefaults(&rgd)
 
 		if err = generateCRD(&rgd); err != nil {
 			return fmt.Errorf("failed to generate CRD: %w", err)

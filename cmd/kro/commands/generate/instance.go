@@ -23,6 +23,7 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/cmd/kro/emulator"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/defaults"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 )
 
@@ -46,6 +47,7 @@ var generateInstanceCmd = &cobra.Command{
 		if err = yaml.Unmarshal(data, &rgd); err != nil {
 			return fmt.Errorf("failed to unmarshal ResourceGraphDefinition: %w", err)
 		}
+		defaults.ApplyRGDDefaults(&rgd)
 
 		if err = generateInstance(&rgd); err != nil {
 			return fmt.Errorf("failed to generate instance: %w", err)

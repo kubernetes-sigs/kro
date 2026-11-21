@@ -17,7 +17,10 @@
 // without cycling through cmd/kro/commands.
 package defaults
 
-import "github.com/kubernetes-sigs/kro/pkg/graph"
+import (
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
+)
 
 // RGDConfig mirrors the controller's default RGD collection limits
 // (see cmd/controller/main.go rgd-max-collection-* flag defaults). It is
@@ -26,4 +29,20 @@ import "github.com/kubernetes-sigs/kro/pkg/graph"
 var RGDConfig = graph.RGDConfig{
 	MaxCollectionSize:          1000,
 	MaxCollectionDimensionSize: 10,
+}
+
+// ApplyRGDDefaults sets the schema defaults that the API server applies when
+// a ResourceGraphDefinition is created (the +kubebuilder:default markers of
+// v1alpha1.Schema). The CLI reads RGD files without the API server, so
+// commands call it right after unmarshaling one.
+func ApplyRGDDefaults(rgd *v1alpha1.ResourceGraphDefinition) {
+	if rgd.Spec.Schema == nil {
+		return
+	}
+	if rgd.Spec.Schema.Group == "" {
+		rgd.Spec.Schema.Group = v1alpha1.KRODomainName
+	}
+	if rgd.Spec.Schema.Scope == "" {
+		rgd.Spec.Schema.Scope = v1alpha1.ResourceScopeNamespaced
+	}
 }

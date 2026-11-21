@@ -58,6 +58,7 @@ var validateRGDCmd = &cobra.Command{
 		if err = yaml.Unmarshal(data, &rgd); err != nil {
 			return fmt.Errorf("failed to unmarshal ResourceGroupDefinition: %w", err)
 		}
+		defaults.ApplyRGDDefaults(&rgd)
 
 		if err := validateRGD(&rgd); err != nil {
 			return fmt.Errorf("validation failed: %w", err)

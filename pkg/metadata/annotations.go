@@ -15,6 +15,10 @@
 package metadata
 
 const (
+	// CRDMetadataAnnotation records the label and annotation keys last applied
+	// to a generated CRD, so removed keys can be pruned without touching metadata
+	// owned by other controllers.
+	CRDMetadataAnnotation = InternalKROPrefix + "crd-metadata"
 	// ApplyOrderAnnotation persists a managed resource's reverse topological
 	// deletion wave, as a one-based layer: dependency-free (leaf) resources are
 	// wave 1 and each dependent is 1 + max(dependency waves). Deletion proceeds

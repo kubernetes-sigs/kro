@@ -17,6 +17,8 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -35,7 +37,7 @@ func TestEnsureUpdatesCRDNamesWithoutVersionChanges(t *testing.T) {
 	desired.Spec.Names.ShortNames = []string{"wd", "widget"}
 	desired.Spec.Names.Categories = []string{"kro"}
 
-	wrapper := newTestCRDWrapper(existing)
+	wrapper, _ := newTestCRDWrapper(existing)
 
 	require.NoError(t, wrapper.Ensure(context.Background(), *desired, false))
 
@@ -53,7 +55,7 @@ func TestEnsureClearsCRDNames(t *testing.T) {
 	desired.Spec.Names.ShortNames = nil
 	desired.Spec.Names.Categories = nil
 
-	wrapper := newTestCRDWrapper(existing)
+	wrapper, _ := newTestCRDWrapper(existing)
 
 	require.NoError(t, wrapper.Ensure(context.Background(), *desired, false))
 
@@ -63,8 +65,160 @@ func TestEnsureClearsCRDNames(t *testing.T) {
 	assert.Empty(t, got.Spec.Names.Categories)
 }
 
+func TestEnsureReconcilesCRDMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name                string
+		existingLabels      map[string]string
+		desiredLabels       map[string]string
+		existingAnnotations map[string]string
+		desiredAnnotations  map[string]string
+		wantPatches         int
+	}{
+		{
+			name:          "add label",
+			desiredLabels: map[string]string{"example.com/ingest": "true"},
+			wantPatches:   1,
+		},
+		{
+			name:           "update label",
+			existingLabels: map[string]string{"example.com/ingest": "false"},
+			desiredLabels:  map[string]string{"example.com/ingest": "true"},
+			wantPatches:    1,
+		},
+		{
+			name:               "add annotation",
+			desiredAnnotations: map[string]string{"example.com/description": "updated"},
+			wantPatches:        1,
+		},
+		{
+			name:                "update annotation",
+			existingAnnotations: map[string]string{"example.com/description": "original"},
+			desiredAnnotations:  map[string]string{"example.com/description": "updated"},
+			wantPatches:         1,
+		},
+		{
+			name:          "add empty label",
+			desiredLabels: map[string]string{"example.com/ingest": ""},
+			wantPatches:   1,
+		},
+		{
+			name:               "add empty annotation",
+			desiredAnnotations: map[string]string{"example.com/description": ""},
+			wantPatches:        1,
+		},
+		{
+			name:           "clear label value",
+			existingLabels: map[string]string{"example.com/ingest": "true"},
+			desiredLabels:  map[string]string{"example.com/ingest": ""},
+			wantPatches:    1,
+		},
+		{
+			name:                "clear annotation value",
+			existingAnnotations: map[string]string{"example.com/description": "original"},
+			desiredAnnotations:  map[string]string{"example.com/description": ""},
+			wantPatches:         1,
+		},
+		{
+			name:           "remove label",
+			existingLabels: map[string]string{"example.com/ingest": "true"},
+			wantPatches:    1,
+		},
+		{
+			name:                "remove annotation with nil desired annotations",
+			existingAnnotations: map[string]string{"example.com/description": "original"},
+			wantPatches:         1,
+		},
+		{
+			name:                "remove annotation with empty desired annotations",
+			existingAnnotations: map[string]string{"example.com/description": "original"},
+			desiredAnnotations:  map[string]string{},
+			wantPatches:         1,
+		},
+		{
+			name: "remove some metadata while retaining other managed keys",
+			existingLabels: map[string]string{
+				"example.com/ingest": "true",
+				"example.com/keep":   "label",
+			},
+			desiredLabels: map[string]string{"example.com/keep": "label"},
+			existingAnnotations: map[string]string{
+				"example.com/description": "original",
+				"example.com/keep":        "annotation",
+			},
+			desiredAnnotations: map[string]string{"example.com/keep": "annotation"},
+			wantPatches:        1,
+		},
+		{
+			name: "unchanged metadata with nil annotations",
+		},
+		{
+			name:               "unchanged metadata with empty annotations",
+			desiredAnnotations: map[string]string{},
+		},
+		{
+			name:                "unchanged configured metadata",
+			existingLabels:      map[string]string{"example.com/ingest": "true"},
+			desiredLabels:       map[string]string{"example.com/ingest": "true"},
+			existingAnnotations: map[string]string{"example.com/description": ""},
+			desiredAnnotations:  map[string]string{"example.com/description": ""},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			existing := testCRD()
+			maps.Copy(existing.Labels, tt.existingLabels)
+			existing.Annotations = maps.Clone(tt.existingAnnotations)
+			require.NoError(t, trackCRDMetadata(existing))
+			desired := testCRD()
+			maps.Copy(desired.Labels, tt.desiredLabels)
+			desired.Annotations = maps.Clone(tt.desiredAnnotations)
+			originalDesired := desired.DeepCopy()
+
+			// Metadata owned by other controllers must be preserved and must not
+			// cause otherwise up-to-date CRDs to be patched repeatedly.
+			existing.Labels["other.example.com/label"] = "preserved"
+			existing.Annotations["other.example.com/annotation"] = "preserved"
+
+			wrapper, clientset := newTestCRDWrapper(existing)
+			require.NoError(t, wrapper.Ensure(context.Background(), *desired, false))
+
+			patches := 0
+			for _, action := range clientset.Actions() {
+				if action.GetVerb() == "patch" {
+					patches++
+				}
+			}
+			assert.Equal(t, tt.wantPatches, patches)
+
+			got, err := wrapper.Get(context.Background(), existing.Name)
+			require.NoError(t, err)
+			wantLabels := maps.Clone(desired.Labels)
+			wantLabels["other.example.com/label"] = "preserved"
+			wantAnnotations := map[string]string{
+				"other.example.com/annotation": "preserved",
+				metadata.CRDMetadataAnnotation: got.Annotations[metadata.CRDMetadataAnnotation],
+			}
+			maps.Copy(wantAnnotations, desired.Annotations)
+			assert.Equal(t, wantLabels, got.Labels)
+			assert.Equal(t, wantAnnotations, got.Annotations)
+			assert.Equal(t, existing.Spec, got.Spec)
+			assert.Equal(t, originalDesired, desired, "Ensure must not mutate the caller's CRD")
+
+			var tracked crdMetadataKeys
+			require.NoError(t, json.Unmarshal([]byte(got.Annotations[metadata.CRDMetadataAnnotation]), &tracked))
+			assert.Equal(t, slices.Sorted(maps.Keys(desired.Labels)), tracked.Labels)
+			assert.Equal(t, slices.Sorted(maps.Keys(desired.Annotations)), tracked.Annotations)
+
+			clientset.ClearActions()
+			require.NoError(t, wrapper.Ensure(context.Background(), *desired, false))
+			for _, action := range clientset.Actions() {
+				assert.Equal(t, "get", action.GetVerb(), "reconciliation should be read-only once metadata matches")
+			}
+		})
+	}
+}
+
 func TestCRDMergePatchClearsEmptyNames(t *testing.T) {
-	patchBytes, err := crdMergePatch(*testCRD())
+	patchBytes, err := crdMergePatch(v1.CustomResourceDefinition{}, *testCRD())
 	require.NoError(t, err)
 
 	var patch map[string]any
@@ -83,7 +237,7 @@ func TestCRDMergePatchClearsEmptyNames(t *testing.T) {
 
 func TestCRDMergePatchIncludesMetadataLabels(t *testing.T) {
 	crd := testCRD()
-	patchBytes, err := crdMergePatch(*crd)
+	patchBytes, err := crdMergePatch(v1.CustomResourceDefinition{}, *crd)
 	require.NoError(t, err)
 
 	var patch map[string]any
@@ -96,6 +250,17 @@ func TestCRDMergePatchIncludesMetadataLabels(t *testing.T) {
 	assert.Equal(t, "uid", labels[metadata.ResourceGraphDefinitionIDLabel])
 }
 
+func TestCRDMergePatchIncludesResourceVersion(t *testing.T) {
+	existing := testCRD()
+	existing.ResourceVersion = "42"
+	patchBytes, err := crdMergePatch(*existing, *testCRD())
+	require.NoError(t, err)
+
+	var patch map[string]any
+	require.NoError(t, json.Unmarshal(patchBytes, &patch))
+	assert.Equal(t, "42", requireMap(t, patch, "metadata")["resourceVersion"])
+}
+
 func requireMap(t *testing.T, parent map[string]any, key string) map[string]any {
 	t.Helper()
 	value, ok := parent[key].(map[string]any)
@@ -103,13 +268,13 @@ func requireMap(t *testing.T, parent map[string]any, key string) map[string]any 
 	return value
 }
 
-func newTestCRDWrapper(crd *v1.CustomResourceDefinition) *CRDWrapper {
+func newTestCRDWrapper(crd *v1.CustomResourceDefinition) (*CRDWrapper, *apiextensionsfake.Clientset) {
 	clientset := apiextensionsfake.NewSimpleClientset(crd)
 	return newCRDWrapper(CRDWrapperConfig{
 		Client:       clientset.ApiextensionsV1(),
 		PollInterval: time.Millisecond,
 		Timeout:      time.Second,
-	})
+	}), clientset
 }
 
 func testCRD() *v1.CustomResourceDefinition {

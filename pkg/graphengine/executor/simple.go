@@ -1835,11 +1835,13 @@ func (s *Simple) replaceStatus(ctx context.Context, obj, current *unstructured.U
 			live = fresh
 		}
 		liveStatus, _ := live.Object["status"].(map[string]any)
-		next := make(map[string]any, len(rendered)+2)
+		next := make(map[string]any, len(rendered)+4)
 		for k, v := range rendered {
 			next[k] = v
 		}
-		for _, key := range []string{"conditions", "state"} {
+		// Status fields kro owns: the author projection never declares them,
+		// so they must survive the replace.
+		for _, key := range []string{"conditions", "state", "graphRevision", "targetGraphRevision"} {
 			if v, ok := liveStatus[key]; ok {
 				next[key] = v
 			}

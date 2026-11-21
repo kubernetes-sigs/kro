@@ -1,0 +1,19 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: check-multi-version
+spec:
+  schema:
+    apiVersion: v1beta1
+    kind: CheckMultiVersionApp
+    spec:
+      value: string | default="hello"
+  resources:
+    - id: cm
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.metadata.name}-cm
+        data:
+          value: ${schema.spec.value}

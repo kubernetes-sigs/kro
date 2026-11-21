@@ -159,6 +159,30 @@ rules:
   verbs:
   - impersonate
 {{- end }}
+{{- if get (.Values.config.featureGates | default dict) "MultiVersionSchema" }}
+# Serving more than one instance version requires kro to migrate objects stored
+# under a retired version and to trim status.storedVersions afterwards. kro
+# drives the in-tree storage version migrator where it exists, and rewrites the
+# objects itself where it does not.
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - storagemigration.k8s.io
+  resources:
+  - storageversionmigrations
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+{{- end }}
 - apiGroups:
   - coordination.k8s.io
   resources:

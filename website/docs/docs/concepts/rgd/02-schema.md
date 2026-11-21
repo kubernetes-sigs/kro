@@ -169,6 +169,40 @@ Must be a valid [RFC 1035 label name](https://kubernetes.io/docs/concepts/overvi
 The `plural` field is immutable after creation, because it is part of the generated CRD's name.
 :::
 
+### Serving More Than One Version
+
+With the [`MultiVersionSchema`](../../advanced/02-feature-gates.md#multiversionschema)
+feature gate, `apiVersion` may move forward in Kubernetes version priority, and
+the versions it leaves behind are declared under `previousVersions`:
+
+```yaml
+schema:
+  apiVersion: v1beta1          # the hub: the version instances are stored under
+  kind: WebApplication
+  spec:
+    replicas: integer | default=1
+  previousVersions:
+    - apiVersion: v1alpha1
+      deprecated: true
+      deprecationWarning: "v1alpha1 is deprecated, migrate to v1beta1"
+      spec:
+        replicas: integer | default=1
+```
+
+Each previous version carries its own `spec`, and optionally `types` and
+`status`; omitting `status` reuses the status schema inferred for the hub.
+
+kro serves every version from one stored object (CRD conversion strategy
+`None`), so a previous version's schema has to accept what the hub stores — kro
+rejects one that does not. After the hub moves, kro migrates the stored objects
+and trims the CRD's `status.storedVersions`; a version may not stop being
+served before that finishes, or while a pinned graph revision still uses it.
+
+:::note
+Without the feature gate, `apiVersion` is immutable. With it, the controller
+still rejects any change that does not move forward in version priority.
+:::
+
 ### Short Names and Categories
 
 `shortNames` adds kubectl aliases for the generated CRD, and `categories` makes instances show up when users list a category.

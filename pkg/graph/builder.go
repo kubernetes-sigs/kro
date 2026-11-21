@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/apimachinery/pkg/version"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/rest"
@@ -165,6 +166,10 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		resourceSpecs = append(resourceSpecs, rs)
 	}
 
+	if err := validateReservedStatusFields(rgd.Spec.Schema.Status.Raw); err != nil {
+		return nil, fmt.Errorf("failed to build resourcegraphdefinition %q: %w", rgd.Name, err)
+	}
+
 	g, statusSchema, err := b.compileSource(rgdSource{
 		resources:       resourceSpecs,
 		instanceGVR:     metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema),
@@ -204,6 +209,9 @@ func synthesizeInstanceCRD(rgd *v1alpha1.ResourceGraphDefinition) (*extv1.Custom
 	if rgd.Spec.Schema == nil {
 		return nil, nil, "", fmt.Errorf("resourcegraphdefinition %q: schema is required", rgd.Name)
 	}
+	if err := validatePreviousVersions(rgd.Spec.Schema); err != nil {
+		return nil, nil, "", err
+	}
 	instanceSpecSchema, err := buildInstanceSpecSchema(rgd.Spec.Schema)
 	if err != nil {
 		return nil, nil, "", err
@@ -225,11 +233,130 @@ func synthesizeInstanceCRD(rgd *v1alpha1.ResourceGraphDefinition) (*extv1.Custom
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("failed to synthesize instance CRD: %w", err)
 	}
+	if err := appendPreviousVersions(instanceCRD, rgd.Spec.Schema); err != nil {
+		return nil, nil, "", err
+	}
 	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
 	if err != nil {
 		return nil, nil, "", err
 	}
 	return instanceCRD, schemaWithoutStatus, crdScope, nil
+}
+
+// validatePreviousVersions checks the declared previous schema versions
+// against the hub: the feature gate must be on, each version must be distinct
+// from the hub and from its siblings, must sort below the hub in Kubernetes
+// version priority, and must declare types rather than CEL expressions in its
+// status.
+func validatePreviousVersions(rgSchema *v1alpha1.Schema) error {
+	if len(rgSchema.PreviousVersions) == 0 {
+		return nil
+	}
+	if !features.FeatureGate.Enabled(features.MultiVersionSchema) {
+		return fmt.Errorf("schema.previousVersions requires the MultiVersionSchema feature gate to be enabled")
+	}
+
+	seen := make(map[string]struct{}, len(rgSchema.PreviousVersions))
+	for _, previous := range rgSchema.PreviousVersions {
+		if previous.APIVersion == rgSchema.APIVersion {
+			return fmt.Errorf("schema.previousVersions[%s] must differ from schema.apiVersion", previous.APIVersion)
+		}
+		if _, dup := seen[previous.APIVersion]; dup {
+			return fmt.Errorf("schema.previousVersions[%s] is declared more than once", previous.APIVersion)
+		}
+		seen[previous.APIVersion] = struct{}{}
+
+		if version.CompareKubeAwareVersionStrings(previous.APIVersion, rgSchema.APIVersion) >= 0 {
+			return fmt.Errorf("schema.previousVersions[%s] must have lower priority than schema.apiVersion %s",
+				previous.APIVersion, rgSchema.APIVersion)
+		}
+		if containsCELExpression(previous.Status.Raw) {
+			return fmt.Errorf("schema.previousVersions[%s].status must declare types, not expressions; omit it to reuse the hub status schema",
+				previous.APIVersion)
+		}
+	}
+	return nil
+}
+
+// containsCELExpression reports whether any string leaf of a SimpleSchema
+// document embeds a CEL expression.
+func containsCELExpression(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var document any
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		return false
+	}
+	return valueContainsExpression(document)
+}
+
+func valueContainsExpression(value any) bool {
+	switch typed := value.(type) {
+	case string:
+		return strings.Contains(typed, "${")
+	case map[string]any:
+		for _, nested := range typed {
+			if valueContainsExpression(nested) {
+				return true
+			}
+		}
+	case []any:
+		for _, nested := range typed {
+			if valueContainsExpression(nested) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// appendPreviousVersions adds every declared previous version to the
+// synthesized CRD, in declaration order, right after the hub version.
+func appendPreviousVersions(instanceCRD *extv1.CustomResourceDefinition, rgSchema *v1alpha1.Schema) error {
+	for _, previous := range rgSchema.PreviousVersions {
+		specSchema, err := buildSpecSchema(previous.Spec.Raw, previous.Types.Raw)
+		if err != nil {
+			return fmt.Errorf("schema.previousVersions[%s].spec: %w", previous.APIVersion, err)
+		}
+		var statusSchema *extv1.JSONSchemaProps
+		if len(previous.Status.Raw) > 0 {
+			statusSchema, err = buildSpecSchema(previous.Status.Raw, previous.Types.Raw)
+			if err != nil {
+				return fmt.Errorf("schema.previousVersions[%s].status: %w", previous.APIVersion, err)
+			}
+		}
+		if err := crd.AppendSpokeVersion(instanceCRD, previous, *specSchema, statusSchema, rgSchema); err != nil {
+			return fmt.Errorf("failed to synthesize instance CRD: %w", err)
+		}
+	}
+	return nil
+}
+
+// reservedStatusFields are the instance status fields kro writes itself when
+// GraphRevisionPinning is enabled. An RGD that declares one of them would have
+// its projection silently overwritten, so it is rejected at build time.
+var reservedStatusFields = []string{"graphRevision", "targetGraphRevision"}
+
+// validateReservedStatusFields rejects author status projections that collide
+// with the status fields kro owns. It is a no-op while GraphRevisionPinning is
+// disabled, because kro does not write those fields then.
+func validateReservedStatusFields(statusRaw []byte) error {
+	if len(statusRaw) == 0 || !features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+		return nil
+	}
+	fields := map[string]any{}
+	if err := yaml.Unmarshal(statusRaw, &fields); err != nil {
+		// Malformed status is reported by the status inference pass with a
+		// better message; nothing to add here.
+		return nil
+	}
+	for _, reserved := range reservedStatusFields {
+		if _, ok := fields[reserved]; ok {
+			return fmt.Errorf("schema.status field %q is reserved by kro when the GraphRevisionPinning feature gate is enabled", reserved)
+		}
+	}
+	return nil
 }
 
 // rgdSource adapts a ResourceGraphDefinition's precomputed pieces to source.
@@ -811,10 +938,17 @@ func BuildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 // used to generate the CRD for the instance resource. The instance spec
 // schema is expected to be defined using the "SimpleSchema" format.
 func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps, error) {
+	return buildSpecSchema(rgSchema.Spec.Raw, rgSchema.Types.Raw)
+}
+
+// buildSpecSchema converts one SimpleSchema document and its custom type
+// definitions into OpenAPI. Previous schema versions reuse it with their own
+// types, which are independent of the hub's.
+func buildSpecSchema(specRaw, typesRaw []byte) (*extv1.JSONSchemaProps, error) {
 	// We need to unmarshal the instance schema to a map[string]interface{} to
 	// make it easier to work with.
 	instanceSpec := map[string]any{}
-	err := yaml.UnmarshalStrict(rgSchema.Spec.Raw, &instanceSpec)
+	err := yaml.UnmarshalStrict(specRaw, &instanceSpec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal spec schema: %w", err)
 	}
@@ -822,7 +956,7 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 	// Also the custom types must be unmarshalled to a map[string]interface{} to
 	// make handling easier.
 	customTypes := map[string]any{}
-	err = yaml.UnmarshalStrict(rgSchema.Types.Raw, &customTypes)
+	err = yaml.UnmarshalStrict(typesRaw, &customTypes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal predefined types: %w", err)
 	}
@@ -1592,9 +1726,10 @@ func validateAndCompileForEach(bc *buildContext, node *Node, inspector *ast.Insp
 }
 
 // getSchemaWithoutStatus extracts a spec.Schema from a CRD for CEL validation.
+// The hub version is always Versions[0].
 func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
-	if len(crd.Spec.Versions) != 1 {
-		return nil, fmt.Errorf("expected CRD to have exactly one version, got %d versions", len(crd.Spec.Versions))
+	if len(crd.Spec.Versions) < 1 {
+		return nil, fmt.Errorf("expected CRD to have at least one version, got %d versions", len(crd.Spec.Versions))
 	}
 	if crd.Spec.Versions[0].Schema == nil {
 		return nil, fmt.Errorf("expected CRD version to have schema defined")

@@ -1,0 +1,21 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: checkmultiversionapps.kro.run
+spec:
+  conversion:
+    strategy: None
+  group: kro.run
+  names:
+    kind: CheckMultiVersionApp
+    plural: checkmultiversionapps
+  scope: Namespaced
+  (versions[?name == 'v1beta1']):
+    - served: true
+      storage: true
+  (versions[?name == 'v1alpha1']):
+    - served: true
+      storage: false
+status:
+  storedVersions:
+  - v1beta1

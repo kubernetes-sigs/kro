@@ -101,8 +101,9 @@ func NewManager(client metadata.Interface, resync time.Duration, onEvent EventHa
 	return m
 }
 
-// SetInformerFactory overrides the informer constructor. Intended for tests
-// that need to inject a fake SharedIndexInformer.
+// SetInformerFactory overrides the informer constructor. Used by the dynamic
+// controller to back parent watches with revision-aware full-object informers,
+// and by tests that need to inject a fake SharedIndexInformer.
 func (m *Manager) SetInformerFactory(f func(schema.GroupVersionResource) cache.SharedIndexInformer) {
 	m.createInformer = f
 }

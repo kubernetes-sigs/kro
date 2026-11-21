@@ -78,6 +78,10 @@ type GraphRevisionStatus struct {
 	Conditions krov1alpha1.Conditions `json:"conditions,omitempty"`
 	// Resources provides detailed information about each resource in the graph.
 	Resources []krov1alpha1.ResourceInformation `json:"resources,omitempty"`
+	// CELEnvironmentVersion records the kro version that compiled this
+	// snapshot. The kro version determines the CEL environment (available
+	// functions and their semantics) a revision was verified against.
+	CELEnvironmentVersion string `json:"celEnvironmentVersion,omitempty"`
 }
 
 // +kubebuilder:object:root=true

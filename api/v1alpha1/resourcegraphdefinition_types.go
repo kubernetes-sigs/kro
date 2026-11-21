@@ -27,6 +27,14 @@ import (
 // It contains the schema for instances (defining the CRD structure) and the list of
 // Kubernetes resources that make up the graph.
 type ResourceGraphDefinitionSpec struct {
+	// Rollout controls how instances of this ResourceGraphDefinition adopt new
+	// graph revisions. It is policy, not graph content: changing it does not
+	// issue a new GraphRevision.
+	//
+	// Requires the GraphRevisionPinning feature gate.
+	//
+	// +kubebuilder:validation:Optional
+	Rollout *Rollout `json:"rollout,omitempty"`
 	// Schema defines the structure of instances created from this ResourceGraphDefinition.
 	// It specifies the API version, kind, and fields (spec/status) for the generated CRD.
 	// Use SimpleSchema syntax to define the instance schema concisely.
@@ -40,6 +48,35 @@ type ResourceGraphDefinitionSpec struct {
 	// +kubebuilder:validation:Optional
 	Resources []*Resource `json:"resources,omitempty"`
 }
+
+// Rollout controls how instances adopt new graph revisions.
+type Rollout struct {
+	// Strategy selects the rollout strategy for instances of this
+	// ResourceGraphDefinition.
+	//
+	// "Latest" (the default) reconciles every instance against the most
+	// recent graph revision. "Manual" keeps each instance on the revision it
+	// already reconciled against until the kro.run/graph-revision annotation
+	// moves it.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=Latest
+	Strategy RolloutStrategy `json:"strategy,omitempty"`
+}
+
+// RolloutStrategy selects how instances adopt new graph revisions.
+//
+// +kubebuilder:validation:Enum=Latest;Manual
+type RolloutStrategy string
+
+const (
+	// RolloutStrategyLatest reconciles every instance against the latest
+	// graph revision as soon as it is issued.
+	RolloutStrategyLatest RolloutStrategy = "Latest"
+	// RolloutStrategyManual keeps every instance on the graph revision it
+	// last reconciled against until it is moved explicitly.
+	RolloutStrategyManual RolloutStrategy = "Manual"
+)
 
 // Schema defines the structure and behavior of instances created from a ResourceGraphDefinition.
 // It specifies the API group, version, and kind for the generated CRD, along with the
@@ -67,14 +104,17 @@ type Schema struct {
 	// +kubebuilder:validation:Pattern=`^[a-z]([-a-z0-9]*[a-z0-9])?$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="plural is immutable"
 	Plural string `json:"plural,omitempty"`
-	// APIVersion is the version identifier for the generated CRD.
+	// APIVersion is the version identifier for the generated CRD, and the
+	// version instances are stored under (the "hub" version).
 	// Must follow Kubernetes versioning conventions (v1, v1alpha1, v1beta1, etc.).
-	// This field is immutable after creation.
+	// It may only move forward in Kubernetes version priority, and only with
+	// the MultiVersionSchema feature gate enabled; the controller rejects any
+	// other change. The previous hub must be listed under previousVersions
+	// until no object is stored under it.
 	// Example: "v1alpha1", "v1", "v2beta1"
 	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Pattern=`^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$`
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="apiVersion is immutable"
 	APIVersion string `json:"apiVersion,omitempty"`
 	// Group is the API group for the generated CRD. Together with APIVersion and Kind,
 	// it forms the complete GVK (Group-Version-Kind) identifier.
@@ -145,6 +185,66 @@ type Schema struct {
 	// Metadata configures instance metadata validation and metadata applied to the generated CRD.
 	// +kubebuilder:validation:Optional
 	Metadata *CRDMetadata `json:"metadata,omitempty"`
+
+	// PreviousVersions declares additional, read-only versions of the
+	// generated CRD that the API server keeps serving while objects stored
+	// under them are migrated to apiVersion. Every previous version must have
+	// a lower Kubernetes version priority than apiVersion.
+	//
+	// kro converts between versions with strategy None: the stored object is
+	// served verbatim under every version, so a previous version's schema must
+	// accept what the hub schema stores.
+	//
+	// Requires the MultiVersionSchema feature gate.
+	//
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=apiVersion
+	PreviousVersions []PreviousSchemaVersion `json:"previousVersions,omitempty"`
+}
+
+// PreviousSchemaVersion is one additional served version of the generated CRD.
+type PreviousSchemaVersion struct {
+	// APIVersion is this version's identifier. It must differ from, and have a
+	// lower Kubernetes version priority than, schema.apiVersion.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$`
+	APIVersion string `json:"apiVersion"`
+
+	// Served controls whether the API server serves this version. Defaults to
+	// true. A version may only stop being served once nothing is stored under
+	// it and no pinned graph revision still uses it.
+	//
+	// +kubebuilder:default=true
+	Served *bool `json:"served,omitempty"`
+
+	// Deprecated marks this version deprecated. kubectl warns on every request
+	// to a deprecated version.
+	//
+	// +kubebuilder:validation:Optional
+	Deprecated bool `json:"deprecated,omitempty"`
+
+	// DeprecationWarning replaces the default deprecation warning. Ignored
+	// unless Deprecated is set.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=256
+	DeprecationWarning string `json:"deprecationWarning,omitempty"`
+
+	// Spec is this version's instance spec in SimpleSchema syntax, with the
+	// same grammar as schema.spec.
+	Spec runtime.RawExtension `json:"spec,omitempty"`
+
+	// Types holds the custom type definitions referenced by this version's
+	// Spec and Status. Previous versions carry their own types because the
+	// hub's types evolve with the hub schema.
+	Types runtime.RawExtension `json:"types,omitempty"`
+
+	// Status declares this version's instance status fields in SimpleSchema
+	// syntax — type declarations, not the CEL expressions schema.status uses.
+	// Omit it to reuse the status schema inferred for the hub version.
+	Status runtime.RawExtension `json:"status,omitempty"`
 }
 
 // CRDMetadata configures instance metadata validation and metadata applied to the generated CRD.

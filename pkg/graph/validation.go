@@ -266,12 +266,18 @@ func validateKubernetesVersion(version string) error {
 
 // validateCombinableResourceFields checks that certain fields in a resource
 // are not used together in an invalid combination, and that required fields are present.
-func validateCombinableResourceFields(id string, hasTemplate, hasExternalRef bool, forEachLen int) error {
-	if !hasTemplate && !hasExternalRef {
-		return fmt.Errorf("resource %q: exactly one of template or externalRef must be provided", id)
+func validateCombinableResourceFields(id string, hasTemplate, hasExternalRef, hasDef bool, forEachLen int) error {
+	set := 0
+	for _, b := range []bool{hasTemplate, hasExternalRef, hasDef} {
+		if b {
+			set++
+		}
 	}
-	if hasExternalRef && hasTemplate {
-		return fmt.Errorf("resource %q: cannot use externalRef with template", id)
+	if set == 0 {
+		return fmt.Errorf("resource %q: exactly one of template, externalRef, or def must be provided", id)
+	}
+	if set > 1 {
+		return fmt.Errorf("resource %q: only one of template, externalRef, or def may be provided", id)
 	}
 	if hasExternalRef && forEachLen > 0 {
 		return fmt.Errorf("resource %q: cannot use externalRef with forEach", id)
@@ -408,6 +414,9 @@ func validateTemplateConstraints(
 //     resource itself is namespaced (no instance namespace to inherit)
 func validateIdentityFields(nodes map[string]*Node, inspector *ast.Inspector, isInstanceNamespaced bool) error {
 	for _, node := range nodes {
+		if node.Meta.Type == NodeTypeDef {
+			continue
+		}
 		for _, v := range node.Variables {
 			if !isRequiredIdentityField(v.Path, node.Meta.Namespaced, isInstanceNamespaced) {
 				continue

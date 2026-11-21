@@ -419,7 +419,7 @@ func TestComputeIgnored_DepErrorPropagates(t *testing.T) {
 		generator.WithDef("seed", map[string]any{"k": "v"}),
 		// dyn field resolves to a string; the includeWhen result is not a
 		// bool, so the upstream "mid" node's IsIgnored returns a hard error.
-		generator.WithDef("cfg", map[string]any{"flag": "${'literal'}"}),
+		generator.WithDef("cfg", map[string]any{"flag": "${dyn('literal')}"}),
 		generator.WithDef("mid", map[string]any{"x": "y"}),
 		generator.WithIncludeWhen("${cfg.flag}"),
 		generator.WithDef("leaf", map[string]any{"y": "${mid.x}"}),

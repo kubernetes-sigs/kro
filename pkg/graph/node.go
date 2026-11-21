@@ -59,6 +59,9 @@ const (
 	// NodeTypeExternalCollection is an external reference with a label selector
 	// that matches multiple resources (read-only collection, not applied).
 	NodeTypeExternalCollection
+	// NodeTypeDef is computed data: it creates and reads no cluster object.
+	// With forEach it evaluates to a list of objects.
+	NodeTypeDef
 )
 
 // String returns a human-readable string for the node type.
@@ -74,6 +77,8 @@ func (t NodeType) String() string {
 		return "Instance"
 	case NodeTypeExternalCollection:
 		return "ExternalCollection"
+	case NodeTypeDef:
+		return "Def"
 	default:
 		return "Unknown"
 	}
@@ -126,6 +131,8 @@ type ResourceSpec struct {
 	ExternalRef bool
 	// Collection marks a selector-based external collection.
 	Collection bool
+	// Def marks computed data. Object holds the def payload (no apiVersion/kind).
+	Def bool
 	// ReadyWhen / IncludeWhen are raw expression strings (pre-unwrap).
 	ReadyWhen   []string
 	IncludeWhen []string
@@ -203,4 +210,15 @@ func (n *Node) DeepCopy() *Node {
 	}
 
 	return cp
+}
+
+// isListValued reports whether the node evaluates to a list in CEL scope.
+func (n *Node) isListValued() bool {
+	switch n.Meta.Type {
+	case NodeTypeCollection, NodeTypeExternalCollection:
+		return true
+	case NodeTypeDef:
+		return len(n.ForEach) > 0
+	}
+	return false
 }

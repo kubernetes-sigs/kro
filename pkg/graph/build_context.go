@@ -138,3 +138,21 @@ func (bc *buildContext) extendWithTypedVar(parent *cel.Env, varName string, s *s
 	bc.extendedEnvs[key] = extended
 	return extended, nil
 }
+
+// typedBuildContext builds a typed CEL environment for celSchemas and returns a
+// fresh buildContext bound to it.
+func (b *Builder) typedBuildContext(c *schema.Cache, celSchemas map[string]*spec.Schema) (*buildContext, error) {
+	env, provider, err := krocel.TypedEnvironmentWithProvider(celSchemas)
+	if err != nil {
+		return nil, err
+	}
+	return &buildContext{
+		env:          env,
+		typeProvider: provider,
+		schemaCache:  c,
+		declTypes:    make(map[*spec.Schema]*apiservercel.DeclType),
+		checkedASTs:  make(map[checkedASTKey]*cel.Ast),
+		extendedEnvs: make(map[extendedEnvKey]*cel.Env),
+		costLimit:    b.costLimit,
+	}, nil
+}

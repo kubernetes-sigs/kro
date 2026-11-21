@@ -448,3 +448,15 @@ func hasStructuralSchemaMarkerEnabled(schema *spec.Schema, marker string) bool {
 	}
 	return false
 }
+
+// JoinPathAndFieldName joins a field name onto a parent path using the same
+// path format as the field descriptors returned by the parsers.
+func JoinPathAndFieldName(path, fieldName string) string {
+	return joinPathAndFieldName(path, fieldName)
+}
+
+// JoinPathAndIndex appends a list index to a path using the same format as
+// the field descriptors returned by the schemaless parser.
+func JoinPathAndIndex(path string, index int) string {
+	return path + "[" + strconv.Itoa(index) + "]"
+}

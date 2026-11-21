@@ -40,6 +40,7 @@ var ErrUnsupported = errors.New("rgdadapter: unsupported RGD shape")
 //
 //   - template          → Node.Template (same ID, raw manifest + ${...} CEL intact)
 //   - named externalRef → Node.Ref
+//   - def               → Node.Def (computed data, no cluster object)
 //
 // forEach / readyWhen / includeWhen are copied through. The instance
 // spec is not emitted as a resource node — callers prepend InstanceSchemaNode
@@ -161,9 +162,24 @@ func authorStatusPatchNode(rgd *v1alpha1.ResourceGraphDefinition) (v1alpha1.Node
 func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {
 	hasTemplate := len(res.Template.Raw) > 0
 	hasRef := res.ExternalRef != nil
+	hasDef := len(res.Def.Raw) > 0
+	set := 0
+	for _, b := range []bool{hasTemplate, hasRef, hasDef} {
+		if b {
+			set++
+		}
+	}
 	switch {
-	case hasTemplate && hasRef:
-		return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: template and externalRef are both set", ErrUnsupported, res.ID)
+	case set > 1:
+		return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: only one of template, externalRef, def may be set", ErrUnsupported, res.ID)
+	case hasDef:
+		return v1alpha1.Node{
+			ID:          res.ID,
+			Def:         copyRaw(res.Def.Raw),
+			ReadyWhen:   copyStrings(res.ReadyWhen),
+			IncludeWhen: copyStrings(res.IncludeWhen),
+			ForEach:     copyForEach(res.ForEach),
+		}, nil
 	case hasTemplate:
 		return v1alpha1.Node{
 			ID:          res.ID,
@@ -202,7 +218,7 @@ func resourceToNode(res *v1alpha1.Resource) (v1alpha1.Node, error) {
 			IncludeWhen: copyStrings(res.IncludeWhen),
 		}, nil
 	default:
-		return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: neither template nor externalRef is set", ErrUnsupported, res.ID)
+		return v1alpha1.Node{}, fmt.Errorf("%w: resource %q: none of template, externalRef, def is set", ErrUnsupported, res.ID)
 	}
 }
 

@@ -12,7 +12,6 @@ aliases:
     - cheftako
     - jakobmoellerdev
     - jlbutler
-    - matthchr
   kro-reviewers:
     - michaelhtm
     - cheeseandcereal
@@ -21,6 +20,7 @@ aliases:
   emeritus-kro-maintainers:
     - barney-s
     - eqe-aws
+    - matthchr
     - nicslatts
     - rynowak
 

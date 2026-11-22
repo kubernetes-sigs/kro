@@ -5,7 +5,7 @@
   "version": "0.0.1",
   "license": "Apache-2.0",
   "engines": {
-    "vscode": "^1.91.0"
+    "vscode": "^1.146.0"
   },
   "categories": [
     "Programming Languages"

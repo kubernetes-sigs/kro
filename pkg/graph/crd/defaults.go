@@ -22,6 +22,11 @@ var (
 	defaultStateType = extv1.JSONSchemaProps{
 		Type: "string",
 	}
+	// defaultObservedRevisionType records the GraphRevision number the instance
+	// last reconciled against. POC for KREP-026 fleet rollout.
+	defaultObservedRevisionType = extv1.JSONSchemaProps{
+		Type: "integer",
+	}
 	defaultConditionsType = extv1.JSONSchemaProps{
 		Type: "array",
 		Items: &extv1.JSONSchemaPropsOrArray{

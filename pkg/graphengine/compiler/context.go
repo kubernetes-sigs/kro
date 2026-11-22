@@ -204,14 +204,15 @@ func (ctx *CompilationContext) buildDefNode(n *expv1alpha1.Node, order int, payl
 		return nil, nil, err
 	}
 	node := &Node{
-		ID:          n.ID,
-		Index:       order,
-		Kind:        NodeKindDef,
-		Object:      &unstructured.Unstructured{Object: payload},
-		Variables:   common.Variables,
-		ForEach:     common.ForEach,
-		IncludeWhen: common.IncludeWhen,
-		ReadyWhen:   common.ReadyWhen,
+		ID:            n.ID,
+		Index:         order,
+		Kind:          NodeKindDef,
+		Object:        &unstructured.Unstructured{Object: payload},
+		Variables:     common.Variables,
+		ForEach:       common.ForEach,
+		IncludeWhen:   common.IncludeWhen,
+		ReadyWhen:     common.ReadyWhen,
+		PropagateWhen: common.PropagateWhen,
 	}
 	if override, ok := ctx.nodeSchemaOverrides[n.ID]; ok {
 		return node, override, nil
@@ -326,17 +327,18 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	}
 
 	return &Node{
-		ID:          n.ID,
-		Index:       order,
-		Kind:        kind,
-		GVR:         mapping.Resource,
-		Namespaced:  mapping.Scope.Name() == meta.RESTScopeNameNamespace,
-		Subresource: subresource,
-		Object:      &unstructured.Unstructured{Object: payload},
-		Variables:   common.Variables,
-		ForEach:     common.ForEach,
-		IncludeWhen: common.IncludeWhen,
-		ReadyWhen:   common.ReadyWhen,
+		ID:            n.ID,
+		Index:         order,
+		Kind:          kind,
+		GVR:           mapping.Resource,
+		Namespaced:    mapping.Scope.Name() == meta.RESTScopeNameNamespace,
+		Subresource:   subresource,
+		Object:        &unstructured.Unstructured{Object: payload},
+		Variables:     common.Variables,
+		ForEach:       common.ForEach,
+		IncludeWhen:   common.IncludeWhen,
+		ReadyWhen:     common.ReadyWhen,
+		PropagateWhen: common.PropagateWhen,
 		// A Ref whose payload carries metadata.selector is a read-only
 		// collection of external objects (list-by-selector), so it publishes
 		// a list into scope like a forEach collection.
@@ -345,10 +347,11 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 }
 
 type parsedNodeElements struct {
-	Variables   []*variable.ResourceField
-	ForEach     []ForEachDimension
-	IncludeWhen []*krocel.Expression
-	ReadyWhen   []*krocel.Expression
+	Variables     []*variable.ResourceField
+	ForEach       []ForEachDimension
+	IncludeWhen   []*krocel.Expression
+	ReadyWhen     []*krocel.Expression
+	PropagateWhen []*krocel.Expression
 }
 
 func parseNodeCommon(n *expv1alpha1.Node, descriptors []variable.FieldDescriptor) (parsedNodeElements, error) {
@@ -360,11 +363,19 @@ func parseNodeCommon(n *expv1alpha1.Node, descriptors []variable.FieldDescriptor
 	if err != nil {
 		return parsedNodeElements{}, err
 	}
+	var propagateWhen []*krocel.Expression
+	if len(n.PropagateWhen) > 0 {
+		propagateWhen, err = parser.UnwrapExpressions(n.PropagateWhen)
+		if err != nil {
+			return parsedNodeElements{}, fmt.Errorf("propagateWhen: %w", err)
+		}
+	}
 	return parsedNodeElements{
-		Variables:   fieldDescriptorsToVariables(descriptors),
-		ForEach:     forEach,
-		IncludeWhen: includeWhen,
-		ReadyWhen:   readyWhen,
+		Variables:     fieldDescriptorsToVariables(descriptors),
+		ForEach:       forEach,
+		IncludeWhen:   includeWhen,
+		ReadyWhen:     readyWhen,
+		PropagateWhen: propagateWhen,
 	}, nil
 }
 
@@ -477,16 +488,17 @@ func (ctx *CompilationContext) buildDynamicNode(
 		}
 	}
 	return &Node{
-		ID:          n.ID,
-		Index:       order,
-		Kind:        kind,
-		DynamicGVK:  true,
-		Subresource: subresource,
-		Object:      &unstructured.Unstructured{Object: payload},
-		Variables:   common.Variables,
-		ForEach:     common.ForEach,
-		IncludeWhen: common.IncludeWhen,
-		ReadyWhen:   common.ReadyWhen,
+		ID:            n.ID,
+		Index:         order,
+		Kind:          kind,
+		DynamicGVK:    true,
+		Subresource:   subresource,
+		Object:        &unstructured.Unstructured{Object: payload},
+		Variables:     common.Variables,
+		ForEach:       common.ForEach,
+		IncludeWhen:   common.IncludeWhen,
+		ReadyWhen:     common.ReadyWhen,
+		PropagateWhen: common.PropagateWhen,
 		// A dynamic Ref carrying metadata.selector is a read-only collection
 		// (list-by-selector), same as the static Ref path. Template/Patch are
 		// never collections here, so the guard is a no-op for them.

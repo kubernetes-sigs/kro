@@ -39,6 +39,16 @@ type ResourceGraphDefinitionSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	Resources []*Resource `json:"resources,omitempty"`
+	// PropagateWhen gates the rollout of a new revision of this definition
+	// across its instances. Each expression is evaluated per instance when a
+	// newer revision exists than the one the instance last reconciled, with
+	// `instances` bound to every instance of this definition (each carrying
+	// updated() and ready()) and `each` bound to the instance under decision.
+	// When any expression is false the instance keeps reconciling against the
+	// revision it is on. Changing this field does not issue a new revision.
+	//
+	// +kubebuilder:validation:Optional
+	PropagateWhen []string `json:"propagateWhen,omitempty"`
 }
 
 // Schema defines the structure and behavior of instances created from a ResourceGraphDefinition.
@@ -282,6 +292,13 @@ type Resource struct {
 	//
 	// +kubebuilder:validation:Optional
 	IncludeWhen []string `json:"includeWhen,omitempty"`
+	// PropagateWhen is a list of CEL expressions that must all evaluate to true
+	// before this resource's desired state may be applied. When any is false the
+	// resource is held at its last-applied state (not pruned). Use `ready.<id>`
+	// to gate on another resource's readyWhen verdict.
+	//
+	// +kubebuilder:validation:Optional
+	PropagateWhen []string `json:"propagateWhen,omitempty"`
 	// ForEach expands this resource into a collection of resources.
 	// Each entry binds a variable name to a CEL expression that evaluates to an array.
 	// kro creates one resource instance for each element in the array.

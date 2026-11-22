@@ -36,6 +36,7 @@ func Register(registry prometheus.Registerer) {
 		NodeIgnoredCheckTotal,
 		NodeIgnoredTotal,
 		NodeReadyCheckTotal,
+		NodeGateEvalTotal,
 		NodeNotReadyTotal,
 		CollectionSize,
 

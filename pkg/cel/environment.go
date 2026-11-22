@@ -153,6 +153,8 @@ func coreDeclarations() []cel.EnvOption {
 		// (includeWhen, readyWhen, forEach) via inspectExpressionRestricted
 		// and validateAndCompileForEach.
 		library.Omit(),
+		// ready()/updated() per-item facts for propagateWhen on collections.
+		library.ItemFacts(),
 	}
 }
 

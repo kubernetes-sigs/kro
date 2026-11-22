@@ -17,6 +17,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"os"
 	"sync"
 	"testing"
@@ -60,6 +61,10 @@ var (
 // TestMain owns the envtest lifecycle for the executor package: it boots
 // lazily (only the patch tests need it) and is torn down once after the run.
 func TestMain(m *testing.M) {
+	// propagateWhen tests in this package need the alpha gate on.
+	if err := features.FeatureGate.Set("PropagateWhen=true"); err != nil {
+		panic(err)
+	}
 	code := m.Run()
 	if patchTestEnv != nil {
 		_ = patchTestEnv.Stop()

@@ -110,6 +110,12 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool,
 		if _, ok := status.Properties["conditions"]; !ok {
 			status.Properties["conditions"] = defaultConditionsType
 		}
+		if _, ok := status.Properties["observedRevision"]; !ok {
+			status.Properties["observedRevision"] = defaultObservedRevisionType
+		}
+		if _, ok := status.Properties["convergedRevision"]; !ok {
+			status.Properties["convergedRevision"] = defaultObservedRevisionType
+		}
 	}
 
 	metadataSchema := extv1.JSONSchemaProps{Type: "object"}
@@ -155,6 +161,12 @@ func SetCRDStatus(crd *extv1.CustomResourceDefinition, status extv1.JSONSchemaPr
 		}
 		if _, ok := status.Properties["conditions"]; !ok {
 			status.Properties["conditions"] = defaultConditionsType
+		}
+		if _, ok := status.Properties["observedRevision"]; !ok {
+			status.Properties["observedRevision"] = defaultObservedRevisionType
+		}
+		if _, ok := status.Properties["convergedRevision"]; !ok {
+			status.Properties["convergedRevision"] = defaultObservedRevisionType
 		}
 	}
 

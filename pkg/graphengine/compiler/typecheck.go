@@ -38,6 +38,8 @@ type buildContext struct {
 	typeProvider *krocel.DeclTypeProvider
 	schemaCache  *schema.Cache
 	costLimit    uint64
+	// nodeIDs is the set of node ids in this frame, for the <id>.ready() macro.
+	nodeIDs map[string]bool
 
 	declTypes    map[*spec.Schema]*apiservercel.DeclType
 	checkedASTs  map[checkedASTKey]*cel.Ast
@@ -131,6 +133,20 @@ func (bc *buildContext) extendWithIterators(parent *cel.Env, iterators map[strin
 		opts = append(opts, cel.Variable(name, t))
 	}
 	extended, err := parent.Extend(opts...)
+	if err != nil {
+		return nil, err
+	}
+	bc.extendedEnvs[key] = extended
+	return extended, nil
+}
+
+// extendWithMacro adds a macro to an env, cached per parent.
+func (bc *buildContext) extendWithMacro(parent *cel.Env, m cel.Macro) (*cel.Env, error) {
+	key := extendedEnvKey{parent: parent, fingerprint: "macro:" + m.Function()}
+	if env, ok := bc.extendedEnvs[key]; ok {
+		return env, nil
+	}
+	extended, err := parent.Extend(cel.Macros(m))
 	if err != nil {
 		return nil, err
 	}
@@ -293,6 +309,29 @@ func validateAndCompileNode(bc *buildContext, n *Node, payloadSchema *spec.Schem
 	// typed env.
 	if err := validateAndCompileConditions(bc, bc.env, n.IncludeWhen, n.ID, "includeWhen"); err != nil {
 		return err
+	}
+	// propagateWhen evaluates at the node level against the typed env plus a
+	// hidden map of per-node readiness verdicts. `<id>.ready()` is a macro
+	// that lowers to a lookup in that map (NodeReadyMacro), so the author
+	// writes a method and the compiler still sees a checked node reference.
+	if len(n.PropagateWhen) > 0 {
+		gateVars := map[string]*cel.Type{ReadyVarName: cel.MapType(cel.StringType, cel.BoolType)}
+		if n.IsCollection() {
+			// Per-item gates bind `each` to the item under decision. Declared
+			// dyn here: the per-item value is the live object, not the render.
+			gateVars[EachVarName] = cel.DynType
+		}
+		gateEnv, err := bc.extendWithIterators(bc.env, gateVars)
+		if err != nil {
+			return fmt.Errorf("extend env with %q for propagateWhen: %w", ReadyVarName, err)
+		}
+		gateEnv, err = bc.extendWithMacro(gateEnv, NodeReadyMacro(bc.nodeIDs))
+		if err != nil {
+			return fmt.Errorf("extend env with ready() macro for propagateWhen: %w", err)
+		}
+		if err := validateAndCompileConditions(bc, gateEnv, n.PropagateWhen, n.ID, "propagateWhen"); err != nil {
+			return err
+		}
 	}
 	// readyWhen for a collection is evaluated per-element with `each` bound to
 	// the node's element schema; type-check it against an env extended with

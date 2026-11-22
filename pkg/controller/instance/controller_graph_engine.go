@@ -119,11 +119,58 @@ func (c *Controller) reconcileViaGraphEngine(
 		return c.requeueUntilRGDSpecPopulated(ctx, inst)
 	}
 
+	// Fleet rollout gate (spec.propagateWhen): decide whether this instance
+	// may move to the latest revision or stays on the one it last reconciled.
+	target, heldBy, admitted, gateErr := c.selectRevision(ctx, inst, latest)
+	if gateErr != nil {
+		markResolutionFailed("fleet gate: %v", gateErr)
+		return c.delayedRequeue(gateErr)
+	}
+	// Admitted to a newer revision: claim it NOW, before any child is applied.
+	// observedRevision means "the revision this instance is reconciling
+	// against". Writing it first makes the admission durable: a reconcile that
+	// applies some children at the new revision and then fails stays on the
+	// new revision (observed >= latest bypasses the gate next time) instead of
+	// being re-gated and possibly held back onto the old one, which would
+	// reconcile its children backwards. It also shrinks the ledger window from
+	// a whole reconcile to one status write. A failed claim releases the slot.
+	if admitted {
+		c.heldBackoff.Reset(instanceKey(inst))
+		if err := c.claimRevision(ctx, inst, latest.Revision); err != nil {
+			c.ledger.release(latest.Revision, instanceKeyOf(inst))
+			markResolutionFailed("fleet gate: claim revision %d: %v", latest.Revision, err)
+			return c.delayedRequeue(fmt.Errorf("fleet gate: claim revision: %w", err))
+		}
+	}
+	// Held: full freeze, the same as a held Graph node. Nothing is rendered or
+	// applied, drift is not corrected, and the instance's other conditions
+	// stay as they were. Only RevisionReconciled=False/Held is written. The
+	// instance does not need its old revision to be resolvable for this.
+	if heldBy != "" {
+		observed := observedRevision(inst)
+		c.ledger.markHeld(types.NamespacedName{Namespace: inst.GetNamespace(), Name: inst.GetName()})
+		// One status write per hold, not per evaluation: a held instance is
+		// re-evaluated on every sibling convergence and on every requeue, and
+		// its Held condition rarely changes between those.
+		if !heldConditionCurrent(inst, observed, latest.Revision, heldBy) {
+			if err := c.writeHeldCondition(ctx, inst, observed, latest.Revision, heldBy); err != nil {
+				log.V(1).Info("graph-engine: failed to update held status", "error", err)
+			}
+		}
+		// Backed-off requeue: a held instance is woken explicitly when a slot
+		// frees, so the poll is a safety net. H held instances polling every
+		// 3 s is H/3 fleet snapshots per second for the whole rollout.
+		if c.reconcileConfig.DefaultRequeueDuration == 0 {
+			return requeue.None(fmt.Errorf("fleet gate: held on revision %d (latest %d)", observed, latest.Revision))
+		}
+		return requeue.NeededAfter(fmt.Errorf("fleet gate: held on revision %d (latest %d)", observed, latest.Revision), c.heldBackoff.Next(instanceKey(inst)))
+	}
+
 	rgd := &v1alpha1.ResourceGraphDefinition{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: latest.OwnerKey,
+			Name: target.OwnerKey,
 		},
-		Spec: *latest.RGDSpec,
+		Spec: *target.RGDSpec,
 	}
 
 	// Guard: the compiler must be wired via WithGraphEngineCompiler.
@@ -143,6 +190,7 @@ func (c *Controller) reconcileViaGraphEngine(
 	wireStatus := captureWireStatus(inst)
 	mark := NewConditionsMarkerFor(inst)
 	mark.InstanceManaged()
+	mark.RevisionReconciled(target.Revision)
 
 	// Read prior contributions off the instance annotations.
 	priorContribs, err := controllergraph.ReadContributions(inst)
@@ -274,9 +322,28 @@ func (c *Controller) reconcileViaGraphEngine(
 	// longer projects them here, so the two writers stay on disjoint fields.
 	degraded := hardErr
 
+	// Record which revision this reconcile ran against so the fleet gate can
+	// tell updated() instances from pending ones. Written on every outcome:
+	// the apply was attempted at this revision.
+	if s, ok := inst.Object["status"].(map[string]any); ok {
+		s[observedRevisionField] = target.Revision
+	} else {
+		inst.Object["status"] = map[string]any{observedRevisionField: target.Revision}
+	}
+
 	if err := c.persistGraphEngineStatus(ctx, inst, wireStatus, rt, rgd, degraded); err != nil {
 		log.Error(err, "graph-engine: status persist failed")
 		return err
+	}
+	// Converged on the latest revision (convergedRevision just advanced) and
+	// the status write landed, so a sibling's snapshot will see the freed
+	// slot. Wake one held sibling; waking all would be O(held) snapshots per
+	// convergence. Before the persist the woken sibling would still count
+	// this instance as in flight and re-hold.
+	if applyErr == nil && target.Revision == latest.Revision && convergedRevision(inst) == latest.Revision && c.coordinator != nil {
+		for _, k := range c.ledger.takeHeld(1) {
+			c.coordinator.EnqueueInstance(c.gvr, k)
+		}
 	}
 
 	// All apply outcomes (success, soft-not-ready, or retryable apply error)
@@ -975,8 +1042,15 @@ func (c *Controller) persistGraphEngineStatus(
 ) error {
 	previousState, _ := wireStatus["state"].(string)
 
-	// Only conditions and state: author status fields belong to the patch node.
+	// Only conditions, state and the two revision fields: author status
+	// fields belong to the patch node.
 	status := map[string]any{}
+	if rev, ok, _ := unstructured.NestedInt64(inst.Object, "status", observedRevisionField); ok {
+		status[observedRevisionField] = rev
+	}
+	// Always written (0 until the first Ready reconcile) so that
+	// observed != converged means in flight, with no absent-vs-zero case.
+	status[convergedRevisionField] = convergedRevision(inst)
 
 	builtins := builtinConditions(inst)
 	status["conditions"] = conditionsToInterfaceSlice(builtins)
@@ -987,6 +1061,12 @@ func (c *Controller) persistGraphEngineStatus(
 		status["state"] = string(v1alpha1.InstanceStateError)
 	case cs.IsRootReady():
 		status["state"] = string(v1alpha1.InstanceStateActive)
+		// Converged on the revision this reconcile ran against. This is the
+		// only place convergedRevision advances; a held instance never gets
+		// here, so its convergedRevision stays at the revision it is frozen on.
+		if rev, ok := status[observedRevisionField]; ok {
+			status[convergedRevisionField] = rev
+		}
 	default:
 		status["state"] = string(v1alpha1.InstanceStateInProgress)
 	}

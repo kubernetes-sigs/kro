@@ -71,7 +71,10 @@ This project has adopted the [Kubernetes Community Code of Conduct](https://git.
 
 ## Security
 
-If you discover a potential security issue in this project, we ask that you notify project maintainers via email at security@kro.run.  _Please do not create a public GitHub issue._
+If you discover a potential security issue in this project, report it privately through the
+Kubernetes security process described in [SECURITY.md](SECURITY.md). Reports go to the
+Kubernetes Security Response Committee, which works with the contacts in
+[SECURITY_CONTACTS](SECURITY_CONTACTS). _Please do not create a public GitHub issue._
 
 ## Licensing
 

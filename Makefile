@@ -43,6 +43,29 @@ LDFLAGS="-buildid= -X sigs.k8s.io/release-utils/version.gitVersion=$(GIT_VERSION
         -X sigs.k8s.io/release-utils/version.buildDate=$(BUILD_DATE)"
 
 WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
+
+KO_IMAGE_METADATA_FLAGS = \
+	--image-label org.opencontainers.image.title=kro \
+	--image-annotation org.opencontainers.image.title=kro \
+	--image-label 'org.opencontainers.image.description=Kube Resource Orchestrator' \
+	--image-annotation 'org.opencontainers.image.description=Kube Resource Orchestrator' \
+	--image-label 'org.opencontainers.image.vendor=The Kubernetes Authors' \
+	--image-annotation 'org.opencontainers.image.vendor=The Kubernetes Authors' \
+	--image-label org.opencontainers.image.url=https://kro.run \
+	--image-annotation org.opencontainers.image.url=https://kro.run \
+	--image-label org.opencontainers.image.documentation=https://kro.run/docs/overview \
+	--image-annotation org.opencontainers.image.documentation=https://kro.run/docs/overview \
+	--image-label org.opencontainers.image.source=https://github.com/kubernetes-sigs/kro \
+	--image-annotation org.opencontainers.image.source=https://github.com/kubernetes-sigs/kro \
+	--image-label org.opencontainers.image.licenses=Apache-2.0 \
+	--image-annotation org.opencontainers.image.licenses=Apache-2.0 \
+	--image-label org.opencontainers.image.revision=$(GIT_HASH) \
+	--image-annotation org.opencontainers.image.revision=$(GIT_HASH) \
+	--image-label org.opencontainers.image.version=$(RELEASE_VERSION) \
+	--image-annotation org.opencontainers.image.version=$(RELEASE_VERSION) \
+	--image-label org.opencontainers.image.created=$(BUILD_DATE) \
+	--image-annotation org.opencontainers.image.created=$(BUILD_DATE)
+
 PPROF_GOFLAGS ?= -tags=pprof
 PPROF_IMAGE_TAG_SUFFIX ?= -debug
 
@@ -279,7 +302,7 @@ build-image: ko ## Build kro controller image.
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) build --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		$(if $(filter true,$(KO_LOCAL)),--local,--oci-layout-path rendered/oci/layout) \
-		--push=false --tags ${RELEASE_VERSION} --sbom=none
+		--push=false --tags ${RELEASE_VERSION} --sbom=none $(KO_IMAGE_METADATA_FLAGS)
 
 .PHONY: build-debug-image
 build-debug-image: ## Build kro controller debug image with pprof enabled.
@@ -289,7 +312,7 @@ build-debug-image: ## Build kro controller debug image with pprof enabled.
 publish-image: ko ## Publish kro controller image.
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) publish --bare github.com/kubernetes-sigs/kro/cmd/controller \
-		--tags ${RELEASE_VERSION} --sbom=none
+		--tags ${RELEASE_VERSION} --sbom=none $(KO_IMAGE_METADATA_FLAGS)
 
 .PHONY: publish-debug-image
 publish-debug-image: ## Publish kro controller debug image with pprof enabled.

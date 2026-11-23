@@ -16,14 +16,13 @@ package validate
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/yaml"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/cmd/kro/internal/defaults"
 	"github.com/kubernetes-sigs/kro/cmd/kro/internal/kubeconfig"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/rgdfile"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 )
 
@@ -49,17 +48,12 @@ var validateRGDCmd = &cobra.Command{
 			return fmt.Errorf("ResourceGroupDefinition file is required")
 		}
 
-		data, err := os.ReadFile(resourceGroupDefinitionFile)
+		rgd, err := rgdfile.Read(resourceGroupDefinitionFile)
 		if err != nil {
-			return fmt.Errorf("failed to read ResourceGroupDefinition file: %w", err)
+			return err
 		}
 
-		var rgd v1alpha1.ResourceGraphDefinition
-		if err = yaml.Unmarshal(data, &rgd); err != nil {
-			return fmt.Errorf("failed to unmarshal ResourceGroupDefinition: %w", err)
-		}
-
-		if err := validateRGD(&rgd); err != nil {
+		if err := validateRGD(rgd); err != nil {
 			return fmt.Errorf("validation failed: %w", err)
 		}
 

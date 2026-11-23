@@ -591,9 +591,8 @@ _Appears in:_
 
 
 Schema defines the structure and behavior of instances created from a ResourceGraphDefinition.
-It specifies the API group, version, and kind for the generated CRD, along with the
-spec and status schemas using SimpleSchema syntax. You can also define custom types,
-validation rules, and printer columns.
+It specifies the API group, version, and kind for the generated CRD, along with
+SimpleSchema spec fields, CEL status projections, and printer columns.
 
 
 
@@ -608,7 +607,7 @@ _Appears in:_
 | `group` _string_ | Group is the API group for the generated CRD. Together with APIVersion and Kind,<br />it forms the complete GVK (Group-Version-Kind) identifier.<br />If omitted, defaults to "kro.run". This field is immutable after creation.<br />Example: "mycompany.io", "databases.example.com" | kro.run | Optional: {} <br /> |
 | `spec` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#rawextension-runtime-pkg)_ | Spec defines the schema for the instance's spec section using SimpleSchema syntax.<br />This becomes the OpenAPI schema for instances of the generated CRD.<br />Use SimpleSchema's concise syntax to define fields, types, defaults, and validations.<br />Markers are space-separated after a single "\|" separator.<br />Example: {"replicas": "integer \| default=1 minimum=1 maximum=10"} |  |  |
 | `types` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#rawextension-runtime-pkg)_ | Types is a map of custom type definitions that can be referenced in the Spec.<br />This allows you to define reusable complex types using SimpleSchema syntax.<br />Reference custom types in Spec using the type name.<br />Example: {"Server": {"host": "string", "port": "integer"}} |  |  |
-| `status` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#rawextension-runtime-pkg)_ | Status defines the schema for the instance's status section using SimpleSchema syntax.<br />Unlike spec, status fields use CEL expressions to project values from underlying resources.<br />This allows you to surface important information from managed resources at the instance level.<br />Example: {"connectionName": "${database.status.connectionName}", "endpoint": "${service.status.loadBalancer.ingress[0].hostname}"} |  |  |
+| `status` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#rawextension-runtime-pkg)_ | Status projects CEL expression values into instance status fields.<br />kro infers their types from the expressions and referenced schemas.<br />Example: {"connectionName": "${database.status.connectionName}", "endpoint": "${service.status.loadBalancer.ingress[0].hostname}"} |  |  |
 | `scope` _[ResourceScope](#resourcescope)_ | Scope determines whether the generated instance CRD is Namespaced or Cluster scoped.<br />Defaults to Namespaced to preserve existing behaviour. This field is immutable after creation. | Namespaced | Enum: [Namespaced Cluster] <br />Required: {} <br /> |
 | `additionalPrinterColumns` _[CustomResourceColumnDefinition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#customresourcecolumndefinition-v1-apiextensions-k8s-io) array_ | AdditionalPrinterColumns defines additional printer columns<br />that will be passed down to the created CRD. If set, no<br />default printer columns will be added to the created CRD,<br />and if default printer columns need to be retained, they<br />need to be added explicitly. |  | Optional: {} <br /> |
 | `shortNames` _string array_ | ShortNames are aliases for the generated CRD that can be used with kubectl.<br />Example: ["wa", "webapp"] allows `kubectl get wa` or `kubectl get webapp` instead of `kubectl get webapplications`. |  | MaxItems: 32 <br />Optional: {} <br />items:MaxLength: 63 <br />items:Pattern: `^[a-z]([-a-z0-9]*[a-z0-9])?$` <br /> |

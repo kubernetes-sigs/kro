@@ -20,25 +20,29 @@ import (
 	"slices"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	celconfig "k8s.io/apiserver/pkg/apis/cel"
 
 	"github.com/kubernetes-sigs/kro/pkg/dag"
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema/types"
 )
 
-// customType stores the schema and required state for a custom type.
 type customType struct {
 	Schema   extv1.JSONSchemaProps
 	Required bool
+	// size is the expanded schema's protobuf size, including nested types and defaults.
+	size int
 }
 
 type transformer struct {
-	customTypes map[string]customType
+	customTypes             map[string]customType
+	remainingExpansionBytes int
 }
 
 // newTransformer creates a new transformer with the given custom types.
 func newTransformer(customTypes map[string]any) (*transformer, error) {
 	t := &transformer{
-		customTypes: make(map[string]customType),
+		customTypes:             make(map[string]customType),
+		remainingExpansionBytes: int(celconfig.MaxRequestSizeBytes),
 	}
 	if err := t.loadCustomTypes(customTypes); err != nil {
 		return nil, err
@@ -52,6 +56,11 @@ func (t *transformer) Resolve(name string) (*extv1.JSONSchemaProps, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown type: %s", name)
 	}
+	// Repeated references can grow far beyond the input. Charge each copy before allocating it.
+	if ct.size > t.remainingExpansionBytes {
+		return nil, fmt.Errorf("custom type expansion exceeds %d bytes at %s", celconfig.MaxRequestSizeBytes, name)
+	}
+	t.remainingExpansionBytes -= ct.size
 	return ct.Schema.DeepCopy(), nil
 }
 
@@ -101,7 +110,7 @@ func (t *transformer) loadCustomTypes(customTypes map[string]any) error {
 		if err != nil {
 			return fmt.Errorf("building schema for %s: %w", name, err)
 		}
-		t.customTypes[name] = customType{Schema: *schema, Required: required}
+		t.customTypes[name] = customType{Schema: *schema, Required: required, size: schema.Size()}
 	}
 
 	return nil

@@ -692,7 +692,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "expected array type for path spec.cidrBlocks, got string",
 		},
 		{
-			name: "crds aren't allowed to have variables in their spec fields",
+			name: "CRD spec expressions must match the field type",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
@@ -716,12 +716,12 @@ func TestGraphBuilder_Validation(t *testing.T) {
 							"singular": "vpc",
 							"plural":   "vpcs",
 						},
-						"scope": "Namespaced-${schema.spec.name}",
+						"scope": "${1 + 1}",
 					},
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "CEL expressions in CRDs are only supported for metadata fields",
+			errMsg:  `type mismatch in resource "somecrd" at path "spec.scope"`,
 		},
 		{
 			name: "crds are allowed to have CEL expressions in metadata.name",
@@ -4141,9 +4141,9 @@ spec:
 		assert.Contains(t, err.Error(), "failed to parse schemaless resource")
 	})
 
-	t.Run("crd only allows metadata expressions", func(t *testing.T) {
+	t.Run("crd spec expressions are extracted", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
+		node, err := buildRGResourceForTest(builder, testParser, &krov1alpha1.Resource{
 			ID: "crd",
 			Template: rawExt(`
 apiVersion: apiextensions.k8s.io/v1
@@ -4154,8 +4154,9 @@ spec:
   group: ${schema.spec.group}
 `),
 		}, true)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "only supported for metadata fields")
+		require.NoError(t, err)
+		require.Len(t, node.Variables, 1)
+		assert.Equal(t, "spec.group", node.Variables[0].Path)
 	})
 
 	t.Run("schema based parsing error", func(t *testing.T) {

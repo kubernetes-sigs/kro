@@ -42,9 +42,8 @@ type ResourceGraphDefinitionSpec struct {
 }
 
 // Schema defines the structure and behavior of instances created from a ResourceGraphDefinition.
-// It specifies the API group, version, and kind for the generated CRD, along with the
-// spec and status schemas using SimpleSchema syntax. You can also define custom types,
-// validation rules, and printer columns.
+// It specifies the API group, version, and kind for the generated CRD, along with
+// SimpleSchema spec fields, CEL status projections, and printer columns.
 type Schema struct {
 	// Kind is the name of the custom resource type that will be created.
 	// This becomes the kind field of the generated CRD and must be a valid Kubernetes kind name
@@ -98,9 +97,8 @@ type Schema struct {
 	// Example: {"Server": {"host": "string", "port": "integer"}}
 	Types runtime.RawExtension `json:"types,omitempty"`
 
-	// Status defines the schema for the instance's status section using SimpleSchema syntax.
-	// Unlike spec, status fields use CEL expressions to project values from underlying resources.
-	// This allows you to surface important information from managed resources at the instance level.
+	// Status projects CEL expression values into instance status fields.
+	// kro infers their types from the expressions and referenced schemas.
 	// Example: {"connectionName": "${database.status.connectionName}", "endpoint": "${service.status.loadBalancer.ingress[0].hostname}"}
 	Status runtime.RawExtension `json:"status,omitempty"`
 

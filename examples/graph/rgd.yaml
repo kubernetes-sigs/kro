@@ -10,8 +10,10 @@
 # shipped engine, so applying it will not fully reconcile. Kept in-tree as the
 # design's north star; the gaps below are tracked follow-up work, not bugs in
 # this PR:
-#   - simpleSchema.toOpenAPI() and plural() CEL functions are not registered in
-#     the shipped CEL environment (needed at L1 to synthesize the Kind's CRD).
+#   - plural() is not registered in the shipped CEL environment (needed at L1 to
+#     name the Kind's CRD).
+#   - The Kind's CRD preserves status fields. This example does not validate
+#     status projections or infer their types as the RGD controller does.
 #   - .ready() on a node is deferred to KREP-006 (readiness lifecycle) — used
 #     here for status gating; there is no working replacement yet.
 #   - propagateWhen (conditional status updates) is deferred to KREP-006.
@@ -41,8 +43,9 @@
 #   The per-RGD Graph reads the RGD spec via ref:, validates it using pure CEL
 #   (def: nodes check reserved words, naming conventions, duplicate IDs, and
 #   schema validity), creates the Kind's CRD (gated on validation passing), and
-#   watches instances of the user's Kind. The CRD's OpenAPI schema is
-#   synthesized from the RGD's spec.schema using simpleSchema.toOpenAPI().
+#   watches instances of the user's Kind. The CRD's spec schema is converted
+#   from the RGD's spec.schema.spec and spec.schema.types with
+#   simpleschema.toOpenAPI(); its status accepts any fields.
 #
 #   The rgdStatus node writes Ready/state/conditions back to the RGD via patch:.
 #   It is the single writer for these fields, keeping the status pipeline to
@@ -181,7 +184,7 @@ spec:
             - id: validation
               def:
                 result: >-
-                  ${"${checks.resources.exists(r, checks.reserved.exists(w, r.id == w)) ? {'valid': false, 'message': 'naming convention violation: id ' + checks.resources.filter(r, checks.reserved.exists(w, r.id == w))[0].id + ' is a reserved keyword in KRO'} : checks.resources.exists(r, !r.id.matches('^[a-z][a-zA-Z0-9]*$')) ? {'valid': false, 'message': 'naming convention violation: id ' + checks.resources.filter(r, !r.id.matches('^[a-z][a-zA-Z0-9]*$'))[0].id + ' is not a valid KRO resource id: must be lower camelCase'} : checks.resources.exists(r, checks.resources.filter(s, s.id == r.id).size() > 1) ? {'valid': false, 'message': 'found duplicate resource IDs: ' + checks.resources.filter(r, checks.resources.filter(s, s.id == r.id).size() > 1)[0].id} : checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(d, d.exists(k, checks.reserved.exists(w, k == w)))) ? {'valid': false, 'message': 'forEach iterator is a reserved keyword'} : checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(d, d.exists(k, checks.allIDs.exists(id, id == k)))) ? {'valid': false, 'message': 'forEach iterator conflicts with resource ID'} : schema.?spec.?schema.?status.orValue({}).size() > 0 && schema.spec.schema.status.exists(k, !string(schema.spec.schema.status[k]).contains('${')) ? {'valid': false, 'message': 'failed to build instance status schema: status fields without expressions are not supported'} : checks.resources.exists(r, !has(r.externalRef) && has(r.template) && (!has(r.template.apiVersion) || !has(r.template.kind) || !has(r.template.metadata))) ? {'valid': false, 'message': 'resource ' + checks.resources.filter(r, !has(r.externalRef) && has(r.template) && (!has(r.template.apiVersion) || !has(r.template.kind) || !has(r.template.metadata)))[0].id + ' is not a valid Kubernetes object: missing apiVersion, kind, or metadata'} : checks.resources.exists(r, !has(r.externalRef) && has(r.template) && has(r.template.apiVersion) && !string(r.template.apiVersion).contains('${') && !string(r.template.apiVersion).matches('^([a-zA-Z0-9][a-zA-Z0-9.-]*/)?v[0-9]+((?:alpha|beta)[0-9]+)?$')) ? {'valid': false, 'message': 'resource ' + checks.resources.filter(r, !has(r.externalRef) && has(r.template) && has(r.template.apiVersion) && !string(r.template.apiVersion).contains('${') && !string(r.template.apiVersion).matches('^([a-zA-Z0-9][a-zA-Z0-9.-]*/)?v[0-9]+((?:alpha|beta)[0-9]+)?$'))[0].id + ' has invalid apiVersion format'} : {'valid': true, 'message': ''}}"}
+                  ${"${checks.resources.exists(r, checks.reserved.exists(w, r.id == w)) ? {'valid': false, 'message': 'naming convention violation: id ' + checks.resources.filter(r, checks.reserved.exists(w, r.id == w))[0].id + ' is a reserved keyword in KRO'} : checks.resources.exists(r, !r.id.matches('^[a-z][a-zA-Z0-9]*$')) ? {'valid': false, 'message': 'naming convention violation: id ' + checks.resources.filter(r, !r.id.matches('^[a-z][a-zA-Z0-9]*$'))[0].id + ' is not a valid KRO resource id: must be lower camelCase'} : checks.resources.exists(r, checks.resources.filter(s, s.id == r.id).size() > 1) ? {'valid': false, 'message': 'found duplicate resource IDs: ' + checks.resources.filter(r, checks.resources.filter(s, s.id == r.id).size() > 1)[0].id} : checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(d, d.exists(k, checks.reserved.exists(w, k == w)))) ? {'valid': false, 'message': 'forEach iterator is a reserved keyword'} : checks.resources.exists(r, has(r.forEach) && r.forEach.size() > 0 && r.forEach.exists(d, d.exists(k, checks.allIDs.exists(id, id == k)))) ? {'valid': false, 'message': 'forEach iterator conflicts with resource ID'} : checks.resources.exists(r, !has(r.externalRef) && has(r.template) && (!has(r.template.apiVersion) || !has(r.template.kind) || !has(r.template.metadata))) ? {'valid': false, 'message': 'resource ' + checks.resources.filter(r, !has(r.externalRef) && has(r.template) && (!has(r.template.apiVersion) || !has(r.template.kind) || !has(r.template.metadata)))[0].id + ' is not a valid Kubernetes object: missing apiVersion, kind, or metadata'} : checks.resources.exists(r, !has(r.externalRef) && has(r.template) && has(r.template.apiVersion) && !string(r.template.apiVersion).contains('${') && !string(r.template.apiVersion).matches('^([a-zA-Z0-9][a-zA-Z0-9.-]*/)?v[0-9]+((?:alpha|beta)[0-9]+)?$')) ? {'valid': false, 'message': 'resource ' + checks.resources.filter(r, !has(r.externalRef) && has(r.template) && has(r.template.apiVersion) && !string(r.template.apiVersion).contains('${') && !string(r.template.apiVersion).matches('^([a-zA-Z0-9][a-zA-Z0-9.-]*/)?v[0-9]+((?:alpha|beta)[0-9]+)?$'))[0].id + ' has invalid apiVersion format'} : {'valid': true, 'message': ''}}"}
 
             # ─── L1: Create the user's Kind CRD ──────────────────────────────
             - id: crd
@@ -216,8 +219,14 @@ spec:
                       subresources:
                         status: {}
                       schema:
-                        openAPIV3Schema: >-
-                          ${"${simpleSchema.toOpenAPI(schema.spec.schema, has(schema.spec.resources) ? schema.spec.resources : [])}"}
+                        openAPIV3Schema:
+                          type: object
+                          properties:
+                            spec: >-
+                              ${"${simpleschema.toOpenAPI(schema.spec.schema.?spec.orValue(dyn({})), schema.spec.schema.?types.orValue(dyn({})))}"}
+                            status:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
                       additionalPrinterColumns: >-
                         ${"${schema.?spec.?schema.?additionalPrinterColumns.orValue([])}"}
 

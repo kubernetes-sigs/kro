@@ -449,6 +449,7 @@ func Test_CELEnvHasFunction(t *testing.T) {
 		"random.seededString",
 		"json.unmarshal",
 		"json.marshal",
+		"simpleschema.toOpenAPI",
 	}
 	for _, fn := range expectedFns {
 		t.Run(fn, func(t *testing.T) {

@@ -208,6 +208,15 @@ func TestCompile_TypeMismatch(t *testing.T) {
 			wantErr: "type mismatch",
 		},
 		{
+			name: "schema assigned to a string field of a CRD",
+			graph: generator.NewGraph("g", generator.WithTemplate("crd", map[string]any{
+				"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+				"metadata": map[string]any{"name": "widgets.example.com"},
+				"spec":     map[string]any{"scope": "${simpleschema.toOpenAPI({}, {})}"},
+			})),
+			wantErr: `type mismatch in node "crd" at path "spec.scope"`,
+		},
+		{
 			name: "string template stays string at metadata.name",
 			graph: generator.NewGraph("g",
 				generator.WithTemplate("cm", configMap("source")),

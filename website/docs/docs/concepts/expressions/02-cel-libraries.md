@@ -12,6 +12,7 @@ kro includes a rich set of CEL function libraries from three sources: kro's own 
 |-----------------------------|------------|------|
 | Hash                        | kro        | [kro](#hash), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#Hash) |
 | JSON                        | kro        | [kro](#json), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#JSON) |
+| SimpleSchema                | kro        | [kro](#simpleschema), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#SimpleSchema) |
 | Random                      | kro        | [kro](#random), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#Random) |
 | Maps                        | kro        | [kro](#maps), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#Maps) |
 | Index Mutation              | kro        | [kro](#index-mutation), [Go doc](https://pkg.go.dev/github.com/kubernetes-sigs/kro/pkg/cel/library#Lists) |
@@ -76,6 +77,16 @@ dbHost: ${json.unmarshal(configmap.data.settings).database.host}
 # Serialize structured data into a JSON string (e.g. for an annotation or env var)
 configJson: '${json.marshal({"name": schema.spec.name, "replicas": schema.spec.replicas})}'
 ```
+
+### SimpleSchema
+
+Convert [SimpleSchema](../../../api/specifications/simple-schema.md) field declarations to an OpenAPI v3 object schema. An RGD's `spec.schema.status` contains CEL projections; kro infers those types from the resource graph.
+
+| Function | Returns | Description |
+| --- | --- | --- |
+| `simpleschema.toOpenAPI(fields, types)` | `map` | Converts a map of field declarations using the supplied custom types. Pass `{}` when there are no custom types. |
+
+**Example:** `simpleschema.toOpenAPI({'name': 'string', 'kind': 'string'}, {})` returns an object schema with two string properties. The [ApplicationPreset Graph](https://github.com/kubernetes-sigs/kro/blob/main/examples/graph/application-preset.yaml) uses the [Quick Start RGD](../../getting-started/02-deploy-a-resource-graph-definition.md) to generate a CRD's `properties.spec`. See [Enabling Graphs](../graph/01-overview.md#enabling-graphs) for feature gate and ServiceAccount setup.
 
 ### Random
 

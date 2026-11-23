@@ -365,9 +365,8 @@ spec:
                     x-kubernetes-preserve-unknown-fields: true
                   status:
                     description: |-
-                      Status defines the schema for the instance's status section using SimpleSchema syntax.
-                      Unlike spec, status fields use CEL expressions to project values from underlying resources.
-                      This allows you to surface important information from managed resources at the instance level.
+                      Status projects CEL expression values into instance status fields.
+                      kro infers their types from the expressions and referenced schemas.
                       Example: {"connectionName": "${database.status.connectionName}", "endpoint": "${service.status.loadBalancer.ingress[0].hostname}"}
                     type: object
                     x-kubernetes-preserve-unknown-fields: true

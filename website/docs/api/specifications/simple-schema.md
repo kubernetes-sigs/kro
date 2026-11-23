@@ -210,7 +210,7 @@ schema:
     ceo: Employee
 ```
 
-kro processes types in dependency order (Address → Company → Employee) and expands them inline in the generated CRD.
+kro processes types in dependency order (Address → Company → Employee) and expands them inline in the generated CRD. A conversion can copy up to 3 MiB of custom type schemas. Each reference counts the protobuf size of the expanded type it copies, including references used to build other types.
 
 #### Cyclic Dependency Detection
 

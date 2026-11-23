@@ -8,7 +8,6 @@ aliases:
     - joelspeed
   kro-maintainers:
     - a-hilaly
-    - bridgetkromhout
     - cheftako
     - jakobmoellerdev
     - jlbutler
@@ -19,6 +18,7 @@ aliases:
     - Skarlso
   emeritus-kro-maintainers:
     - barney-s
+    - bridgetkromhout
     - eqe-aws
     - matthchr
     - nicslatts

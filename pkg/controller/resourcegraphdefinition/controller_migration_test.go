@@ -16,6 +16,8 @@ package resourcegraphdefinition
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -46,7 +48,13 @@ const migrationTestHub = "v1beta1"
 // under the retired version.
 func migrationTestCRD() *extv1.CustomResourceDefinition {
 	return &extv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "networks.example.io"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "networks.example.io",
+			Labels: map[string]string{
+				metadata.OwnedLabel:                       "true",
+				metadata.ResourceGraphDefinitionNameLabel: "network-graph",
+			},
+		},
 		Spec: extv1.CustomResourceDefinitionSpec{
 			Group: "example.io",
 			Names: extv1.CustomResourceDefinitionNames{Kind: "Network", Plural: "networks"},
@@ -236,6 +244,61 @@ func TestStorageMigrationWithoutClusterAPI(t *testing.T) {
 	// Every stored instance is rewritten through the hub version.
 	assert.True(t, instancePatched(dynamicClient, "stored-instance"),
 		"the kro pass must rewrite each instance through the hub version")
+}
+
+func TestStorageMigrationLeavesACRDTheRGDDoesNotOwnAlone(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+	}{
+		{name: "not owned by kro"},
+		{name: "owned by another RGD", labels: map[string]string{
+			metadata.OwnedLabel:                       "true",
+			metadata.ResourceGraphDefinitionNameLabel: "other-graph",
+		}},
+	}
+	for _, tt := range tests {
+		for _, serveMigrationAPI := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, migration API served %t", tt.name, serveMigrationAPI), func(t *testing.T) {
+				reconciler, crdManager, dynamicClient := newMigrationReconciler(t, serveMigrationAPI)
+				crdManager.getReturn.Labels = tt.labels
+
+				done, err := reconciler.reconcileStorageMigration(context.Background(), migrationTestRGD())
+				require.NoError(t, err)
+				assert.True(t, done)
+				assert.Empty(t, crdManager.storedVersions, "stored versions of a foreign CRD must not be trimmed")
+				assert.Empty(t, dynamicClient.Actions(), "no migration object and no instance rewrite for a foreign CRD")
+			})
+		}
+	}
+}
+
+func TestStorageMigrationRetriesAFailedDiscovery(t *testing.T) {
+	reconciler, crdManager, dynamicClient := newMigrationReconciler(t, true)
+	discoveryFails := true
+	kubeClient := reconciler.clientSet.Kubernetes().(*kubefake.Clientset)
+	kubeClient.PrependReactor("get", "resource", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if discoveryFails {
+			return true, nil, errors.New("discovery unavailable")
+		}
+		return false, nil, nil
+	})
+
+	done, err := reconciler.reconcileStorageMigration(context.Background(), migrationTestRGD())
+	require.Error(t, err)
+	assert.False(t, done)
+	assert.Empty(t, crdManager.storedVersions)
+	assert.False(t, instancePatched(dynamicClient, "stored-instance"),
+		"a failed discovery call must not send the migration through kro")
+
+	discoveryFails = false
+	done, err = reconciler.reconcileStorageMigration(context.Background(), migrationTestRGD())
+	require.NoError(t, err)
+	assert.False(t, done, "migration is still in flight")
+
+	name := storageVersionMigrationName(migrationTestHub, "networks.example.io")
+	_, err = dynamicClient.Resource(storageVersionMigrationGVR).Get(context.Background(), name, metav1.GetOptions{})
+	assert.NoError(t, err, "the cluster's migrator is used once discovery answers")
 }
 
 // instancePatched reports whether the fake dynamic client saw a patch of the

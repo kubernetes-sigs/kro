@@ -463,6 +463,7 @@ func (r *ResourceGraphDefinitionReconciler) ensureServingState(
 	}
 	if err := r.ensureResourceGraphDefinitionCRD(ctx, crd, ensureOptions); err != nil {
 		mark.KindUnreadyWithReason(crdFailureReason(err), err.Error())
+		r.keepServingLiveCRD(ctx, rgd, processedRGD, instanceLabeler, mark)
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
 	if crd, err = r.crdManager.Get(ctx, crd.Name); err != nil {
@@ -478,6 +479,51 @@ func (r *ResourceGraphDefinitionReconciler) ensureServingState(
 	mark.ControllerRunning()
 
 	return processedRGD.TopologicalOrder, resourcesInfo, nil
+}
+
+// keepServingLiveCRD starts the instance controller although the CRD update was rejected:
+// the live CRD is untouched, so an RGD served before a kro restart is served after it too.
+func (r *ResourceGraphDefinitionReconciler) keepServingLiveCRD(
+	ctx context.Context,
+	rgd *v1alpha1.ResourceGraphDefinition,
+	processedRGD *graph.Graph,
+	instanceLabeler metadata.Labeler,
+	mark *ConditionsMarker,
+) {
+	if _, registered := r.registeredGVR(rgd.UID); registered {
+		return
+	}
+	if !r.liveCRDServes(ctx, processedRGD.CRD, processedRGD.Instance.Meta.GVR.Version) {
+		return
+	}
+	if err := r.ensureResourceGraphDefinitionController(ctx, rgd, processedRGD, instanceLabeler); err != nil {
+		mark.ControllerFailedToStart(err.Error())
+		return
+	}
+	mark.ControllerRunning()
+}
+
+// liveCRDServes reports whether the CRD on the cluster was applied by this
+// very RGD and serves the given version.
+func (r *ResourceGraphDefinitionReconciler) liveCRDServes(
+	ctx context.Context,
+	desired *v1.CustomResourceDefinition,
+	version string,
+) bool {
+	live, err := r.crdManager.Get(ctx, desired.Name)
+	if err != nil {
+		return false
+	}
+	owned, nameMatch, idMatch := metadata.CompareRGDOwnership(live.ObjectMeta, desired.ObjectMeta)
+	if !owned || !nameMatch || !idMatch {
+		return false
+	}
+	for _, served := range live.Spec.Versions {
+		if served.Name == version {
+			return served.Served
+		}
+	}
+	return false
 }
 
 // Sentinel errors identifying which stage of reconciliation failed. Each

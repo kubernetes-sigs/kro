@@ -5,8 +5,8 @@ metadata:
 spec:
   description: |
     Tests moving the instance CRD's hub version forward while keeping the
-    previous version served, migrating stored objects, and blocking an edit
-    that would drop a version still listed in status.storedVersions.
+    previous version served, migrating stored objects, and refusing a hub
+    move that does not keep the old hub as a previous version.
     Requires the MultiVersionSchema feature gate.
   steps:
   - name: install-rgd
@@ -47,22 +47,17 @@ spec:
       podLogs:
         selector: app.kubernetes.io/instance=kro
         namespace: kro-system
-  - name: reject-dropping-the-stored-version
+  - name: reject-moving-the-hub-without-a-previous-version
     try:
     - apply:
         file: rgd-hub-move-no-spoke.yaml
-      description: Move the hub to v1beta1 without keeping v1alpha1
+        expect:
+        - check:
+            ($error != null): true
+      description: The API server refuses a hub move that does not keep v1alpha1 as a previous version
     - assert:
-        resource:
-          apiVersion: kro.run/v1alpha1
-          kind: ResourceGraphDefinition
-          metadata:
-            name: check-multi-version
-          status:
-            (conditions[?type == 'KindReady']):
-              - status: 'False'
-                reason: VersionRemovalBlocked
-      description: kro refuses to retire a stored version
+        file: rgd-assert.yaml
+      description: The RGD keeps serving
     - assert:
         file: instancecrd-single-assert.yaml
       description: The CRD still stores v1alpha1

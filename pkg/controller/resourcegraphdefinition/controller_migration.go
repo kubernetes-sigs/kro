@@ -73,6 +73,12 @@ func (r *ResourceGraphDefinitionReconciler) reconcileStorageMigration(
 		return false, fmt.Errorf("getting CRD %s for storage migration: %w", crdName, err)
 	}
 
+	// Ensure refuses a CRD that kro does not own or that belongs to another
+	// RGD, but this runs off the live CRD even then, so it has to refuse too.
+	if !metadata.IsKROOwned(crd) || crd.Labels[metadata.ResourceGraphDefinitionNameLabel] != rgd.Name {
+		return true, nil
+	}
+
 	hub := ""
 	for _, version := range crd.Spec.Versions {
 		if version.Storage {
@@ -95,7 +101,11 @@ func (r *ResourceGraphDefinitionReconciler) reconcileStorageMigration(
 		return true, nil
 	}
 
-	if r.storageVersionMigrationAvailable() && !r.migrationStalled(crd.Name) {
+	available, err := r.storageVersionMigrationAvailable()
+	if err != nil {
+		return false, err
+	}
+	if available && !r.migrationStalled(crd.Name) {
 		done, err := r.reconcileMigrationObject(ctx, rgd.Name, crd, hub, migrationName)
 		if err != nil {
 			return false, err
@@ -246,7 +256,7 @@ func (r *ResourceGraphDefinitionReconciler) rewriteInstances(
 // deleteStorageVersionMigration removes a finished migration object. Failures
 // are ignored: a leftover object is harmless and the next reconcile retries.
 func (r *ResourceGraphDefinitionReconciler) deleteStorageVersionMigration(ctx context.Context, name string) {
-	if !r.storageVersionMigrationAvailable() {
+	if available, err := r.storageVersionMigrationAvailable(); err != nil || !available {
 		return
 	}
 	err := r.clientSet.Dynamic().Resource(storageVersionMigrationGVR).Delete(ctx, name, metav1.DeleteOptions{})
@@ -258,23 +268,30 @@ func (r *ResourceGraphDefinitionReconciler) deleteStorageVersionMigration(ctx co
 }
 
 // storageVersionMigrationAvailable reports whether the cluster serves
-// storagemigration.k8s.io/v1. The answer is discovered once: a cluster does
-// not gain or lose a built-in API group without an API server restart, and
-// this runs on every RGD reconcile.
-func (r *ResourceGraphDefinitionReconciler) storageVersionMigrationAvailable() bool {
-	r.storageMigrationAPIOnce.Do(func() {
-		resources, err := r.clientSet.Kubernetes().Discovery().ServerResourcesForGroupVersion(storageVersionMigrationGroupVersion)
-		if err != nil || resources == nil {
-			return
-		}
+// storagemigration.k8s.io/v1. A definite answer is cached: a cluster does not
+// gain or lose a built-in API group without an API server restart, and this
+// runs on every RGD reconcile. A failed discovery call is not an answer.
+func (r *ResourceGraphDefinitionReconciler) storageVersionMigrationAvailable() (bool, error) {
+	r.storageMigrationAPIMu.Lock()
+	defer r.storageMigrationAPIMu.Unlock()
+	if r.storageMigrationAPIKnown {
+		return r.storageMigrationAPI, nil
+	}
+
+	resources, err := r.clientSet.Kubernetes().Discovery().ServerResourcesForGroupVersion(storageVersionMigrationGroupVersion)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("discovering %s: %w", storageVersionMigrationGroupVersion, err)
+	}
+	if resources != nil {
 		for _, resource := range resources.APIResources {
 			if resource.Name == storageVersionMigrationGVR.Resource {
 				r.storageMigrationAPI = true
-				return
+				break
 			}
 		}
-	})
-	return r.storageMigrationAPI
+	}
+	r.storageMigrationAPIKnown = true
+	return r.storageMigrationAPI, nil
 }
 
 // newStorageVersionMigration builds the migration object for one CRD.

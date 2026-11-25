@@ -236,9 +236,18 @@ func (c Change) Description() string {
 		return fmt.Sprintf("Default value was changed from %s to %s", c.OldValue, c.NewValue)
 	case AdditionalPrinterColumnsChanged:
 		return "Additional printer columns were changed"
+	case VersionMetadataChanged:
+		return c.versionMetadataDescription(propName)
 	default:
 		return c.constraintDescription()
 	}
+}
+
+func (c Change) versionMetadataDescription(field string) string {
+	if c.OldValue == "" && c.NewValue == "" {
+		return fmt.Sprintf("Version field %s was changed", field)
+	}
+	return fmt.Sprintf("Version field %s was changed from %s to %s", field, c.OldValue, c.NewValue)
 }
 
 func (c Change) constraintDescription() string {

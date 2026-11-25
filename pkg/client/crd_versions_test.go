@@ -344,6 +344,85 @@ func TestEnsureBlockedRemovalWithoutVersionsInUseLookup(t *testing.T) {
 	assert.Equal(t, 1, called, "VersionsInUse must be consulted lazily, at most once")
 }
 
+func TestEnsureConsultsVersionsInUseOnceForANilSet(t *testing.T) {
+	existing := versionedCRD(
+		crdVersion("v1beta1", true, true, stringProps("name")),
+		crdVersion("v1alpha1", true, false, stringProps("name")),
+		crdVersion("v1alpha2", true, false, stringProps("name")),
+	)
+	existing.Status.StoredVersions = []string{"v1beta1"}
+
+	called := 0
+	wrapper := newTestCRDWrapper(existing)
+	desired := versionedCRD(crdVersion("v1beta1", true, true, stringProps("name")))
+
+	err := wrapper.Ensure(context.Background(), *desired, EnsureOptions{
+		MultiVersion: true,
+		VersionsInUse: func() (sets.Set[string], error) {
+			called++
+			return nil, nil
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, called, "a nil set is an answer too, not a reason to ask again")
+}
+
+func TestEnsureNamesTheSameVersionOnEveryCall(t *testing.T) {
+	withDefault := func(value string) map[string]v1.JSONSchemaProps {
+		props := stringProps("name")
+		name := props["name"]
+		name.Default = &v1.JSON{Raw: []byte(`"` + value + `"`)}
+		props["name"] = name
+		return props
+	}
+	tests := []struct {
+		name     string
+		existing *v1.CustomResourceDefinition
+		desired  *v1.CustomResourceDefinition
+		opts     EnsureOptions
+		wantErr  string
+	}{
+		{
+			name: "two previous versions with a breaking edit",
+			existing: versionedCRD(
+				crdVersion("v1", true, true, stringProps("name", "a", "b")),
+				crdVersion("v1alpha1", true, false, stringProps("name", "a")),
+				crdVersion("v1beta1", true, false, stringProps("name", "b")),
+			),
+			desired: versionedCRD(
+				crdVersion("v1", true, true, stringProps("name", "a", "b")),
+				crdVersion("v1alpha1", true, false, stringProps("name")),
+				crdVersion("v1beta1", true, false, stringProps("name")),
+			),
+			wantErr: "version v1alpha1 of CRD",
+		},
+		{
+			name: "two versions with a default change under Manual",
+			existing: versionedCRD(
+				crdVersion("v1", true, true, withDefault("x")),
+				crdVersion("v1alpha1", true, false, withDefault("x")),
+			),
+			desired: versionedCRD(
+				crdVersion("v1", true, true, withDefault("y")),
+				crdVersion("v1alpha1", true, false, withDefault("y")),
+			),
+			opts:    EnsureOptions{RejectDefaultChanges: true},
+			wantErr: "version v1:",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapper := newTestCRDWrapper(tt.existing)
+			// Map iteration is random: repeat until a flip would have shown.
+			for range 40 {
+				err := wrapper.Ensure(context.Background(), *tt.desired.DeepCopy(), tt.opts)
+				require.ErrorContains(t, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestSetStoredVersions(t *testing.T) {
 	crd := versionedCRD(
 		crdVersion("v1beta1", true, true, stringProps("name")),

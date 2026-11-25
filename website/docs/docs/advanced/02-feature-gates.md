@@ -207,12 +207,18 @@ kro migrates the stored objects — through the cluster's
 `StorageVersionMigration` API where it exists, otherwise by rewriting the
 objects itself — and then trims `status.storedVersions` to the new hub.
 
+Moving the hub takes two edits. The first moves `schema.apiVersion` and lists
+the old hub under `schema.previousVersions`. The API server refuses an edit that
+changes `schema.apiVersion` without listing the old value there: the old hub is
+always in the CRD's `status.storedVersions` at that point, so it could not be
+retired yet. The second edit removes the previous version.
+
 A version may not stop being served while it is still listed in the CRD's
 `status.storedVersions` or still used by a graph revision an instance is pinned
 to; kro reports `KindReady=False` with reason `VersionRemovalBlocked` and keeps
-serving it. Retiring a version in the same edit that moves the hub is therefore
-rejected at first and applied by itself once the migration has rewritten the
-stored objects — the migration runs even while the edit is blocked. Moving
+serving it. The second edit may follow the first right away: it is rejected at
+first and applied by itself once the migration has rewritten the stored objects,
+because the migration runs even while the edit is blocked. Moving
 `schema.apiVersion` backwards is always rejected.
 
 With `rbac.mode: aggregation`, the chart grants the controller the extra

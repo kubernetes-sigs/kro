@@ -86,9 +86,10 @@ type ResourceGraphDefinitionReconciler struct {
 	cfg                   Config
 
 	// storageMigrationAPI caches whether the cluster serves
-	// storagemigration.k8s.io/v1, discovered at most once.
-	storageMigrationAPIOnce sync.Once
-	storageMigrationAPI     bool
+	// storagemigration.k8s.io/v1, once discovery gave a definite answer.
+	storageMigrationAPIMu    sync.Mutex
+	storageMigrationAPIKnown bool
+	storageMigrationAPI      bool
 
 	// stalledMigrations records the CRDs whose storage version migration the
 	// cluster's migrator never finished, so kro stops waiting for it.

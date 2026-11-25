@@ -82,6 +82,8 @@ const (
 // It specifies the API group, version, and kind for the generated CRD, along with the
 // spec and status schemas using SimpleSchema syntax. You can also define custom types,
 // validation rules, and printer columns.
+//
+// +kubebuilder:validation:XValidation:rule="self.apiVersion == oldSelf.apiVersion || (has(self.previousVersions) && self.previousVersions.exists(v, v.apiVersion == oldSelf.apiVersion))",message="apiVersion may only change when its previous value is listed under previousVersions"
 type Schema struct {
 	// Kind is the name of the custom resource type that will be created.
 	// This becomes the kind field of the generated CRD and must be a valid Kubernetes kind name
@@ -114,6 +116,7 @@ type Schema struct {
 	// Example: "v1alpha1", "v1", "v2beta1"
 	//
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$`
 	APIVersion string `json:"apiVersion,omitempty"`
 	// Group is the API group for the generated CRD. Together with APIVersion and Kind,
@@ -198,6 +201,7 @@ type Schema struct {
 	// Requires the MultiVersionSchema feature gate.
 	//
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=32
 	// +listType=map
 	// +listMapKey=apiVersion
 	PreviousVersions []PreviousSchemaVersion `json:"previousVersions,omitempty"`
@@ -209,6 +213,7 @@ type PreviousSchemaVersion struct {
 	// lower Kubernetes version priority than, schema.apiVersion.
 	//
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$`
 	APIVersion string `json:"apiVersion"`
 

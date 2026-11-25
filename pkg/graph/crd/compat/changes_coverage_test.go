@@ -168,6 +168,10 @@ func TestChangeDescriptions(t *testing.T) {
 			[]string{"Schema field", "spec.x", "cannot be classified safely"}},
 		{"description changed", Change{Path: "spec.d", ChangeType: DescriptionChanged, OldValue: "a", NewValue: "b"},
 			[]string{"Description", "changed"}},
+		{"version flag changed", Change{Path: "version.served", ChangeType: VersionMetadataChanged, OldValue: "true", NewValue: "false"},
+			[]string{"Version field", "served", "true", "false"}},
+		{"version field changed without values", Change{Path: "version.deprecationWarning", ChangeType: VersionMetadataChanged},
+			[]string{"Version field", "deprecationWarning", "changed"}},
 		{"default changed", Change{Path: "spec.d", ChangeType: DefaultChanged, OldValue: "1", NewValue: "2"},
 			[]string{"Default value was changed", "1", "2"}},
 

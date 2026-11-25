@@ -279,6 +279,7 @@ spec:
                       other change. The previous hub must be listed under previousVersions
                       until no object is stored under it.
                       Example: "v1alpha1", "v1", "v2beta1"
+                    maxLength: 63
                     pattern: ^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$
                     type: string
                   categories:
@@ -375,6 +376,7 @@ spec:
                           description: |-
                             APIVersion is this version's identifier. It must differ from, and have a
                             lower Kubernetes version priority than, schema.apiVersion.
+                          maxLength: 63
                           pattern: ^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$
                           type: string
                         deprecated:
@@ -418,6 +420,7 @@ spec:
                       required:
                       - apiVersion
                       type: object
+                    maxItems: 32
                     type: array
                     x-kubernetes-list-map-keys:
                     - apiVersion
@@ -475,6 +478,11 @@ spec:
                 - kind
                 - scope
                 type: object
+                x-kubernetes-validations:
+                - message: apiVersion may only change when its previous value is listed
+                    under previousVersions
+                  rule: self.apiVersion == oldSelf.apiVersion || (has(self.previousVersions)
+                    && self.previousVersions.exists(v, v.apiVersion == oldSelf.apiVersion))
             required:
             - schema
             type: object

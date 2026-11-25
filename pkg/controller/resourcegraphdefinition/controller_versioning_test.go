@@ -24,6 +24,8 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -283,6 +285,102 @@ func TestEnsureServingStateSurfacesCRDFailureReason(t *testing.T) {
 			assertConditionExact(t, rgd, KindReady, metav1.ConditionFalse, tt.wantReason, tt.ensureErr.Error())
 		})
 	}
+}
+
+// After a kro restart no instance controller is registered. A rejected CRD
+// update must not keep it that way while the live CRD is still this RGD's own.
+func TestEnsureServingStateKeepsServingTheLiveCRDWhenTheUpdateIsRejected(t *testing.T) {
+	ensureErr := fmt.Errorf("%w: version v1alpha1 of CRD networks.example.io differs incompatibly", kroclient.ErrSpokeSchemaMismatch)
+	gvr := instanceGVRFor("v1alpha1")
+
+	tests := []struct {
+		name           string
+		mutate         func(live *extv1.CustomResourceDefinition)
+		getErr         error
+		wantRegistered bool
+	}{
+		{
+			name:           "the live CRD is this RGD's own and serves the hub version",
+			wantRegistered: true,
+		},
+		{
+			name:   "the CRD does not exist",
+			getErr: apierrors.NewNotFound(schema.GroupResource{Resource: "customresourcedefinitions"}, "networks.example.io"),
+		},
+		{
+			name:   "the CRD is not owned by kro",
+			mutate: func(live *extv1.CustomResourceDefinition) { live.Labels = nil },
+		},
+		{
+			name: "the CRD belongs to another RGD",
+			mutate: func(live *extv1.CustomResourceDefinition) {
+				live.Labels[metadata.ResourceGraphDefinitionNameLabel] = "other-graph"
+			},
+		},
+		{
+			name: "the CRD was applied by an earlier RGD of the same name",
+			mutate: func(live *extv1.CustomResourceDefinition) {
+				live.Labels[metadata.ResourceGraphDefinitionIDLabel] = "earlier-uid"
+			},
+		},
+		{
+			name: "the live CRD does not serve the hub version",
+			mutate: func(live *extv1.CustomResourceDefinition) {
+				live.Spec.Versions[0].Served = false
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := newTestRGD("rgd-keep-serving")
+			rgd.UID = "rgd-uid"
+
+			live := newProcessedGraph().CRD
+			live.Labels = map[string]string{
+				metadata.OwnedLabel:                       "true",
+				metadata.ResourceGraphDefinitionNameLabel: rgd.Name,
+				metadata.ResourceGraphDefinitionIDLabel:   string(rgd.UID),
+			}
+			live.Spec.Versions = []extv1.CustomResourceDefinitionVersion{{Name: "v1alpha1", Served: true, Storage: true}}
+			if tt.mutate != nil {
+				tt.mutate(live)
+			}
+
+			manager := &stubCRDManager{ensureErr: ensureErr, getReturn: live, getErr: tt.getErr}
+			dc := newRunningDynamicController(t)
+			reconciler := newServingReconciler(t, manager, dc)
+			mark := NewConditionsMarkerFor(rgd)
+
+			_, _, err := reconciler.ensureServingState(context.Background(), rgd, newProcessedGraph(), mark)
+			require.ErrorIs(t, err, kroclient.ErrSpokeSchemaMismatch, "the rejection is still reported")
+			assertConditionExact(t, rgd, KindReady, metav1.ConditionFalse, "SpokeSchemaMismatch", ensureErr.Error())
+
+			_, registered := reconciler.registeredGVR(rgd.UID)
+			assert.Equal(t, tt.wantRegistered, registered)
+			_, watched := dc.InstanceKeys(gvr)
+			assert.Equal(t, tt.wantRegistered, watched)
+			if tt.wantRegistered {
+				assert.True(t, conditionFor(t, rgd, ControllerReady).IsTrue())
+			}
+		})
+	}
+}
+
+func TestEnsureServingStateLeavesARegisteredControllerAloneWhenTheUpdateIsRejected(t *testing.T) {
+	rgd := newTestRGD("rgd-keep-registered")
+	rgd.UID = "rgd-uid"
+	manager := &stubCRDManager{}
+	reconciler := newServingReconciler(t, manager, newRunningDynamicController(t))
+
+	_, _, err := reconciler.ensureServingState(context.Background(), rgd, newProcessedGraph(), NewConditionsMarkerFor(rgd))
+	require.NoError(t, err)
+	requested := len(manager.requestedCRDNames)
+
+	manager.ensureErr = errors.New("crd boom")
+	_, _, err = reconciler.ensureServingState(context.Background(), rgd, newProcessedGraph(), NewConditionsMarkerFor(rgd))
+	require.Error(t, err)
+	assert.Len(t, manager.requestedCRDNames, requested, "an RGD that is already served needs no look at the live CRD")
 }
 
 func TestGarbageCollectGraphRevisionsRetainsReferenced(t *testing.T) {

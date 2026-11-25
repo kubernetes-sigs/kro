@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -231,7 +233,10 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 		return err
 	}
 
-	for name, versionReport := range report.Versions {
+	// Sorted, so the version an error names does not change between reconciles.
+	versionNames := slices.Sorted(maps.Keys(report.Versions))
+	for _, name := range versionNames {
+		versionReport := report.Versions[name]
 		if name == newStorage || versionReport.IsCompatible() {
 			continue
 		}
@@ -251,8 +256,8 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 	}
 
 	if opts.RejectDefaultChanges && !opts.AllowBreakingChanges {
-		for name, versionReport := range report.Versions {
-			for _, change := range versionReport.NonBreakingChanges {
+		for _, name := range versionNames {
+			for _, change := range report.Versions[name].NonBreakingChanges {
 				if change.ChangeType != crdcompat.DefaultChanged {
 					continue
 				}
@@ -346,6 +351,7 @@ func (w *CRDWrapper) checkRetiredVersions(
 
 	stored := sets.New(existing.Status.StoredVersions...)
 	var inUse sets.Set[string]
+	fetched := false
 	for _, name := range retired {
 		if stored.Has(name) {
 			return fmt.Errorf("%w: version %s of CRD %s is still listed in status.storedVersions",
@@ -354,12 +360,12 @@ func (w *CRDWrapper) checkRetiredVersions(
 		if opts.VersionsInUse == nil {
 			continue
 		}
-		if inUse == nil {
+		if !fetched {
 			used, err := opts.VersionsInUse()
 			if err != nil {
 				return fmt.Errorf("failed to determine versions in use for CRD %s: %w", desired.Name, err)
 			}
-			inUse = used
+			inUse, fetched = used, true
 		}
 		if inUse.Has(name) {
 			return fmt.Errorf("%w: version %s of CRD %s is still used by a pinned graph revision",

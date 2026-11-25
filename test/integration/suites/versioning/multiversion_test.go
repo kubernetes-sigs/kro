@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -63,6 +64,20 @@ func updateRGD(ctx SpecContext, name string, mutate func(*krov1alpha1.ResourceGr
 		g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: name}, rgd)).To(Succeed())
 		mutate(rgd)
 		g.Expect(env.Client.Update(ctx, rgd)).To(Succeed())
+	}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+}
+
+// expectUpdateRejected applies mutate to the RGD and expects the API server
+// to refuse the update with the given message.
+func expectUpdateRejected(ctx SpecContext, name string, mutate func(*krov1alpha1.ResourceGraphDefinition), message string) {
+	GinkgoHelper()
+	Eventually(func(g Gomega, ctx SpecContext) {
+		rgd := &krov1alpha1.ResourceGraphDefinition{}
+		g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: name}, rgd)).To(Succeed())
+		mutate(rgd)
+		err := env.Client.Update(ctx, rgd)
+		g.Expect(apierrors.IsInvalid(err)).To(BeTrue(), "expected an Invalid error, got: %v", err)
+		g.Expect(err.Error()).To(ContainSubstring(message))
 	}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 }
 
@@ -239,7 +254,7 @@ var _ = Describe("MultiVersion", func() {
 		waitForRGDActive(ctx, rgd)
 	})
 
-	It("rejects dropping the stored version in the same edit that moves the hub", func(ctx SpecContext) {
+	It("rejects moving the hub without keeping the old one as a previous version", func(ctx SpecContext) {
 		kind := "DropHubApp"
 		rgd := multiVersionRGD("test-drop-hub-"+rand.String(5), kind)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
@@ -248,20 +263,15 @@ var _ = Describe("MultiVersion", func() {
 		})
 		waitForRGDActive(ctx, rgd)
 
+		// The old hub is always listed in status.storedVersions, so this edit
+		// could never be applied. The API server refuses it up front.
+		expectUpdateRejected(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
+			live.Spec.Schema.APIVersion = "v1beta1"
+		}, "apiVersion may only change when its previous value is listed under previousVersions")
+
+		// Declaring the old hub as a previous version in the same edit is accepted.
 		updateRGD(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
 			live.Spec.Schema.APIVersion = "v1beta1"
-		})
-
-		message := expectKindUnready(ctx, rgd.Name, "VersionRemovalBlocked")
-		Expect(message).To(ContainSubstring("v1alpha1"))
-
-		Consistently(func(g Gomega, ctx SpecContext) {
-			crd := instanceCRD(g, ctx, kind)
-			g.Expect(storageVersionOf(crd)).To(Equal("v1alpha1"))
-		}, 5*time.Second, 1*time.Second).WithContext(ctx).Should(Succeed())
-
-		// Declaring the old hub as a previous version recovers the RGD.
-		updateRGD(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
 			live.Spec.Schema.PreviousVersions = []krov1alpha1.PreviousSchemaVersion{{
 				APIVersion: "v1alpha1",
 				Spec:       toRawExtension(hubSpec),
@@ -344,12 +354,36 @@ var _ = Describe("MultiVersion", func() {
 		})
 		waitForRGDActive(ctx, rgd)
 
-		updateRGD(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
+		expectUpdateRejected(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
 			live.Spec.Schema.APIVersion = "v1alpha1"
 			live.Spec.Schema.PreviousVersions = nil
+		}, "apiVersion may only change when its previous value is listed under previousVersions")
+
+		// Keeping the old hub as a previous version passes admission, and then
+		// fails the graph: a previous version may not outrank the hub.
+		updateRGD(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
+			live.Spec.Schema.APIVersion = "v1alpha1"
+			live.Spec.Schema.PreviousVersions = []krov1alpha1.PreviousSchemaVersion{{
+				APIVersion: "v1beta1",
+				Spec:       toRawExtension(hubSpec),
+			}}
 		})
 
-		message := expectKindUnready(ctx, rgd.Name, "Failed")
-		Expect(message).To(ContainSubstring("may only move forward"))
+		Eventually(func(g Gomega, ctx SpecContext) {
+			live := &krov1alpha1.ResourceGraphDefinition{}
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, live)).To(Succeed())
+			var message string
+			for _, condition := range live.Status.Conditions {
+				if condition.Type == krov1alpha1.RGDConditionTypeGraphAccepted && condition.Status == metav1.ConditionFalse && condition.Message != nil {
+					message = *condition.Message
+				}
+			}
+			g.Expect(message).To(ContainSubstring("must have lower priority than schema.apiVersion v1alpha1"))
+		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+		Consistently(func(g Gomega, ctx SpecContext) {
+			crd := instanceCRD(g, ctx, kind)
+			g.Expect(storageVersionOf(crd)).To(Equal("v1beta1"))
+		}, 3*time.Second, 1*time.Second).WithContext(ctx).Should(Succeed())
 	})
 })

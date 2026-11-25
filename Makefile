@@ -182,9 +182,17 @@ golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || GOBIN=$(shell dirname $(GOLANGCI_LINT)) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter & yamllint
+lint: golangci-lint verify-boilerplate ## Run golangci-lint linter, yamllint and the license header check
 	$(GOLANGCI_LINT) run
 	cd cmd/kro && $(GOLANGCI_LINT) run
+
+.PHONY: verify-boilerplate
+verify-boilerplate: $(LOCALBIN) ## Verify Go files carry the Kubernetes license header (config: .nwa-config.yaml).
+	@go tool nwa config -c check || { \
+		sed '/^  mute:/d' .nwa-config.yaml > $(LOCALBIN)/nwa-check.yaml; \
+		go tool nwa config -c check $(LOCALBIN)/nwa-check.yaml | grep -v 'generated file'; \
+		echo "Run 'make fmt' to add missing headers; fix a wrong holder or year by hand."; \
+		exit 1; }
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes

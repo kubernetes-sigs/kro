@@ -24,7 +24,16 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 
 	"gopkg.in/yaml.v2"
+	"sigs.k8s.io/release-utils/version"
 )
+
+const cliVersionAnnotation = "kro.run/cli-version"
+
+// cliVersionAnnotations stamps generated objects with the CLI build version.
+// Builds without the Makefile LDFLAGS fall back to Go's build info.
+func cliVersionAnnotations() map[string]string {
+	return map[string]string{cliVersionAnnotation: version.GetVersionInfo().GitVersion}
+}
 
 func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, error) {
 	set, err := kubeconfig.NewClientSet()

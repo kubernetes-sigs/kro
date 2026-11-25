@@ -83,8 +83,6 @@ func (c *Controller) reconcileViaGraphEngine(
 		"path", "graph-engine",
 	)
 
-	gvrStr := c.gvr.String()
-
 	entry, err := c.resolveRevisionEntry(ctx, log, inst)
 	if err != nil {
 		return err
@@ -120,21 +118,8 @@ func (c *Controller) reconcileViaGraphEngine(
 	// The revision declares the version its graph was compiled against. When
 	// the instance was read under a different served version, re-read it there
 	// so spec fields the other version does not declare are visible.
-	if entry.RGDSpec.Schema != nil && entry.RGDSpec.Schema.APIVersion != inst.GroupVersionKind().Version {
-		fetched, err := c.getInstanceAtVersion(ctx, inst, entry.RGDSpec.Schema.APIVersion)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				c.markRevisionUnavailable(ctx, log, inst, entry.Revision,
-					"graph revision %d requires %s which is not served or the instance no longer exists",
-					entry.Revision, entry.RGDSpec.Schema.APIVersion)
-				return c.delayedRequeue(fmt.Errorf(
-					"graph-engine: revision %d requires version %s which is not served",
-					entry.Revision, entry.RGDSpec.Schema.APIVersion))
-			}
-			return err
-		}
-		// In place, so Reconcile's deferred emitters observe the same object.
-		inst.Object = fetched.Object
+	if err := c.updateInstanceObject(ctx, inst, entry, log); err != nil {
+		return err
 	}
 
 	// Stamp the kro finalizer and management labels on the instance.
@@ -166,6 +151,8 @@ func (c *Controller) reconcileViaGraphEngine(
 	if c.reconcileConfig.MaxCollectionSize > 0 {
 		rtOpts = append(rtOpts, geruntime.WithMaxCollectionSize(c.reconcileConfig.MaxCollectionSize))
 	}
+
+	gvrStr := c.gvr.String()
 	comp := rgdadapter.WithInstanceCRD(c.graphEngineCompiler, entry.CompiledGraph.CRD)
 	rt, _, err := rgdadapter.BuildRuntimeForInstanceCached(rgd, inst, comp, c.programCache, rtOpts...)
 	if err != nil {
@@ -304,12 +291,32 @@ func (c *Controller) reconcileViaGraphEngine(
 	return nil
 }
 
+func (c *Controller) updateInstanceObject(ctx context.Context, inst *unstructured.Unstructured, entry revisions.Entry, log logr.Logger) error {
+	if entry.RGDSpec.Schema != nil && entry.RGDSpec.Schema.APIVersion != inst.GroupVersionKind().Version {
+		fetched, err := c.getInstanceAtVersion(ctx, inst, entry.RGDSpec.Schema.APIVersion)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				c.markRevisionUnavailable(ctx, log, inst, entry.Revision,
+					"graph revision %d requires %s which is not served or the instance no longer exists",
+					entry.Revision, entry.RGDSpec.Schema.APIVersion)
+				return c.delayedRequeue(fmt.Errorf(
+					"graph-engine: revision %d requires version %s which is not served",
+					entry.Revision, entry.RGDSpec.Schema.APIVersion))
+			}
+			return err
+		}
+		// In place, so Reconcile's deferred emitters observe the same object.
+		inst.Object = fetched.Object
+	}
+	return nil
+}
+
 // markResolutionFailed records a graph-resolution failure condition on the
 // instance and best-effort persists it (a persist error is only logged — the
 // caller still returns its requeue).
 func (c *Controller) markResolutionFailed(ctx context.Context, log logr.Logger, inst *unstructured.Unstructured, format string, args ...any) {
 	NewConditionsMarkerFor(inst).GraphResolutionFailed(format, args...)
-	if err := c.updateConditionsStatus(ctx, inst, 0); err != nil {
+	if err := c.updateConditionsStatus(ctx, inst, keepTargetRevision); err != nil {
 		log.V(1).Info("graph-engine: failed to update conditions status", "error", err)
 	}
 }
@@ -317,6 +324,7 @@ func (c *Controller) markResolutionFailed(ctx context.Context, log logr.Logger, 
 // markRevisionUnavailable is markResolutionFailed for the cases where the
 // instance's target revision itself cannot be served; targetRevision is
 // recorded on the status so the pin stays visible while it is unresolvable.
+// Zero means the pin names no revision, which clears an earlier target.
 func (c *Controller) markRevisionUnavailable(ctx context.Context, log logr.Logger, inst *unstructured.Unstructured, targetRevision int64, format string, args ...any) {
 	NewConditionsMarkerFor(inst).GraphRevisionUnavailable(format, args...)
 	if err := c.updateConditionsStatus(ctx, inst, targetRevision); err != nil {

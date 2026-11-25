@@ -82,6 +82,7 @@ _Appears in:_
 | `topologicalOrder` _string array_ | TopologicalOrder is the ordered list of resource IDs based on dependencies. |  |  |
 | `conditions` _[Conditions](#conditions)_ | Conditions represent the latest available observations of the GraphRevision state.<br />GraphRevision exposes GraphVerified plus aggregate Ready. |  |  |
 | `resources` _[ResourceInformation](#resourceinformation) array_ | Resources provides detailed information about each resource in the graph. |  |  |
+| `celEnvironmentVersion` _string_ | CELEnvironmentVersion records the kro version that compiled this<br />snapshot. The kro version determines the CEL environment (available<br />functions and their semantics) a revision was verified against. |  |  |
 
 
 #### ResourceGraphDefinitionSnapshot
@@ -445,6 +446,28 @@ _Appears in:_
 
 
 
+#### PreviousSchemaVersion
+
+
+
+PreviousSchemaVersion is one additional served version of the generated CRD.
+
+
+
+_Appears in:_
+- [Schema](#schema)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | APIVersion is this version's identifier. It must differ from, and have a<br />lower Kubernetes version priority than, schema.apiVersion. |  | Pattern: `^v[0-9]+(alpha[0-9]+\|beta[0-9]+)?$` <br />Required: {} <br /> |
+| `served` _boolean_ | Served controls whether the API server serves this version. Defaults to<br />true. A version may only stop being served once nothing is stored under<br />it and no pinned graph revision still uses it. | true |  |
+| `deprecated` _boolean_ | Deprecated marks this version deprecated. kubectl warns on every request<br />to a deprecated version. |  | Optional: {} <br /> |
+| `deprecationWarning` _string_ | DeprecationWarning replaces the default deprecation warning. Ignored<br />unless Deprecated is set. |  | MaxLength: 256 <br />Optional: {} <br /> |
+| `spec` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#rawextension-runtime-pkg)_ | Spec is this version's instance spec in SimpleSchema syntax, with the<br />same grammar as schema.spec. |  |  |
+| `types` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#rawextension-runtime-pkg)_ | Types holds the custom type definitions referenced by this version's<br />Spec and Status. Previous versions carry their own types because the<br />hub's types evolve with the hub schema. |  |  |
+| `status` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#rawextension-runtime-pkg)_ | Status declares this version's instance status fields in SimpleSchema<br />syntax — type declarations, not the CEL expressions schema.status uses.<br />Omit it to reuse the status schema inferred for the hub version. |  |  |
+
+
 #### Resource
 
 
@@ -507,6 +530,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
+| `rollout` _[Rollout](#rollout)_ | Rollout controls how instances of this ResourceGraphDefinition adopt new<br />graph revisions. It is policy, not graph content: changing it does not<br />issue a new GraphRevision.<br />Requires the GraphRevisionPinning feature gate. |  | Optional: {} <br /> |
 | `schema` _[Schema](#schema)_ | Schema defines the structure of instances created from this ResourceGraphDefinition.<br />It specifies the API version, kind, and fields (spec/status) for the generated CRD.<br />Use SimpleSchema syntax to define the instance schema concisely. |  | Required: {} <br /> |
 | `resources` _[Resource](#resource) array_ | Resources is the list of Kubernetes resources that will be created and managed<br />for each instance. Resources can reference each other using CEL expressions,<br />creating a dependency graph that determines creation order. |  | Optional: {} <br /> |
 
@@ -586,6 +610,40 @@ _Appears in:_
 | `Cluster` | ResourceScopeCluster means the generated instance CRD will be cluster-scoped.<br /> |
 
 
+#### Rollout
+
+
+
+Rollout controls how instances adopt new graph revisions.
+
+
+
+_Appears in:_
+- [ResourceGraphDefinitionSpec](#resourcegraphdefinitionspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `strategy` _[RolloutStrategy](#rolloutstrategy)_ | Strategy selects the rollout strategy for instances of this<br />ResourceGraphDefinition.<br />"Latest" (the default) reconciles every instance against the most<br />recent graph revision. "Manual" keeps each instance on the revision it<br />already reconciled against until the kro.run/graph-revision annotation<br />moves it. | Latest | Enum: [Latest Manual] <br />Optional: {} <br /> |
+
+
+#### RolloutStrategy
+
+_Underlying type:_ _string_
+
+RolloutStrategy selects how instances adopt new graph revisions.
+
+_Validation:_
+- Enum: [Latest Manual]
+
+_Appears in:_
+- [Rollout](#rollout)
+
+| Field | Description |
+| --- | --- |
+| `Latest` | RolloutStrategyLatest reconciles every instance against the latest<br />graph revision as soon as it is issued.<br /> |
+| `Manual` | RolloutStrategyManual keeps every instance on the graph revision it<br />last reconciled against until it is moved explicitly.<br /> |
+
+
 #### Schema
 
 
@@ -604,7 +662,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `kind` _string_ | Kind is the name of the custom resource type that will be created.<br />This becomes the kind field of the generated CRD and must be a valid Kubernetes kind name<br />(PascalCase, starting with a capital letter). This field is immutable after creation.<br />Example: "WebApplication", "Database", "MicroService" |  | Pattern: `^[A-Z][a-zA-Z0-9]{0,62}$` <br />Required: {} <br /> |
 | `plural` _string_ | Plural is the plural form of Kind used as the resource name in the generated<br />CRD, forming its name as "&lt;plural&gt;.&lt;group&gt;". If omitted, it is derived by<br />pluralizing the lowercased kind, which follows English rules and is not always<br />what you would expect or might even not be correct. (For example: "PodInfo" becomes "podinfoes").<br />Set this explicitly to override the generated value.<br />This field is immutable after creation! It cannot be changed again. |  | MaxLength: 63 <br />Optional: {} <br />Pattern: `^[a-z]([-a-z0-9]*[a-z0-9])?$` <br /> |
-| `apiVersion` _string_ | APIVersion is the version identifier for the generated CRD.<br />Must follow Kubernetes versioning conventions (v1, v1alpha1, v1beta1, etc.).<br />This field is immutable after creation.<br />Example: "v1alpha1", "v1", "v2beta1" |  | Pattern: `^v[0-9]+(alpha[0-9]+\|beta[0-9]+)?$` <br />Required: {} <br /> |
+| `apiVersion` _string_ | APIVersion is the version identifier for the generated CRD, and the<br />version instances are stored under (the "hub" version).<br />Must follow Kubernetes versioning conventions (v1, v1alpha1, v1beta1, etc.).<br />It may only move forward in Kubernetes version priority, and only with<br />the MultiVersionSchema feature gate enabled; the controller rejects any<br />other change. The previous hub must be listed under previousVersions<br />until no object is stored under it.<br />Example: "v1alpha1", "v1", "v2beta1" |  | Pattern: `^v[0-9]+(alpha[0-9]+\|beta[0-9]+)?$` <br />Required: {} <br /> |
 | `group` _string_ | Group is the API group for the generated CRD. Together with APIVersion and Kind,<br />it forms the complete GVK (Group-Version-Kind) identifier.<br />If omitted, defaults to "kro.run". This field is immutable after creation.<br />Example: "mycompany.io", "databases.example.com" | kro.run | Optional: {} <br /> |
 | `spec` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#rawextension-runtime-pkg)_ | Spec defines the schema for the instance's spec section using SimpleSchema syntax.<br />This becomes the OpenAPI schema for instances of the generated CRD.<br />Use SimpleSchema's concise syntax to define fields, types, defaults, and validations.<br />Markers are space-separated after a single "\|" separator.<br />Example: {"replicas": "integer \| default=1 minimum=1 maximum=10"} |  |  |
 | `types` _[RawExtension](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#rawextension-runtime-pkg)_ | Types is a map of custom type definitions that can be referenced in the Spec.<br />This allows you to define reusable complex types using SimpleSchema syntax.<br />Reference custom types in Spec using the type name.<br />Example: {"Server": {"host": "string", "port": "integer"}} |  |  |
@@ -614,5 +672,6 @@ _Appears in:_
 | `shortNames` _string array_ | ShortNames are aliases for the generated CRD that can be used with kubectl.<br />Example: ["wa", "webapp"] allows `kubectl get wa` or `kubectl get webapp` instead of `kubectl get webapplications`. |  | MaxItems: 32 <br />Optional: {} <br />items:MaxLength: 63 <br />items:Pattern: `^[a-z]([-a-z0-9]*[a-z0-9])?$` <br /> |
 | `categories` _string array_ | Categories is a list of grouped resources this custom resource belongs to.<br />Resources in a category can be retrieved together with `kubectl get <category>`.<br />Example: ["kro"] makes instances appear in `kubectl get kro`. |  | MaxItems: 32 <br />Optional: {} <br />items:MaxLength: 63 <br />items:Pattern: `^[a-z]([-a-z0-9]*[a-z0-9])?$` <br /> |
 | `metadata` _[CRDMetadata](#crdmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: {} <br /> |
+| `previousVersions` _[PreviousSchemaVersion](#previousschemaversion) array_ | PreviousVersions declares additional, read-only versions of the<br />generated CRD that the API server keeps serving while objects stored<br />under them are migrated to apiVersion. Every previous version must have<br />a lower Kubernetes version priority than apiVersion.<br />kro converts between versions with strategy None: the stored object is<br />served verbatim under every version, so a previous version's schema must<br />accept what the hub schema stores.<br />Requires the MultiVersionSchema feature gate. |  | Optional: {} <br /> |
 
 

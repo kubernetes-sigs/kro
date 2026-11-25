@@ -63,7 +63,7 @@ func migrationTestCRD() *extv1.CustomResourceDefinition {
 
 func migrationTestRGD() *v1alpha1.ResourceGraphDefinition {
 	return &v1alpha1.ResourceGraphDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "networks", UID: "rgd-uid"},
+		ObjectMeta: metav1.ObjectMeta{Name: "network-graph", UID: "rgd-uid"},
 		Spec: v1alpha1.ResourceGraphDefinitionSpec{
 			Schema: &v1alpha1.Schema{Group: "example.io", APIVersion: migrationTestHub, Kind: "Network"},
 		},
@@ -158,7 +158,27 @@ func TestStorageMigrationCreatesMigrationObject(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, map[string]any{"group": "example.io", "resource": "networks"}, resource)
-	assert.Equal(t, "networks", created.GetLabels()[metadata.ResourceGraphDefinitionNameLabel])
+	assert.Equal(t, "network-graph", created.GetLabels()[metadata.ResourceGraphDefinitionNameLabel])
+}
+
+func TestStorageMigrationRemovesObjectWhenTheMigratorTrimsStoredVersions(t *testing.T) {
+	reconciler, crdManager, dynamicClient := newMigrationReconciler(t, true)
+
+	done, err := reconciler.reconcileStorageMigration(context.Background(), migrationTestRGD())
+	require.NoError(t, err)
+	require.False(t, done)
+
+	// The cluster's migrator finishes and trims storedVersions before kro looks again.
+	crdManager.getReturn.Status.StoredVersions = []string{migrationTestHub}
+
+	done, err = reconciler.reconcileStorageMigration(context.Background(), migrationTestRGD())
+	require.NoError(t, err)
+	assert.True(t, done)
+	assert.Empty(t, crdManager.storedVersions, "the migrator already trimmed, nothing to write")
+
+	name := storageVersionMigrationName(migrationTestHub, "networks.example.io")
+	_, err = dynamicClient.Resource(storageVersionMigrationGVR).Get(context.Background(), name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "the finished migration object is removed")
 }
 
 func TestStorageMigrationSucceeded(t *testing.T) {
@@ -235,11 +255,12 @@ func instancePatched(dynamicClient *dynamicfake.FakeDynamicClient, name string) 
 }
 
 func TestStorageMigrationNoopWhenOnlyTheHubIsStored(t *testing.T) {
-	reconciler, crdManager, _ := newMigrationReconciler(t, true)
+	reconciler, crdManager, dynamicClient := newMigrationReconciler(t, true)
 	reconciler.crdManager.(*stubCRDManager).getReturn.Status.StoredVersions = []string{migrationTestHub}
 
 	done, err := reconciler.reconcileStorageMigration(context.Background(), migrationTestRGD())
 	require.NoError(t, err)
 	assert.True(t, done)
 	assert.Empty(t, crdManager.storedVersions, "nothing to migrate, nothing to write")
+	assert.Empty(t, dynamicClient.Actions(), "this path runs on every reconcile and must make no API calls")
 }

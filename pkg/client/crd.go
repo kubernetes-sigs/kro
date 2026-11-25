@@ -314,8 +314,8 @@ func checkSpokesServeStorage(desired v1.CustomResourceDefinition, opts EnsureOpt
 			continue
 		}
 		return fmt.Errorf(
-			"cannot update CRD %s: version %s cannot be converted to %s without a conversion webhook: %s",
-			desired.Name, spoke.Name, hub.Name, report,
+			"%w: cannot update CRD %s: version %s cannot be converted to %s without a conversion webhook: %s",
+			ErrSpokeSchemaMismatch, desired.Name, spoke.Name, hub.Name, report,
 		)
 	}
 	return nil

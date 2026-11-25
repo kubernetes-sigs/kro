@@ -237,6 +237,23 @@ func TestReconcileViaGraphEngine_RevisionPinning(t *testing.T) {
 		assert.Equal(t, "GraphRevisionUnavailable", *cond.Reason)
 	})
 
+	t.Run("invalid annotation clears the target of an earlier pin", func(t *testing.T) {
+		featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+		inst := newInstanceObject("demo", "default")
+		inst.SetAnnotations(map[string]string{v1alpha1.InstanceGraphRevisionAnnotation: "abc"})
+		inst.Object["status"] = map[string]any{"graphRevision": int64(1), "targetGraphRevision": int64(7)}
+		c, _, stored := twoRevisionController(t, inst)
+
+		require.Error(t, c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{}))
+
+		obj := stored()
+		_, found := statusInt64(t, obj, "targetGraphRevision")
+		assert.False(t, found, "a pin that names no revision must not keep an older target")
+		cur, _ := statusInt64(t, obj, "graphRevision")
+		assert.Equal(t, int64(1), cur, "the revision the instance runs is untouched")
+	})
+
 	t.Run("gate off ignores the annotation and writes no revision fields", func(t *testing.T) {
 		inst := newInstanceObject("demo", "default")
 		inst.SetAnnotations(map[string]string{v1alpha1.InstanceGraphRevisionAnnotation: "1"})

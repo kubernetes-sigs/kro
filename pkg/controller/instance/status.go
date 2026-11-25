@@ -157,15 +157,18 @@ func (m *ConditionsMarker) ResourcesUnderDeletion(msg string, args ...any) {
 	m.cs.SetUnknownWithReason(ResourcesReady, "UnderDeletion", fmt.Sprintf(msg, args...))
 }
 
+// keepTargetRevision leaves status.targetGraphRevision as it is on the wire.
+const keepTargetRevision int64 = -1
+
 // updateConditionsStatus persists conditions and state from the instance
 // object. Used on early-exit paths (e.g. graph resolution failure) where a
 // full ReconcileContext is not available. When the RGD declares author
 // conditions this path cannot evaluate them (there is no graph), so only
 // `state` is written and the persisted conditions are left untouched.
 //
-// targetGraphRevision, when greater than zero and GraphRevisionPinning is
-// enabled, also records the revision the instance is trying to reach, so a
-// pin that cannot be served stays visible on the instance.
+// targetGraphRevision, with GraphRevisionPinning enabled, also records the
+// revision the instance is trying to reach, so a pin that cannot be served
+// stays visible on the instance. Zero clears it; keepTargetRevision leaves it.
 func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructured.Unstructured, targetGraphRevision int64) error {
 	ri := c.client.Dynamic().Resource(c.gvrFor(inst))
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -189,8 +192,13 @@ func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructu
 			}
 		}
 		status["state"] = string(v1alpha1.InstanceStateError)
-		if targetGraphRevision > 0 && features.FeatureGate.Enabled(features.GraphRevisionPinning) {
-			status["targetGraphRevision"] = targetGraphRevision
+		if features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+			switch {
+			case targetGraphRevision > 0:
+				status["targetGraphRevision"] = targetGraphRevision
+			case targetGraphRevision == 0:
+				delete(status, "targetGraphRevision")
+			}
 		}
 		cur.Object["status"] = status
 		// Mirror persisted status onto the instance so the deferred

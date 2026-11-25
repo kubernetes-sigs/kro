@@ -87,14 +87,16 @@ func (r *ResourceGraphDefinitionReconciler) reconcileStorageMigration(
 	migrationName := storageVersionMigrationName(hub, crd.Name)
 	stored := crd.Status.StoredVersions
 	if len(stored) == 0 || (len(stored) == 1 && stored[0] == hub) {
-		// Nothing is stored under a retired version. Any migration object kro
-		// created was already deleted when the migration finished, so this
-		// path makes no API calls.
+		// The cluster's migrator trims storedVersions itself when it finishes, so
+		// a migration kro started can end here without reaching the cleanup below.
+		if _, pending := r.pendingMigrations.Load(migrationName); pending {
+			r.deleteStorageVersionMigration(ctx, migrationName)
+		}
 		return true, nil
 	}
 
 	if r.storageVersionMigrationAvailable() && !r.migrationStalled(crd.Name) {
-		done, err := r.reconcileMigrationObject(ctx, crd, hub, migrationName)
+		done, err := r.reconcileMigrationObject(ctx, rgd.Name, crd, hub, migrationName)
 		if err != nil {
 			return false, err
 		}
@@ -126,11 +128,13 @@ func (r *ResourceGraphDefinitionReconciler) reconcileStorageMigration(
 // the next reconcile.
 func (r *ResourceGraphDefinitionReconciler) reconcileMigrationObject(
 	ctx context.Context,
+	rgdName string,
 	crd *v1.CustomResourceDefinition,
 	hub, migrationName string,
 ) (bool, error) {
 	log := ctrl.LoggerFrom(ctx)
 	client := r.clientSet.Dynamic().Resource(storageVersionMigrationGVR)
+	r.pendingMigrations.Store(migrationName, struct{}{})
 
 	existing, err := client.Get(ctx, migrationName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -140,7 +144,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileMigrationObject(
 		if labels == nil {
 			labels = map[string]string{}
 		}
-		labels[metadata.ResourceGraphDefinitionNameLabel] = crd.Spec.Names.Plural
+		labels[metadata.ResourceGraphDefinitionNameLabel] = rgdName
 		migration.SetLabels(labels)
 
 		if _, err := client.Create(ctx, migration, metav1.CreateOptions{}); err != nil {
@@ -248,7 +252,9 @@ func (r *ResourceGraphDefinitionReconciler) deleteStorageVersionMigration(ctx co
 	err := r.clientSet.Dynamic().Resource(storageVersionMigrationGVR).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		ctrl.LoggerFrom(ctx).V(1).Info("failed to delete storage version migration", "name", name, "error", err)
+		return
 	}
+	r.pendingMigrations.Delete(name)
 }
 
 // storageVersionMigrationAvailable reports whether the cluster serves

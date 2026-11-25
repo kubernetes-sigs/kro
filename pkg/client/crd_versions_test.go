@@ -257,6 +257,7 @@ func TestEnsureVersionRules(t *testing.T) {
 				)
 			},
 			opts:    EnsureOptions{MultiVersion: true},
+			wantIs:  ErrSpokeSchemaMismatch,
 			wantErr: "version v1alpha1 cannot be converted to v1beta1 without a conversion webhook",
 		},
 		{

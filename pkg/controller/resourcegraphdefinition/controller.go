@@ -94,6 +94,17 @@ type ResourceGraphDefinitionReconciler struct {
 	// cluster's migrator never finished, so kro stops waiting for it.
 	stalledMigrations sync.Map
 
+	// pendingMigrations records the migration objects kro created and has not
+	// seen deleted yet, so cleanup is retried without a call on every reconcile.
+	//
+	// TODO(skarlso): Potentially, this could be a label based List call instead
+	// of an in-memory map that does not survive a crash / reboot of the
+	// controller and would miss cleaning up things. Jakob: You deliberately
+	// chose to do this to avoid API calls, are you okay with this approach here
+	// also avoiding API calls, or would you rather switch to a List call (a bit
+	// more complexity, but makes the lookup more robust).
+	pendingMigrations sync.Map
+
 	// graphEngineCompiler is injected via WithGraphEngineCompiler after
 	// SetupWithManager so that the compiler shares the same REST config/HTTP
 	// client as the rest of the manager.  It drives the instance reconcile path.

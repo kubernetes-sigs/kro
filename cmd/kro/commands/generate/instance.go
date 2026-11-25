@@ -75,7 +75,7 @@ func generateInstance(rgd *v1alpha1.ResourceGraphDefinition) error {
 		return fmt.Errorf("failed to generate dummy CR: %w", err)
 	}
 
-	emulatedObj.SetAnnotations(map[string]string{"kro.run/version": "dev"})
+	emulatedObj.SetAnnotations(cliVersionAnnotations())
 
 	delete(emulatedObj.Object, "status")
 

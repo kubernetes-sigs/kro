@@ -61,7 +61,7 @@ func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	}
 
 	crd := rgdGraph.CRD
-	crd.SetAnnotations(map[string]string{"kro.run/cli-version": "dev"})
+	crd.SetAnnotations(cliVersionAnnotations())
 
 	b, err := marshalObject(crd, config.outputFormat)
 	if err != nil {

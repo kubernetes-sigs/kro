@@ -389,7 +389,7 @@ ko-apply: ko
 ## CLI
 .PHONY: cli
 cli:
-	go build -C cmd/kro -o $(LOCALBIN)/kro .
+	go build -C cmd/kro -buildvcs=false -ldflags=${LDFLAGS} -o $(LOCALBIN)/kro .
 	sudo mv bin/kro /usr/local/bin
 	@echo "CLI built successfully"
 

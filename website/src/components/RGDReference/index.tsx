@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 import styles from './styles.module.css';
 
 interface Field {
@@ -170,7 +170,7 @@ function FieldTable({ fields, title }: { fields: Field[]; title: string }) {
 }
 
 export default function RGDReference({ crdYaml }: { crdYaml: string }): JSX.Element {
-  const crdData = yaml.load(crdYaml);
+  const crdData = load(crdYaml);
   const { specFields, statusFields } = parseFieldsFromCRD(crdData);
 
   return (

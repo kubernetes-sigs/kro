@@ -301,6 +301,84 @@ var _ = Describe("CRD", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
+		It("should reject new instances without spec when requireSpec is set", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-crd-require-spec",
+				generator.WithSchema(
+					"TestRequireSpec", "v1alpha1",
+					map[string]any{
+						"name": "string | required=true",
+					},
+					nil,
+				),
+			)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+			})
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			newInstance := func(name string, spec map[string]any) *unstructured.Unstructured {
+				instance := &unstructured.Unstructured{Object: map[string]any{
+					"apiVersion": "kro.run/v1alpha1",
+					"kind":       "TestRequireSpec",
+					"metadata": map[string]any{
+						"name":      name,
+						"namespace": namespace,
+					},
+				}}
+				if spec != nil {
+					instance.Object["spec"] = spec
+				}
+				return instance
+			}
+
+			// Without requireSpec, an instance without spec is accepted.
+			existing := newInstance("existing", nil)
+			Expect(env.Client.Create(ctx, existing)).To(Succeed())
+
+			// Wait for kro to add its finalizer, so deleting the instance later
+			// needs an update that the rule must allow.
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: existing.GetName(), Namespace: namespace}, existing)).To(Succeed())
+				g.Expect(existing.GetFinalizers()).ToNot(BeEmpty())
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
+				rgd.Spec.Schema.RequireSpec = true
+				g.Expect(env.Client.Update(ctx, rgd)).To(Succeed())
+			}, 10*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: "testrequirespecs.kro.run"}, crd)).To(Succeed())
+				g.Expect(crd.Spec.Versions[0].Schema.OpenAPIV3Schema.XValidations).To(HaveLen(1))
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			// New instances without spec are rejected by the API server.
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Create(ctx, newInstance("missing-spec", nil))
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(err.Error()).To(ContainSubstring("spec is required"))
+			}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			valid := newInstance("valid", map[string]any{"name": "valid"})
+			Expect(env.Client.Create(ctx, valid)).To(Succeed())
+
+			// The instance created before requireSpec was set can still be deleted.
+			for _, instance := range []*unstructured.Unstructured{existing, valid} {
+				Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+				Eventually(func(g Gomega, ctx SpecContext) {
+					err := env.Client.Get(ctx, types.NamespacedName{Name: instance.GetName(), Namespace: namespace}, instance)
+					g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
+				}, 20*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+			}
+		})
+
 		It("should delete CRD when ResourceGraphDefinition is deleted", func(ctx SpecContext) {
 			// Create ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd-delete",

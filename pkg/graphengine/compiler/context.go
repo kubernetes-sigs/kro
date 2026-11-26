@@ -287,27 +287,12 @@ func (ctx *CompilationContext) buildNode(p *parser.Parser, n *expv1alpha1.Node, 
 	}
 
 	var descriptors []variable.FieldDescriptor
-	if kind == NodeKindTemplate || kind == NodeKindPatch {
-		if kind == NodeKindTemplate && gvk.Group == "apiextensions.k8s.io" && gvk.Kind == "CustomResourceDefinition" {
-			descriptors, _, err = parser.ParseSchemalessResource(payload)
-			if err != nil {
-				return nil, nil, fmt.Errorf("parse %s payload: %w", kind, err)
-			}
-			for _, expr := range descriptors {
-				if !strings.HasPrefix(expr.Path, "metadata.") {
-					return nil, nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, n.ID)
-				}
-			}
-		} else {
-			// A patch body is a partial manifest shaped like the target, so it
-			// type-checks against the target schema exactly as a template does.
-			descriptors, err = p.ParseResource(payload, sch)
-		}
-	} else {
-		// Ref payloads are synthesized from typed structs (ExternalRef).
-		// The OpenAPI schema for the target GVK does not match
-		// that shape — parse schemaless instead.
+	crdTemplate := kind == NodeKindTemplate && gvk.Group == "apiextensions.k8s.io" && gvk.Kind == "CustomResourceDefinition"
+	if !authoredManifest || crdTemplate {
+		// Ref selectors and recursive CRD schemas are not described by the target schema.
 		descriptors, _, err = parser.ParseSchemalessResource(payload)
+	} else {
+		descriptors, err = p.ParseResource(payload, sch)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse %s payload: %w", kind, err)

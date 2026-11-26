@@ -478,15 +478,10 @@ func (b *Builder) buildResourceNode(
 			return nil, nil, fmt.Errorf("failed to parse external ref resource %s: %w", rs.ID, err)
 		}
 	} else if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
+		// The resolved CRD schema does not describe recursive JSONSchemaProps fields.
 		fieldDescriptors, _, err = parser.ParseSchemalessResource(rs.Object)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rs.ID, err)
-		}
-
-		for _, expr := range fieldDescriptors {
-			if !strings.HasPrefix(expr.Path, "metadata.") {
-				return nil, nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, rs.ID)
-			}
 		}
 	} else {
 		fieldDescriptors, err = p.ParseResource(rs.Object, resourceSchema)

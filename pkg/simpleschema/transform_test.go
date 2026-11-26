@@ -20,8 +20,21 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
+
+func TestCustomTypeExpansionBudget(t *testing.T) {
+	tr, err := newTransformer(map[string]any{"Port": map[string]any{"number": "integer"}})
+	require.NoError(t, err)
+	port := tr.customTypes["Port"]
+	tr.remainingExpansionBytes = 2 * port.Schema.Size()
+	_, err = tr.buildSchema(map[string]any{"ports": "[]Port", "namedPorts": "map[string]Port"})
+	require.NoError(t, err)
+	require.Zero(t, tr.remainingExpansionBytes)
+	_, err = tr.buildSchema(map[string]any{"extra": "Port"})
+	require.ErrorContains(t, err, "custom type expansion exceeds")
+}
 
 func TestBuildOpenAPISchema(t *testing.T) {
 	tests := []struct {

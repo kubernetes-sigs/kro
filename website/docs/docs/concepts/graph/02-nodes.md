@@ -68,8 +68,10 @@ Other nodes read the applied resource's observed state. `${config.data.LOG_LEVEL
 returns the value kro wrote; `${deployment.status.availableReplicas}` returns
 whatever the cluster reports.
 
-One restriction applies to `CustomResourceDefinition` templates: CEL
-expressions are allowed only under `metadata`. A CRD's schema must be literal.
+`CustomResourceDefinition` templates support CEL in values such as `spec.group`
+and `spec.versions[].schema.openAPIV3Schema`. kro checks expression types where
+it can resolve the field; the API server validates the rendered CRD. See
+[`simpleschema.toOpenAPI`](../expressions/02-cel-libraries.md#simpleschema) for an example.
 
 ## `ref`
 

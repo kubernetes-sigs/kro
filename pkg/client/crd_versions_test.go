@@ -74,6 +74,7 @@ func TestEnsureVersionRules(t *testing.T) {
 		opts     EnsureOptions
 		wantErr  string
 		wantIs   error
+		wantNot  error
 		verify   func(t *testing.T, got *v1.CustomResourceDefinition)
 	}{
 		{
@@ -220,8 +221,9 @@ func TestEnsureVersionRules(t *testing.T) {
 					crdVersion("v1alpha1", true, false, stringProps("name")),
 				)
 			},
-			opts:    EnsureOptions{MultiVersion: true},
-			wantIs:  ErrSpokeSchemaMismatch,
+			opts: EnsureOptions{MultiVersion: true},
+			// A breaking edit to the version itself, not a mismatch with the hub.
+			wantNot: ErrSpokeSchemaMismatch,
 			wantErr: "differs incompatibly from the served schema",
 		},
 		{
@@ -305,6 +307,9 @@ func TestEnsureVersionRules(t *testing.T) {
 				}
 				if tt.wantIs != nil {
 					assert.ErrorIs(t, err, tt.wantIs)
+				}
+				if tt.wantNot != nil {
+					assert.NotErrorIs(t, err, tt.wantNot)
 				}
 				// A rejected update must not have touched the CRD.
 				got, getErr := wrapper.Get(context.Background(), existing.Name)
@@ -395,7 +400,7 @@ func TestEnsureNamesTheSameVersionOnEveryCall(t *testing.T) {
 				crdVersion("v1alpha1", true, false, stringProps("name")),
 				crdVersion("v1beta1", true, false, stringProps("name")),
 			),
-			wantErr: "version v1alpha1 of CRD",
+			wantErr: "version v1alpha1 differs",
 		},
 		{
 			name: "two versions with a default change under Manual",

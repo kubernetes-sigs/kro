@@ -29,6 +29,8 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/features"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // crdFailureReason maps a CRD ensure failure to a status condition reason.
@@ -97,37 +99,105 @@ func (r *ResourceGraphDefinitionReconciler) referencedRevisions(
 		}
 		return nil, fmt.Errorf("getting CRD %s: %w", crd.Name, err)
 	}
+	instances, err := r.listInstances(ctx, existing)
+	if err != nil {
+		return nil, err
+	}
+
+	refs := sets.New[int64]()
+	for i := range instances {
+		for _, revision := range instanceRevisionRefs(&instances[i]) {
+			refs.Insert(revision)
+		}
+	}
+	return refs, nil
+}
+
+// listInstances lists every instance of a CRD through its storage version.
+func (r *ResourceGraphDefinitionReconciler) listInstances(
+	ctx context.Context,
+	crd *v1.CustomResourceDefinition,
+) ([]unstructured.Unstructured, error) {
 	storage := ""
-	for _, version := range existing.Spec.Versions {
+	for _, version := range crd.Spec.Versions {
 		if version.Storage {
 			storage = version.Name
 			break
 		}
 	}
 	if storage == "" {
-		return sets.New[int64](), nil
+		return nil, nil
 	}
 
 	gvr := schema.GroupVersionResource{
-		Group:    existing.Spec.Group,
+		Group:    crd.Spec.Group,
 		Version:  storage,
-		Resource: existing.Spec.Names.Plural,
+		Resource: crd.Spec.Names.Plural,
 	}
 	list, err := r.clientSet.Dynamic().Resource(gvr).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return sets.New[int64](), nil
+			return nil, nil
 		}
 		return nil, fmt.Errorf("listing instances of %s: %w", gvr, err)
 	}
+	return list.Items, nil
+}
 
-	refs := sets.New[int64]()
-	for i := range list.Items {
-		for _, revision := range instanceRevisionRefs(&list.Items[i]) {
-			refs.Insert(revision)
+// revisionFloor returns the highest graph revision an instance of this RGD
+// holds from a deleted RGD of the same name, so that number is never reissued.
+func (r *ResourceGraphDefinitionReconciler) revisionFloor(
+	ctx context.Context,
+	rgd *v1alpha1.ResourceGraphDefinition,
+) (int64, error) {
+	if !features.FeatureGate.Enabled(features.GraphRevisionPinning) {
+		return 0, nil
+	}
+	// With a registered controller this RGD issued every number its instances hold.
+	if _, ok := r.registeredGVR(rgd.UID); ok {
+		return 0, nil
+	}
+
+	crdName := extractCRDName(rgd.Spec.Schema)
+	crd, err := r.crdManager.Get(ctx, crdName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("getting CRD %s: %w", crdName, err)
+	}
+	if !metadata.IsKROOwned(crd) || crd.Labels[metadata.ResourceGraphDefinitionNameLabel] != rgd.Name {
+		return 0, nil
+	}
+	instances, err := r.listInstances(ctx, crd)
+	if err != nil {
+		return 0, err
+	}
+
+	// Only the revision an instance ran counts: a pin can name any number.
+	var floor int64
+	for i := range instances {
+		if revision, ok := statusRevision(&instances[i], "graphRevision"); ok {
+			floor = max(floor, revision)
 		}
 	}
-	return refs, nil
+	return floor, nil
+}
+
+// statusRevision reads a revision number kro wrote onto an instance's status.
+func statusRevision(inst *unstructured.Unstructured, field string) (int64, bool) {
+	status, ok := inst.Object["status"].(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	switch value := status[field].(type) {
+	case int64:
+		return value, true
+	case float64:
+		return int64(value), true
+	default:
+		return 0, false
+	}
 }
 
 // instanceRevisionRefs returns the revisions one instance references: the
@@ -135,14 +205,9 @@ func (r *ResourceGraphDefinitionReconciler) referencedRevisions(
 // annotation when that names a concrete revision.
 func instanceRevisionRefs(inst *unstructured.Unstructured) []int64 {
 	var refs []int64
-	if status, ok := inst.Object["status"].(map[string]any); ok {
-		for _, key := range []string{"graphRevision", "targetGraphRevision"} {
-			switch value := status[key].(type) {
-			case int64:
-				refs = append(refs, value)
-			case float64:
-				refs = append(refs, int64(value))
-			}
+	for _, key := range []string{"graphRevision", "targetGraphRevision"} {
+		if revision, ok := statusRevision(inst, key); ok {
+			refs = append(refs, revision)
 		}
 	}
 	if pin := inst.GetAnnotations()[v1alpha1.InstanceGraphRevisionAnnotation]; pin != "" {

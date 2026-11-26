@@ -152,7 +152,12 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 		}
 		mark.ResourceGraphValid()
 
-		revision := max(rgd.Status.LastIssuedRevision, latestRevisionView.RevisionNumber) + 1
+		floor, err := r.revisionFloor(ctx, rgd)
+		if err != nil {
+			resolutionResult = graphRevisionResolutionResultFailed
+			return ctrl.Result{}, nil, nil, fmt.Errorf("finding the graph revisions instances hold: %w", err)
+		}
+		revision := max(rgd.Status.LastIssuedRevision, latestRevisionView.RevisionNumber, floor) + 1
 		createdGR, createErr := r.createGraphRevision(ctx, rgd, revision, currentSpecHash)
 		if createErr != nil {
 			resolutionResult = graphRevisionResolutionResultFailed

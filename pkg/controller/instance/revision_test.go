@@ -16,6 +16,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,6 +30,7 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 func TestResolveTargetRevision(t *testing.T) {
@@ -269,4 +271,188 @@ func TestReconcileViaGraphEngine_RevisionPinning(t *testing.T) {
 		_, found = statusInt64(t, obj, "targetGraphRevision")
 		assert.False(t, found, "status.targetGraphRevision must not be written with the gate off")
 	})
+}
+
+// An instance that last reconciled under a deleted ResourceGraphDefinition of
+// the same name holds a revision the recreated one never issued.
+func TestReconcileViaGraphEngine_RevisionOfARecreatedDefinition(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+	tests := []struct {
+		name     string
+		labelID  string
+		wantHint bool
+	}{
+		{name: "instance last reconciled under another definition", labelID: "old-uid", wantHint: true},
+		{name: "instance of the current definition", labelID: "new-uid"},
+		{name: "instance that was never stamped"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst := newInstanceObject("demo", "default")
+			inst.Object["status"] = map[string]any{"graphRevision": int64(7)}
+			if tt.labelID != "" {
+				inst.SetLabels(map[string]string{metadata.ResourceGraphDefinitionIDLabel: tt.labelID})
+			}
+			c, rc, stored := twoRevisionController(t, inst)
+			c.reconcileConfig.RolloutStrategy = v1alpha1.RolloutStrategyManual
+			c.instanceLabeler = metadata.GenericLabeler{metadata.ResourceGraphDefinitionIDLabel: "new-uid"}
+
+			err := c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{})
+			require.Error(t, err)
+			assert.Empty(t, storedConfigMapNames(t, rc), "nothing may be applied")
+
+			obj := stored()
+			cond := conditionByType(t, obj, GraphResolved)
+			require.NotNil(t, cond.Reason)
+			assert.Equal(t, "GraphRevisionUnavailable", *cond.Reason)
+			require.NotNil(t, cond.Message)
+			assert.Contains(t, *cond.Message, "revision 7 not found")
+			if tt.wantHint {
+				assert.Contains(t, *cond.Message, "deleted and recreated")
+				assert.Contains(t, *cond.Message, v1alpha1.InstanceGraphRevisionAnnotation)
+			} else {
+				assert.NotContains(t, *cond.Message, "recreated")
+			}
+			assert.Equal(t, tt.labelID, obj.GetLabels()[metadata.ResourceGraphDefinitionIDLabel], "the label keeps naming the definition the instance last ran under")
+		})
+	}
+}
+
+// failingPatchClient fails the apply of the named objects, or of every object
+// when the name is "*".
+type failingPatchClient struct {
+	client.Client
+	name string
+}
+
+func (f *failingPatchClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if f.name == "*" || obj.GetName() == f.name {
+		return errors.New("SSA apply failed: connection refused")
+	}
+	return f.Client.Patch(ctx, obj, patch, opts...)
+}
+
+// revisionTwoController wires a controller with revision 1 (ConfigMap
+// cm-rev1) and the given revision 2, both Active, under Manual rollout.
+func revisionTwoController(
+	t *testing.T,
+	inst *unstructured.Unstructured,
+	revisionTwo *v1alpha1.ResourceGraphDefinitionSpec,
+	rc client.Client,
+) (*Controller, func() *unstructured.Unstructured) {
+	t.Helper()
+
+	raw := newControllerTestDynamicClient(t, inst.DeepCopy())
+	c, _ := newGraphEngineControllerUnderTest(t, raw, testRGDSpecWithConfigMap("cm-rev1", ""),
+		revisions.RevisionStateActive, newTestRealCompiler(t), rc,
+		revisions.Entry{Revision: 2, State: revisions.RevisionStateActive, RGDSpec: revisionTwo})
+	c.reconcileConfig.RolloutStrategy = v1alpha1.RolloutStrategyManual
+	return c, func() *unstructured.Unstructured { return getStoredParentObject(t, raw) }
+}
+
+// specWithSecondResource is testRGDSpecWithConfigMap plus one more resource:
+// the same ConfigMap again when name is empty, another ConfigMap otherwise.
+func specWithSecondResource(first, name string) *v1alpha1.ResourceGraphDefinitionSpec {
+	spec := testRGDSpecWithConfigMap(first, "")
+	second := spec.Resources[0].DeepCopy()
+	second.ID = "second"
+	if name != "" {
+		second = testRGDSpecWithConfigMap(name, "").Resources[0]
+		second.ID = "second"
+	}
+	spec.Resources = append(spec.Resources, second)
+	return spec
+}
+
+// status.graphRevision is the revision whose resources the instance has. A
+// cycle that fails before anything of the target landed must not move it.
+func TestReconcileViaGraphEngine_GraphRevisionMovesOnlyWithItsResources(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+	tests := []struct {
+		name        string
+		recorded    int64
+		revisionTwo *v1alpha1.ResourceGraphDefinitionSpec
+		failPatch   string
+		wantCurrent int64
+		wantApplied []string
+	}{
+		{
+			name:        "rejected before apply keeps the recorded revision",
+			recorded:    1,
+			revisionTwo: specWithSecondResource("cm-rev2", ""),
+			wantCurrent: 1,
+		},
+		{
+			name:        "rejected before apply on a fresh instance records none",
+			revisionTwo: specWithSecondResource("cm-rev2", ""),
+		},
+		{
+			name:        "hard failure that applied nothing keeps the recorded revision",
+			recorded:    1,
+			revisionTwo: testRGDSpecWithConfigMap("cm-rev2", ""),
+			failPatch:   "*",
+			wantCurrent: 1,
+		},
+		{
+			name:        "hard failure after a resource landed moves it",
+			recorded:    1,
+			revisionTwo: specWithSecondResource("cm-rev2", "cm-rev2-b"),
+			failPatch:   "cm-rev2-b",
+			wantCurrent: 2,
+			wantApplied: []string{"cm-rev2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst := newInstanceObject("demo", "default")
+			inst.SetAnnotations(map[string]string{v1alpha1.InstanceGraphRevisionAnnotation: "2"})
+			if tt.recorded > 0 {
+				inst.Object["status"] = map[string]any{"graphRevision": tt.recorded, "targetGraphRevision": tt.recorded}
+			}
+			rc := newFakeRuntimeClient(t)
+			c, stored := revisionTwoController(t, inst, tt.revisionTwo, &failingPatchClient{Client: rc, name: tt.failPatch})
+
+			require.Error(t, c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{}))
+			assert.ElementsMatch(t, tt.wantApplied, storedConfigMapNames(t, rc))
+
+			obj := stored()
+			cur, found := statusInt64(t, obj, "graphRevision")
+			assert.Equal(t, tt.wantCurrent > 0, found)
+			assert.Equal(t, tt.wantCurrent, cur)
+			target, found := statusInt64(t, obj, "targetGraphRevision")
+			require.True(t, found, "the revision the instance is heading for stays visible")
+			assert.Equal(t, int64(2), target)
+			assert.Equal(t, string(v1alpha1.InstanceStateError), obj.Object["status"].(map[string]any)["state"])
+		})
+	}
+}
+
+func TestReconcileViaGraphEngine_RemovingARejectedPinReturnsToTheRecordedRevision(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+	inst := newInstanceObject("demo", "default")
+	inst.SetAnnotations(map[string]string{v1alpha1.InstanceGraphRevisionAnnotation: "2"})
+	inst.Object["status"] = map[string]any{"graphRevision": int64(1), "targetGraphRevision": int64(1)}
+	rc := newFakeRuntimeClient(t)
+	c, stored := revisionTwoController(t, inst, specWithSecondResource("cm-rev2", ""), rc)
+
+	require.Error(t, c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{}))
+
+	unpinned := stored()
+	unpinned.SetAnnotations(nil)
+	_, err := c.client.Dynamic().Resource(controllerTestParentGVR).Namespace("default").Update(context.Background(), unpinned, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	require.NoError(t, c.reconcileViaGraphEngine(context.Background(), stored(), &fakeInstanceWatcher{}))
+
+	assert.Equal(t, []string{"cm-rev1"}, storedConfigMapNames(t, rc))
+	obj := stored()
+	cur, _ := statusInt64(t, obj, "graphRevision")
+	assert.Equal(t, int64(1), cur)
+	target, _ := statusInt64(t, obj, "targetGraphRevision")
+	assert.Equal(t, int64(1), target)
 }

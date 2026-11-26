@@ -193,6 +193,29 @@ var _ = Describe("MultiVersion", func() {
 			g.Expect(value).To(Equal("hello"))
 		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 
+		// It is not stuck in an error either: an edit made through the new hub
+		// reaches the ConfigMap.
+		Eventually(func(g Gomega, ctx SpecContext) {
+			beta := &unstructured.Unstructured{}
+			beta.SetAPIVersion("kro.run/v1beta1")
+			beta.SetKind(kind)
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: "legacy"}, beta)).To(Succeed())
+			g.Expect(unstructured.SetNestedField(beta.Object, "moved", "spec", "value")).To(Succeed())
+			g.Expect(env.Client.Update(ctx, beta)).To(Succeed())
+		}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+		Eventually(func(g Gomega, ctx SpecContext) {
+			cm := &corev1.ConfigMap{}
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: "legacy-cm"}, cm)).To(Succeed())
+			g.Expect(cm.Data).To(HaveKeyWithValue("value", "moved"))
+
+			beta := &unstructured.Unstructured{}
+			beta.SetAPIVersion("kro.run/v1beta1")
+			beta.SetKind(kind)
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: "legacy"}, beta)).To(Succeed())
+			state, _, _ := unstructured.NestedString(beta.Object, "status", "state")
+			g.Expect(state).To(Equal("ACTIVE"))
+		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
 		// Storage migration trims status.storedVersions to the hub alone.
 		Eventually(func(g Gomega, ctx SpecContext) {
 			crd := instanceCRD(g, ctx, kind)
@@ -284,7 +307,7 @@ var _ = Describe("MultiVersion", func() {
 		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 
-	It("rejects a previous version that cannot serve what the hub stores", func(ctx SpecContext) {
+	It("rejects a breaking edit to a previous version and a previous version the hub cannot store", func(ctx SpecContext) {
 		kind := "SpokeDriftApp"
 		rgd := generator.NewResourceGraphDefinition("test-spoke-"+rand.String(5),
 			generator.WithSchema(
@@ -318,7 +341,7 @@ var _ = Describe("MultiVersion", func() {
 		})
 		waitForRGDActive(ctx, rgd)
 
-		// Drop a field from the spoke that the hub still serves.
+		// Dropping a field from the spoke breaks its own clients, like any breaking change.
 		updateRGD(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
 			live.Spec.Schema.PreviousVersions = []krov1alpha1.PreviousSchemaVersion{{
 				APIVersion: "v1alpha1",
@@ -326,8 +349,23 @@ var _ = Describe("MultiVersion", func() {
 			}}
 		})
 
-		message := expectKindUnready(ctx, rgd.Name, "SpokeSchemaMismatch")
-		Expect(message).To(ContainSubstring("v1alpha1"))
+		message := expectKindUnready(ctx, rgd.Name, "Failed")
+		Expect(message).To(ContainSubstring("version v1alpha1 differs incompatibly"))
+
+		// A spoke field the hub does not declare cannot be stored.
+		updateRGD(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
+			live.Spec.Schema.PreviousVersions = []krov1alpha1.PreviousSchemaVersion{{
+				APIVersion: "v1alpha1",
+				Spec: toRawExtension(map[string]any{
+					"value":  "string | default=\"hello\"",
+					"extra":  "string | default=\"present\"",
+					"legacy": "string | default=\"old\"",
+				}),
+			}}
+		})
+
+		message = expectKindUnready(ctx, rgd.Name, "SpokeSchemaMismatch")
+		Expect(message).To(ContainSubstring("v1alpha1 cannot be converted to v1beta1"))
 	})
 
 	It("rejects moving the hub backwards", func(ctx SpecContext) {

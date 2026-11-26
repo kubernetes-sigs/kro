@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	metadatafake "k8s.io/client-go/metadata/fake"
+	clienttesting "k8s.io/client-go/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -42,6 +43,7 @@ import (
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	krofake "github.com/kubernetes-sigs/kro/pkg/client/fake"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
@@ -263,7 +265,7 @@ func TestEnsureServingStateSurfacesCRDFailureReason(t *testing.T) {
 		},
 		{
 			name:       "spoke schema mismatch",
-			ensureErr:  fmt.Errorf("%w: version v1alpha1 of CRD networks.example.io differs incompatibly", kroclient.ErrSpokeSchemaMismatch),
+			ensureErr:  fmt.Errorf("%w: cannot update CRD networks.example.io: version v1alpha1 cannot be converted to v1beta1", kroclient.ErrSpokeSchemaMismatch),
 			wantReason: "SpokeSchemaMismatch",
 		},
 		{
@@ -290,7 +292,7 @@ func TestEnsureServingStateSurfacesCRDFailureReason(t *testing.T) {
 // After a kro restart no instance controller is registered. A rejected CRD
 // update must not keep it that way while the live CRD is still this RGD's own.
 func TestEnsureServingStateKeepsServingTheLiveCRDWhenTheUpdateIsRejected(t *testing.T) {
-	ensureErr := fmt.Errorf("%w: version v1alpha1 of CRD networks.example.io differs incompatibly", kroclient.ErrSpokeSchemaMismatch)
+	ensureErr := fmt.Errorf("%w: cannot update CRD networks.example.io: version v1alpha1 cannot be converted to v1beta1", kroclient.ErrSpokeSchemaMismatch)
 	gvr := instanceGVRFor("v1alpha1")
 
 	tests := []struct {
@@ -511,4 +513,187 @@ func TestCleanupDeregistersRegisteredGVRNotSpecGVR(t *testing.T) {
 	assert.False(t, watching, "the GVR that was registered must be deregistered")
 	_, watching = dc.InstanceKeys(specGVR)
 	assert.True(t, watching, "the spec-derived GVR was never registered for this RGD and must stay untouched")
+}
+
+// recreatedRGDReconciler wires a reconciler for an RGD that has no revisions
+// and no instance controller yet, while its CRD and instances are still there.
+func recreatedRGDReconciler(
+	t testing.TB,
+	rgd *v1alpha1.ResourceGraphDefinition,
+	manager *stubCRDManager,
+	instances ...runtime.Object,
+) (*ResourceGraphDefinitionReconciler, *dynamicfake.FakeDynamicClient) {
+	t.Helper()
+
+	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{instanceGVRFor("v1alpha1"): "NetworkList"},
+		instances...,
+	)
+	cl := newTestClient(t, interceptor.Funcs{})
+	return &ResourceGraphDefinitionReconciler{
+		Client:            cl,
+		apiReader:         cl,
+		metadataLabeler:   metadata.NewKROMetaLabeler(),
+		rgBuilder:         newTestBuilder(),
+		crdManager:        manager,
+		clientSet:         krofake.NewFakeSet(dynamicClient),
+		revisionsRegistry: revisions.NewRegistry(),
+		cfg:               Config{MaxGraphRevisions: 20, ProgressRequeueDelay: 3 * time.Second},
+	}, dynamicClient
+}
+
+// survivingCRD is the instance CRD a deleted RGD of the given name left behind.
+func survivingCRD(rgdName string) *extv1.CustomResourceDefinition {
+	crd := migrationTestCRD()
+	crd.Labels[metadata.ResourceGraphDefinitionNameLabel] = rgdName
+	crd.Spec.Versions = []extv1.CustomResourceDefinitionVersion{{Name: "v1alpha1", Served: true, Storage: true}}
+	return crd
+}
+
+// A recreated RGD starts without revisions and without status. Its instances
+// still hold revision numbers, and none of those may name a new graph.
+func TestReconcileIssuesAboveTheRevisionsSurvivingInstancesHold(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+	rgd := newTestRGD("rgd-recreated")
+	reconciler, _ := recreatedRGDReconciler(t, rgd, &stubCRDManager{getReturn: survivingCRD(rgd.Name)},
+		newInstance("one", 1, ""),
+		newInstance("four", 4, ""),
+	)
+
+	_, _, _, err := reconciler.reconcileResourceGraphDefinition(context.Background(), rgd)
+	require.NoError(t, err)
+
+	revisionList := &internalv1alpha1.GraphRevisionList{}
+	require.NoError(t, reconciler.Client.List(context.Background(), revisionList))
+	require.Len(t, revisionList.Items, 1)
+	assert.Equal(t, int64(5), revisionList.Items[0].Spec.Revision)
+	assert.Equal(t, int64(5), rgd.Status.LastIssuedRevision)
+}
+
+func TestRevisionFloor(t *testing.T) {
+	const rgdName = "rgd-recreated"
+	foreign := func(mutate func(*extv1.CustomResourceDefinition)) *extv1.CustomResourceDefinition {
+		crd := survivingCRD(rgdName)
+		mutate(crd)
+		return crd
+	}
+	withTarget := newInstance("pinned", 2, "9")
+	withTarget.Object["status"].(map[string]any)["targetGraphRevision"] = int64(9)
+
+	tests := []struct {
+		name       string
+		gateOff    bool
+		registered bool
+		manager    *stubCRDManager
+		instances  []runtime.Object
+		listErr    error
+		want       int64
+		wantErr    string
+		wantNoGet  bool
+	}{
+		{
+			name:      "highest revision an instance ran",
+			manager:   &stubCRDManager{getReturn: survivingCRD(rgdName)},
+			instances: []runtime.Object{newInstance("one", 1, ""), newInstance("four", 4, ""), newInstance("fresh", 0, "")},
+			want:      4,
+		},
+		{
+			name:      "a pin and its target are not a revision the instance ran",
+			manager:   &stubCRDManager{getReturn: survivingCRD(rgdName)},
+			instances: []runtime.Object{withTarget},
+			want:      2,
+		},
+		{
+			name:    "no instances",
+			manager: &stubCRDManager{getReturn: survivingCRD(rgdName)},
+		},
+		{
+			name:    "no CRD yet",
+			manager: &stubCRDManager{getErr: apierrors.NewNotFound(schema.GroupResource{Resource: "customresourcedefinitions"}, "networks.kro.run")},
+		},
+		{
+			name: "CRD of another RGD",
+			manager: &stubCRDManager{getReturn: foreign(func(crd *extv1.CustomResourceDefinition) {
+				crd.Labels[metadata.ResourceGraphDefinitionNameLabel] = "someone-else"
+			})},
+			instances: []runtime.Object{newInstance("four", 4, "")},
+		},
+		{
+			name: "CRD kro does not own",
+			manager: &stubCRDManager{getReturn: foreign(func(crd *extv1.CustomResourceDefinition) {
+				delete(crd.Labels, metadata.OwnedLabel)
+			})},
+			instances: []runtime.Object{newInstance("four", 4, "")},
+		},
+		{
+			name:       "an RGD with a registered controller issued its instances' numbers itself",
+			registered: true,
+			manager:    &stubCRDManager{getReturn: survivingCRD(rgdName)},
+			instances:  []runtime.Object{newInstance("four", 4, "")},
+			wantNoGet:  true,
+		},
+		{
+			name:      "gate off",
+			gateOff:   true,
+			manager:   &stubCRDManager{getReturn: survivingCRD(rgdName)},
+			instances: []runtime.Object{newInstance("four", 4, "")},
+			wantNoGet: true,
+		},
+		{
+			name:    "a failed CRD read is not guessed around",
+			manager: &stubCRDManager{getErr: errors.New("api server unavailable")},
+			wantErr: "api server unavailable",
+		},
+		{
+			name:    "a failed instance list is not guessed around",
+			manager: &stubCRDManager{getReturn: survivingCRD(rgdName)},
+			listErr: errors.New("list refused"),
+			wantErr: "list refused",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, !tt.gateOff)
+
+			rgd := newTestRGD(rgdName)
+			rgd.UID = "new-uid"
+			reconciler, dynamicClient := recreatedRGDReconciler(t, rgd, tt.manager, tt.instances...)
+			if tt.listErr != nil {
+				dynamicClient.PrependReactor("list", "networks", func(clienttesting.Action) (bool, runtime.Object, error) {
+					return true, nil, tt.listErr
+				})
+			}
+			if tt.registered {
+				reconciler.registeredControllers.Store(rgd.UID, instanceGVRFor("v1alpha1"))
+			}
+
+			got, err := reconciler.revisionFloor(context.Background(), rgd)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			if tt.wantNoGet {
+				assert.Empty(t, tt.manager.requestedCRDNames)
+			}
+		})
+	}
+}
+
+func TestReconcileDoesNotIssueWhenTheHeldRevisionsAreUnknown(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+	rgd := newTestRGD("rgd-recreated")
+	reconciler, _ := recreatedRGDReconciler(t, rgd, &stubCRDManager{getErr: errors.New("api server unavailable")})
+
+	_, _, _, err := reconciler.reconcileResourceGraphDefinition(context.Background(), rgd)
+	require.ErrorContains(t, err, "api server unavailable")
+
+	revisionList := &internalv1alpha1.GraphRevisionList{}
+	require.NoError(t, reconciler.Client.List(context.Background(), revisionList))
+	assert.Empty(t, revisionList.Items)
 }

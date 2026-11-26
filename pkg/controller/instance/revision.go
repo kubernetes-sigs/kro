@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/graphengine/executor"
 )
 
 // instanceRevisions is the pair of revision numbers kro writes onto an
@@ -29,6 +30,22 @@ import (
 type instanceRevisions struct {
 	Current int64
 	Target  int64
+}
+
+// heldAt on a revision where nothing changed.
+func (r *instanceRevisions) heldAt(recorded int64) *instanceRevisions {
+	if r == nil {
+		return nil
+	}
+	return &instanceRevisions{Current: recorded, Target: r.Target}
+}
+
+// settled holds the revision in case of and error so on an error the revision does not get updated.
+func (r *instanceRevisions) settled(recorded int64, hardErr bool, result executor.ApplyResult) *instanceRevisions {
+	if hardErr && len(result.Applied) == 0 && len(result.Contributions) == 0 {
+		return r.heldAt(recorded)
+	}
+	return r
 }
 
 // resolveTargetRevision decides which graph revision an instance must

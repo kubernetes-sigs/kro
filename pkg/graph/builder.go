@@ -1754,11 +1754,14 @@ func stripStatusFromSchema(openAPI *extv1.JSONSchemaProps, isClusterScoped bool)
 	return specSchema, nil
 }
 
-// InstanceSchemaFromCRD converts an instance CRD's schema to a spec.Schema,
-// keeping status and adding metadata.
+// InstanceSchemaFromCRD converts the hub schema of an instance CRD to a
+// spec.Schema, keeping status and adding metadata. The hub is Versions[0].
 func InstanceSchemaFromCRD(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
-	if len(crd.Spec.Versions) != 1 || crd.Spec.Versions[0].Schema == nil || crd.Spec.Versions[0].Schema.OpenAPIV3Schema == nil {
-		return nil, fmt.Errorf("expected instance CRD to have exactly one version with a schema")
+	if len(crd.Spec.Versions) < 1 {
+		return nil, fmt.Errorf("expected instance CRD to have at least one version")
+	}
+	if crd.Spec.Versions[0].Schema == nil || crd.Spec.Versions[0].Schema.OpenAPIV3Schema == nil {
+		return nil, fmt.Errorf("expected instance CRD version %s to have a schema", crd.Spec.Versions[0].Name)
 	}
 	specSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
 	if err != nil {

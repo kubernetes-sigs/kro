@@ -15,10 +15,13 @@
 package graph
 
 import (
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 
@@ -196,6 +199,73 @@ func TestGraphBuilderReservedStatusFields(t *testing.T) {
 			require.NoError(t, err)
 			status := g.CRD.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["status"]
 			assert.Contains(t, status.Properties, tt.field)
+		})
+	}
+}
+
+// A revision's CRD carries every served version. The instance reconciles
+// under the hub, so that is the schema its status writeback is typed against.
+func TestInstanceSchemaFromCRD(t *testing.T) {
+	version := func(name string, status ...string) extv1.CustomResourceDefinitionVersion {
+		props := map[string]extv1.JSONSchemaProps{}
+		for _, field := range status {
+			props[field] = extv1.JSONSchemaProps{Type: "string"}
+		}
+		return extv1.CustomResourceDefinitionVersion{
+			Name: name,
+			Schema: &extv1.CustomResourceValidation{OpenAPIV3Schema: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"status": {Type: "object", Properties: props},
+				},
+			}},
+		}
+	}
+	crdWith := func(versions ...extv1.CustomResourceDefinitionVersion) *extv1.CustomResourceDefinition {
+		return &extv1.CustomResourceDefinition{Spec: extv1.CustomResourceDefinitionSpec{
+			Scope:    extv1.NamespaceScoped,
+			Versions: versions,
+		}}
+	}
+
+	tests := []struct {
+		name       string
+		crd        *extv1.CustomResourceDefinition
+		wantStatus []string
+		wantErr    string
+	}{
+		{
+			name:       "single version",
+			crd:        crdWith(version("v1alpha1", "out")),
+			wantStatus: []string{"out"},
+		},
+		{
+			name:       "hub with a previous version",
+			crd:        crdWith(version("v1beta1", "out", "added"), version("v1alpha1", "out")),
+			wantStatus: []string{"added", "out"},
+		},
+		{
+			name:    "no versions",
+			crd:     crdWith(),
+			wantErr: "at least one version",
+		},
+		{
+			name:    "hub without a schema",
+			crd:     crdWith(extv1.CustomResourceDefinitionVersion{Name: "v1beta1"}, version("v1alpha1", "out")),
+			wantErr: "schema",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := InstanceSchemaFromCRD(tt.crd)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tt.wantStatus, slices.Collect(maps.Keys(got.Properties["status"].Properties)))
+			assert.Contains(t, got.Properties, "metadata")
 		})
 	}
 }

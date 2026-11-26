@@ -107,4 +107,16 @@ func TestWithInstanceCRD_TypesStatusPatchAgainstAuthoredCRD(t *testing.T) {
 	rt, _, err := BuildRuntimeForInstanceCached(rgd, instance, WithInstanceCRD(c, crd), registry.New())
 	require.NoError(t, err)
 	assert.NotNil(t, rt.Node(StatusPatchNodeID))
+
+	// A revision with a previous version carries it as a second CRD version,
+	// behind the hub. The writeback is still typed against the hub.
+	multiVersion := crd.DeepCopy()
+	previous := *crd.Spec.Versions[0].DeepCopy()
+	previous.Name = "v1alpha0"
+	delete(previous.Schema.OpenAPIV3Schema.Properties["status"].Properties, "out2")
+	multiVersion.Spec.Versions = append(multiVersion.Spec.Versions, previous)
+
+	rt, _, err = BuildRuntimeForInstanceCached(rgd, instance, WithInstanceCRD(c, multiVersion), registry.New())
+	require.NoError(t, err)
+	assert.NotNil(t, rt.Node(StatusPatchNodeID))
 }

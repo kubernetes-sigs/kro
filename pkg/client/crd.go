@@ -241,8 +241,8 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 			continue
 		}
 		if !opts.AllowBreakingChanges {
-			return fmt.Errorf("%w: version %s of CRD %s differs incompatibly from the served schema: %s",
-				ErrSpokeSchemaMismatch, name, desired.Name, versionReport)
+			return fmt.Errorf("cannot update CRD %s: version %s differs incompatibly from the served schema: %s",
+				desired.Name, name, versionReport)
 		}
 		log.Info("Allowing breaking changes to a non-storage version", "name", desired.Name, "version", name)
 	}

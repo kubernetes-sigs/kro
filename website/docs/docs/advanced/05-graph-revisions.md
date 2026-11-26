@@ -167,6 +167,16 @@ is rejected at build time. A pin that names a revision kro does not have leaves
 keeps running the resources of the revision it is on rather than silently
 jumping to another one.
 
+A move that fails before any resource of the target revision is applied leaves
+`graphRevision` untouched, while `targetGraphRevision` contains the target it
+would have moved to. Under `Manual`, removing the pin then returns the instance
+to the revision it runs.
+
+Revision numbers are not reused. An RGD that is deleted and recreated while its
+instances still exist uses a number that is above the highest latest number. An
+instance that is pinned by `Manual` reports `GraphRevisionUnavailable` until you
+pin it to a revision of the new RGD or to `latest`.
+
 Rollout is policy, not graph content: changing the strategy does not issue a
 revision. While the strategy is `Manual`, kro also rejects a change to a schema
 default, because instances still pinned to an older revision would pick it up

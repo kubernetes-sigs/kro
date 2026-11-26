@@ -93,6 +93,8 @@ func (c *Controller) reconcileViaGraphEngine(
 	if features.FeatureGate.Enabled(features.GraphRevisionPinning) {
 		revs = &instanceRevisions{Current: entry.Revision, Target: entry.Revision}
 	}
+	// Previous revision, unchanged when no change or error occurred.
+	recorded := currentGraphRevision(inst)
 	// Whether the author owns the condition surface is a property of the
 	// revision being reconciled, not of the latest one: a pinned instance may
 	// run an older graph with a different conditions block. The config flag
@@ -171,7 +173,7 @@ func (c *Controller) reconcileViaGraphEngine(
 	if preErr != nil {
 		if errors.Is(preErr, applyset.ErrDuplicateResource) {
 			mark.ResourcesNotReady("duplicate resource in graph: %v", preErr)
-			return c.persistRejectedGraphEngineStatus(ctx, inst, wireStatus, rt, rgd, revs, hasAuthorConditions, preErr)
+			return c.persistRejectedGraphEngineStatus(ctx, inst, wireStatus, rt, rgd, revs.heldAt(recorded), hasAuthorConditions, preErr)
 		}
 		return preErr
 	}
@@ -267,6 +269,7 @@ func (c *Controller) reconcileViaGraphEngine(
 	// executor.Apply above, under its own field manager — the controller no
 	// longer projects them here, so the two writers stay on disjoint fields.
 	degraded := hardErr
+	revs = revs.settled(recorded, hardErr, applyResult)
 
 	if err := c.persistGraphEngineStatus(ctx, inst, wireStatus, rt, rgd, degraded, revs, hasAuthorConditions); err != nil {
 		log.Error(err, "graph-engine: status persist failed")
@@ -379,7 +382,7 @@ func (c *Controller) resolveRevisionEntry(
 		metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvrStr).Inc()
 		// Also covers registry warm-up right after a restart, hence the
 		// requeue rather than a terminal error.
-		c.markRevisionUnavailable(ctx, log, inst, target, "graph not resolved: revision %d not found", target)
+		c.markRevisionUnavailable(ctx, log, inst, target, "graph not resolved: revision %d not found%s", target, c.recreatedDefinitionHint(inst))
 		return revisions.Entry{}, c.delayedRequeue(fmt.Errorf("graph-engine: revision %d not available", target))
 	}
 	if entry.State == revisions.RevisionStateFailed {
@@ -393,6 +396,20 @@ func (c *Controller) resolveRevisionEntry(
 		return revisions.Entry{}, c.delayedRequeue(fmt.Errorf("graph-engine: revision %d is not active (state=%s)", target, entry.State))
 	}
 	return c.withRGDSpec(ctx, log, inst, entry, gvrStr)
+}
+
+// recreatedDefinitionHint explains a missing revision on an instance that last
+// reconciled under a deleted ResourceGraphDefinition of the same name.
+func (c *Controller) recreatedDefinitionHint(inst *unstructured.Unstructured) string {
+	current := c.instanceLabeler.Labels()[metadata.ResourceGraphDefinitionIDLabel]
+	last := inst.GetLabels()[metadata.ResourceGraphDefinitionIDLabel]
+	if current == "" || last == "" || last == current {
+		return ""
+	}
+	return fmt.Sprintf(
+		": the ResourceGraphDefinition was deleted and recreated since this instance last reconciled, set the %s annotation to one of its revisions or to %q",
+		v1alpha1.InstanceGraphRevisionAnnotation, v1alpha1.GraphRevisionLatest,
+	)
 }
 
 // resolveLatestRevision returns the latest issued revision, requiring it to be
@@ -1150,7 +1167,7 @@ func (c *Controller) persistRejectedGraphEngineStatus(
 // revs is non-nil when GraphRevisionPinning is enabled; it adds the revision
 // the instance reconciled against and the revision it targets to the written
 // status, including on degraded cycles, so a stuck instance still reports
-// where it stands.
+// where it stands. An instance that never ran a revision records none.
 func (c *Controller) persistGraphEngineStatus(
 	ctx context.Context,
 	inst *unstructured.Unstructured,
@@ -1167,7 +1184,9 @@ func (c *Controller) persistGraphEngineStatus(
 	// belong to the patch node.
 	status := map[string]any{}
 	if revs != nil {
-		status["graphRevision"] = revs.Current
+		if revs.Current > 0 {
+			status["graphRevision"] = revs.Current
+		}
 		status["targetGraphRevision"] = revs.Target
 	}
 

@@ -16,13 +16,15 @@ package generate
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/yaml"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	k8sschema "k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/cmd/kro/emulator"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/rgdfile"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 )
 
@@ -37,17 +39,12 @@ var generateInstanceCmd = &cobra.Command{
 			return fmt.Errorf("ResourceGraphDefinition file is required")
 		}
 
-		data, err := os.ReadFile(config.resourceGraphDefinitionFile)
+		rgd, err := rgdfile.Read(config.resourceGraphDefinitionFile)
 		if err != nil {
-			return fmt.Errorf("failed to read ResourceGraphDefinition file: %w", err)
+			return err
 		}
 
-		var rgd v1alpha1.ResourceGraphDefinition
-		if err = yaml.Unmarshal(data, &rgd); err != nil {
-			return fmt.Errorf("failed to unmarshal ResourceGraphDefinition: %w", err)
-		}
-
-		if err = generateInstance(&rgd); err != nil {
+		if err = generateInstance(rgd); err != nil {
 			return fmt.Errorf("failed to generate instance: %w", err)
 		}
 
@@ -60,24 +57,11 @@ func generateInstance(rgd *v1alpha1.ResourceGraphDefinition) error {
 	if err != nil {
 		return fmt.Errorf("failed to create resource graph definition: %w", err)
 	}
-	em := emulator.NewEmulator()
 
-	crd := rgdGraph.CRD
-	gvk := rgdGraph.CRD.GroupVersionKind()
-
-	s, err := schema.ConvertJSONSchemaPropsToSpecSchema(crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
+	emulatedObj, err := dummyInstance(rgdGraph.CRD)
 	if err != nil {
-		return fmt.Errorf("failed to convert JSONSchemaProps to SpecSchema: %w", err)
+		return err
 	}
-
-	emulatedObj, err := em.GenerateDummyCR(gvk, s)
-	if err != nil {
-		return fmt.Errorf("failed to generate dummy CR: %w", err)
-	}
-
-	emulatedObj.SetAnnotations(cliVersionAnnotations())
-
-	delete(emulatedObj.Object, "status")
 
 	b, err := marshalObject(emulatedObj, config.outputFormat)
 	if err != nil {
@@ -87,4 +71,31 @@ func generateInstance(rgd *v1alpha1.ResourceGraphDefinition) error {
 	fmt.Println(string(b))
 
 	return nil
+}
+
+// dummyInstance returns an example instance of the RGD's instance CRD. The
+// group, version and kind come from the CRD spec: the CRD's own TypeMeta, if
+// set, names the CustomResourceDefinition kind instead.
+func dummyInstance(crd *extv1.CustomResourceDefinition) (*unstructured.Unstructured, error) {
+	gvk := k8sschema.GroupVersionKind{
+		Group:   crd.Spec.Group,
+		Version: crd.Spec.Versions[0].Name,
+		Kind:    crd.Spec.Names.Kind,
+	}
+
+	s, err := schema.ConvertJSONSchemaPropsToSpecSchema(crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert JSONSchemaProps to SpecSchema: %w", err)
+	}
+
+	emulatedObj, err := emulator.NewEmulator().GenerateDummyCR(gvk, s)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate dummy CR: %w", err)
+	}
+
+	emulatedObj.SetAnnotations(cliVersionAnnotations())
+
+	delete(emulatedObj.Object, "status")
+
+	return emulatedObj, nil
 }

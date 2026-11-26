@@ -7,15 +7,17 @@ toolchain go1.27.3
 require (
 	github.com/go-echarts/go-echarts/v2 v2.7.3
 	github.com/go-logr/logr v1.4.4
-	github.com/kubernetes-sigs/kro v0.9.4
+	github.com/kubernetes-sigs/kro v0.10.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1
 	gopkg.in/yaml.v2 v2.4.0
+	k8s.io/apiextensions-apiserver v0.36.6
 	k8s.io/apimachinery v0.36.6
 	k8s.io/client-go v0.36.6
 	k8s.io/kube-openapi v0.0.0-20260821135717-be32def86098
 	sigs.k8s.io/controller-runtime v0.24.1
+	sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5
 	sigs.k8s.io/release-utils v0.12.5
 	sigs.k8s.io/yaml v1.6.0
 )
@@ -82,12 +84,10 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	k8s.io/api v0.36.6 // indirect
-	k8s.io/apiextensions-apiserver v0.36.6 // indirect
 	k8s.io/apiserver v0.36.6 // indirect
 	k8s.io/component-base v0.36.6 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/utils v0.0.0-20261023123148-ca04ba58ecab // indirect
-	sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 )

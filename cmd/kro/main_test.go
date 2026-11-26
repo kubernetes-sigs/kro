@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -151,6 +152,37 @@ func TestKubeconfigAndContextFlags(t *testing.T) {
 			} else {
 				assert.NotContains(t, string(out), "Using cluster")
 			}
+		})
+	}
+}
+
+// Every command reads the RGD file the same way, so a file the API server
+// rejects fails before the CLI connects to the cluster.
+func TestCommandsRejectInvalidRGDFile(t *testing.T) {
+	server, requests := newFakeAPIServer(t)
+	kubeconfig := writeKubeconfig(t, "a", map[string]string{"a": server})
+	rgdFile := filepath.Join(t.TempDir(), "rgd.yaml")
+	misspelled := strings.Replace(testRGD, "    kind: TestApp\n", "    kind: TestApp\n    gruop: example.com\n", 1)
+	require.NoError(t, os.WriteFile(rgdFile, []byte(misspelled), 0o600))
+
+	for _, command := range [][]string{
+		{"validate", "rgd"},
+		{"generate", "crd"},
+		{"generate", "instance"},
+		{"generate", "diagram"},
+	} {
+		t.Run(strings.Join(command, " "), func(t *testing.T) {
+			requests.Store(0)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			cmd := exec.CommandContext(ctx, os.Args[0], append(command, "-f", rgdFile)...)
+			cmd.Env = append(os.Environ(), runCLIEnv+"=1", "KUBECONFIG="+kubeconfig, "HOME="+t.TempDir())
+			out, err := cmd.CombinedOutput()
+
+			require.Error(t, err, "output:\n%s", out)
+			assert.Contains(t, string(out), `strict decoding error: unknown field "spec.schema.gruop"`)
+			assert.Zero(t, requests.Load(), "requests to the cluster, output:\n%s", out)
 		})
 	}
 }

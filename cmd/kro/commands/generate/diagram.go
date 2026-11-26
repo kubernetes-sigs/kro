@@ -21,9 +21,9 @@ import (
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/yaml"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/rgdfile"
 )
 
 var generateDiagramCmd = &cobra.Command{
@@ -36,17 +36,12 @@ var generateDiagramCmd = &cobra.Command{
 			return fmt.Errorf("ResourceGraphDefinition file is required")
 		}
 
-		data, err := os.ReadFile(config.resourceGraphDefinitionFile)
+		rgd, err := rgdfile.Read(config.resourceGraphDefinitionFile)
 		if err != nil {
-			return fmt.Errorf("failed to read ResourceGraphDefinition file: %w", err)
+			return err
 		}
 
-		var rgd v1alpha1.ResourceGraphDefinition
-		if err = yaml.Unmarshal(data, &rgd); err != nil {
-			return fmt.Errorf("failed to unmarshal ResourceGraphDefinition: %w", err)
-		}
-
-		if err = generateDiagram(&rgd); err != nil {
+		if err = generateDiagram(rgd); err != nil {
 			return fmt.Errorf("failed to generate diagram: %w", err)
 		}
 

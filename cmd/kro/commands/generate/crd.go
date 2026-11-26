@@ -16,12 +16,11 @@ package generate
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/yaml"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/cmd/kro/internal/rgdfile"
 )
 
 var generateCRDCmd = &cobra.Command{
@@ -36,17 +35,12 @@ var generateCRDCmd = &cobra.Command{
 			return fmt.Errorf("ResourceGraphDefinition file is required")
 		}
 
-		data, err := os.ReadFile(config.resourceGraphDefinitionFile)
+		rgd, err := rgdfile.Read(config.resourceGraphDefinitionFile)
 		if err != nil {
-			return fmt.Errorf("failed to read ResourceGraphDefinition file: %w", err)
+			return err
 		}
 
-		var rgd v1alpha1.ResourceGraphDefinition
-		if err = yaml.Unmarshal(data, &rgd); err != nil {
-			return fmt.Errorf("failed to unmarshal ResourceGraphDefinition: %w", err)
-		}
-
-		if err = generateCRD(&rgd); err != nil {
+		if err = generateCRD(rgd); err != nil {
 			return fmt.Errorf("failed to generate CRD: %w", err)
 		}
 

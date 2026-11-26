@@ -111,6 +111,7 @@ type Marker struct {
 	MarkerType MarkerType
 	Key        string
 	Value      string
+	Message    string
 }
 
 // ParseMarkers parses a string of markers and returns a slice of Marker structs.
@@ -153,7 +154,7 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 			}
 		case unicode.IsSpace(char) && !inQuotes && bracketCount == 0:
 			if currentMarker != nil {
-				currentMarker.Value = processValue(buffer.String())
+				setMarkerValue(currentMarker, buffer.String())
 				result = append(result, currentMarker)
 				currentMarker = nil
 				buffer.Reset()
@@ -167,7 +168,7 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 	}
 
 	if currentMarker != nil {
-		currentMarker.Value = processValue(buffer.String())
+		setMarkerValue(currentMarker, buffer.String())
 		result = append(result, currentMarker)
 	} else {
 		// If we end with a nil currentMarker, that's an error because it means we had a marker key without a value(i.e. no "=")
@@ -182,6 +183,17 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 	}
 
 	return result, nil
+}
+
+func setMarkerValue(marker *Marker, raw string) {
+	if marker.MarkerType == MarkerTypeValidation && strings.HasPrefix(raw, `"`) && strings.HasSuffix(raw, `"`) {
+		if rule, message, ok := strings.Cut(raw, `",message="`); ok {
+			marker.Value = processValue(rule + `"`)
+			marker.Message = processValue(`"` + message)
+			return
+		}
+	}
+	marker.Value = processValue(raw)
 }
 
 func processValue(value string) string {
@@ -408,7 +420,8 @@ func applyValidationMarker(schema *extv1.JSONSchemaProps, marker *Marker) error 
 		return fmt.Errorf("validation failed")
 	}
 	schema.XValidations = append(schema.XValidations, extv1.ValidationRule{
-		Rule: marker.Value,
+		Rule:    marker.Value,
+		Message: marker.Message,
 	})
 	return nil
 }

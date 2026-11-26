@@ -164,6 +164,33 @@ var _ = Describe("Validation", func() {
 			Expect(env.Client.Create(ctx, valid)).To(Succeed())
 			Expect(env.Client.Delete(ctx, valid)).To(Succeed())
 		})
+
+		It("should report the custom message when an instance violates the rule", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-validation-custom-message",
+				generator.WithSchema("ValidationCustomMessage", "v1alpha1", map[string]any{
+					"replicas": `integer | validation="self >= 1 && self <= 10",message="replicas must be between 1 and 10"`,
+				}, nil),
+			)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+			})
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)).To(Succeed())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 30*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+			err := env.Client.Create(ctx, &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "kro.run/v1alpha1",
+				"kind":       "ValidationCustomMessage",
+				"metadata":   map[string]any{"name": "too-many", "namespace": namespace},
+				"spec":       map[string]any{"replicas": int64(11)},
+			}})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("replicas must be between 1 and 10"))
+			Expect(err.Error()).NotTo(ContainSubstring("failed rule"))
+		})
 	})
 
 	Context("Resource IDs", func() {

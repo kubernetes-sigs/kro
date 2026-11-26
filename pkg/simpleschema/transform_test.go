@@ -576,6 +576,29 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "Validation with custom message",
+			obj: map[string]any{
+				"replicas": `integer | default=3 validation="self >= 1 && self <= 10",message="Replicas must be between 1 and 10"`,
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:    "object",
+				Default: &extv1.JSON{Raw: []byte("{}")},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"replicas": {
+						Type:    "integer",
+						Default: &extv1.JSON{Raw: []byte("3")},
+						XValidations: []extv1.ValidationRule{
+							{
+								Rule:    "self >= 1 && self <= 10",
+								Message: "Replicas must be between 1 and 10",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
 			name: "Simple string validation",
 			obj: map[string]any{
 				"name": `string | validation="self.name != 'invalid'"`,

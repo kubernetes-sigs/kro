@@ -257,7 +257,12 @@ mode: string | enum="debug,info,warn,error" default="info"
 - `maxItems=number`: Maximum number of items in arrays
 - `listType=atomic|set|map`: Specifies how Kubernetes should treat the array for merge operations
 - `listMapKey=fieldName`: Specifies which field(s) to use as keys when `listType=map` (can be repeated for composite keys)
-- `validation="<CEL rule>"`: A [CEL validation rule](https://kubernetes.io/docs/reference/using-api/cel/) evaluated by the API server against the field's value, available as `self`. For example `validation="self <= 10 || self % 2 == 0"`
+- `validation="<CEL rule>"`: A [CEL validation rule](https://kubernetes.io/docs/reference/using-api/cel/) evaluated by the API server against the field's value, available as `self`. For example `validation="self <= 10 || self % 2 == 0"`. By default a failing rule reports `failed rule: <CEL rule>`. To show a custom message instead, add a comma-delimited `message="<text>"` right after the rule, with no space around the comma:
+
+```simpleschema
+spec:
+  replicas: integer | validation="self >= 1 && self <= 10",message="Replicas must be between 1 and 10"
+```
 
 Markers follow the type after a single `|` and are separated by spaces, as in the examples above.
 

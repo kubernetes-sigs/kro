@@ -7,7 +7,7 @@ toolchain go1.27.3
 require (
 	github.com/go-echarts/go-echarts/v2 v2.7.3
 	github.com/go-logr/logr v1.4.4
-	github.com/kubernetes-sigs/kro v0.9.4
+	github.com/kubernetes-sigs/kro v0.10.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1

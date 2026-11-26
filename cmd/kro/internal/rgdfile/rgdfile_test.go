@@ -81,6 +81,12 @@ func TestRead(t *testing.T) {
 			wantErr: `spec.schema.scope: Unsupported value: "namespaced"`,
 		},
 		{
+			name:      "field added in kro v0.10.0",
+			schema:    "    plural: testappz\n",
+			wantGroup: v1alpha1.KRODomainName,
+			wantScope: v1alpha1.ResourceScopeNamespaced,
+		},
+		{
 			name:    "misspelled group",
 			schema:  "    gruop: example.com\n",
 			wantErr: `strict decoding error: unknown field "spec.schema.gruop"`,

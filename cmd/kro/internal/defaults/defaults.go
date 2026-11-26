@@ -23,7 +23,7 @@ import "github.com/kubernetes-sigs/kro/pkg/graph"
 // (see cmd/controller/main.go rgd-max-collection-* flag defaults). It is
 // shared by every kro CLI command that constructs a graph without user
 // overrides.
-var RGDConfig = graph.RGDConfig{
+var RGDConfig = graph.Config{
 	MaxCollectionSize:          1000,
 	MaxCollectionDimensionSize: 10,
 }

@@ -28,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
-	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/rest"
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -260,7 +259,7 @@ func (b *Builder) compileSource(src source) (*Graph, *extv1.JSONSchemaProps, err
 	nodes := make(map[string]*Node)
 	schemas := make(map[string]*spec.Schema)
 	for _, rs := range src.Resources() {
-		node, nodeSchema, err := b.buildResourceNode(p, rs, src.InstanceNamespaced())
+		node, nodeSchema, err := b.buildNode(p, rs, src.InstanceNamespaced())
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to build resource %q: %w", rs.ID, err)
 		}
@@ -268,7 +267,9 @@ func (b *Builder) compileSource(src source) (*Graph, *extv1.JSONSchemaProps, err
 			return nil, nil, fmt.Errorf("found resources with duplicate id %q", rs.ID)
 		}
 		nodes[rs.ID] = node
-		schemas[rs.ID] = nodeSchema
+		if nodeSchema != nil {
+			schemas[rs.ID] = nodeSchema
+		}
 	}
 
 	// Lightweight inspector env: declares identifier names only (enough to parse
@@ -305,22 +306,16 @@ func (b *Builder) compileSource(src source) (*Graph, *extv1.JSONSchemaProps, err
 		}
 	}
 
+	if err := b.inferDefSchemas(schemaCache, nodes, schemas, topologicalOrder, inspector, src.SchemaVarSchema()); err != nil {
+		return nil, nil, err
+	}
+
 	celSchemas := collectNodeSchemas(schemaCache, nodes, schemas)
 	celSchemas[SchemaVarName] = src.SchemaVarSchema()
 
-	typedEnv, typeProvider, err := krocel.TypedEnvironmentWithProvider(celSchemas)
+	bc, err := b.typedBuildContext(schemaCache, celSchemas)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
-	}
-
-	bc := &buildContext{
-		env:          typedEnv,
-		typeProvider: typeProvider,
-		schemaCache:  schemaCache,
-		declTypes:    make(map[*spec.Schema]*apiservercel.DeclType),
-		checkedASTs:  make(map[checkedASTKey]*cel.Ast),
-		extendedEnvs: make(map[extendedEnvKey]*cel.Env),
-		costLimit:    b.costLimit,
 	}
 
 	for id, node := range nodes {
@@ -393,7 +388,7 @@ func (b *Builder) buildExternalRefResource(
 // it validates field combinations and resolves the template object (user YAML or
 // external ref serialized to unstructured).
 func (b *Builder) rgResourceSpec(rgResource *v1alpha1.Resource, order int) (ResourceSpec, error) {
-	if err := validateCombinableResourceFields(rgResource.ID, len(rgResource.Template.Raw) > 0, rgResource.ExternalRef != nil, len(rgResource.ForEach)); err != nil {
+	if err := validateCombinableResourceFields(rgResource.ID, len(rgResource.Template.Raw) > 0, rgResource.ExternalRef != nil, len(rgResource.Def.Raw) > 0, len(rgResource.ForEach)); err != nil {
 		return ResourceSpec{}, fmt.Errorf("invalid combination of resource fields: %w", err)
 	}
 	if rgResource.ExternalRef != nil {
@@ -406,6 +401,10 @@ func (b *Builder) rgResourceSpec(rgResource *v1alpha1.Resource, order int) (Reso
 	if len(rgResource.Template.Raw) > 0 {
 		if err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject); err != nil {
 			return ResourceSpec{}, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
+		}
+	} else if len(rgResource.Def.Raw) > 0 {
+		if err := yaml.UnmarshalStrict(rgResource.Def.Raw, &resourceObject); err != nil {
+			return ResourceSpec{}, fmt.Errorf("failed to unmarshal def %s: it must be an object: %w", rgResource.ID, err)
 		}
 	} else {
 		var err error
@@ -423,12 +422,46 @@ func (b *Builder) rgResourceSpec(rgResource *v1alpha1.Resource, order int) (Reso
 		ID:          rgResource.ID,
 		Object:      resourceObject,
 		ExternalRef: rgResource.ExternalRef != nil,
+		Def:         len(rgResource.Def.Raw) > 0,
 		Collection:  rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.HasSelector(),
 		ReadyWhen:   rgResource.ReadyWhen,
 		IncludeWhen: rgResource.IncludeWhen,
 		ForEach:     forEach,
 		Order:       order,
 	}, nil
+}
+
+// nodeModifiers holds the parsed readyWhen, includeWhen and forEach of a node.
+type nodeModifiers struct {
+	readyWhen   []*krocel.Expression
+	includeWhen []*krocel.Expression
+	forEach     []ForEachDimension
+}
+
+func parseNodeModifiers(rs ResourceSpec) (nodeModifiers, error) {
+	readyWhen, err := parser.UnwrapExpressions(rs.ReadyWhen)
+	if err != nil {
+		return nodeModifiers{}, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
+	}
+	includeWhen, err := parser.UnwrapExpressions(rs.IncludeWhen)
+	if err != nil {
+		return nodeModifiers{}, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
+	}
+	forEach, err := parseForEachDimensions(rs.ForEach)
+	if err != nil {
+		return nodeModifiers{}, fmt.Errorf("failed to parse forEach dimensions: %v", err)
+	}
+	return nodeModifiers{readyWhen: readyWhen, includeWhen: includeWhen, forEach: forEach}, nil
+}
+
+// buildNode dispatches a ResourceSpec to the def or resource node builder. A
+// def node has no schema until inferDefSchemas runs, so its schema is nil.
+func (b *Builder) buildNode(p *parser.Parser, rs ResourceSpec, instanceNamespaced bool) (*Node, *spec.Schema, error) {
+	if rs.Def {
+		node, err := buildDefNode(rs)
+		return node, nil, err
+	}
+	return b.buildResourceNode(p, rs, instanceNamespaced)
 }
 
 // buildResourceNode builds a node from a schema-agnostic ResourceSpec: it
@@ -504,20 +537,11 @@ func (b *Builder) buildResourceNode(
 		})
 	}
 
-	readyWhen, err := parser.UnwrapExpressions(rs.ReadyWhen)
+	mods, err := parseNodeModifiers(rs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
+		return nil, nil, err
 	}
-
-	includeWhen, err := parser.UnwrapExpressions(rs.IncludeWhen)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
-	}
-
-	forEachDimensions, err := parseForEachDimensions(rs.ForEach)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
-	}
+	forEachDimensions := mods.forEach
 
 	// Determine node type.
 	nodeType := NodeTypeResource
@@ -543,8 +567,8 @@ func (b *Builder) buildResourceNode(
 		},
 		Template:    &unstructured.Unstructured{Object: rs.Object},
 		Variables:   templateVariables,
-		IncludeWhen: includeWhen,
-		ReadyWhen:   readyWhen,
+		IncludeWhen: mods.includeWhen,
+		ReadyWhen:   mods.readyWhen,
 		ForEach:     forEachDimensions,
 	}
 	return node, resourceSchema, nil
@@ -578,7 +602,8 @@ func (b *Builder) buildDependencyGraph(
 		}
 
 		// Validate that all forEach dimensions are used in resource identity fields.
-		if len(iteratorNames) > 0 {
+		// A def has no identity, so its dimensions are not required to appear there.
+		if len(iteratorNames) > 0 && node.Meta.Type != NodeTypeDef {
 			var missing []string
 			for _, iterName := range iteratorNames {
 				if !slices.Contains(usedIterators, iterName) {
@@ -1398,8 +1423,9 @@ func validateAndCompileNode(bc *buildContext, node *Node, inspector *ast.Inspect
 	if len(node.ReadyWhen) > 0 {
 		// readyWhen expressions can ONLY reference the node itself (or 'each' for collections).
 		// At runtime, IsResourceReady/IsCollectionReady only has the resource in scope.
+		bindsEach := node.Meta.Type == NodeTypeCollection || (node.Meta.Type == NodeTypeDef && len(node.ForEach) > 0)
 		allowedVar := node.Meta.ID
-		if node.Meta.Type == NodeTypeCollection {
+		if bindsEach {
 			allowedVar = EachVarName
 		}
 
@@ -1412,7 +1438,7 @@ func validateAndCompileNode(bc *buildContext, node *Node, inspector *ast.Inspect
 		// For readyWhen on collections, we need "each" variable which isn't in the shared env.
 		// Uses cached extended env so N identical collection nodes share one env.
 		readyEnv := bc.env
-		if node.Meta.Type == NodeTypeCollection {
+		if bindsEach {
 			var err error
 			readyEnv, err = bc.extendWithTypedVar(bc.env, EachVarName, nodeSchema)
 			if err != nil {
@@ -1455,6 +1481,14 @@ func validateAndCompileTemplates(
 	}
 
 	for _, templateVariable := range node.Variables {
+		if node.Meta.Type == NodeTypeDef {
+			// A def has no external schema: each field's type is the type of its
+			// own expression, so there is no expected type to check against.
+			if _, err := bc.compile(compileEnv, templateVariable.Expression); err != nil {
+				return fmt.Errorf("failed to compile def expression %q at path %q: %w", templateVariable.Expression.UserExpression(), templateVariable.Path, err)
+			}
+			continue
+		}
 		// Compute expected type for this field
 		expectedType := expectedTypeForField(bc, &templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, node.Meta.Type)
 
@@ -1651,7 +1685,7 @@ func collectNodeSchemas(c *schema.Cache, nodes map[string]*Node, nodeSchemas map
 	result := make(map[string]*spec.Schema)
 	for id, node := range nodes {
 		if sch, ok := nodeSchemas[id]; ok {
-			if node.Meta.Type == NodeTypeCollection || node.Meta.Type == NodeTypeExternalCollection {
+			if node.isListValued() {
 				result[id] = c.WrapAsList(sch)
 			} else {
 				result[id] = sch

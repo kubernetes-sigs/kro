@@ -390,8 +390,12 @@ func (ctx *CompilationContext) compileFrame(apiNodes []expv1alpha1.Node, isRoot 
 		}
 	}
 
-	// Def nodes contribute inferred schemas to celSchemas (set in buildNode),
+	// Defs with expressions are typed now that the dependency order is known,
 	// so the typed env knows `${naming.prefix}` down to its field type.
+	if err := ctx.inferDefSchemas(nodes, nodeSchemas, celSchemas, topo, ancestors); err != nil {
+		return nil, nil, err
+	}
+
 	// Schemaless identifiers (dynamic-GVK nodes, subgraph nodes, captured
 	// ancestors) are declared dyn or list(dyn); see schemalessIdentifiers.
 	// Within-frame typed references stay fully checked; the rest type-check

@@ -124,6 +124,11 @@ func normalizeSpec(spec v1alpha1.ResourceGraphDefinitionSpec) (v1alpha1.Resource
 			return v1alpha1.ResourceGraphDefinitionSpec{}, fmt.Errorf("normalize resources[%d].template: %w", i, err)
 		}
 		normalized.Resources[i].Template = normalizedTemplate
+		normalizedDef, err := normalizeRawExtension(normalized.Resources[i].Def)
+		if err != nil {
+			return v1alpha1.ResourceGraphDefinitionSpec{}, fmt.Errorf("normalize resources[%d].def: %w", i, err)
+		}
+		normalized.Resources[i].Def = normalizedDef
 		if normalized.Resources[i].ReadyWhen == nil {
 			normalized.Resources[i].ReadyWhen = []string{}
 		}

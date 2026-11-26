@@ -628,3 +628,22 @@ type badRuntimeObject struct{}
 func (badRuntimeObject) GetObjectKind() schema.ObjectKind { return schema.EmptyObjectKind }
 func (badRuntimeObject) DeepCopyObject() runtime.Object   { return badRuntimeObject{} }
 func (badRuntimeObject) MarshalJSON() ([]byte, error)     { return nil, errors.New("boom") }
+
+func TestSpecHashesDef(t *testing.T) {
+	spec := func(def string) v1alpha1.ResourceGraphDefinitionSpec {
+		return v1alpha1.ResourceGraphDefinitionSpec{
+			Resources: []*v1alpha1.Resource{{ID: "naming", Def: runtime.RawExtension{Raw: []byte(def)}}},
+		}
+	}
+
+	base, err := Spec(spec(`{"a":"${schema.spec.x}","b":"y"}`))
+	require.NoError(t, err)
+
+	reordered, err := Spec(spec(`{"b":"y","a":"${schema.spec.x}"}`))
+	require.NoError(t, err)
+	assert.Equal(t, base, reordered, "key order inside a def must not change the hash")
+
+	changed, err := Spec(spec(`{"a":"${schema.spec.z}","b":"y"}`))
+	require.NoError(t, err)
+	assert.NotEqual(t, base, changed, "a def change must produce a new revision hash")
+}

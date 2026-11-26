@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -110,6 +112,9 @@ func newCRDWrapper(cfg CRDWrapperConfig) *CRDWrapper {
 // allowBreakingChanges is false, it will return an error.
 func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefinition, allowBreakingChanges bool) error {
 	log := logr.FromContext(ctx)
+	if err := trackCRDMetadata(&desired); err != nil {
+		return err
+	}
 	existing, err := w.Get(ctx, desired.Name)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
@@ -154,7 +159,9 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 
 		// If there are no changes at all, we can skip the update
 		namesChanged := !equality.Semantic.DeepEqual(existing.Spec.Names, desired.Spec.Names)
-		if !report.HasChanges() && !namesChanged {
+		metadataChanged := !containsMetadata(existing.Labels, desired.Labels) ||
+			!containsMetadata(existing.Annotations, desired.Annotations)
+		if !report.HasChanges() && !namesChanged && !metadataChanged {
 			log.V(1).Info("CRD is up-to-date", "name", desired.Name)
 			return nil
 		}
@@ -169,12 +176,49 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 		}
 
 		log.Info("Updating existing CRD", "name", desired.Name)
-		if err := w.patch(ctx, desired); err != nil {
+		if err := w.patch(ctx, *existing, desired); err != nil {
 			return fmt.Errorf("failed to patch CRD: %w", err)
 		}
 	}
 
 	return w.waitForReady(ctx, desired.Name)
+}
+
+type crdMetadataKeys struct {
+	Labels      []string `json:"labels,omitempty"`
+	Annotations []string `json:"annotations,omitempty"`
+}
+
+// trackCRDMetadata records only desired keys, not externally added metadata.
+// A change to this inventory also makes Ensure notice metadata removals.
+func trackCRDMetadata(crd *v1.CustomResourceDefinition) error {
+	annotations := maps.Clone(crd.Annotations)
+	delete(annotations, metadata.CRDMetadataAnnotation)
+	keys := crdMetadataKeys{
+		Labels:      slices.Sorted(maps.Keys(crd.Labels)),
+		Annotations: slices.Sorted(maps.Keys(annotations)),
+	}
+	data, err := json.Marshal(keys)
+	if err != nil {
+		return fmt.Errorf("failed to marshal CRD metadata keys: %w", err)
+	}
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[metadata.CRDMetadataAnnotation] = string(data)
+	crd.Annotations = annotations
+	return nil
+}
+
+// containsMetadata checks desired entries without requiring exact map equality:
+// metadata not recorded in the inventory belongs to other writers.
+func containsMetadata(existing, desired map[string]string) bool {
+	for key, value := range desired {
+		if existingValue, ok := existing[key]; !ok || existingValue != value {
+			return false
+		}
+	}
+	return true
 }
 
 // Get retrieves a CRD by name
@@ -187,8 +231,8 @@ func (w *CRDWrapper) create(ctx context.Context, crd v1.CustomResourceDefinition
 	return err
 }
 
-func (w *CRDWrapper) patch(ctx context.Context, crd v1.CustomResourceDefinition) error {
-	patchBytes, err := crdMergePatch(crd)
+func (w *CRDWrapper) patch(ctx context.Context, existing, crd v1.CustomResourceDefinition) error {
+	patchBytes, err := crdMergePatch(existing, crd)
 	if err != nil {
 		return err
 	}
@@ -197,7 +241,16 @@ func (w *CRDWrapper) patch(ctx context.Context, crd v1.CustomResourceDefinition)
 	return err
 }
 
-func crdMergePatch(crd v1.CustomResourceDefinition) ([]byte, error) {
+func crdMergePatch(existing, crd v1.CustomResourceDefinition) ([]byte, error) {
+	// Legacy CRDs have no inventory: preserve unknown keys and start tracking
+	// only the current desired keys, rather than guessing which ones kro owns.
+	var previous crdMetadataKeys
+	if data, ok := existing.Annotations[metadata.CRDMetadataAnnotation]; ok {
+		if err := json.Unmarshal([]byte(data), &previous); err != nil {
+			return nil, fmt.Errorf("failed to read previous CRD metadata keys: %w", err)
+		}
+	}
+
 	// The desired CRD is used as a JSON merge-patch document, not as the full
 	// post-patch object. Omitted fields preserve existing/defaulted values. The
 	// alias fields need explicit nulls because their CRD type uses omitempty.
@@ -217,15 +270,20 @@ func crdMergePatch(crd v1.CustomResourceDefinition) ([]byte, error) {
 		},
 	}
 
-	if len(crd.Labels) > 0 || len(crd.Annotations) > 0 {
-		metadata := map[string]any{}
-		if len(crd.Labels) > 0 {
-			metadata["labels"] = crd.Labels
-		}
-		if len(crd.Annotations) > 0 {
-			metadata["annotations"] = crd.Annotations
-		}
-		patch["metadata"] = metadata
+	metadataPatch := map[string]any{}
+	// The inventory and its metadata changes must be based on the same object
+	// version, or a concurrent reconcile could lose ownership information.
+	if existing.ResourceVersion != "" {
+		metadataPatch["resourceVersion"] = existing.ResourceVersion
+	}
+	if labels := crdMetadataMergePatch(crd.Labels, previous.Labels); len(labels) > 0 {
+		metadataPatch["labels"] = labels
+	}
+	if annotations := crdMetadataMergePatch(crd.Annotations, previous.Annotations); len(annotations) > 0 {
+		metadataPatch["annotations"] = annotations
+	}
+	if len(metadataPatch) > 0 {
+		patch["metadata"] = metadataPatch
 	}
 
 	if crd.Spec.Conversion != nil || crd.Spec.PreserveUnknownFields {
@@ -243,6 +301,21 @@ func crdMergePatch(crd v1.CustomResourceDefinition) ([]byte, error) {
 		return nil, fmt.Errorf("failed to marshal CRD merge patch: %w", err)
 	}
 	return patchBytes, nil
+}
+
+// crdMetadataMergePatch deletes only keys previously applied by kro. An empty
+// string is a valid value; JSON null is required to delete a merge-patched key.
+func crdMetadataMergePatch(desired map[string]string, previous []string) map[string]any {
+	patch := make(map[string]any, len(desired)+len(previous))
+	for key, value := range desired {
+		patch[key] = value
+	}
+	for _, key := range previous {
+		if _, ok := desired[key]; !ok {
+			patch[key] = nil
+		}
+	}
+	return patch
 }
 
 // Delete removes a CRD if it exists

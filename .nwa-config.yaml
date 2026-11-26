@@ -1,9 +1,20 @@
 nwa:
-  holder: The Kube Resource Orchestrator Authors
+  holder: The Kubernetes Authors.
   license: apache
-  year: "2025"
+  # Match headers regardless of year: files keep the year they were created in.
+  fuzzy: true
+  mute: true
   path:
+    - api/**/*.go
     - cmd/**/*.go
     - pkg/**/*.go
     - test/**/*.go
-  mute: true
+    - tools/**/*.go
+  skip:
+    # Derived from cel-go and Kubernetes apiserver; keep the upstream headers.
+    - pkg/cel/library/maps.go
+    - pkg/cel/library/maps_test.go
+    - pkg/cel/schemas.go
+    - pkg/cel/types.go
+    - pkg/cel/unstructured/valunstructured.go
+    - pkg/cel/unstructured/valunstructured_test.go

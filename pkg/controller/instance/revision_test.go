@@ -1,0 +1,458 @@
+// Copyright 2026 The Kubernetes Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package instance
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/features"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+)
+
+func TestResolveTargetRevision(t *testing.T) {
+	tests := []struct {
+		name       string
+		annotation string
+		strategy   v1alpha1.RolloutStrategy
+		current    int64
+		wantTarget int64
+		wantFollow bool
+		wantErr    bool
+	}{
+		{name: "empty/Latest/current 0", annotation: "", strategy: v1alpha1.RolloutStrategyLatest, current: 0, wantFollow: true},
+		{name: "empty/Latest/current 2", annotation: "", strategy: v1alpha1.RolloutStrategyLatest, current: 2, wantFollow: true},
+		{name: "empty/Manual/current 0", annotation: "", strategy: v1alpha1.RolloutStrategyManual, current: 0, wantFollow: true},
+		{name: "empty/Manual/current 2 pins to current", annotation: "", strategy: v1alpha1.RolloutStrategyManual, current: 2, wantTarget: 2},
+
+		{name: "latest/Latest/current 0", annotation: v1alpha1.GraphRevisionLatest, strategy: v1alpha1.RolloutStrategyLatest, current: 0, wantFollow: true},
+		{name: "latest/Manual/current 2 still follows latest", annotation: v1alpha1.GraphRevisionLatest, strategy: v1alpha1.RolloutStrategyManual, current: 2, wantFollow: true},
+
+		{name: "pin 3/Latest/current 0", annotation: "3", strategy: v1alpha1.RolloutStrategyLatest, current: 0, wantTarget: 3},
+		{name: "pin 3/Manual/current 2 overrides current", annotation: "3", strategy: v1alpha1.RolloutStrategyManual, current: 2, wantTarget: 3},
+
+		{name: "abc/Latest/current 0", annotation: "abc", strategy: v1alpha1.RolloutStrategyLatest, current: 0, wantErr: true},
+		{name: "abc/Manual/current 2", annotation: "abc", strategy: v1alpha1.RolloutStrategyManual, current: 2, wantErr: true},
+		{name: "zero/Latest/current 0", annotation: "0", strategy: v1alpha1.RolloutStrategyLatest, current: 0, wantErr: true},
+		{name: "zero/Manual/current 2", annotation: "0", strategy: v1alpha1.RolloutStrategyManual, current: 2, wantErr: true},
+		{name: "negative", annotation: "-1", strategy: v1alpha1.RolloutStrategyLatest, current: 2, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target, followLatest, err := resolveTargetRevision(tt.annotation, tt.strategy, tt.current)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), v1alpha1.InstanceGraphRevisionAnnotation)
+				assert.False(t, followLatest)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFollow, followLatest)
+			if !tt.wantFollow {
+				assert.Equal(t, tt.wantTarget, target)
+			}
+		})
+	}
+}
+
+func TestCurrentGraphRevision(t *testing.T) {
+	tests := []struct {
+		name   string
+		status any
+		want   int64
+	}{
+		{name: "no status", status: nil, want: 0},
+		{name: "status without the field", status: map[string]any{"state": "Active"}, want: 0},
+		{name: "int64", status: map[string]any{"graphRevision": int64(4)}, want: 4},
+		{name: "float64 (JSON round trip)", status: map[string]any{"graphRevision": float64(7)}, want: 7},
+		{name: "int", status: map[string]any{"graphRevision": 2}, want: 2},
+		{name: "string is ignored", status: map[string]any{"graphRevision": "3"}, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst := newInstanceObject("demo", "default")
+			if tt.status != nil {
+				inst.Object["status"] = tt.status
+			}
+			assert.Equal(t, tt.want, currentGraphRevision(inst))
+		})
+	}
+}
+
+// storedConfigMapNames lists the ConfigMaps the engine created, which
+// identifies the revision the instance reconciled against.
+func storedConfigMapNames(t *testing.T, rc client.Client) []string {
+	t.Helper()
+
+	var list corev1.ConfigMapList
+	require.NoError(t, rc.List(context.Background(), &list))
+	names := make([]string, 0, len(list.Items))
+	for _, item := range list.Items {
+		names = append(names, item.Name)
+	}
+	return names
+}
+
+func statusInt64(t *testing.T, obj *unstructured.Unstructured, field string) (int64, bool) {
+	t.Helper()
+
+	val, found, err := unstructured.NestedInt64(obj.Object, "status", field)
+	require.NoError(t, err)
+	return val, found
+}
+
+// twoRevisionController wires a controller whose registry holds revision 1
+// (ConfigMap cm-rev1) and revision 2 (ConfigMap cm-rev2), both Active.
+func twoRevisionController(t *testing.T, inst *unstructured.Unstructured) (*Controller, client.Client, func() *unstructured.Unstructured) {
+	t.Helper()
+
+	raw := newControllerTestDynamicClient(t, inst.DeepCopy())
+	rc := newFakeRuntimeClient(t)
+	c, _ := newGraphEngineControllerUnderTest(
+		t,
+		raw,
+		testRGDSpecWithConfigMap("cm-rev1", ""),
+		revisions.RevisionStateActive,
+		newTestRealCompiler(t),
+		rc,
+		revisions.Entry{
+			Revision: 2,
+			State:    revisions.RevisionStateActive,
+			RGDSpec:  testRGDSpecWithConfigMap("cm-rev2", ""),
+		},
+	)
+	return c, rc, func() *unstructured.Unstructured { return getStoredParentObject(t, raw) }
+}
+
+func TestReconcileViaGraphEngine_RevisionPinning(t *testing.T) {
+	t.Run("annotation pins the instance to an older revision", func(t *testing.T) {
+		featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+		inst := newInstanceObject("demo", "default")
+		inst.SetAnnotations(map[string]string{v1alpha1.InstanceGraphRevisionAnnotation: "1"})
+		c, rc, stored := twoRevisionController(t, inst)
+
+		require.NoError(t, c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{}))
+
+		assert.Equal(t, []string{"cm-rev1"}, storedConfigMapNames(t, rc))
+
+		obj := stored()
+		cur, found := statusInt64(t, obj, "graphRevision")
+		require.True(t, found, "status.graphRevision must be written")
+		assert.Equal(t, int64(1), cur)
+		target, found := statusInt64(t, obj, "targetGraphRevision")
+		require.True(t, found, "status.targetGraphRevision must be written")
+		assert.Equal(t, int64(1), target)
+	})
+
+	t.Run("Manual strategy holds the instance on its recorded revision", func(t *testing.T) {
+		featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+		inst := newInstanceObject("demo", "default")
+		inst.Object["status"] = map[string]any{"graphRevision": int64(1)}
+		c, rc, stored := twoRevisionController(t, inst)
+		c.reconcileConfig.RolloutStrategy = v1alpha1.RolloutStrategyManual
+
+		require.NoError(t, c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{}))
+
+		assert.Equal(t, []string{"cm-rev1"}, storedConfigMapNames(t, rc))
+		cur, _ := statusInt64(t, stored(), "graphRevision")
+		assert.Equal(t, int64(1), cur)
+	})
+
+	t.Run("Latest strategy without a pin moves to the latest revision", func(t *testing.T) {
+		featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+		inst := newInstanceObject("demo", "default")
+		inst.Object["status"] = map[string]any{"graphRevision": int64(1)}
+		c, rc, stored := twoRevisionController(t, inst)
+
+		require.NoError(t, c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{}))
+
+		assert.Equal(t, []string{"cm-rev2"}, storedConfigMapNames(t, rc))
+		cur, _ := statusInt64(t, stored(), "graphRevision")
+		assert.Equal(t, int64(2), cur)
+	})
+
+	t.Run("pin to a missing revision reports GraphRevisionUnavailable and applies nothing", func(t *testing.T) {
+		featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+		inst := newInstanceObject("demo", "default")
+		inst.SetAnnotations(map[string]string{v1alpha1.InstanceGraphRevisionAnnotation: "7"})
+		c, rc, stored := twoRevisionController(t, inst)
+
+		err := c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "revision 7 not available")
+
+		assert.Empty(t, storedConfigMapNames(t, rc))
+
+		obj := stored()
+		cond := conditionByType(t, obj, GraphResolved)
+		assert.Equal(t, metav1.ConditionFalse, cond.Status)
+		require.NotNil(t, cond.Reason)
+		assert.Equal(t, "GraphRevisionUnavailable", *cond.Reason)
+		target, found := statusInt64(t, obj, "targetGraphRevision")
+		require.True(t, found)
+		assert.Equal(t, int64(7), target)
+	})
+
+	t.Run("invalid annotation is terminal and names the annotation", func(t *testing.T) {
+		featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+		inst := newInstanceObject("demo", "default")
+		inst.SetAnnotations(map[string]string{v1alpha1.InstanceGraphRevisionAnnotation: "abc"})
+		c, rc, stored := twoRevisionController(t, inst)
+
+		err := c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{})
+		require.Error(t, err)
+		assert.Empty(t, storedConfigMapNames(t, rc))
+
+		cond := conditionByType(t, stored(), GraphResolved)
+		assert.Equal(t, metav1.ConditionFalse, cond.Status)
+		require.NotNil(t, cond.Reason)
+		assert.Equal(t, "GraphRevisionUnavailable", *cond.Reason)
+	})
+
+	t.Run("invalid annotation clears the target of an earlier pin", func(t *testing.T) {
+		featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+		inst := newInstanceObject("demo", "default")
+		inst.SetAnnotations(map[string]string{v1alpha1.InstanceGraphRevisionAnnotation: "abc"})
+		inst.Object["status"] = map[string]any{"graphRevision": int64(1), "targetGraphRevision": int64(7)}
+		c, _, stored := twoRevisionController(t, inst)
+
+		require.Error(t, c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{}))
+
+		obj := stored()
+		_, found := statusInt64(t, obj, "targetGraphRevision")
+		assert.False(t, found, "a pin that names no revision must not keep an older target")
+		cur, _ := statusInt64(t, obj, "graphRevision")
+		assert.Equal(t, int64(1), cur, "the revision the instance runs is untouched")
+	})
+
+	t.Run("gate off ignores the annotation and writes no revision fields", func(t *testing.T) {
+		inst := newInstanceObject("demo", "default")
+		inst.SetAnnotations(map[string]string{v1alpha1.InstanceGraphRevisionAnnotation: "1"})
+		c, rc, stored := twoRevisionController(t, inst)
+
+		require.NoError(t, c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{}))
+
+		assert.Equal(t, []string{"cm-rev2"}, storedConfigMapNames(t, rc))
+
+		obj := stored()
+		_, found := statusInt64(t, obj, "graphRevision")
+		assert.False(t, found, "status.graphRevision must not be written with the gate off")
+		_, found = statusInt64(t, obj, "targetGraphRevision")
+		assert.False(t, found, "status.targetGraphRevision must not be written with the gate off")
+	})
+}
+
+// An instance that last reconciled under a deleted ResourceGraphDefinition of
+// the same name holds a revision the recreated one never issued.
+func TestReconcileViaGraphEngine_RevisionOfARecreatedDefinition(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+	tests := []struct {
+		name     string
+		labelID  string
+		wantHint bool
+	}{
+		{name: "instance last reconciled under another definition", labelID: "old-uid", wantHint: true},
+		{name: "instance of the current definition", labelID: "new-uid"},
+		{name: "instance that was never stamped"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst := newInstanceObject("demo", "default")
+			inst.Object["status"] = map[string]any{"graphRevision": int64(7)}
+			if tt.labelID != "" {
+				inst.SetLabels(map[string]string{metadata.ResourceGraphDefinitionIDLabel: tt.labelID})
+			}
+			c, rc, stored := twoRevisionController(t, inst)
+			c.reconcileConfig.RolloutStrategy = v1alpha1.RolloutStrategyManual
+			c.instanceLabeler = metadata.GenericLabeler{metadata.ResourceGraphDefinitionIDLabel: "new-uid"}
+
+			err := c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{})
+			require.Error(t, err)
+			assert.Empty(t, storedConfigMapNames(t, rc), "nothing may be applied")
+
+			obj := stored()
+			cond := conditionByType(t, obj, GraphResolved)
+			require.NotNil(t, cond.Reason)
+			assert.Equal(t, "GraphRevisionUnavailable", *cond.Reason)
+			require.NotNil(t, cond.Message)
+			assert.Contains(t, *cond.Message, "revision 7 not found")
+			if tt.wantHint {
+				assert.Contains(t, *cond.Message, "deleted and recreated")
+				assert.Contains(t, *cond.Message, v1alpha1.InstanceGraphRevisionAnnotation)
+			} else {
+				assert.NotContains(t, *cond.Message, "recreated")
+			}
+			assert.Equal(t, tt.labelID, obj.GetLabels()[metadata.ResourceGraphDefinitionIDLabel], "the label keeps naming the definition the instance last ran under")
+		})
+	}
+}
+
+// failingPatchClient fails the apply of the named objects, or of every object
+// when the name is "*".
+type failingPatchClient struct {
+	client.Client
+	name string
+}
+
+func (f *failingPatchClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if f.name == "*" || obj.GetName() == f.name {
+		return errors.New("SSA apply failed: connection refused")
+	}
+	return f.Client.Patch(ctx, obj, patch, opts...)
+}
+
+// revisionTwoController wires a controller with revision 1 (ConfigMap
+// cm-rev1) and the given revision 2, both Active, under Manual rollout.
+func revisionTwoController(
+	t *testing.T,
+	inst *unstructured.Unstructured,
+	revisionTwo *v1alpha1.ResourceGraphDefinitionSpec,
+	rc client.Client,
+) (*Controller, func() *unstructured.Unstructured) {
+	t.Helper()
+
+	raw := newControllerTestDynamicClient(t, inst.DeepCopy())
+	c, _ := newGraphEngineControllerUnderTest(t, raw, testRGDSpecWithConfigMap("cm-rev1", ""),
+		revisions.RevisionStateActive, newTestRealCompiler(t), rc,
+		revisions.Entry{Revision: 2, State: revisions.RevisionStateActive, RGDSpec: revisionTwo})
+	c.reconcileConfig.RolloutStrategy = v1alpha1.RolloutStrategyManual
+	return c, func() *unstructured.Unstructured { return getStoredParentObject(t, raw) }
+}
+
+// specWithSecondResource is testRGDSpecWithConfigMap plus one more resource:
+// the same ConfigMap again when name is empty, another ConfigMap otherwise.
+func specWithSecondResource(first, name string) *v1alpha1.ResourceGraphDefinitionSpec {
+	spec := testRGDSpecWithConfigMap(first, "")
+	second := spec.Resources[0].DeepCopy()
+	second.ID = "second"
+	if name != "" {
+		second = testRGDSpecWithConfigMap(name, "").Resources[0]
+		second.ID = "second"
+	}
+	spec.Resources = append(spec.Resources, second)
+	return spec
+}
+
+// status.graphRevision is the revision whose resources the instance has. A
+// cycle that fails before anything of the target landed must not move it.
+func TestReconcileViaGraphEngine_GraphRevisionMovesOnlyWithItsResources(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+	tests := []struct {
+		name        string
+		recorded    int64
+		revisionTwo *v1alpha1.ResourceGraphDefinitionSpec
+		failPatch   string
+		wantCurrent int64
+		wantApplied []string
+	}{
+		{
+			name:        "rejected before apply keeps the recorded revision",
+			recorded:    1,
+			revisionTwo: specWithSecondResource("cm-rev2", ""),
+			wantCurrent: 1,
+		},
+		{
+			name:        "rejected before apply on a fresh instance records none",
+			revisionTwo: specWithSecondResource("cm-rev2", ""),
+		},
+		{
+			name:        "hard failure that applied nothing keeps the recorded revision",
+			recorded:    1,
+			revisionTwo: testRGDSpecWithConfigMap("cm-rev2", ""),
+			failPatch:   "*",
+			wantCurrent: 1,
+		},
+		{
+			name:        "hard failure after a resource landed moves it",
+			recorded:    1,
+			revisionTwo: specWithSecondResource("cm-rev2", "cm-rev2-b"),
+			failPatch:   "cm-rev2-b",
+			wantCurrent: 2,
+			wantApplied: []string{"cm-rev2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst := newInstanceObject("demo", "default")
+			inst.SetAnnotations(map[string]string{v1alpha1.InstanceGraphRevisionAnnotation: "2"})
+			if tt.recorded > 0 {
+				inst.Object["status"] = map[string]any{"graphRevision": tt.recorded, "targetGraphRevision": tt.recorded}
+			}
+			rc := newFakeRuntimeClient(t)
+			c, stored := revisionTwoController(t, inst, tt.revisionTwo, &failingPatchClient{Client: rc, name: tt.failPatch})
+
+			require.Error(t, c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{}))
+			assert.ElementsMatch(t, tt.wantApplied, storedConfigMapNames(t, rc))
+
+			obj := stored()
+			cur, found := statusInt64(t, obj, "graphRevision")
+			assert.Equal(t, tt.wantCurrent > 0, found)
+			assert.Equal(t, tt.wantCurrent, cur)
+			target, found := statusInt64(t, obj, "targetGraphRevision")
+			require.True(t, found, "the revision the instance is heading for stays visible")
+			assert.Equal(t, int64(2), target)
+			assert.Equal(t, string(v1alpha1.InstanceStateError), obj.Object["status"].(map[string]any)["state"])
+		})
+	}
+}
+
+func TestReconcileViaGraphEngine_RemovingARejectedPinReturnsToTheRecordedRevision(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FeatureGate, features.GraphRevisionPinning, true)
+
+	inst := newInstanceObject("demo", "default")
+	inst.SetAnnotations(map[string]string{v1alpha1.InstanceGraphRevisionAnnotation: "2"})
+	inst.Object["status"] = map[string]any{"graphRevision": int64(1), "targetGraphRevision": int64(1)}
+	rc := newFakeRuntimeClient(t)
+	c, stored := revisionTwoController(t, inst, specWithSecondResource("cm-rev2", ""), rc)
+
+	require.Error(t, c.reconcileViaGraphEngine(context.Background(), inst, &fakeInstanceWatcher{}))
+
+	unpinned := stored()
+	unpinned.SetAnnotations(nil)
+	_, err := c.client.Dynamic().Resource(controllerTestParentGVR).Namespace("default").Update(context.Background(), unpinned, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	require.NoError(t, c.reconcileViaGraphEngine(context.Background(), stored(), &fakeInstanceWatcher{}))
+
+	assert.Equal(t, []string{"cm-rev1"}, storedConfigMapNames(t, rc))
+	obj := stored()
+	cur, _ := statusInt64(t, obj, "graphRevision")
+	assert.Equal(t, int64(1), cur)
+	target, _ := statusInt64(t, obj, "targetGraphRevision")
+	assert.Equal(t, int64(1), target)
+}

@@ -234,6 +234,13 @@ func (m *ConditionsMarker) KindUnready(msg string) {
 	m.cs.SetFalse(KindReady, "Failed", msg)
 }
 
+// KindUnreadyWithReason is KindUnready with an explicit reason, used when the
+// CRD update was rejected for a specific, actionable cause (a version that is
+// still stored or in use, or a spoke schema that cannot serve stored objects).
+func (m *ConditionsMarker) KindUnreadyWithReason(reason, msg string) {
+	m.cs.SetFalse(KindReady, reason, msg)
+}
+
 // --- ControllerReady ---
 
 // ControllerRunning signals the instance reconciler is registered and serving.

@@ -1,0 +1,12 @@
+apiVersion: kro.run/v1alpha1
+kind: CheckRolloutManualApp
+metadata:
+  name: pinned-instance
+  annotations:
+    kro.run/graph-revision: "2"
+status:
+  (conditions[?type == 'Ready']):
+    - status: 'True'
+  state: ACTIVE
+  graphRevision: 2
+  targetGraphRevision: 2

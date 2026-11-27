@@ -46,6 +46,15 @@ const (
 	// ReconcileLegacyDisabled is the legacy annotation value for suspending reconciliation.
 	// Kept for backward compatibility; prefer ReconcileSuspended.
 	ReconcileLegacyDisabled = "disabled"
+
+	// InstanceGraphRevisionAnnotation pins an instance to a specific graph
+	// revision. The value is either a revision number ("3") or "latest".
+	// Requires the GraphRevisionPinning feature gate.
+	InstanceGraphRevisionAnnotation = KRODomainName + "/graph-revision"
+
+	// GraphRevisionLatest is the InstanceGraphRevisionAnnotation value that
+	// explicitly follows the latest graph revision.
+	GraphRevisionLatest = "latest"
 )
 
 // IsReconcileSuspended reports whether the given annotation value represents

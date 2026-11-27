@@ -62,7 +62,11 @@ type Config struct {
 	// projection so author conditions get the same execution bound as graph
 	// expressions rather than silently bypassing it.
 	CELCostLimit uint64
-	RGDConfig    graph.Config
+	// StorageMigrationTimeout bounds how long kro waits for the cluster's
+	// storage version migrator before migrating stored objects itself.
+	// Zero means the package default (2 minutes).
+	StorageMigrationTimeout time.Duration
+	RGDConfig               graph.Config
 }
 
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
@@ -80,6 +84,27 @@ type ResourceGraphDefinitionReconciler struct {
 	revisionsRegistry     *revisions.Registry
 	registeredControllers sync.Map
 	cfg                   Config
+
+	// storageMigrationAPI caches whether the cluster serves
+	// storagemigration.k8s.io/v1, once discovery gave a definite answer.
+	storageMigrationAPIMu    sync.Mutex
+	storageMigrationAPIKnown bool
+	storageMigrationAPI      bool
+
+	// stalledMigrations records the CRDs whose storage version migration the
+	// cluster's migrator never finished, so kro stops waiting for it.
+	stalledMigrations sync.Map
+
+	// pendingMigrations records the migration objects kro created and has not
+	// seen deleted yet, so cleanup is retried without a call on every reconcile.
+	//
+	// TODO(skarlso): Potentially, this could be a label based List call instead
+	// of an in-memory map that does not survive a crash / reboot of the
+	// controller and would miss cleaning up things. Jakob: You deliberately
+	// chose to do this to avoid API calls, are you okay with this approach here
+	// also avoiding API calls, or would you rather switch to a List call (a bit
+	// more complexity, but makes the lookup more robust).
+	pendingMigrations sync.Map
 
 	// graphEngineCompiler is injected via WithGraphEngineCompiler after
 	// SetupWithManager so that the compiler shares the same REST config/HTTP

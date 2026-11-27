@@ -173,6 +173,7 @@ func newGraphEngineControllerUnderTest(
 	revState revisions.RevisionState,
 	comp rgdadapter.Compiler,
 	geClient client.Client,
+	extraEntries ...revisions.Entry,
 ) (*Controller, *clientfake.FakeSet) {
 	t.Helper()
 
@@ -187,6 +188,15 @@ func newGraphEngineControllerUnderTest(
 			RGDSpec:  rgdSpec,
 		}
 		if rgdSpec != nil {
+			entry.CompiledGraph = &graph.Graph{CRD: testInstanceCRD()}
+		}
+		registry.Put(entry)
+	}
+	for _, entry := range extraEntries {
+		if entry.OwnerKey == "" {
+			entry.OwnerKey = controllerTestParentGVR.Resource
+		}
+		if entry.RGDSpec != nil && entry.CompiledGraph == nil {
 			entry.CompiledGraph = &graph.Graph{CRD: testInstanceCRD()}
 		}
 		registry.Put(entry)
@@ -409,7 +419,7 @@ func TestPersistGraphEngineStatus(t *testing.T) {
 		rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, comp)
 		require.NoError(t, err)
 
-		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, false)
+		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, false, nil, c.reconcileConfig.HasAuthorConditions)
 		require.NoError(t, err)
 
 		stored := getStoredParentObject(t, raw)
@@ -437,7 +447,7 @@ func TestPersistGraphEngineStatus(t *testing.T) {
 		rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, comp)
 		require.NoError(t, err)
 
-		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, false)
+		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, false, nil, c.reconcileConfig.HasAuthorConditions)
 		require.NoError(t, err)
 
 		stored := getStoredParentObject(t, raw)
@@ -463,7 +473,7 @@ func TestPersistGraphEngineStatus(t *testing.T) {
 		rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, comp)
 		require.NoError(t, err)
 
-		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, true)
+		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, true, nil, c.reconcileConfig.HasAuthorConditions)
 		require.NoError(t, err)
 
 		stored := getStoredParentObject(t, raw)
@@ -496,7 +506,7 @@ func TestPersistGraphEngineStatus(t *testing.T) {
 		require.NoError(t, err)
 
 		raw.ClearActions()
-		err = c.persistGraphEngineStatus(context.Background(), inst, wireStatus, rt, rgd, false)
+		err = c.persistGraphEngineStatus(context.Background(), inst, wireStatus, rt, rgd, false, nil, c.reconcileConfig.HasAuthorConditions)
 		require.NoError(t, err)
 
 		// 0 status patch actions because status matched
@@ -522,7 +532,7 @@ func TestPersistGraphEngineStatus(t *testing.T) {
 		rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, comp)
 		require.NoError(t, err)
 
-		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, false)
+		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, false, nil, c.reconcileConfig.HasAuthorConditions)
 		require.NoError(t, err)
 
 		stored := getStoredParentObject(t, raw)
@@ -569,7 +579,7 @@ func TestPersistGraphEngineStatus(t *testing.T) {
 		rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, comp)
 		require.NoError(t, err)
 
-		err = c.persistGraphEngineStatus(context.Background(), inst, wireStatus, rt, rgd, false)
+		err = c.persistGraphEngineStatus(context.Background(), inst, wireStatus, rt, rgd, false, nil, c.reconcileConfig.HasAuthorConditions)
 		require.NoError(t, err)
 
 		stored := getStoredParentObject(t, raw)
@@ -605,7 +615,7 @@ func TestPersistGraphEngineStatus(t *testing.T) {
 		rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, comp)
 		require.NoError(t, err)
 
-		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, false)
+		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, false, nil, c.reconcileConfig.HasAuthorConditions)
 		require.NoError(t, err)
 
 		stored := getStoredParentObject(t, raw)
@@ -629,7 +639,7 @@ func TestPersistGraphEngineStatus(t *testing.T) {
 		rt, _, err := rgdadapter.BuildRuntimeForInstance(rgd, inst, comp)
 		require.NoError(t, err)
 
-		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, false)
+		err = c.persistGraphEngineStatus(context.Background(), inst, nil, rt, rgd, false, nil, c.reconcileConfig.HasAuthorConditions)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "API server error during status patch")
 	})
@@ -2076,7 +2086,7 @@ func TestRequeueUntilRGDSpecPopulated_Direct(t *testing.T) {
 		raw := newControllerTestDynamicClient(t, inst.DeepCopy())
 		c, _ := newGraphEngineControllerUnderTest(t, raw, nil, revisions.RevisionStateActive, comp, nil)
 
-		err := c.requeueUntilRGDSpecPopulated(context.Background(), inst)
+		err := c.requeueUntilRGDSpecPopulated(context.Background(), inst, 0)
 		require.Error(t, err)
 		assert.True(t, requeue.IsRequeueError(err))
 		assert.Contains(t, err.Error(), "revision entry has no RGDSpec")
@@ -2093,7 +2103,7 @@ func TestRequeueUntilRGDSpecPopulated_Direct(t *testing.T) {
 		})
 		c, _ := newGraphEngineControllerUnderTest(t, raw, nil, revisions.RevisionStateActive, comp, nil)
 
-		err := c.requeueUntilRGDSpecPopulated(context.Background(), inst)
+		err := c.requeueUntilRGDSpecPopulated(context.Background(), inst, 0)
 		require.Error(t, err)
 		assert.True(t, requeue.IsRequeueError(err))
 		assert.Contains(t, err.Error(), "revision entry has no RGDSpec")

@@ -37,7 +37,7 @@ func TestEnsureUpdatesCRDNamesWithoutVersionChanges(t *testing.T) {
 
 	wrapper := newTestCRDWrapper(existing)
 
-	require.NoError(t, wrapper.Ensure(context.Background(), *desired, false))
+	require.NoError(t, wrapper.Ensure(context.Background(), *desired, EnsureOptions{}))
 
 	got, err := wrapper.Get(context.Background(), existing.Name)
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func TestEnsureClearsCRDNames(t *testing.T) {
 
 	wrapper := newTestCRDWrapper(existing)
 
-	require.NoError(t, wrapper.Ensure(context.Background(), *desired, false))
+	require.NoError(t, wrapper.Ensure(context.Background(), *desired, EnsureOptions{}))
 
 	got, err := wrapper.Get(context.Background(), existing.Name)
 	require.NoError(t, err)

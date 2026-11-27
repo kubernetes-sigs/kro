@@ -1,0 +1,12 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: check-rollout-manual
+  finalizers:
+    - kro.run/finalizer
+status:
+  (conditions[?type == 'Ready']):
+    - status: 'True'
+  state: Active
+  topologicalOrder:
+    - cm

@@ -23,6 +23,7 @@ endif
 
 GIT_TAG ?= dirty-tag
 GIT_VERSION ?= $(shell git describe --tags --always --dirty)
+RELEASE_VERSION ?= $(GIT_VERSION)
 GIT_HASH ?= $(shell git rev-parse HEAD)
 DATE_FMT = +%Y-%m-%dT%H:%M:%SZ
 SOURCE_DATE_EPOCH ?= $(shell git log -1 --no-show-signature --pretty=%ct)

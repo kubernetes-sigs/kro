@@ -83,7 +83,7 @@ const (
 // spec and status schemas using SimpleSchema syntax. You can also define custom types,
 // validation rules, and printer columns.
 //
-// +kubebuilder:validation:XValidation:rule="self.apiVersion == oldSelf.apiVersion || (has(self.previousVersions) && self.previousVersions.exists(v, v.apiVersion == oldSelf.apiVersion))",message="apiVersion may only change when its previous value is listed under previousVersions"
+// +kubebuilder:validation:XValidation:rule="self.apiVersion == oldSelf.apiVersion || (has(self.previousVersions) && self.previousVersions.exists(v, v.apiVersion == oldSelf.apiVersion)) || (has(oldSelf.previousVersions) && oldSelf.previousVersions.exists(v, v.apiVersion == self.apiVersion))",message="apiVersion may only change when its previous value is listed under previousVersions"
 type Schema struct {
 	// Kind is the name of the custom resource type that will be created.
 	// This becomes the kind field of the generated CRD and must be a valid Kubernetes kind name

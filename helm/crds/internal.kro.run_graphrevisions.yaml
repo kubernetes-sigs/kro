@@ -506,6 +506,8 @@ spec:
                             is listed under previousVersions
                           rule: self.apiVersion == oldSelf.apiVersion || (has(self.previousVersions)
                             && self.previousVersions.exists(v, v.apiVersion == oldSelf.apiVersion))
+                            || (has(oldSelf.previousVersions) && oldSelf.previousVersions.exists(v,
+                            v.apiVersion == self.apiVersion))
                     required:
                     - schema
                     type: object

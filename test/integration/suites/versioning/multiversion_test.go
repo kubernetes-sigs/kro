@@ -423,5 +423,62 @@ var _ = Describe("MultiVersion", func() {
 			crd := instanceCRD(g, ctx, kind)
 			g.Expect(storageVersionOf(crd)).To(Equal("v1beta1"))
 		}, 3*time.Second, 1*time.Second).WithContext(ctx).Should(Succeed())
+
+		// The rejected edit can be taken back as it was made.
+		updateRGD(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
+			live.Spec.Schema.APIVersion = "v1beta1"
+			live.Spec.Schema.PreviousVersions = nil
+		})
+		waitForRGDActive(ctx, rgd)
+	})
+
+	It("takes a rejected hub move back", func(ctx SpecContext) {
+		kind := "RevertMoveApp"
+		rgd := multiVersionRGD("test-revert-move-"+rand.String(5), kind)
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(client.IgnoreNotFound(env.Client.Delete(ctx, rgd))).To(Succeed())
+		})
+		waitForRGDActive(ctx, rgd)
+
+		instance := newInstance(kind, namespace, "app")
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+		cmKey := types.NamespacedName{Namespace: namespace, Name: "app-cm"}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			g.Expect(env.Client.Get(ctx, cmKey, &corev1.ConfigMap{})).To(Succeed())
+		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+		// The previous version declares a field the new hub cannot store.
+		updateRGD(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
+			live.Spec.Schema.APIVersion = "v1beta1"
+			live.Spec.Schema.PreviousVersions = []krov1alpha1.PreviousSchemaVersion{{
+				APIVersion: "v1alpha1",
+				Spec: toRawExtension(map[string]any{
+					"value":  "string | default=\"hello\"",
+					"legacy": "string | default=\"old\"",
+				}),
+			}}
+		})
+		expectKindUnready(ctx, rgd.Name, "SpokeSchemaMismatch")
+		Expect(env.Client.Delete(ctx, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "app-cm"},
+		})).To(Succeed())
+
+		// Reverts and clears previous versions. This should be okay, because we want
+		// to be able to go back cleanly instead of blocking forever.
+		updateRGD(ctx, rgd.Name, func(live *krov1alpha1.ResourceGraphDefinition) {
+			live.Spec.Schema.APIVersion = "v1alpha1"
+			live.Spec.Schema.PreviousVersions = nil
+		})
+		waitForRGDActive(ctx, rgd)
+
+		// The instance reconciles again under the restored hub.
+		Eventually(func(g Gomega, ctx SpecContext) {
+			g.Expect(env.Client.Get(ctx, cmKey, &corev1.ConfigMap{})).To(Succeed())
+			live := instance.DeepCopy()
+			g.Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(instance), live)).To(Succeed())
+			state, _, _ := unstructured.NestedString(live.Object, "status", "state")
+			g.Expect(state).To(Equal("ACTIVE"))
+		}, 60*time.Second, 250*time.Millisecond).WithContext(ctx).Should(Succeed())
 	})
 })

@@ -221,6 +221,11 @@ first and applied by itself once the migration has rewritten the stored objects,
 because the migration runs even while the edit is blocked. Moving
 `schema.apiVersion` backwards is always rejected.
 
+An edit that kro rejected can be taken back: `schema.apiVersion` may return to
+a version the rejected spec listed under `schema.previousVersions`. Until then,
+instances that follow the latest revision stop reconciling if the rejected edit
+moved the hub.
+
 With `rbac.mode: aggregation`, the chart grants the controller the extra
 permissions this needs (`customresourcedefinitions/status` and
 `storageversionmigrations`) only when the gate is on.
